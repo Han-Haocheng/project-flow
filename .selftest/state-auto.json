@@ -1,9 +1,9 @@
 {
   "ok": true,
-  "generatedAt": "2026-10-28T15:01:15+08:00",
+  "generatedAt": "2026-10-28T17:25:38+08:00",
   "contract": {
-    "source": "defaults",
-    "schema": 1,
+    "source": ".dsh/flow/flow.json",
+    "schema": 2,
     "name": "alpha"
   },
   "roots": [
@@ -26,217 +26,546 @@
   ],
   "root": "/tmp/pf-demo/alpha",
   "head": {
-    "sha": "432243c",
-    "subject": "exp(learning): [待验证] 竞争性信用分配能让预测分化",
+    "sha": "e2550a1",
+    "subject": "exp(propagation): 输出层相对化（tie_mean 3.0→2.64，未达预期）",
     "branch": "dev",
-    "dirty": 4
+    "dirty": 0
   },
   "experiments": {
+    "source": "store",
     "total": 13,
-    "confirmed": 4,
-    "refuted": 6,
-    "open": 3,
-    "groups": [
+    "counts": {
+      "total": 13,
+      "open": 2,
+      "confirmed": 4,
+      "refuted": 7,
+      "abandoned": 0
+    },
+    "items": [
       {
-        "factor": "engine-config",
-        "items": [
-          {
-            "id": "H1-baseline",
-            "verdict": "confirmed",
-            "date": "2026-10-26",
-            "sha": "33cc7246",
-            "subject": "exp(engine-config): 默认配置下模型不优于众数基线",
-            "hypothesis": "默认配置下模型不优于众数基线",
-            "expected": "top1_train<=baseline_train",
-            "measured": "top1_train=0.3125",
-            "scale": "small"
-          }
-        ]
-      },
-      {
-        "factor": "eval",
-        "items": [
-          {
-            "id": "H-text8-repro",
-            "verdict": "refuted",
-            "date": "2026-10-26",
-            "sha": "893b38b9",
-            "subject": "exp(eval): text8 22.18% 可复现",
-            "hypothesis": "README 的 22.18% 在当前构建可复现",
-            "expected": "accuracy>=0.2218",
-            "measured": "accuracy=0.2095",
-            "scale": "small"
-          }
-        ]
-      },
-      {
-        "factor": "event-graph",
-        "items": [
-          {
-            "id": "H-inject-clean",
-            "verdict": null,
-            "date": "2026-10-28",
-            "sha": "526f2481",
-            "subject": "exp(event-graph): [待验证] 区分注入目标与模型输出能打破对称",
-            "hypothesis": "建边只连模型自产输出、注入目标单独建边后权重不再全为 1",
-            "expected": "weight_one_ratio<0.9",
-            "measured": "",
-            "scale": "small"
-          }
-        ]
-      },
-      {
-        "factor": "focus-control",
-        "items": [
-          {
-            "id": "H-pi-max",
-            "verdict": "confirmed",
-            "date": "2026-10-26",
-            "sha": "fd89eb6d",
-            "subject": "exp(focus-control): 最大值归一化下 PI 可收敛",
-            "hypothesis": "改为层内最大值归一化后 PI 能稳定",
-            "expected": "band_hit>=0.9",
-            "measured": "band_hit=0.98",
-            "scale": "small"
-          },
-          {
-            "id": "H-pi-sum",
-            "verdict": "refuted",
-            "date": "2026-10-26",
-            "sha": "2c2800d5",
-            "subject": "exp(focus-control): 总和归一化下 PI 可收敛",
-            "hypothesis": "按总和归一化后 PI 能将激活稳定在目标带",
-            "expected": "band_hit>=0.9",
-            "measured": "band_hit=0.0",
-            "scale": "small"
-          }
-        ]
-      },
-      {
-        "factor": "learning",
-        "items": [
-          {
-            "id": "H-credit",
-            "verdict": null,
-            "date": "2026-10-28",
-            "sha": "432243c8",
-            "subject": "exp(learning): [待验证] 竞争性信用分配能让预测分化",
-            "hypothesis": "argmax 通道差异化更新后出现多个不同预测",
-            "expected": "distinct_preds>1",
-            "measured": "",
-            "scale": "small"
-          }
-        ]
-      },
-      {
-        "factor": "multimodal",
-        "items": [
-          {
-            "id": "H-multistream",
-            "verdict": "refuted",
-            "date": "2026-10-25",
-            "sha": "dfca343e",
-            "subject": "exp(multimodal): 三路互补线索优于单路",
-            "hypothesis": "视频+音频+鼠标的 top-1 应高于单路",
-            "expected": "top1_holdout>0.5",
-            "measured": "top1_holdout=0.1875",
-            "scale": "small"
-          }
-        ]
-      },
-      {
+        "schema": 1,
+        "id": "H-relativize",
+        "title": "输出层改用相对强度后候选不再等值",
+        "hypothesis": "输出层改用相对强度后候选不再等值",
         "factor": "propagation",
-        "items": [
-          {
-            "id": "H-relativize",
-            "verdict": null,
-            "date": "2026-10-28",
-            "sha": "d0632c17",
-            "subject": "exp(propagation): [待验证] 层内相对化能打破输出对称",
-            "hypothesis": "输出层改用相对强度后候选不再等值",
-            "expected": "tie_mean<1.0",
-            "measured": "",
-            "scale": "small"
-          },
-          {
-            "id": "H-normalize",
-            "verdict": "confirmed",
-            "date": "2026-10-26",
-            "sha": "20a8de4f",
-            "subject": "exp(propagation): 能量归一化能解除饱和",
-            "hypothesis": "归一化后饱和占比显著下降",
-            "expected": "saturate_rate<0.1",
-            "measured": "saturate_rate=0.0233",
-            "scale": "small"
-          },
-          {
-            "id": "H-focus-floor",
-            "verdict": "refuted",
-            "date": "2026-10-26",
-            "sha": "96e1f98e",
-            "subject": "exp(propagation): focus 阈值可压制饱和激活",
-            "hypothesis": "调高 focus 能减少每帧激活节点",
-            "expected": "act_at_focus_1.0<100",
-            "measured": "act_at_focus_1.0=122",
-            "scale": "small"
-          }
-        ]
+        "parent": null,
+        "expected": "tie_mean<1.0",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "tie_mean=2.6389",
+        "metrics": {},
+        "commits": [
+          "d0632c1",
+          "e2550a1"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T15:05:26+08:00"
       },
       {
+        "schema": 1,
+        "id": "H-inject-clean",
+        "title": "建边只连模型自产输出、注入目标单独建边后权重不再全为 1",
+        "hypothesis": "建边只连模型自产输出、注入目标单独建边后权重不再全为 1",
+        "factor": "event-graph",
+        "parent": null,
+        "expected": "weight_one_ratio<0.9",
+        "scale": "small",
+        "status": "open",
+        "measured": "",
+        "metrics": {},
+        "commits": [
+          "526f248"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-credit",
+        "title": "argmax 通道差异化更新后出现多个不同预测",
+        "hypothesis": "argmax 通道差异化更新后出现多个不同预测",
+        "factor": "learning",
+        "parent": null,
+        "expected": "distinct_preds>1",
+        "scale": "small",
+        "status": "open",
+        "measured": "",
+        "metrics": {},
+        "commits": [
+          "432243c"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H1-baseline",
+        "title": "默认配置下模型不优于众数基线",
+        "hypothesis": "默认配置下模型不优于众数基线",
+        "factor": "engine-config",
+        "parent": null,
+        "expected": "top1_train<=baseline_train",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "33cc724"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-text8-repro",
+        "title": "README 的 22.18% 在当前构建可复现",
+        "hypothesis": "README 的 22.18% 在当前构建可复现",
+        "factor": "eval",
+        "parent": null,
+        "expected": "accuracy>=0.2218",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "accuracy=0.2095",
+        "metrics": {},
+        "commits": [
+          "893b38b"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-saturation",
+        "title": "计分帧的输出候选应全部等值",
+        "hypothesis": "计分帧的输出候选应全部等值",
         "factor": "readout",
-        "items": [
-          {
-            "id": "H-saturation",
-            "verdict": "confirmed",
-            "date": "2026-10-26",
-            "sha": "19773822",
-            "subject": "exp(readout): 输出层全饱和导致并列",
-            "hypothesis": "计分帧的输出候选应全部等值",
-            "expected": "tie_mean>=3.0",
-            "measured": "tie_mean=3.0",
-            "scale": "small"
-          },
-          {
-            "id": "H-readout",
-            "verdict": "refuted",
-            "date": "2026-10-26",
-            "sha": "a11858e9",
-            "subject": "exp(readout): focus 控制能改善 top-1",
-            "hypothesis": "开启归一化后 top-1 应高于默认",
-            "expected": "top1_train>0.3125",
-            "measured": "top1_train=0.3125",
-            "scale": "small"
-          }
-        ]
+        "parent": null,
+        "expected": "tie_mean>=3.0",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "tie_mean=3.0",
+        "metrics": {},
+        "commits": [
+          "1977382"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
       },
       {
+        "schema": 1,
+        "id": "H-readout",
+        "title": "开启归一化后 top-1 应高于默认",
+        "hypothesis": "开启归一化后 top-1 应高于默认",
+        "factor": "readout",
+        "parent": null,
+        "expected": "top1_train>0.3125",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "a11858e"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-pi-sum",
+        "title": "按总和归一化后 PI 能将激活稳定在目标带",
+        "hypothesis": "按总和归一化后 PI 能将激活稳定在目标带",
+        "factor": "focus-control",
+        "parent": null,
+        "expected": "band_hit>=0.9",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "band_hit=0.0",
+        "metrics": {},
+        "commits": [
+          "2c2800d"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-pi-max",
+        "title": "改为层内最大值归一化后 PI 能稳定",
+        "hypothesis": "改为层内最大值归一化后 PI 能稳定",
+        "factor": "focus-control",
+        "parent": null,
+        "expected": "band_hit>=0.9",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "band_hit=0.98",
+        "metrics": {},
+        "commits": [
+          "fd89eb6"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-normalize",
+        "title": "归一化后饱和占比显著下降",
+        "hypothesis": "归一化后饱和占比显著下降",
+        "factor": "propagation",
+        "parent": null,
+        "expected": "saturate_rate<0.1",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "saturate_rate=0.0233",
+        "metrics": {},
+        "commits": [
+          "20a8de4"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-focus-floor",
+        "title": "调高 focus 能减少每帧激活节点",
+        "hypothesis": "调高 focus 能减少每帧激活节点",
+        "factor": "propagation",
+        "parent": null,
+        "expected": "act_at_focus_1.0<100",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "act_at_focus_1.0=122",
+        "metrics": {},
+        "commits": [
+          "96e1f98"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-epochs",
+        "title": "20 轮应优于 2 轮",
+        "hypothesis": "20 轮应优于 2 轮",
         "factor": "training",
-        "items": [
-          {
-            "id": "H-epochs",
-            "verdict": "refuted",
-            "date": "2026-10-26",
-            "sha": "488d875f",
-            "subject": "exp(training): 训练轮数越多指标越好",
-            "hypothesis": "20 轮应优于 2 轮",
-            "expected": "top1_train>0.4",
-            "measured": "top1_train=0.3125",
-            "scale": "small"
-          }
-        ]
+        "parent": null,
+        "expected": "top1_train>0.4",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "488d875"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00"
+      },
+      {
+        "schema": 1,
+        "id": "H-multistream",
+        "title": "视频+音频+鼠标的 top-1 应高于单路",
+        "hypothesis": "视频+音频+鼠标的 top-1 应高于单路",
+        "factor": "multimodal",
+        "parent": null,
+        "expected": "top1_holdout>0.5",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_holdout=0.1875",
+        "metrics": {},
+        "commits": [
+          "dfca343"
+        ],
+        "notes": "",
+        "created_at": "2026-10-25T12:00:00+08:00",
+        "updated_at": "2026-10-25T12:00:00+08:00"
       }
-    ]
+    ],
+    "tree": [
+      {
+        "schema": 1,
+        "id": "H-relativize",
+        "title": "输出层改用相对强度后候选不再等值",
+        "hypothesis": "输出层改用相对强度后候选不再等值",
+        "factor": "propagation",
+        "parent": null,
+        "expected": "tie_mean<1.0",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "tie_mean=2.6389",
+        "metrics": {},
+        "commits": [
+          "d0632c1",
+          "e2550a1"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T15:05:26+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-inject-clean",
+        "title": "建边只连模型自产输出、注入目标单独建边后权重不再全为 1",
+        "hypothesis": "建边只连模型自产输出、注入目标单独建边后权重不再全为 1",
+        "factor": "event-graph",
+        "parent": null,
+        "expected": "weight_one_ratio<0.9",
+        "scale": "small",
+        "status": "open",
+        "measured": "",
+        "metrics": {},
+        "commits": [
+          "526f248"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-credit",
+        "title": "argmax 通道差异化更新后出现多个不同预测",
+        "hypothesis": "argmax 通道差异化更新后出现多个不同预测",
+        "factor": "learning",
+        "parent": null,
+        "expected": "distinct_preds>1",
+        "scale": "small",
+        "status": "open",
+        "measured": "",
+        "metrics": {},
+        "commits": [
+          "432243c"
+        ],
+        "notes": "",
+        "created_at": "2026-10-28T12:00:00+08:00",
+        "updated_at": "2026-10-28T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H1-baseline",
+        "title": "默认配置下模型不优于众数基线",
+        "hypothesis": "默认配置下模型不优于众数基线",
+        "factor": "engine-config",
+        "parent": null,
+        "expected": "top1_train<=baseline_train",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "33cc724"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-text8-repro",
+        "title": "README 的 22.18% 在当前构建可复现",
+        "hypothesis": "README 的 22.18% 在当前构建可复现",
+        "factor": "eval",
+        "parent": null,
+        "expected": "accuracy>=0.2218",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "accuracy=0.2095",
+        "metrics": {},
+        "commits": [
+          "893b38b"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-saturation",
+        "title": "计分帧的输出候选应全部等值",
+        "hypothesis": "计分帧的输出候选应全部等值",
+        "factor": "readout",
+        "parent": null,
+        "expected": "tie_mean>=3.0",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "tie_mean=3.0",
+        "metrics": {},
+        "commits": [
+          "1977382"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-readout",
+        "title": "开启归一化后 top-1 应高于默认",
+        "hypothesis": "开启归一化后 top-1 应高于默认",
+        "factor": "readout",
+        "parent": null,
+        "expected": "top1_train>0.3125",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "a11858e"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-pi-sum",
+        "title": "按总和归一化后 PI 能将激活稳定在目标带",
+        "hypothesis": "按总和归一化后 PI 能将激活稳定在目标带",
+        "factor": "focus-control",
+        "parent": null,
+        "expected": "band_hit>=0.9",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "band_hit=0.0",
+        "metrics": {},
+        "commits": [
+          "2c2800d"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-pi-max",
+        "title": "改为层内最大值归一化后 PI 能稳定",
+        "hypothesis": "改为层内最大值归一化后 PI 能稳定",
+        "factor": "focus-control",
+        "parent": null,
+        "expected": "band_hit>=0.9",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "band_hit=0.98",
+        "metrics": {},
+        "commits": [
+          "fd89eb6"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-normalize",
+        "title": "归一化后饱和占比显著下降",
+        "hypothesis": "归一化后饱和占比显著下降",
+        "factor": "propagation",
+        "parent": null,
+        "expected": "saturate_rate<0.1",
+        "scale": "small",
+        "status": "confirmed",
+        "measured": "saturate_rate=0.0233",
+        "metrics": {},
+        "commits": [
+          "20a8de4"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-focus-floor",
+        "title": "调高 focus 能减少每帧激活节点",
+        "hypothesis": "调高 focus 能减少每帧激活节点",
+        "factor": "propagation",
+        "parent": null,
+        "expected": "act_at_focus_1.0<100",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "act_at_focus_1.0=122",
+        "metrics": {},
+        "commits": [
+          "96e1f98"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-epochs",
+        "title": "20 轮应优于 2 轮",
+        "hypothesis": "20 轮应优于 2 轮",
+        "factor": "training",
+        "parent": null,
+        "expected": "top1_train>0.4",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_train=0.3125",
+        "metrics": {},
+        "commits": [
+          "488d875"
+        ],
+        "notes": "",
+        "created_at": "2026-10-26T12:00:00+08:00",
+        "updated_at": "2026-10-26T12:00:00+08:00",
+        "children": []
+      },
+      {
+        "schema": 1,
+        "id": "H-multistream",
+        "title": "视频+音频+鼠标的 top-1 应高于单路",
+        "hypothesis": "视频+音频+鼠标的 top-1 应高于单路",
+        "factor": "multimodal",
+        "parent": null,
+        "expected": "top1_holdout>0.5",
+        "scale": "small",
+        "status": "refuted",
+        "measured": "top1_holdout=0.1875",
+        "metrics": {},
+        "commits": [
+          "dfca343"
+        ],
+        "notes": "",
+        "created_at": "2026-10-25T12:00:00+08:00",
+        "updated_at": "2026-10-25T12:00:00+08:00",
+        "children": []
+      }
+    ],
+    "groups": []
   },
   "tasks": {
-    "total": 54,
+    "total": 58,
     "counts": {
-      "draft": 19,
+      "draft": 21,
       "active": 1,
-      "done": 33,
+      "done": 35,
       "archived": 1,
       "other": 0
     },
-    "current": "T-20261028-53",
+    "current": null,
     "active": [
       {
         "id": "T-20261028-53",
@@ -248,6 +577,20 @@
       }
     ],
     "recentDone": [
+      {
+        "id": "T-20261028-56",
+        "title": "project-flow Stage1 Client 半（右侧栏标签，改名+项目切换）",
+        "updated_at": "2026-10-28T15:06:11+08:00",
+        "commits": [],
+        "gate": "pass"
+      },
+      {
+        "id": "T-20261028-55",
+        "title": "project-flow Stage1 Host 半（契约驱动的项目流面板）",
+        "updated_at": "2026-10-28T15:06:11+08:00",
+        "commits": [],
+        "gate": "pass"
+      },
       {
         "id": "T-20261028-54",
         "title": "alpha-live 迁到右侧栏（rightbar 标签页）",
@@ -279,185 +622,34 @@
           "12556a8"
         ],
         "gate": "pass"
-      },
-      {
-        "id": "T-20261026-50",
-        "title": "docs(agents): 更新协作约束契约",
-        "updated_at": "2026-10-26T21:28:20+0800",
-        "commits": [
-          "ca0f265"
-        ],
-        "gate": "pass"
-      },
-      {
-        "id": "T-20261026-49",
-        "title": "docs: 同步 264 用例与 focus 控制机制",
-        "updated_at": "2026-10-26T21:02:00+0800",
-        "commits": [
-          "1ad80c3"
-        ],
-        "gate": "pass"
       }
     ]
   },
-  "gate": {
-    "lines": [
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:35 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:36 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:36 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:36 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:36 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:36 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:37 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:37 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:37 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:37 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:38 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:38 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check",
-      "",
-      "== 2026-10-28 14:38:38 pre-commit ==",
-      "no .agents/tasks/.current; skip gate check"
-    ],
-    "mtime": 1793169518465,
-    "size": 30979
-  },
+  "gates": [],
+  "gate": null,
   "heartbeats": [
     {
       "file": "T-20261026-44-eval-harness.md",
       "title": "T-20261026-44 进度（评测基线子代理）",
       "statusLine": "状态：完成（待协调者构建/运行/提交）",
-      "ageSeconds": 190457,
+      "ageSeconds": 199120,
       "mtime": 1792980418186
     },
     {
       "file": "T-20261026-43-doc-eval-fix.md",
       "title": "T-20261026-43 进度（文档子代理）",
       "statusLine": "状态：完成（待协调者验收/提交）",
-      "ageSeconds": 191245,
+      "ageSeconds": 199908,
       "mtime": 1792979629696
     },
     {
       "file": "T-20261025-40-active-window.md",
       "title": "T-20261025-40 heartbeat（active window 去重 O(1)）",
       "statusLine": "状态：实现 + 自测 + 基准全部完成，等待协调者门禁。",
-      "ageSeconds": 243601,
+      "ageSeconds": 252264,
       "mtime": 1792927274010
     }
   ],
-  "runs": [
-    {
-      "path": ".agents/tmp/t53/new_norm.txt",
-      "ageSeconds": 465,
-      "size": 3296,
-      "lines": [
-        "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
-        "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
-        "focus config normalize=0 pi=0 target=64 (0=off, default target=64)",
-        "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
-        "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
-        "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
-        "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
-        "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
-        "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
-      ]
-    },
-    {
-      "path": ".agents/tmp/t53/base_norm.txt",
-      "ageSeconds": 465,
-      "size": 3296,
-      "lines": [
-        "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
-        "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
-        "focus config normalize=0 pi=0 target=64 (0=off, default target=64)",
-        "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
-        "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
-        "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
-        "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
-        "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
-        "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
-      ]
-    },
-    {
-      "path": ".agents/tmp/t53/new_relative2.txt",
-      "ageSeconds": 465,
-      "size": 3328,
-      "lines": [
-        "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
-        "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
-        "focus config normalize=0 pi=0 target=64 out_relative=1 (0=off, default target=64)",
-        "seed=1 majority=2000 top1_train=0.437500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=1 sat_rate=0.5811 sat_nodes_mean=158.38 tie_rate=0.9167 tie_mean=2.50 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=2 sat_rate=0.5816 sat_nodes_mean=158.67 tie_rate=0.9583 tie_mean=2.79 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=3 sat_rate=0.5814 sat_nodes_mean=158.54 tie_rate=0.9583 tie_mean=2.62 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "summary top1_train=0.354167+/-0.077951 top1_holdout=0.166667+/-0.058926",
-        "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
-        "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
-        "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
-        "summary sat_rate=0.5814+/-0.0002 sat_nodes_mean=158.53+/-0.12 tie_rate=0.9444+/-0.0196 tie_mean=2.64+/-0.12 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
-        "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.354167,\"top1_train_std\":0.077951,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
-      ]
-    },
-    {
-      "path": ".agents/tmp/t53/new_default2.txt",
-      "ageSeconds": 478,
-      "size": 3328,
-      "lines": [
-        "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
-        "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
-        "focus config normalize=0 pi=0 target=64 out_relative=0 (0=off, default target=64)",
-        "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
-        "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
-        "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
-        "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
-        "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
-        "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
-        "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
-        "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
-      ]
-    }
-  ],
+  "runs": [],
   "warnings": []
 }

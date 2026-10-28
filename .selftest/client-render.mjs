@@ -37,7 +37,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, SignalsCard, TopBar, Footer, ProjectPicker, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, GatesCard, SignalsCard, TopBar, Footer, ProjectPicker, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -610,6 +610,7 @@ function renderParts(payload) {
     probe.TopBar({ view: v, t, now: NOW, lastOkAt: NOW, failed: false, refreshing: false, onRefresh: () => {} }),
     probe.ExperimentTree({ exp: v.exp, t }),
     probe.TasksCard({ tasks: v.tasks, t, now: NOW }),
+    probe.GatesCard({ gates: v.gates, t, now: NOW }),
     probe.SignalsCard({ gate: v.gate, heartbeats: v.heartbeats, runs: v.runs, t, now: NOW }),
     probe.Footer({ view: v, t }),
     probe.ProjectPicker({ roots: v.roots, t, value: v.root, onChange: () => {} }),
@@ -628,7 +629,7 @@ function renderedClassNames(parts) {
   return names;
 }
 
-const hostFixtures = ['state-alpha.json', 'state-iqb.json', 'state-auto.json'];
+const hostFixtures = ['state-alpha.json', 'state-iqb.json', 'state-auto.json', 'state-store.json'];
 let replayed = 0;
 for (const name of hostFixtures) {
   const path = fileURLToPath(new URL('./' + name, import.meta.url));
@@ -643,6 +644,12 @@ for (const name of hostFixtures) {
     for (const cls of classes) {
       assert.ok(!/alpha/i.test(cls), `class list still carries the legacy prefix: ${cls}`);
       assert.ok(cls.split(/\s+/).every((one) => one.startsWith('project-flow')), `unexpected class: ${cls}`);
+    }
+    if (name === 'state-store.json') {
+      const text = JSON.stringify(parts);
+      assert.ok(text.includes('E-20261028-02'), 'store fixture: nested child node missing from render');
+      assert.ok(text.includes('smoke'), 'store fixture: gate definition missing from render');
+      assert.ok(text.includes('门禁'), 'store fixture: gates section title missing');
     }
     replayed += 1;
   });

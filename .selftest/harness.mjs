@@ -167,15 +167,20 @@ const alpha = await call(route, { url: `${route.path}?root=${encodeURIComponent(
 save('alpha', alpha.json)
 summary('alpha', alpha)
 check('alpha: 200 + ok', alpha.status === 200 && alpha.json?.ok === true)
-check('alpha: contract.source defaults', alpha.json?.contract?.source === 'defaults', alpha.json?.contract?.source)
+const alphaSource = alpha.json?.contract?.source
+check(
+  'alpha: contract.source is defaults or a store contract',
+  alphaSource === 'defaults' || alphaSource === '.dsh/flow/flow.json',
+  alphaSource,
+)
 check('alpha: contract name alpha', alpha.json?.contract?.name === 'alpha', alpha.json?.contract?.name)
 check('alpha: experiments.total >= 1', alpha.json?.experiments?.total >= 1, alpha.json?.experiments?.total)
 check('alpha: tasks.total >= 49', alpha.json?.tasks?.total >= 49, alpha.json?.tasks?.total)
-check('alpha: gate.lines non-empty', Array.isArray(alpha.json?.gate?.lines) && alpha.json.gate.lines.length > 0)
-check('alpha: gate has mtime/size', typeof alpha.json?.gate?.mtime === 'number' && alpha.json.gate.size > 0)
+check('alpha: gate is a log object or disabled (null)', alpha.json?.gate === null || (Array.isArray(alpha.json.gate?.lines) && alpha.json.gate.lines.length > 0), alpha.json?.gate === null ? 'null' : 'lines')
+check('alpha: gate has mtime/size when enabled', alpha.json?.gate === null || (typeof alpha.json.gate.mtime === 'number' && alpha.json.gate.size > 0))
 check('alpha: heartbeats non-empty', Array.isArray(alpha.json?.heartbeats) && alpha.json.heartbeats.length > 0)
 check('alpha: head.sha present', typeof alpha.json?.head?.sha === 'string' && alpha.json.head.sha.length >= 7, JSON.stringify(alpha.json?.head))
-check('alpha: tasks.current present', typeof alpha.json?.tasks?.current === 'string', alpha.json?.tasks?.current)
+check('alpha: tasks.current is a string or absent', alpha.json?.tasks?.current === null || typeof alpha.json?.tasks?.current === 'string', alpha.json?.tasks?.current)
 check('alpha: run shape bounded', alpha.json?.runs.length <= 4)
 
 const iqb = await call(route, { url: `${route.path}?root=${encodeURIComponent(IQB)}` })

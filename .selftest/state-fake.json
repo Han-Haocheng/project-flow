@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "generatedAt": "2026-10-28T15:01:15+08:00",
+  "generatedAt": "2026-10-28T17:25:38+08:00",
   "contract": {
     "source": "flow.json",
     "schema": 1,
@@ -36,7 +36,10 @@
     "confirmed": 0,
     "refuted": 0,
     "open": 0,
-    "groups": []
+    "groups": [],
+    "source": "git-trailers",
+    "items": [],
+    "tree": []
   },
   "tasks": {
     "total": 0,
@@ -51,6 +54,7 @@
     "active": [],
     "recentDone": []
   },
+  "gates": [],
   "gate": {
     "lines": [],
     "mtime": null,

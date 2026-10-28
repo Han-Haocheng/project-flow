@@ -1,3 +1,4 @@
 node_modules/
 .selftest/.client-probe/
 .selftest/.host-probe/
+test/.tmp/

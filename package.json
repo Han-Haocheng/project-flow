@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Read-only project flow panel: experiment tree, tasks, gate log, subagent heartbeats and running output, driven by a per-project flow contract.",
+  "bin": {
+    "flow": "./bin/flow.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -17,7 +20,11 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "CONTRACT.md"
+    "CONTRACT.md",
+    "lib/",
+    "bin/",
+    "test/",
+    "skills/"
   ],
   "dsh": {
     "bundle": {

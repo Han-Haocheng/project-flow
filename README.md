@@ -1,73 +1,92 @@
 # project-flow
 
-用一块只读面板看任意项目的「项目流」：实验树、任务进度、
-门禁观察日志、子代理心跳、最近写出的运行输出。实验当前支持两种来源：
-带 `Exp-Id` 等 trailer 的 git 提交（默认），或直接读结构化记录（后续版本）。
+项目流程台账 + 只读面板：实验（含 `parent` 谱系）、任务、门禁定义与运行记录都写在
+**项目自己的 `.dsh/flow/`** 下；面板是它的只读视图，写入只走 `bin/flow.mjs`（CLI）或
+agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个核心 `lib/core.mjs`。
 
-项目用一份可选的 `flow.json` 声明自己的台账布局；不写也能用——只要目录里有
-`.agents/tasks/`、`.agents/gate-observe.log` 或 `.agents/scripts/exp.py`，就按默认布局展示。
-契约细节见 [CONTRACT.md](CONTRACT.md)。
+| 入口 | 用途 |
+|---|---|
+| 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳、运行输出（只读） |
+| 会话头小图标 / 指南卡 | 打开同一面板 |
+| `node bin/flow.mjs …` | 人改台账、跑门禁、迁移旧数据 |
+| agent 工具 `flow_*` | 模型改台账、跑门禁 |
+| 内嵌技能 `project-flow-init` / `project-flow-usage` | 教模型何时初始化、怎么维护 |
 
-## 安装
+契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。
 
-这是一个本地 DSH bundle（`@local/project-flow`），无 npm 依赖、无构建步骤。
+## 初始化一个项目
+
+```text
+node ./bin/flow.mjs --root <项目根> init [--name 名称] [--migrate all]
+```
+
+会在 `<项目根>/.dsh/flow/` 下创建：
+
+```
+.dsh/flow/
+  flow.json                 契约（schema 2）
+  experiments/<id>.json     实验（E-YYYYMMDD-NN，parent 指向父实验）
+  tasks/<id>.json           任务（T-YYYYMMDD-NN）
+  gates/<id>.json           门禁定义（步骤 + 期望 + 超时）
+  logs/<gateId>/<时间>.json 门禁运行记录
+```
+
+`--migrate all` 会把旧的 `git` 提交里的 `Exp-Id` trailer 和 `.agents/tasks/*.json` 一次性导入；
+之后以 store 为准，不再写 trailer。
+
+## 常用 CLI
+
+```text
+flow status                     # 项目名/契约/计数/最近记录
+flow exp list|show <id>|tree    # 实验列表、详情、谱系树
+flow exp add --title T [--hypothesis H --factor F --parent ID --expected E]
+flow exp update <id> --status confirmed --measured '...' --commits abc1234
+flow task add --title T [--status draft|active|done|archived]
+flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
+flow gate run smoke             # 顺序执行步骤、首个失败即停、写运行记录
+flow gate logs smoke            # 最近运行记录
+```
+
+所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法 /
+2 校验 / 3 未找到 / 4 IO。
+
+## 安装（本机 DSH）
+
+本地 bundle `@local/project-flow`，无 npm 依赖、无构建步骤：
 
 ```text
 plugin_manager install_bundle  target=.
 ```
 
-或把本目录作为本地包安装后在 profile 里启用条目 `project-flow`
-（`cordis.patch.yml` 会 insert `id: project-flow` → `name: '@local/project-flow'`）。
-安装后刷新页面即可。
+`cordis.patch.yml` 会 insert 条目 `project-flow`。安装后刷新页面；卸载用
+`plugin_manager remove_bundle target=@local/project-flow`。
 
-## 打开方式
+## 两种数据模式
 
-三种入口，任选：
-
-1. **右侧栏标签**——面板常驻右侧栏，切换项目不丢状态；
-2. **会话头按钮**——顶栏流程图标，点开同一面板；
-3. **指南卡**——首次启用时出现的一张说明卡，点「打开」进入面板。
-
-面板每 2.5 秒拉一次 `GET /api/project-flow/state`；页面隐藏时暂停，切回可见立即重拉；
-切换项目时也立即重拉。
-
-## 多项目
-
-- 所有「带契约或带默认布局」的已注册 workspace 都会出现在「项目」选择器里；
-- 项目选择只保存在当前面板实例里：刷新页面或重开标签会回落到自动选择
-  （按 `<root>/.agents/tasks` 的最新修改时间择一）；
-- 想固定某个项目，用 `?root=<绝对路径>` 直接请求 Host 端点（该目录自带 `flow.json`
-  时即使尚未注册为 workspace 也接受）。
-
-## 自测
-
-`.selftest/` 是可重跑的回归资产（用于验收与后续改动），不属于运行时：
-
-```text
-node .selftest/harness.mjs             # Host：契约、发现、适配器、边界（52 断言）
-node .selftest/root-explicit.mjs       # Host：显式 root 的 opt-in 规则
-node .selftest/client-registration.mjs # Client：座位注册、locale 键、源码卫生（30 断言）
-node .selftest/client-render.mjs       # Client：渲染与真实 payload 回放（31 断言）
-node .selftest/client-poll.mjs         # Client：轮询/取消/可见性（11 断言）
-```
-
-`state-*.json` 是 Host harness 生成的真实快照，`client-render.mjs` 会直接回放它们。
-
-## 卸载
-
-```text
-plugin_manager remove_bundle  target=@local/project-flow
-```
-
-只想临时关掉而保留包：在插件列表里禁用条目 `project-flow`。卸载只移除面板与那条
-`/api/project-flow/state` 路由，不会动任何项目文件——本包从不写文件。
+- **store 模式**：项目有 `.dsh/flow/flow.json` → 实验/任务/门禁读 store，面板画 `parent` 谱系树；
+- **legacy 模式**：没有 store → 沿用旧布局（git `Exp-Id` trailer、`.agents/tasks` JSON 或 Markdown、
+  `.agents/gate-observe.log`、`.agents/heartbeat`），面板只读展示，不迁移、不写。
 
 ## 边界
 
-- **只读**：Host 半只读文件与 git 元信息，不写、不建目录、不删；没有 watcher，每次请求现算。
-- **零依赖**：只用 node 内置模块；不联网；git 调用 4 秒超时。
-- **降级不报错**：目录缺失、`flow.json` 坏、非 git 仓库、`webServer` 服务缺失，一律返回结构完整的
-  200（或空段），异常只进 `warnings`。
-- **安全**：exact GET 路由，非 GET → 405；外站 `origin` → 403；响应 `cache-control: no-store`。
-- **不是数据库**：只展示「最近」的切片（实验最近 400 条提交、门禁末 40 行、心跳 20 条、
-  运行输出 4 个文件），不做历史归档与检索。需要长期记录请写到项目自己的台账里。
+- **面板只读**；写入口只有 CLI 与 agent 工具，且都经过 `lib/core.mjs`（锁 + 原子写 + 校验）。
+- **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
+- **零依赖**：只用 node 内置模块；不联网。
+- **锁只防同机并发**；门禁步骤会以 `shell` 执行，命令来自项目自己的 `gates/*.json`，请只放可信命令。
+- 面板每 2.5 秒轮询 `GET /api/project-flow/state`，页面隐藏时暂停；无 watcher，每次请求现算。
+- 实验/门禁日志只示「最近」切片（实验 400 条、门禁日志 10 行、心跳 20 条、运行输出 4 个文件）。
+
+## 自测
+
+`.selftest/` 与 `test/` 是可重跑的回归资产：
+
+```text
+node --test test/                        # core + CLI：27 用例
+node .selftest/harness.mjs               # Host legacy 适配器
+node .selftest/host2-tools.mjs           # Host store 模式、4 工具、2 技能
+node .selftest/client-registration.mjs   # Client 座位注册 / locale
+node .selftest/client-render.mjs         # Client 渲染 + 真实 payload 回放
+node .selftest/client-poll.mjs           # Client 轮询 / 取消 / 可见性
+```
+
+`.selftest/state-*.json` 是 Host 自测生成的快照，`client-render.mjs` 直接回放。

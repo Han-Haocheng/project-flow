@@ -1,0 +1,334 @@
+{
+ "ok": true,
+ "generatedAt": "2026-10-28T15:01:15+08:00",
+ "contract": {
+  "source": ".dsh/flow/flow.json",
+  "schema": 2,
+  "name": "TmpProj"
+ },
+ "roots": [
+  {
+   "path": "/tmp/tmp.9eYBmSazrZ",
+   "name": "TmpProj"
+  }
+ ],
+ "root": "/tmp/tmp.9eYBmSazrZ",
+ "head": {
+  "sha": "432243c",
+  "subject": "exp(learning): [待验证] 竞争性信用分配能让预测分化",
+  "branch": "dev",
+  "dirty": 4
+ },
+ "experiments": {
+  "source": "store",
+  "total": 3,
+  "counts": {
+   "total": 3,
+   "open": 3,
+   "confirmed": 0,
+   "refuted": 0,
+   "abandoned": 0
+  },
+  "items": [
+   {
+    "title": "第三款并行",
+    "hypothesis": "另一支",
+    "factor": "learning",
+    "expected": "c<=1",
+    "schema": 1,
+    "id": "E-20261028-03",
+    "parent": null,
+    "scale": "",
+    "status": "open",
+    "measured": "",
+    "metrics": {},
+    "commits": [],
+    "notes": "",
+    "created_at": "2026-10-28T16:47:55+08:00",
+    "updated_at": "2026-10-28T16:47:55+08:00"
+   },
+   {
+    "title": "第二款",
+    "hypothesis": "在 A 基础上改 C",
+    "factor": "focus",
+    "expected": "b<=1",
+    "parent": "E-20261028-01",
+    "schema": 1,
+    "id": "E-20261028-02",
+    "scale": "",
+    "status": "open",
+    "measured": "",
+    "metrics": {},
+    "commits": [],
+    "notes": "",
+    "created_at": "2026-10-28T16:47:55+08:00",
+    "updated_at": "2026-10-28T16:47:55+08:00"
+   },
+   {
+    "title": "第一款实验",
+    "hypothesis": "A 能改善 B",
+    "factor": "focus",
+    "expected": "a<=1",
+    "schema": 1,
+    "id": "E-20261028-01",
+    "parent": null,
+    "scale": "",
+    "status": "open",
+    "measured": "",
+    "metrics": {},
+    "commits": [],
+    "notes": "",
+    "created_at": "2026-10-28T16:46:43+08:00",
+    "updated_at": "2026-10-28T16:46:43+08:00"
+   }
+  ],
+  "tree": [
+   {
+    "title": "第三款并行",
+    "hypothesis": "另一支",
+    "factor": "learning",
+    "expected": "c<=1",
+    "schema": 1,
+    "id": "E-20261028-03",
+    "parent": null,
+    "scale": "",
+    "status": "open",
+    "measured": "",
+    "metrics": {},
+    "commits": [],
+    "notes": "",
+    "created_at": "2026-10-28T16:47:55+08:00",
+    "updated_at": "2026-10-28T16:47:55+08:00",
+    "children": []
+   },
+   {
+    "title": "第一款实验",
+    "hypothesis": "A 能改善 B",
+    "factor": "focus",
+    "expected": "a<=1",
+    "schema": 1,
+    "id": "E-20261028-01",
+    "parent": null,
+    "scale": "",
+    "status": "open",
+    "measured": "",
+    "metrics": {},
+    "commits": [],
+    "notes": "",
+    "created_at": "2026-10-28T16:46:43+08:00",
+    "updated_at": "2026-10-28T16:46:43+08:00",
+    "children": [
+     {
+      "title": "第二款",
+      "hypothesis": "在 A 基础上改 C",
+      "factor": "focus",
+      "expected": "b<=1",
+      "parent": "E-20261028-01",
+      "schema": 1,
+      "id": "E-20261028-02",
+      "scale": "",
+      "status": "open",
+      "measured": "",
+      "metrics": {},
+      "commits": [],
+      "notes": "",
+      "created_at": "2026-10-28T16:47:55+08:00",
+      "updated_at": "2026-10-28T16:47:55+08:00",
+      "children": []
+     }
+    ]
+   }
+  ],
+  "groups": []
+ },
+ "tasks": {
+  "source": "json",
+  "total": 1,
+  "counts": {
+   "draft": 0,
+   "active": 1,
+   "done": 0,
+   "archived": 0,
+   "other": 0,
+   "total": 1
+  },
+  "current": null,
+  "active": [
+   {
+    "id": "T-20261028-01",
+    "title": "第一任务",
+    "status": "active",
+    "owner": "me",
+    "updated_at": "2026-10-28T16:46:43+08:00",
+    "goal": ""
+   }
+  ],
+  "recentDone": []
+ },
+ "gate": null,
+ "heartbeats": [
+  {
+   "file": "T-20261026-44-eval-harness.md",
+   "title": "T-20261026-44 进度（评测基线子代理）",
+   "statusLine": "状态：完成（待协调者构建/运行/提交）",
+   "ageSeconds": 190457,
+   "mtime": 1792980418186
+  },
+  {
+   "file": "T-20261026-43-doc-eval-fix.md",
+   "title": "T-20261026-43 进度（文档子代理）",
+   "statusLine": "状态：完成（待协调者验收/提交）",
+   "ageSeconds": 191246,
+   "mtime": 1792979629696
+  },
+  {
+   "file": "T-20261025-40-active-window.md",
+   "title": "T-20261025-40 heartbeat（active window 去重 O(1)）",
+   "statusLine": "状态：实现 + 自测 + 基准全部完成，等待协调者门禁。",
+   "ageSeconds": 243601,
+   "mtime": 1792927274010
+  }
+ ],
+ "runs": [
+  {
+   "path": ".agents/tmp/t53/new_norm.txt",
+   "ageSeconds": 465,
+   "size": 3296,
+   "lines": [
+    "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
+    "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
+    "focus config normalize=0 pi=0 target=64 (0=off, default target=64)",
+    "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
+    "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
+    "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
+    "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
+    "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
+    "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
+   ]
+  },
+  {
+   "path": ".agents/tmp/t53/base_norm.txt",
+   "ageSeconds": 465,
+   "size": 3296,
+   "lines": [
+    "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
+    "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
+    "focus config normalize=0 pi=0 target=64 (0=off, default target=64)",
+    "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
+    "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
+    "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
+    "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
+    "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
+    "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
+   ]
+  },
+  {
+   "path": ".agents/tmp/t53/new_relative2.txt",
+   "ageSeconds": 465,
+   "size": 3328,
+   "lines": [
+    "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
+    "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
+    "focus config normalize=0 pi=0 target=64 out_relative=1 (0=off, default target=64)",
+    "seed=1 majority=2000 top1_train=0.437500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=1 sat_rate=0.5811 sat_nodes_mean=158.38 tie_rate=0.9167 tie_mean=2.50 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=2 sat_rate=0.5816 sat_nodes_mean=158.67 tie_rate=0.9583 tie_mean=2.79 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=3 sat_rate=0.5814 sat_nodes_mean=158.54 tie_rate=0.9583 tie_mean=2.62 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "summary top1_train=0.354167+/-0.077951 top1_holdout=0.166667+/-0.058926",
+    "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
+    "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
+    "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
+    "summary sat_rate=0.5814+/-0.0002 sat_nodes_mean=158.53+/-0.12 tie_rate=0.9444+/-0.0196 tie_mean=2.64+/-0.12 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
+    "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.354167,\"top1_train_std\":0.077951,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
+   ]
+  },
+  {
+   "path": ".agents/tmp/t53/new_default2.txt",
+   "ageSeconds": 478,
+   "size": 3328,
+   "lines": [
+    "metric baseline: top-1 accuracy of \"always output the train-majority target\" on the same sample set",
+    "config seeds=3 train=16 holdout=8 symbols=4 frames_per_sample=4 epochs=40 study_interval=32",
+    "focus config normalize=0 pi=0 target=64 out_relative=0 (0=off, default target=64)",
+    "seed=1 majority=2000 top1_train=0.312500 top1_holdout=0.250000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.312500 baseline_holdout=0.250000 nodes=2588 edges=22962 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=1 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=2 majority=2000 top1_train=0.375000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.375000 baseline_holdout=0.125000 nodes=2588 edges=22990 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=2 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "seed=3 majority=2003 top1_train=0.250000 top1_holdout=0.125000 extras_train=3.000000 extras_holdout=3.000000 baseline_train=0.437500 baseline_holdout=0.250000 nodes=2588 edges=22978 studies=79 training_frames=2560 leak_samples=0",
+    "  diag seed=3 sat_rate=0.5823 sat_nodes_mean=159.08 tie_rate=1.0000 tie_mean=3.00 outputs_mean=4.00 active_mean=415.33 focus_mean=0.1000 focus=[0.1000,0.1000] focus_final=0.1000",
+    "summary top1_train=0.312500+/-0.051031 top1_holdout=0.166667+/-0.058926",
+    "summary extras_train=3.000000+/-0.000000 extras_holdout=3.000000+/-0.000000",
+    "summary baseline_train=0.375000+/-0.051031 baseline_holdout=0.208333+/-0.058926",
+    "summary nodes=2588.00+/-0.00 edges=22976.67+/-11.47 studies=79.00+/-0.00 training_frames=2560.00+/-0.00",
+    "summary sat_rate=0.5823+/-0.0000 sat_nodes_mean=159.08+/-0.00 tie_rate=1.0000+/-0.0000 tie_mean=3.00+/-0.00 outputs_mean=4.00+/-0.00 active_mean=415.33+/-0.00 focus_mean=0.1000+/-0.0000 focus_range=[0.1000,0.1000] focus_final=0.1000",
+    "{\"train\":16,\"holdout\":8,\"symbols\":4,\"frames_per_sample\":4,\"epochs\":40,\"seeds\":3,\"top1_train\":0.312500,\"top1_train_std\":0.051031,\"top1_holdout\":0.166667,\"top1_holdout_std\":0.058926,\"extras_train\":3.000000,\"extras_train_std\":0.000000,\"extras_holdout\":3.000000,\"extras_holdout_std\":0.000000,\"baseline_train\":0.375000,\"baseline_train_std\":0.051031,\"baseline_holdout\":0.208333,\"baseline_holdout_std\":0.058"
+   ]
+  }
+ ],
+ "warnings": [],
+ "gates": [
+  {
+   "id": "smoke",
+   "title": "冒烟",
+   "phase": "commit",
+   "steps": [
+    {
+     "id": "ok",
+     "run": "true",
+     "expect": "exit 0",
+     "timeoutSeconds": 600
+    },
+    {
+     "id": "bad",
+     "run": "false",
+     "expect": "exit 0",
+     "timeoutSeconds": 600
+    }
+   ],
+   "schema": 1,
+   "enabled": true,
+   "created_at": "2026-10-28T16:46:43+08:00",
+   "updated_at": "2026-10-28T16:46:43+08:00",
+   "lastRun": {
+    "gate": "smoke",
+    "title": "冒烟",
+    "started_at": "2026-10-28T16:46:43+08:00",
+    "finished_at": "2026-10-28T16:46:43+08:00",
+    "durationMs": 6,
+    "ok": false,
+    "steps": [
+     {
+      "id": "ok",
+      "run": "true",
+      "expect": "exit 0",
+      "exit": 0,
+      "ok": true,
+      "durationMs": 4
+     },
+     {
+      "id": "bad",
+      "run": "false",
+      "expect": "exit 0",
+      "exit": 1,
+      "ok": false,
+      "durationMs": 2
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -13,15 +13,21 @@
  *
  * The panel polls `api/project-flow/state` (document relative) every 2500 ms,
  * keeps the last good snapshot on failure, and renders:
- *   experiment tree (grouped by Factor) · task ledger progress · gate log tail ·
- *   agent heartbeats · recent run output.
+ *   experiment lineage tree · task ledger progress · gate definitions ·
+ *   gate log tail · agent heartbeats · recent run output.
  *
  * Host payload notes (all optional, all tolerated when missing):
  *   - `roots[]` drives the project switcher (hidden unless more than one);
  *   - `contract: { source, schema, name }` renders one footer line saying
  *     whether the ledger is inferred ("defaults") or declared by a file;
- *   - `gate: null` means the project turned gate logging off — the gate section
- *     shows a localized empty state instead of an empty log;
+ *   - `experiments.source` is `store` (a `.dsh/flow/` store: flat `items`, a
+ *     `tree` of `{id, children}`, per-status `counts`) or `git-trailers` (the
+ *     legacy `groups` per Factor); the tree renders either shape;
+ *   - `gates[]` are gate definitions with an optional `lastRun`; a missing or
+ *     null `gates` key (legacy payload) hides the section entirely, while an
+ *     empty array shows its empty state;
+ *   - `gate: null` means the project turned gate logging off — the gate log
+ *     section shows a localized empty state instead of an empty log;
  *   - `tasks.counts.other` covers markdown / no-ledger task sources.
  *
  * Layout is container-query driven: the same component serves a 300 px docked
@@ -49,6 +55,8 @@ window.__ModuleLoader__.load({
     const POLL_MS = 2500;
     const CLOCK_MS = 1000;
     const MAX_TREE_ROWS = 300;
+    const MAX_TREE_DEPTH = 12;
+    const MAX_GATE_TAIL_LINES = 8;
     const MAX_GATE_LINES = 10;
     const MAX_RUN_LINES = 8;
     const MAX_WARNINGS = 10;
@@ -95,12 +103,24 @@ window.__ModuleLoader__.load({
       'exp.total': '总数',
       'exp.empty': '还没有带实验记录的提交。',
       'exp.emptyHint': '提交带实验 trailer 的 commit 后，实验会出现在这里。',
+      'exp.empty.store': '还没有实验记录。',
+      'exp.emptyHint.store': '运行 flow exp add … 或使用 flow_exp 工具添加第一条实验。',
       'exp.more': '还有 {n} 条未显示',
       'exp.openBanner': '○ {n} 条假设还没验证',
       'exp.detail.hypothesis': '假设',
       'exp.detail.expected': '预期',
       'exp.detail.measured': '实测',
       'exp.detail.none': '未记录',
+      'exp.metrics': '指标',
+      'exp.notes': '备注',
+      'exp.parent': '父实验',
+      'exp.commits': '提交',
+      'exp.source.store': 'store',
+      'exp.source.trailers': 'git trailer',
+      'exp.status.open': '未验证',
+      'exp.status.confirmed': '已确认',
+      'exp.status.refuted': '已证伪',
+      'exp.status.abandoned': '已放弃',
       'tasks.title': '任务进度',
       'tasks.total': '共 {n} 个任务',
       'tasks.status.draft': '草稿',
@@ -117,6 +137,15 @@ window.__ModuleLoader__.load({
       'tasks.owner': '负责人',
       'tasks.gate.pass': '门禁通过',
       'tasks.gate.fail': '门禁失败',
+      'gates.title': '门禁',
+      'gates.empty': '还没有门禁定义；用 flow gate add 创建',
+      'gates.phase.commit': '提交',
+      'gates.phase.release': '发布',
+      'gates.phase.manual': '手动',
+      'gates.never': '从未运行',
+      'gates.run.ok': '✔ {time}',
+      'gates.run.fail': '✘ {time}',
+      'gates.steps': '步骤',
       'signals.title': '实时信号',
       'signals.gate': '门禁日志',
       'signals.gate.updated': '更新于 {time}',
@@ -177,12 +206,24 @@ window.__ModuleLoader__.load({
       'exp.total': 'total',
       'exp.empty': 'No commit carries an experiment record yet.',
       'exp.emptyHint': 'Commit with an experiment trailer and it shows up here.',
+      'exp.empty.store': 'No experiments recorded yet.',
+      'exp.emptyHint.store': 'Run flow exp add … or add the first one with the flow_exp tool.',
       'exp.more': '{n} more not shown',
       'exp.openBanner': '○ {n} hypotheses not yet tested',
       'exp.detail.hypothesis': 'Hypothesis',
       'exp.detail.expected': 'Expected',
       'exp.detail.measured': 'Measured',
       'exp.detail.none': 'not recorded',
+      'exp.metrics': 'Metrics',
+      'exp.notes': 'Notes',
+      'exp.parent': 'Parent',
+      'exp.commits': 'Commits',
+      'exp.source.store': 'store',
+      'exp.source.trailers': 'git trailers',
+      'exp.status.open': 'open',
+      'exp.status.confirmed': 'confirmed',
+      'exp.status.refuted': 'refuted',
+      'exp.status.abandoned': 'abandoned',
       'tasks.title': 'Task progress',
       'tasks.total': '{n} tasks',
       'tasks.status.draft': 'draft',
@@ -199,6 +240,15 @@ window.__ModuleLoader__.load({
       'tasks.owner': 'owner',
       'tasks.gate.pass': 'gate pass',
       'tasks.gate.fail': 'gate fail',
+      'gates.title': 'Gates',
+      'gates.empty': 'No gate definitions yet; create one with flow gate add',
+      'gates.phase.commit': 'commit',
+      'gates.phase.release': 'release',
+      'gates.phase.manual': 'manual',
+      'gates.never': 'never run',
+      'gates.run.ok': '✔ {time}',
+      'gates.run.fail': '✘ {time}',
+      'gates.steps': 'Steps',
       'signals.title': 'Live signals',
       'signals.gate': 'Gate log',
       'signals.gate.updated': 'updated {time}',
@@ -317,7 +367,18 @@ window.__ModuleLoader__.load({
       const value = asText(verdict);
       if (value === 'confirmed') return { cls: 'confirmed', glyph: '\u2714' };
       if (value === 'refuted') return { cls: 'refuted', glyph: '\u2718' };
+      if (value === 'abandoned') return { cls: 'abandoned', glyph: '\u2298' };
       return { cls: 'open', glyph: '\u25cb' };
+    }
+
+    /** Compact duration for a gate run: "850ms" · "1.2s" · "2m 5s". */
+    function formatDuration(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return '';
+      if (ms < 1000) return Math.round(ms) + 'ms';
+      if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
+      const minutes = Math.floor(ms / 60000);
+      const seconds = Math.round((ms % 60000) / 1000);
+      return seconds > 0 ? minutes + 'm ' + seconds + 's' : minutes + 'm';
     }
 
     function joinParts(parts) {
@@ -326,6 +387,100 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region state normalization
+    /** One flat store experiment; legacy group items are not passed through here. */
+    function normalizeItem(raw) {
+      const item = asObject(raw);
+      return {
+        id: asText(item.id),
+        title: asText(item.title),
+        hypothesis: asText(item.hypothesis),
+        factor: asText(item.factor),
+        parent: asText(item.parent) || null,
+        status: asText(item.status) || asText(item.verdict),
+        verdict: asText(item.verdict),
+        expected: asText(item.expected),
+        measured: asText(item.measured),
+        scale: asText(item.scale),
+        metrics: item.metrics === undefined ? null : item.metrics,
+        commits: asArray(item.commits).map(asText).filter(Boolean),
+        created_at: asText(item.created_at),
+        updated_at: asText(item.updated_at),
+        notes: asText(item.notes),
+        at: asText(item.at),
+        date: asText(item.date),
+        sha: asText(item.sha),
+      };
+    }
+
+    /** `tree` nodes are `{id, children[]}`; the item data is looked up by id. */
+    function normalizeTreeNode(rawNode, depth) {
+      const node = asObject(rawNode);
+      return {
+        id: asText(node.id),
+        children:
+          depth < MAX_TREE_DEPTH
+            ? asArray(node.children)
+                .filter((child) => child && typeof child === 'object' && !Array.isArray(child))
+                .map((child) => normalizeTreeNode(child, depth + 1))
+            : [],
+      };
+    }
+
+    function normalizeGate(rawGate) {
+      const gate = asObject(rawGate);
+      const lastSrc =
+        gate.lastRun && typeof gate.lastRun === 'object' && !Array.isArray(gate.lastRun)
+          ? asObject(gate.lastRun)
+          : null;
+      let lastRun = null;
+      if (lastSrc) {
+        const startedAt = asText(lastSrc.started_at);
+        lastRun = {
+          startedAt,
+          startedMs: asNumber(Date.parse(startedAt), null),
+          ok: lastSrc.ok === true,
+          durationMs: asNumber(lastSrc.durationMs, null),
+          steps: asArray(lastSrc.steps)
+            .filter((step) => step && typeof step === 'object' && !Array.isArray(step))
+            .map((step) => {
+              const result = asObject(step);
+              return {
+                id: asText(result.id),
+                exit: asNumber(result.exit, null),
+                ok: result.ok === true,
+                tail: asText(result.tail),
+              };
+            }),
+        };
+      }
+      return {
+        id: asText(gate.id),
+        title: asText(gate.title),
+        phase: asText(gate.phase),
+        enabled: gate.enabled === false ? false : true,
+        steps: asArray(gate.steps)
+          .filter((step) => step && typeof step === 'object' && !Array.isArray(step))
+          .map((step) => {
+            const definition = asObject(step);
+            return {
+              id: asText(definition.id),
+              run: asText(definition.run),
+              expect: asText(definition.expect),
+              timeoutSeconds: asNumber(definition.timeoutSeconds, null),
+            };
+          }),
+        lastRun,
+      };
+    }
+
+    /** `undefined`/`null` hides the section (legacy payload); `[]` shows it empty. */
+    function normalizeGates(rawGates) {
+      if (rawGates === undefined || rawGates === null) return null;
+      return asArray(rawGates)
+        .filter((gate) => gate && typeof gate === 'object' && !Array.isArray(gate))
+        .map(normalizeGate);
+    }
+
     /** Tolerant mapping of the host payload; never throws on missing fields. */
     function normalize(payload) {
       const src = asObject(payload);
@@ -350,19 +505,49 @@ window.__ModuleLoader__.load({
         };
       });
 
-      let confirmed = 0;
-      let refuted = 0;
-      let open = 0;
+      /* Store mode: flat `items` + a `tree` of `{id, children}` + status `counts`. */
+      const items = asArray(expSrc.items)
+        .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+        .map(normalizeItem);
+      const tree = asArray(expSrc.tree)
+        .filter((node) => node && typeof node === 'object' && !Array.isArray(node))
+        .map((node) => normalizeTreeNode(node, 0));
+      const storeMode = asText(expSrc.source) === 'store' || items.length > 0 || tree.length > 0;
+
+      /* Legacy tally from `groups`; store tally from each item's `status`. */
+      let legacyConfirmed = 0;
+      let legacyRefuted = 0;
+      let legacyOpen = 0;
       groups.forEach((group) => {
         group.items.forEach((item) => {
           const verdict = asText(item.verdict);
-          if (verdict === 'confirmed') confirmed += 1;
-          else if (verdict === 'refuted') refuted += 1;
-          else open += 1;
+          if (verdict === 'confirmed') legacyConfirmed += 1;
+          else if (verdict === 'refuted') legacyRefuted += 1;
+          else legacyOpen += 1;
         });
       });
+      const statusTally = { open: 0, confirmed: 0, refuted: 0, abandoned: 0 };
+      items.forEach((item) => {
+        if (Object.prototype.hasOwnProperty.call(statusTally, item.status)) statusTally[item.status] += 1;
+      });
+      const tallies = storeMode
+        ? statusTally
+        : { open: legacyOpen, confirmed: legacyConfirmed, refuted: legacyRefuted, abandoned: 0 };
+      const expCounts = asObject(expSrc.counts);
+      /* Explicit top-level counts (older hosts) stay ahead of the tally. */
+      const counts = {
+        open: asNumber(expCounts.open, asNumber(expSrc.open, tallies.open)),
+        confirmed: asNumber(expCounts.confirmed, asNumber(expSrc.confirmed, tallies.confirmed)),
+        refuted: asNumber(expCounts.refuted, asNumber(expSrc.refuted, tallies.refuted)),
+        abandoned: asNumber(expCounts.abandoned, tallies.abandoned),
+      };
+      const expTotal = asNumber(
+        expSrc.total,
+        counts.open + counts.confirmed + counts.refuted + counts.abandoned
+      );
 
-      const countsSrc = asObject(tasksSrc.counts);
+      const taskCountsSrc = asObject(tasksSrc.counts);
+      const gates = normalizeGates(src.gates);
       const warnings = asArray(src.warnings).map(asText).filter(Boolean);
 
       return {
@@ -388,26 +573,33 @@ window.__ModuleLoader__.load({
           dirty: asNumber(headSrc.dirty, 0),
         },
         exp: {
-          total: asNumber(expSrc.total, confirmed + refuted + open),
-          confirmed: asNumber(expSrc.confirmed, confirmed),
-          refuted: asNumber(expSrc.refuted, refuted),
-          open: asNumber(expSrc.open, open),
+          source: asText(expSrc.source) || 'git-trailers',
+          store: storeMode,
+          total: expTotal,
+          confirmed: counts.confirmed,
+          refuted: counts.refuted,
+          open: counts.open,
+          abandoned: counts.abandoned,
+          counts,
+          items,
+          tree,
           groups,
         },
         tasks: {
           total: asNumber(tasksSrc.total, 0),
           counts: {
-            draft: asNumber(countsSrc.draft, 0),
-            active: asNumber(countsSrc.active, 0),
-            done: asNumber(countsSrc.done, 0),
-            archived: asNumber(countsSrc.archived, 0),
+            draft: asNumber(taskCountsSrc.draft, 0),
+            active: asNumber(taskCountsSrc.active, 0),
+            done: asNumber(taskCountsSrc.done, 0),
+            archived: asNumber(taskCountsSrc.archived, 0),
             /* Markdown / no-ledger projects often report only this bucket. */
-            other: asNumber(countsSrc.other, 0),
+            other: asNumber(taskCountsSrc.other, 0),
           },
           current: tasksSrc.current === undefined ? null : tasksSrc.current,
           active: asArray(tasksSrc.active).filter((task) => task && typeof task === 'object'),
           recentDone: asArray(tasksSrc.recentDone).filter((task) => task && typeof task === 'object'),
         },
+        gates,
         gate: {
           disabled: gateDisabled,
           lines: asArray(gateSrc.lines).map(asText),
@@ -530,14 +722,44 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region experiment tree
+    /** `metrics` may arrive as an object or as `{key, value}` entries. */
+    function metricsText(metrics) {
+      if (!metrics) return '';
+      if (Array.isArray(metrics)) {
+        return metrics
+          .map((entry) => {
+            if (entry && typeof entry === 'object') {
+              const key = asText(entry.key !== undefined ? entry.key : entry.name);
+              const value = asText(entry.value);
+              if (key && value) return key + ': ' + value;
+              return key || value;
+            }
+            return asText(entry);
+          })
+          .filter(Boolean)
+          .join('\n');
+      }
+      if (typeof metrics !== 'object') return asText(metrics);
+      return Object.keys(metrics)
+        .map((key) => key + ': ' + asText(metrics[key]))
+        .join('\n');
+    }
+
     function DetailBlock(props) {
-      const item = props.item;
+      const item = asObject(props.item);
       const t = props.t;
       const rows = [
         { label: t('exp.detail.hypothesis'), value: item.hypothesis },
         { label: t('exp.detail.expected'), value: item.expected },
         { label: t('exp.detail.measured'), value: item.measured },
       ];
+      const metrics = metricsText(item.metrics);
+      if (metrics) rows.push({ label: t('exp.metrics'), value: metrics });
+      if (asText(item.notes)) rows.push({ label: t('exp.notes'), value: item.notes });
+      /* A parent is display-only text: the tree already draws the lineage. */
+      if (asText(item.parent)) rows.push({ label: t('exp.parent'), value: item.parent });
+      const commits = asArray(item.commits).map(shortSha).filter(Boolean).join(', ');
+      if (commits) rows.push({ label: t('exp.commits'), value: commits });
       return React.createElement(
         'div',
         { className: 'project-flow-detail' },
@@ -556,9 +778,89 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** Stand-in item for a tree node whose id is absent from `items`. */
+    function blankItem(id) {
+      return normalizeItem({ id });
+    }
+
+    function hydrateNode(rawNode, itemById, seen, depth) {
+      const node = asObject(rawNode);
+      const id = asText(node.id);
+      const item = id && itemById[id] ? itemById[id] : blankItem(id);
+      if (depth >= MAX_TREE_DEPTH) return { item, children: [] };
+      if (id) {
+        if (seen[id]) return { item, children: [] };
+        seen[id] = true;
+      }
+      const children = asArray(node.children)
+        .filter((child) => child && typeof child === 'object' && !Array.isArray(child))
+        .map((child) => hydrateNode(child, itemById, seen, depth + 1));
+      return { item, children };
+    }
+
+    /** The payload `tree` wins; without it the forest is rebuilt from `parent`. */
+    function composeTree(exp) {
+      const items = asArray(exp.items);
+      const nodes = asArray(exp.tree);
+      const itemById = Object.create(null);
+      items.forEach((item) => {
+        if (item && item.id && !itemById[item.id]) itemById[item.id] = item;
+      });
+      if (nodes.length > 0) {
+        const seen = Object.create(null);
+        return nodes
+          .filter((node) => node && typeof node === 'object' && !Array.isArray(node))
+          .map((node) => hydrateNode(node, itemById, seen, 0));
+      }
+      if (items.length === 0) return [];
+
+      const childrenOf = Object.create(null);
+      const roots = [];
+      items.forEach((item) => {
+        const parentId = item.parent && item.parent !== item.id && itemById[item.parent] ? item.parent : '';
+        if (!parentId) {
+          roots.push(item);
+          return;
+        }
+        if (!childrenOf[parentId]) childrenOf[parentId] = [];
+        childrenOf[parentId].push(item);
+      });
+
+      const seen = Object.create(null);
+      const build = (item, depth) => {
+        if (depth >= MAX_TREE_DEPTH || seen[item.id]) return { item, children: [] };
+        seen[item.id] = true;
+        const children = asArray(childrenOf[item.id]).map((child) => build(child, depth + 1));
+        return { item, children };
+      };
+      /* A parent cycle would leave every node parented; promote all to roots. */
+      const top = roots.length > 0 ? roots : items;
+      return top.map((item) => build(item, 0));
+    }
+
+    /** Flatten the forest; every row carries its own `├─` / `└─` prefix. */
+    function flattenTree(nodes, ancestors, out) {
+      const list = asArray(nodes);
+      list.forEach((node, index) => {
+        const last = index === list.length - 1;
+        let prefix = '';
+        ancestors.forEach((hasNext) => {
+          prefix += hasNext ? '\u2502  ' : '   ';
+        });
+        prefix += last ? '\u2514\u2500' : '\u251c\u2500';
+        out.push({ item: node.item, children: node.children, prefix });
+        /* A leaf draws no extra connector: only its own line is emitted. */
+        if (asArray(node.children).length > 0) {
+          flattenTree(node.children, ancestors.concat(!last), out);
+        }
+      });
+      return out;
+    }
+
     function ExperimentTree(props) {
-      const exp = props.exp;
+      const exp = props.exp || {};
       const t = props.t;
+      const now = props.now;
       const [collapsedGroups, setCollapsedGroups] = useState({});
       const [openItems, setOpenItems] = useState({});
 
@@ -581,100 +883,157 @@ window.__ModuleLoader__.load({
       };
 
       const groups = asArray(exp.groups);
+      const items = asArray(exp.items);
+      const storeMode = exp.store === true || items.length > 0 || asArray(exp.tree).length > 0;
+      const counts = asObject(exp.counts);
+      const confirmed = asNumber(counts.confirmed, asNumber(exp.confirmed, 0));
+      const refuted = asNumber(counts.refuted, asNumber(exp.refuted, 0));
+      const openCount = asNumber(counts.open, asNumber(exp.open, 0));
+      const abandoned = asNumber(counts.abandoned, 0);
+      const total = asNumber(exp.total, confirmed + refuted + openCount + abandoned);
+
       const children = [];
+      const treeRows = storeMode ? flattenTree(composeTree(exp), [], []) : [];
       let budget = MAX_TREE_ROWS;
       let hidden = 0;
 
-      // 未验证的假设永远置顶：这是「容易忘」的部分。
-      const openList = [];
-      groups.forEach((group) => {
-        asArray(group.items).forEach((item) => {
-          if (!item || item.verdict) return;
-          openList.push(item);
-        });
-      });
-      if (openList.length > 0) {
-        const openRows = openList.slice(0, 5).map((item) =>
-          React.createElement(
-            'div',
-            { className: 'project-flow-row', key: 'open-' + item.id },
-            React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--open', 'aria-hidden': 'true' }, '\u25cb'),
-            React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id)),
-            React.createElement('span', { className: 'project-flow-rowHyp' }, asText(item.hypothesis) || t('misc.dash'))
-          )
-        );
-        children.push(
-          React.createElement(
-            'div',
-            { className: 'project-flow-guide', key: 'open-box' },
-            React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.openBanner', { n: openList.length })),
-            openRows,
-            openList.length > openRows.length
-              ? React.createElement('p', { className: 'project-flow-muted' }, t('exp.more', { n: openList.length - openRows.length }))
-              : null
-          )
-        );
-      }
-
-      groups.forEach((group, groupIndex) => {
-        const factor = group.factor || t('misc.dash');
-        const groupKey = 'group-' + groupIndex + '-' + factor;
-        const collapsed = collapsedGroups[groupKey] === true;
-        children.push(
-          React.createElement(
-            'button',
-            {
-              type: 'button',
-              className: 'project-flow-groupHead',
-              key: groupKey,
-              'aria-expanded': collapsed ? false : true,
-              onClick: () => toggleGroup(groupKey),
-            },
-            React.createElement(Caret, { open: !collapsed }),
-            React.createElement('span', { className: 'project-flow-groupName', title: factor }, factor),
-            React.createElement('span', { className: 'project-flow-count' }, ' (' + group.items.length + ')')
-          )
-        );
-        if (collapsed) return;
-
-        group.items.forEach((item, itemIndex) => {
+      if (treeRows.length > 0) {
+        treeRows.forEach((row, index) => {
           if (budget <= 0) {
             hidden += 1;
             return;
           }
           budget -= 1;
-          const id = asText(item.id) || t('misc.dash');
-          const verdict = verdictOf(item.verdict);
-          const itemKey = 'item-' + groupIndex + '-' + itemIndex;
-          const expanded = openItems[itemKey] === true;
-          const hypothesis = asText(item.hypothesis);
-          const meta = joinParts([asText(item.scale), asText(item.at) || asText(item.date), shortSha(item.sha)]);
-          const isLast = itemIndex === group.items.length - 1;
+          const item = row.item || {};
+          const key = 'tree-' + index + '-' + (item.id || '');
+          const expanded = openItems[key] === true;
+          const verdict = verdictOf(asText(item.status) || asText(item.verdict));
+          const label = asText(item.title) || asText(item.hypothesis);
+          const meta = joinParts([
+            asText(item.scale),
+            relativeMoment(Date.parse(asText(item.updated_at)), now, t) || '',
+            shortSha(asArray(item.commits)[0]),
+          ]);
 
           children.push(
             React.createElement(
               'div',
-              { className: 'project-flow-treeItem', key: itemKey },
+              { className: 'project-flow-treeItem', key },
               React.createElement(
                 'button',
                 {
                   type: 'button',
                   className: 'project-flow-row',
                   'aria-expanded': expanded ? true : false,
-                  title: hypothesis || undefined,
-                  onClick: () => toggleItem(itemKey),
+                  title: asText(item.hypothesis) || label || undefined,
+                  onClick: () => toggleItem(key),
                 },
-                React.createElement('span', { className: 'project-flow-connector', 'aria-hidden': 'true' }, isLast ? '\u2514\u2500' : '\u251c\u2500'),
-                React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' }, verdict.glyph),
-                React.createElement('span', { className: 'project-flow-rowId' }, id),
-                React.createElement('span', { className: 'project-flow-rowHyp' }, hypothesis || t('misc.dash')),
+                React.createElement('span', { className: 'project-flow-branch', 'aria-hidden': 'true' }, row.prefix),
+                React.createElement(
+                  'span',
+                  { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' },
+                  verdict.glyph
+                ),
+                React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id) || t('misc.dash')),
+                React.createElement('span', { className: 'project-flow-rowHyp' }, label || t('misc.dash')),
                 React.createElement('span', { className: 'project-flow-rowMeta' }, meta)
               ),
               expanded ? React.createElement(DetailBlock, { item, t }) : null
             )
           );
         });
-      });
+      } else {
+        // 未验证的假设永远置顶：这是「容易忘」的部分（legacy 分组模式）。
+        const openList = [];
+        groups.forEach((group) => {
+          asArray(group.items).forEach((item) => {
+            if (!item || item.verdict) return;
+            openList.push(item);
+          });
+        });
+        if (openList.length > 0) {
+          const openRows = openList.slice(0, 5).map((item) =>
+            React.createElement(
+              'div',
+              { className: 'project-flow-row', key: 'open-' + item.id },
+              React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--open', 'aria-hidden': 'true' }, '\u25cb'),
+              React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id)),
+              React.createElement('span', { className: 'project-flow-rowHyp' }, asText(item.hypothesis) || t('misc.dash'))
+            )
+          );
+          children.push(
+            React.createElement(
+              'div',
+              { className: 'project-flow-guide', key: 'open-box' },
+              React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.openBanner', { n: openList.length })),
+              openRows,
+              openList.length > openRows.length
+                ? React.createElement('p', { className: 'project-flow-muted' }, t('exp.more', { n: openList.length - openRows.length }))
+                : null
+            )
+          );
+        }
+
+        groups.forEach((group, groupIndex) => {
+          const factor = group.factor || t('misc.dash');
+          const groupKey = 'group-' + groupIndex + '-' + factor;
+          const collapsed = collapsedGroups[groupKey] === true;
+          children.push(
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'project-flow-groupHead',
+                key: groupKey,
+                'aria-expanded': collapsed ? false : true,
+                onClick: () => toggleGroup(groupKey),
+              },
+              React.createElement(Caret, { open: !collapsed }),
+              React.createElement('span', { className: 'project-flow-groupName', title: factor }, factor),
+              React.createElement('span', { className: 'project-flow-count' }, ' (' + group.items.length + ')')
+            )
+          );
+          if (collapsed) return;
+
+          group.items.forEach((item, itemIndex) => {
+            if (budget <= 0) {
+              hidden += 1;
+              return;
+            }
+            budget -= 1;
+            const id = asText(item.id) || t('misc.dash');
+            const verdict = verdictOf(item.verdict);
+            const itemKey = 'item-' + groupIndex + '-' + itemIndex;
+            const expanded = openItems[itemKey] === true;
+            const hypothesis = asText(item.hypothesis);
+            const meta = joinParts([asText(item.scale), asText(item.at) || asText(item.date), shortSha(item.sha)]);
+            const isLast = itemIndex === group.items.length - 1;
+
+            children.push(
+              React.createElement(
+                'div',
+                { className: 'project-flow-treeItem', key: itemKey },
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'project-flow-row',
+                    'aria-expanded': expanded ? true : false,
+                    title: hypothesis || undefined,
+                    onClick: () => toggleItem(itemKey),
+                  },
+                  React.createElement('span', { className: 'project-flow-connector', 'aria-hidden': 'true' }, isLast ? '\u2514\u2500' : '\u251c\u2500'),
+                  React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' }, verdict.glyph),
+                  React.createElement('span', { className: 'project-flow-rowId' }, id),
+                  React.createElement('span', { className: 'project-flow-rowHyp' }, hypothesis || t('misc.dash')),
+                  React.createElement('span', { className: 'project-flow-rowMeta' }, meta)
+                ),
+                expanded ? React.createElement(DetailBlock, { item, t }) : null
+              )
+            );
+          });
+        });
+      }
 
       if (hidden > 0) {
         children.push(
@@ -682,7 +1041,18 @@ window.__ModuleLoader__.load({
         );
       }
 
-      const total = exp.total;
+      const chips = [
+        React.createElement(Chip, { key: 'source', tone: 'brand' }, t(storeMode ? 'exp.source.store' : 'exp.source.trailers')),
+        React.createElement(Chip, { key: 'confirmed', tone: 'ok' }, '\u2714 ' + confirmed + ' ' + t('exp.status.confirmed')),
+        React.createElement(Chip, { key: 'refuted', tone: 'error' }, '\u2718 ' + refuted + ' ' + t('exp.status.refuted')),
+        React.createElement(Chip, { key: 'open', tone: 'warn' }, '\u25cb ' + openCount + ' ' + t('exp.status.open')),
+      ];
+      if (abandoned > 0) {
+        chips.push(
+          React.createElement(Chip, { key: 'abandoned' }, '\u2298 ' + abandoned + ' ' + t('exp.status.abandoned'))
+        );
+      }
+      chips.push(React.createElement(Chip, { key: 'total' }, total + ' ' + t('exp.total')));
 
       return React.createElement(
         'section',
@@ -691,21 +1061,14 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'project-flow-cardHead' },
           React.createElement('h2', { className: 'project-flow-cardTitle' }, t('exp.title')),
-          React.createElement(
-            'div',
-            { className: 'project-flow-chips' },
-            React.createElement(Chip, { tone: 'ok' }, '\u2714 ' + exp.confirmed + ' ' + t('exp.confirmed')),
-            React.createElement(Chip, { tone: 'error' }, '\u2718 ' + exp.refuted + ' ' + t('exp.refuted')),
-            React.createElement(Chip, { tone: 'warn' }, '\u25cb ' + exp.open + ' ' + t('exp.open')),
-            React.createElement(Chip, null, total + ' ' + t('exp.total'))
-          )
+          React.createElement('div', { className: 'project-flow-chips' }, chips)
         ),
         total === 0
           ? React.createElement(
               'div',
               { className: 'project-flow-guide' },
-              React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.empty')),
-              React.createElement('p', { className: 'project-flow-muted' }, t('exp.emptyHint'))
+              React.createElement('p', { className: 'project-flow-guideTitle' }, t(storeMode ? 'exp.empty.store' : 'exp.empty')),
+              React.createElement('p', { className: 'project-flow-muted' }, t(storeMode ? 'exp.emptyHint.store' : 'exp.emptyHint'))
             )
           : children.length === 0
             ? React.createElement(EmptyLine, null, t('misc.dash'))
@@ -805,6 +1168,150 @@ window.__ModuleLoader__.load({
                   ]),
                   leading: mark ? React.createElement('span', { className: 'project-flow-gateMark project-flow-gateMark--' + tone }, mark) : null,
                 });
+              })
+            )
+      );
+    }
+
+    /** Phase chip text: known phases are localized, anything else is shown raw. */
+    function phaseOf(phase, t) {
+      const value = asText(phase);
+      if (value === 'commit' || value === 'release' || value === 'manual') {
+        return { cls: value, text: t('gates.phase.' + value) };
+      }
+      return { cls: 'other', text: value || t('misc.dash') };
+    }
+
+    /** Expanded gate: one block per step definition with its latest result. */
+    function GateDetail(props) {
+      const gate = asObject(props.gate);
+      const t = props.t;
+      const steps = asArray(gate.steps);
+      const lastRun = gate.lastRun && typeof gate.lastRun === 'object' ? gate.lastRun : null;
+      const results = Object.create(null);
+      asArray(lastRun ? lastRun.steps : []).forEach((entry) => {
+        const result = asObject(entry);
+        if (result.id && !results[result.id]) results[result.id] = result;
+      });
+
+      return React.createElement(
+        'div',
+        { className: 'project-flow-gateBody' },
+        React.createElement('h4', { className: 'project-flow-subTitle' }, t('gates.steps')),
+        steps.length === 0
+          ? React.createElement(EmptyLine, null, t('misc.dash'))
+          : React.createElement(
+              'div',
+              { className: 'project-flow-steps' },
+              steps.map((step, index) => {
+                const result = step.id && results[step.id] ? results[step.id] : null;
+                const exit = result ? asNumber(result.exit, null) : null;
+                const ok = result ? result.ok === true : null;
+                const tailText = result ? asText(result.tail).replace(/\r\n/g, '\n') : '';
+                const tailLines = tailText ? tailText.split('\n') : [];
+                /* The tail is folded to its first lines; the rest stays in the log. */
+                while (tailLines.length > 0 && tailLines[tailLines.length - 1] === '') tailLines.pop();
+                const shown = tailLines.slice(0, MAX_GATE_TAIL_LINES);
+                return React.createElement(
+                  'div',
+                  { className: 'project-flow-step', key: 'step-' + index },
+                  React.createElement(
+                    'div',
+                    { className: 'project-flow-stepHead' },
+                    React.createElement('span', { className: 'project-flow-stepId' }, step.id || t('misc.dash')),
+                    ok === true
+                      ? React.createElement('span', { className: 'project-flow-stepExit project-flow-stepExit--ok' }, '\u2714 ok')
+                      : null,
+                    ok === false
+                      ? React.createElement('span', { className: 'project-flow-stepExit project-flow-stepExit--fail' }, '\u2718 fail')
+                      : null,
+                    exit !== null
+                      ? React.createElement('span', { className: 'project-flow-stepExit' }, 'exit ' + exit)
+                      : null
+                  ),
+                  step.run
+                    ? React.createElement('code', { className: 'project-flow-stepRun', title: step.run }, step.run)
+                    : null,
+                  step.expect ? React.createElement('p', { className: 'project-flow-stepExpect' }, step.expect) : null,
+                  shown.length > 0
+                    ? React.createElement('pre', { className: 'project-flow-pre project-flow-stepTail' }, shown.join('\n'))
+                    : null
+                );
+              })
+            )
+      );
+    }
+
+    /** Read-only gate definitions: title, phase, enabled flag and the last run. */
+    function GatesCard(props) {
+      const gates = asArray(props.gates);
+      const t = props.t;
+      const now = props.now;
+      const [openGates, setOpenGates] = useState({});
+
+      const toggleGate = (key) => {
+        setOpenGates((previous) => {
+          const next = Object.assign({}, previous);
+          if (next[key]) delete next[key];
+          else next[key] = true;
+          return next;
+        });
+      };
+
+      return React.createElement(
+        'section',
+        { className: 'project-flow-card' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-cardHead' },
+          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('gates.title')),
+          React.createElement('span', { className: 'project-flow-muted' }, String(gates.length))
+        ),
+        gates.length === 0
+          ? React.createElement(
+              'div',
+              { className: 'project-flow-guide' },
+              React.createElement('p', { className: 'project-flow-guideTitle' }, t('gates.empty'))
+            )
+          : React.createElement(
+              'div',
+              { className: 'project-flow-gates' },
+              gates.map((gate, index) => {
+                const key = 'gate-' + index + '-' + gate.id;
+                const expanded = openGates[key] === true;
+                const disabled = gate.enabled === false;
+                const phase = phaseOf(gate.phase, t);
+                const run = gate.lastRun;
+                const when = run && Number.isFinite(run.startedMs) ? relativeMoment(run.startedMs, now, t) : null;
+                const duration = run ? formatDuration(asNumber(run.durationMs, null)) : '';
+                const whenText = [when, duration].filter(Boolean).join(' ');
+                const runText = run
+                  ? t(run.ok ? 'gates.run.ok' : 'gates.run.fail', { time: whenText || t('misc.dash') })
+                  : t('gates.never');
+                const runTone = run ? (run.ok ? ' project-flow-gateRun--ok' : ' project-flow-gateRun--fail') : '';
+
+                return React.createElement(
+                  'div',
+                  {
+                    className: 'project-flow-gate' + (disabled ? ' project-flow-gate--disabled' : ''),
+                    key,
+                  },
+                  React.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'project-flow-gateHead',
+                      'aria-expanded': expanded ? true : false,
+                      title: gate.title || gate.id || undefined,
+                      onClick: () => toggleGate(key),
+                    },
+                    React.createElement(Caret, { open: expanded }),
+                    React.createElement('span', { className: 'project-flow-gateTitle' }, gate.title || gate.id || t('misc.dash')),
+                    React.createElement(Chip, { tone: phase.cls === 'other' ? null : 'phase' }, phase.text),
+                    React.createElement('span', { className: 'project-flow-gateRun' + runTone }, runText)
+                  ),
+                  expanded ? React.createElement(GateDetail, { gate, t, now }) : null
+                );
               })
             )
       );
@@ -1315,12 +1822,14 @@ window.__ModuleLoader__.load({
               React.createElement(
                 'div',
                 { className: 'project-flow-col' },
-                React.createElement(ExperimentTree, { exp: view.exp, t })
+                React.createElement(ExperimentTree, { exp: view.exp, t, now })
               ),
               React.createElement(
                 'div',
                 { className: 'project-flow-col' },
                 React.createElement(TasksCard, { tasks: view.tasks, t, now }),
+                /* Gate definitions sit between tasks and live signals (store mode only). */
+                view.gates ? React.createElement(GatesCard, { gates: view.gates, t, now }) : null,
                 React.createElement(SignalsCard, {
                   gate: view.gate,
                   heartbeats: view.heartbeats,
@@ -1594,6 +2103,8 @@ window.__ModuleLoader__.load({
 .project-flow-verdict--confirmed{color:var(--dsw-alias-state-success-primary);}
 .project-flow-verdict--refuted{color:var(--dsw-alias-state-error-primary);}
 .project-flow-verdict--open{color:var(--dsw-alias-state-warn-primary);}
+.project-flow-verdict--abandoned{color:var(--dsw-alias-label-secondary);}
+.project-flow-branch{flex:none;white-space:pre;overflow:hidden;font-family:${MONO};font-size:10.5px;line-height:1.6;letter-spacing:0;color:var(--dsw-alias-label-secondary);}
 .project-flow-rowId{order:1;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-weight:600;font-size:11px;}
 .project-flow-rowMeta{order:3;flex:none;max-width:55%;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-rowHyp{order:4;flex:1 1 100%;min-width:0;white-space:normal;overflow-wrap:anywhere;overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;color:var(--dsw-alias-label-secondary);}
