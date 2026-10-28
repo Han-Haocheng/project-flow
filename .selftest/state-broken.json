@@ -1,0 +1,68 @@
+{
+  "ok": true,
+  "generatedAt": "2026-10-28T15:01:15+08:00",
+  "contract": {
+    "source": "defaults",
+    "schema": 1,
+    "name": "broken"
+  },
+  "roots": [
+    {
+      "path": "/tmp/pf-demo/alpha",
+      "name": "alpha"
+    },
+    {
+      "path": "/tmp/pf-demo/qbank",
+      "name": "qbank"
+    },
+    {
+      "path": "/tmp/project-flow-selftest/fake",
+      "name": "FakeProject"
+    },
+    {
+      "path": "/tmp/project-flow-selftest/broken",
+      "name": "broken"
+    }
+  ],
+  "root": "/tmp/project-flow-selftest/broken",
+  "head": {
+    "sha": null,
+    "subject": null,
+    "branch": null,
+    "dirty": null
+  },
+  "experiments": {
+    "total": 0,
+    "confirmed": 0,
+    "refuted": 0,
+    "open": 0,
+    "groups": []
+  },
+  "tasks": {
+    "total": 0,
+    "counts": {
+      "draft": 0,
+      "active": 0,
+      "done": 0,
+      "archived": 0,
+      "other": 0
+    },
+    "current": null,
+    "active": [],
+    "recentDone": []
+  },
+  "gate": {
+    "lines": [],
+    "mtime": null,
+    "size": 0
+  },
+  "heartbeats": [],
+  "runs": [],
+  "warnings": [
+    "manifest-invalid: flow.json: Expected property name or '}' in JSON at position 2 (line 1 column 3)",
+    "git log (experiments) failed: Command failed: git -C /tmp/project-flow-selftest/broken log --date=short -n 400 --pretty=format:%H%x1f%ad%x1f%s%x1f%(trailers:key=Exp-Id,valueonly)%x1f%(trailers:key=Hypothesis,valueonly)%x1f%(traile",
+    "not a git repository: Command failed: git -C /tmp/project-flow-selftest/broken rev-parse --short HEAD 致命错误：不是 Git 仓库（或者直至挂载点 / 的任何父目录） 停止在文件系统边界（未设置 GIT_DISCOVERY_ACROSS_FILESYSTEM）。",
+    "tasks dir unreadable: .agents/tasks",
+    "gate log missing: .agents/gate-observe.log"
+  ]
+}

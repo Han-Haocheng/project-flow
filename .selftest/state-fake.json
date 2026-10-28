@@ -1,0 +1,65 @@
+{
+  "ok": true,
+  "generatedAt": "2026-10-28T15:01:15+08:00",
+  "contract": {
+    "source": "flow.json",
+    "schema": 1,
+    "name": "FakeProject"
+  },
+  "roots": [
+    {
+      "path": "/tmp/pf-demo/alpha",
+      "name": "alpha"
+    },
+    {
+      "path": "/tmp/pf-demo/qbank",
+      "name": "qbank"
+    },
+    {
+      "path": "/tmp/project-flow-selftest/fake",
+      "name": "FakeProject"
+    },
+    {
+      "path": "/tmp/project-flow-selftest/broken",
+      "name": "broken"
+    }
+  ],
+  "root": "/tmp/project-flow-selftest/fake",
+  "head": {
+    "sha": null,
+    "subject": null,
+    "branch": null,
+    "dirty": null
+  },
+  "experiments": {
+    "total": 0,
+    "confirmed": 0,
+    "refuted": 0,
+    "open": 0,
+    "groups": []
+  },
+  "tasks": {
+    "total": 0,
+    "counts": {
+      "draft": 0,
+      "active": 0,
+      "done": 0,
+      "archived": 0,
+      "other": 0
+    },
+    "current": null,
+    "active": [],
+    "recentDone": []
+  },
+  "gate": {
+    "lines": [],
+    "mtime": null,
+    "size": 0
+  },
+  "heartbeats": [],
+  "runs": [],
+  "warnings": [
+    "not a git repository: Command failed: git -C /tmp/project-flow-selftest/fake rev-parse --short HEAD 致命错误：不是 Git 仓库（或者直至挂载点 / 的任何父目录） 停止在文件系统边界（未设置 GIT_DISCOVERY_ACROSS_FILESYSTEM）。",
+    "gate log missing: ledger/gate.log"
+  ]
+}
