@@ -2,3 +2,9 @@ node_modules/
 .selftest/.client-probe/
 .selftest/.host-probe/
 test/.tmp/
+
+# 运行时产物：宿主写的心跳文件（本地、每会话变化）
+.agents/
+# 台账 store 入库，但锁与门禁运行记录不提交（避免每次运行产生提交噪音）
+.dsh/flow/.lock
+.dsh/flow/logs/
