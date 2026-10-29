@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "root": "/tmp/project-flow-selftest/init",
+  "name": "InitWorkspace",
+  "alreadyInitialized": false,
+  "created": [
+    ".dsh/flow/flow.json"
+  ],
+  "imported": {
+    "trailers": 0,
+    "tasks": 0
+  },
+  "warnings": []
+}

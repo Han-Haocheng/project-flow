@@ -202,8 +202,11 @@ const ctx = makeCtx({
 apply(ctx)
 
 check('store fixture initialized', initResult.created.includes('.dsh/flow/flow.json'), JSON.stringify(initResult))
-eq('route registered', routes.length, 1)
-const route = routes[0]
+eq('routes registered', routes.length, 2)
+const route = routes.find((entry) => entry.path === '/api/project-flow/state')
+const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
+check('state route present', route !== undefined && route.kind === 'exact')
+check('init route present', initRoute !== undefined && initRoute.kind === 'exact')
 
 // ------------------------------------------------------------- tool surface
 
@@ -394,9 +397,17 @@ eq('flow_gate update: enabled', gateUpdated.gate?.enabled, false)
 
 // --------------------------------------------------------------- skills
 
-const skillFiles = ['project-flow-init', 'project-flow-usage'].filter((name) =>
-  existsSync(join(pkgRoot, 'skills', `${name}.md`)),
-)
+const SKILL_NAMES = ['project-flow-init', 'project-flow-usage', 'ai-collaborative-dev-workflow']
+
+/** Instruction file of one bundled skill: directory layout first, flat layout second. */
+function skillFileOf(name) {
+  const directory = join(pkgRoot, 'skills', name, 'SKILL.md')
+  if (existsSync(directory)) return directory
+  const flat = join(pkgRoot, 'skills', `${name}.md`)
+  return existsSync(flat) ? flat : undefined
+}
+
+const skillFiles = SKILL_NAMES.filter((name) => skillFileOf(name) !== undefined)
 for (const name of skillFiles) {
   const skill = registeredSkills.get(name)
   if (check(`skills: ${name} registered`, skill !== undefined) === false) continue
@@ -404,9 +415,61 @@ for (const name of skillFiles) {
   check(`skills: ${name} content non-empty`, typeof skill.content === 'string' && skill.content.trim().length > 0)
   check(`skills: ${name} description`, typeof skill.description === 'string' && skill.description.length > 0)
   check(`skills: ${name} whenToUse`, typeof skill.whenToUse === 'string' && skill.whenToUse.length > 0)
+  /* The registry's loaded-definition validation rejects a non-string source. */
+  eq(`skills: ${name} source`, skill.source, 'bundled')
 }
-if (skillFiles.length < 2) {
-  console.log(`SKIP skills files missing for: ${['project-flow-init', 'project-flow-usage'].filter((n) => !skillFiles.includes(n)).join(', ')} — warning expected in payload`)
+
+// The workflow skill uses the directory layout: the registration must carry a
+// directory resourceBase, otherwise the model cannot resolve the references/,
+// assets/ and scripts/ paths that SKILL.md mentions relatively.
+const workflowSkill = registeredSkills.get('ai-collaborative-dev-workflow')
+if (check('dir skill: registered', workflowSkill !== undefined) === true) {
+  eq('dir skill: source', workflowSkill.source, 'bundled')
+  check('dir skill: content non-empty', typeof workflowSkill.content === 'string' && workflowSkill.content.trim().length > 0)
+  check(
+    'dir skill: frontmatter stripped from the body',
+    typeof workflowSkill.content === 'string' &&
+      workflowSkill.content.startsWith('# ') &&
+      workflowSkill.content.includes('与 project-flow 插件的分工'),
+  )
+  check(
+    'dir skill: description',
+    typeof workflowSkill.description === 'string' && workflowSkill.description.length > 0,
+    JSON.stringify(workflowSkill.description),
+  )
+  check(
+    'dir skill: description comes from SKILL.md frontmatter',
+    typeof workflowSkill.description === 'string' && workflowSkill.description.startsWith('通用 AI 多代理'),
+    JSON.stringify(workflowSkill.description),
+  )
+  check(
+    'dir skill: whenToUse',
+    typeof workflowSkill.whenToUse === 'string' && workflowSkill.whenToUse.length > 0,
+    JSON.stringify(workflowSkill.whenToUse),
+  )
+  const resourceBase = workflowSkill.resourceBase
+  check(
+    'dir skill: resourceBase is a directory base',
+    resourceBase !== null && typeof resourceBase === 'object' && resourceBase.kind === 'directory',
+    JSON.stringify(resourceBase),
+  )
+  const basePath =
+    resourceBase !== null && typeof resourceBase === 'object' && typeof resourceBase.path === 'string' ? resourceBase.path : ''
+  check(
+    'dir skill: resourceBase path ends with skills/ai-collaborative-dev-workflow',
+    basePath.endsWith(join('skills', 'ai-collaborative-dev-workflow')),
+    basePath,
+  )
+  check(
+    'dir skill: SKILL.md exists at resourceBase',
+    basePath.length > 0 && existsSync(join(basePath, 'SKILL.md')),
+    basePath,
+  )
+}
+if (skillFiles.length < SKILL_NAMES.length) {
+  console.log(
+    `SKIP skills files missing for: ${SKILL_NAMES.filter((name) => !skillFiles.includes(name)).join(', ')} — warning expected in payload`,
+  )
 }
 
 // -------------------------------------------------------- HTTP store payload
@@ -433,7 +496,7 @@ check('store payload: gates array', Array.isArray(store.gates) && store.gates.le
 eq('store payload: gate lastRun ok false', store.gates?.[0]?.lastRun?.ok, false)
 check('store payload: gate lastRun steps present', Array.isArray(store.gates?.[0]?.lastRun?.steps))
 check('store payload: gate log null', store.gate === null)
-if (skillFiles.length < 2) {
+if (skillFiles.length < SKILL_NAMES.length) {
   check(
     'store payload: missing-skill warning surfaced',
     Array.isArray(store.warnings) &&
@@ -588,7 +651,7 @@ const injectCtx = {
 
 apply(injectCtx)
 eq('inject path: four tools registered', injectedTools.size, 4)
-eq('inject path: two skills registered', injectedSkills.size, 2)
+eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()
 eq('inject path: disposal unregisters tools', injectedTools.size, 0)

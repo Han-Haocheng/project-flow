@@ -3,16 +3,21 @@
 项目流程台账 + 只读面板：实验（含 `parent` 谱系）、任务、门禁定义与运行记录都写在
 **项目自己的 `.dsh/flow/`** 下；面板是它的只读视图，写入只走 `bin/flow.mjs`（CLI）或
 agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个核心 `lib/core.mjs`。
+唯一例外：未初始化工作区的空态上有个「初始化」按钮，会 POST `/api/project-flow/init`
+调用同一个 core 写入者建台账。
 
 | 入口 | 用途 |
 |---|---|
-| 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳、运行输出（只读） |
+| 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳、运行输出（只读；未初始化时可一键初始化） |
 | 会话头小图标 / 指南卡 | 打开同一面板 |
 | `node bin/flow.mjs …` | 人改台账、跑门禁、迁移旧数据 |
 | agent 工具 `flow_*` | 模型改台账、跑门禁 |
-| 内嵌技能 `project-flow-init` / `project-flow-usage` | 教模型何时初始化、怎么维护 |
+| 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及多代理协作与发布纪律 |
 
-契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。
+契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。前两个技能是单文件
+（`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发
+（`skills/ai-collaborative-dev-workflow/`，含 `references/`、`assets/`、`scripts/`，
+注册时带 `resourceBase` 目录），它的机械检查同时可由 `flow check staged|release-baseline|state|doc` 触发。
 
 ## 初始化一个项目
 
@@ -69,11 +74,13 @@ plugin_manager install_bundle  target=.
 
 ## 边界
 
-- **面板只读**；写入口只有 CLI 与 agent 工具，且都经过 `lib/core.mjs`（锁 + 原子写 + 校验）。
+- **面板只读（一个例外）**：面板唯一的写操作是「初始化」——`POST /api/project-flow/init`，
+  同样经过 `lib/core.mjs` 的校验与原子写；其余写入口只有 CLI 与 agent 工具。
 - **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
 - **零依赖**：只用 node 内置模块；不联网。
 - **锁只防同机并发**；门禁步骤会以 `shell` 执行，命令来自项目自己的 `gates/*.json`，请只放可信命令。
-- 面板每 2.5 秒轮询 `GET /api/project-flow/state`，页面隐藏时暂停；无 watcher，每次请求现算。
+- 面板每 2.5 秒轮询 `GET /api/project-flow/state?root=<当前工作区目录>`，只展示该工作区的台账，
+  不再切换或汇总其它项目；该工作区没有 `.dsh/flow` 台账时显示「未初始化」空状态。页面隐藏时暂停，无 watcher，每次请求现算。
 - 实验/门禁日志只示「最近」切片（实验 400 条、门禁日志 10 行、心跳 20 条、运行输出 4 个文件）。
 
 ## 自测
@@ -81,9 +88,9 @@ plugin_manager install_bundle  target=.
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI：27 用例
+node --test test/                        # core + CLI + check：48 用例
 node .selftest/harness.mjs               # Host legacy 适配器
-node .selftest/host2-tools.mjs           # Host store 模式、4 工具、2 技能
+node .selftest/host2-tools.mjs           # Host store 模式、4 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
 node .selftest/client-render.mjs         # Client 渲染 + 真实 payload 回放
 node .selftest/client-poll.mjs           # Client 轮询 / 取消 / 可见性

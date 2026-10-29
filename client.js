@@ -11,13 +11,21 @@
  *   - `conversation.session.header.utilities` (id `project-flow`) — one-click
  *     opener; the right bar starts collapsed.
  *
- * The panel polls `api/project-flow/state` (document relative) every 2500 ms,
- * keeps the last good snapshot on failure, and renders:
+ * The panel is scoped to ONE workspace. `PanelBody` reads the tab's `sessionId`
+ * and resolves that session's `cwd` through the `useSessions` prop, then the
+ * panel polls `api/project-flow/state?root=<workspace cwd>` (document relative)
+ * every 2500 ms, keeps the last good snapshot on failure, and renders:
  *   experiment lineage tree · task ledger progress · gate definitions ·
  *   gate log tail · agent heartbeats · recent run output.
  *
  * Host payload notes (all optional, all tolerated when missing):
- *   - `roots[]` drives the project switcher (hidden unless more than one);
+ *   - `root` is the workspace the snapshot describes; `roots[]` is only
+ *     informational — there is no global project switcher any more, because
+ *     the panel must never show a different workspace's ledger;
+ *   - a workspace without a ledger answers HTTP 200 `{ ok:false, root, roots,
+ *     error: { code: 'not-initialized', message } }`; the panel answers with
+ *     the init guidance plus an Initialize button that POSTs the workspace root
+ *     to `api/project-flow/init` and then reloads the ledger;
  *   - `contract: { source, schema, name }` renders one footer line saying
  *     whether the ledger is inferred ("defaults") or declared by a file;
  *   - `experiments.source` is `store` (a `.dsh/flow/` store: flat `items`, a
@@ -33,8 +41,8 @@
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
  *
- * Read-only: only GET requests, no host DOM access, colors only through
- * `--dsw-alias-*` theme tokens.
+ * Read-only apart from that one init POST: no other writes, no host DOM
+ * access, colors only through `--dsw-alias-*` theme tokens.
  */
 window.__ModuleLoader__.load({
   id: '@local/project-flow',
@@ -52,6 +60,8 @@ window.__ModuleLoader__.load({
     /** Fixed id of the conversation-header action that opens the tab. */
     const HEADER_ACTION_ID = 'project-flow';
     const STATE_ENDPOINT = 'api/project-flow/state';
+    /** The one write the panel may perform: create the ledger in this workspace. */
+    const INIT_ENDPOINT = 'api/project-flow/init';
     const POLL_MS = 2500;
     const CLOCK_MS = 1000;
     const MAX_TREE_ROWS = 300;
@@ -166,7 +176,13 @@ window.__ModuleLoader__.load({
       'footer.warnings': '{n} 条警告',
       'footer.warningsNone': '无警告',
       'footer.warningsTitle': '警告',
-      'project.select': '项目',
+      'workspace.pending': '正在读取当前工作区…',
+      'empty.title': '未初始化',
+      'empty.init': '初始化',
+      'empty.initializing': '初始化中…',
+      'error.notInitialized': '这个工作区还没有项目流台账。',
+      'error.initHint': '点「初始化」在当前工作区创建 .dsh/flow 台账，或在项目根运行 node bin/flow.mjs init。',
+      'error.initFailed': '初始化失败：{message}',
       'misc.dash': '—',
     };
 
@@ -269,7 +285,13 @@ window.__ModuleLoader__.load({
       'footer.warnings': '{n} warnings',
       'footer.warningsNone': 'no warnings',
       'footer.warningsTitle': 'Warnings',
-      'project.select': 'Project',
+      'workspace.pending': 'Reading the current workspace…',
+      'empty.title': 'Not initialized',
+      'empty.init': 'Initialize',
+      'empty.initializing': 'Initializing…',
+      'error.notInitialized': 'This workspace has no project flow ledger yet.',
+      'error.initHint': 'Click Initialize to create the .dsh/flow ledger in this workspace, or run node bin/flow.mjs init in the project root.',
+      'error.initFailed': 'Initialization failed: {message}',
       'misc.dash': '—',
     };
     // #endregion
@@ -1555,36 +1577,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /**
-     * Project switcher. `roots[]` carries one entry per project the host knows
-     * about; the visible option text is the project name while the option
-     * value (and tooltip) stays the path sent back as `?root=`.
-     */
-    function ProjectPicker(props) {
-      const roots = props.roots;
-      const t = props.t;
-      const value = props.value;
-      const onChange = props.onChange;
-
-      return React.createElement(
-        'div',
-        { className: 'project-flow-roots' },
-        React.createElement('label', { className: 'project-flow-rootsLabel', htmlFor: 'project-flow-project-select' }, t('project.select')),
-        React.createElement(
-          'select',
-          {
-            id: 'project-flow-project-select',
-            className: 'project-flow-select',
-            value,
-            onChange: (event) => onChange(event.target.value),
-          },
-          roots.map((root) =>
-            React.createElement('option', { key: root.path, value: root.path, title: root.path }, root.name)
-          )
-        )
-      );
-    }
-
     function Footer(props) {
       const view = props.view;
       const t = props.t;
@@ -1650,6 +1642,7 @@ window.__ModuleLoader__.load({
     }
 
     function LoadingState(props) {
+      const t = props.t;
       return React.createElement(
         'div',
         { className: 'project-flow-card project-flow-loadingCard' },
@@ -1657,23 +1650,96 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'project-flow-loading' },
           React.createElement('span', { className: 'project-flow-spinner', 'aria-hidden': 'true' }),
-          React.createElement('span', null, props.t('loading'))
+          React.createElement('span', null, t(props.message || 'loading'))
         )
       );
     }
 
     function ErrorState(props) {
       const t = props.t;
+      const info = props.info;
+      const code = info && info.code ? String(info.code) : '';
+      /* A workspace without a ledger is a normal first-run state, not a fault. */
+      const notInitialized = code === 'not-initialized';
+      const [initializing, setInitializing] = useState(false);
+      const [initError, setInitError] = useState(null);
+
+      /* The one write this panel performs: ask the host to create the ledger. */
+      const initialize = useCallback(async () => {
+        if (initializing) return;
+        setInitializing(true);
+        setInitError(null);
+        try {
+          const response = await window.fetch(INIT_ENDPOINT, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+            body: JSON.stringify({ root: props.workspaceRoot }),
+          });
+          let payload = null;
+          try {
+            const raw = await response.text();
+            payload = raw ? JSON.parse(raw) : null;
+          } catch (error) {
+            payload = null;
+          }
+          if (!response.ok || !payload || payload.ok !== true) {
+            const hostError = payload && payload.error ? payload.error : null;
+            throw new Error(
+              (hostError && asText(hostError.message)) || 'HTTP ' + response.status
+            );
+          }
+          setInitializing(false);
+          if (typeof props.onInitialized === 'function') props.onInitialized();
+        } catch (error) {
+          /* Keep the card, re-arm the button and show why the init failed. */
+          setInitializing(false);
+          setInitError(asText(error && error.message) || t('error.generic'));
+        }
+      }, [initializing, props.workspaceRoot, props.onInitialized, t]);
+
+      const initButton = notInitialized
+        ? React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'project-flow-btn',
+              onClick: initialize,
+              disabled: initializing,
+            },
+            t(initializing ? 'empty.initializing' : 'empty.init')
+          )
+        : React.createElement(
+            'button',
+            { type: 'button', className: 'project-flow-btn', onClick: props.onRetry },
+            t('error.retry')
+          );
+
       return React.createElement(
         'div',
         { className: 'project-flow-card project-flow-errorCard' },
-        React.createElement('h2', { className: 'project-flow-cardTitle' }, t('error.title')),
-        React.createElement('p', { className: 'project-flow-muted' }, errorText(props.info, t)),
         React.createElement(
-          'button',
-          { type: 'button', className: 'project-flow-btn', onClick: props.onRetry },
-          t('error.retry')
-        )
+          'h2',
+          { className: 'project-flow-cardTitle' },
+          t(notInitialized ? 'empty.title' : 'error.title')
+        ),
+        React.createElement(
+          'p',
+          { className: 'project-flow-muted' },
+          notInitialized ? t('error.notInitialized') : errorText(info, t)
+        ),
+        notInitialized
+          ? React.createElement('p', { className: 'project-flow-muted' }, t('error.initHint'))
+          : null,
+        notInitialized && initError !== null
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted' },
+              t('error.initFailed', { message: initError })
+            )
+          : null,
+        initButton
       );
     }
     // #endregion
@@ -1681,10 +1747,11 @@ window.__ModuleLoader__.load({
     // #region panel + polling
     function Panel(props) {
       const t = typeof props.t === 'function' ? props.t : (key) => key;
+      /* The one workspace this panel may show; undefined until the tab resolves it. */
+      const workspaceRoot = props.workspaceRoot;
       const [data, setData] = useState(null);
       const [errorInfo, setErrorInfo] = useState(null);
       const [lastOkAt, setLastOkAt] = useState(0);
-      const [root, setRoot] = useState(null);
       const [reloadKey, setReloadKey] = useState(0);
       const [refreshing, setRefreshing] = useState(false);
       const [now, setNow] = useState(() => Date.now());
@@ -1695,17 +1762,18 @@ window.__ModuleLoader__.load({
         return () => window.clearInterval(timer);
       }, []);
 
-      // Polling loop. Restarts on root switch or manual refresh.
+      // Polling loop for the current session's workspace. Restarts on a workspace
+      // change or a manual refresh; no workspace yet means no polling at all.
       useEffect(() => {
+        if (workspaceRoot === undefined) return undefined;
+
         let cancelled = false;
         let controller = null;
         let timer = null;
 
         setRefreshing(false);
 
-        const url = root
-          ? STATE_ENDPOINT + '?root=' + encodeURIComponent(root)
-          : STATE_ENDPOINT;
+        const url = STATE_ENDPOINT + '?root=' + encodeURIComponent(workspaceRoot);
 
         const load = async (manual) => {
           if (cancelled) return;
@@ -1784,7 +1852,7 @@ window.__ModuleLoader__.load({
             }
           }
         };
-      }, [root, reloadKey]);
+      }, [workspaceRoot, reloadKey]);
 
       const view = useMemo(() => (data ? normalize(data) : null), [data]);
 
@@ -1792,55 +1860,49 @@ window.__ModuleLoader__.load({
         setReloadKey((value) => value + 1);
       }, []);
 
-      const handleRootChange = useCallback(
-        (next) => {
-          const currentRoot = view ? view.root : '';
-          setRoot(next && next !== currentRoot ? next : null);
-        },
-        [view]
-      );
-
       const failed = errorInfo !== null;
-      const body = data === null
-        ? failed
-          ? React.createElement(ErrorState, { t, info: errorInfo, onRetry: refresh })
-          : React.createElement(LoadingState, { t })
-        : React.createElement(
-            React.Fragment,
-            null,
-            view.roots.length > 1
-              ? React.createElement(ProjectPicker, {
-                  roots: view.roots,
+      const body =
+        workspaceRoot === undefined
+          ? /* The workspace is not known yet: same card, workspace-scoped copy. */
+            React.createElement(LoadingState, { t, message: 'workspace.pending' })
+          : data === null
+            ? failed
+              ? React.createElement(ErrorState, {
                   t,
-                  value: root || view.root || view.roots[0].path,
-                  onChange: handleRootChange,
+                  info: errorInfo,
+                  workspaceRoot,
+                  onRetry: refresh,
+                  onInitialized: refresh,
                 })
-              : null,
-            React.createElement(
-              'div',
-              { className: 'project-flow-grid' },
-              React.createElement(
-                'div',
-                { className: 'project-flow-col' },
-                React.createElement(ExperimentTree, { exp: view.exp, t, now })
-              ),
-              React.createElement(
-                'div',
-                { className: 'project-flow-col' },
-                React.createElement(TasksCard, { tasks: view.tasks, t, now }),
-                /* Gate definitions sit between tasks and live signals (store mode only). */
-                view.gates ? React.createElement(GatesCard, { gates: view.gates, t, now }) : null,
-                React.createElement(SignalsCard, {
-                  gate: view.gate,
-                  heartbeats: view.heartbeats,
-                  runs: view.runs,
-                  t,
-                  now,
-                })
-              )
-            ),
-            React.createElement(Footer, { view, t })
-          );
+              : React.createElement(LoadingState, { t })
+            : React.createElement(
+                React.Fragment,
+                null,
+                React.createElement(
+                  'div',
+                  { className: 'project-flow-grid' },
+                  React.createElement(
+                    'div',
+                    { className: 'project-flow-col' },
+                    React.createElement(ExperimentTree, { exp: view.exp, t, now })
+                  ),
+                  React.createElement(
+                    'div',
+                    { className: 'project-flow-col' },
+                    React.createElement(TasksCard, { tasks: view.tasks, t, now }),
+                    /* Gate definitions sit between tasks and live signals (store mode only). */
+                    view.gates ? React.createElement(GatesCard, { gates: view.gates, t, now }) : null,
+                    React.createElement(SignalsCard, {
+                      gate: view.gate,
+                      heartbeats: view.heartbeats,
+                      runs: view.runs,
+                      t,
+                      now,
+                    })
+                  )
+                ),
+                React.createElement(Footer, { view, t })
+              );
 
       return React.createElement(
         'div',
@@ -1958,12 +2020,43 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Resolve the current session's workspace directory from the tab seat:
+     * the standard `sessionId` prop plus the `useSessions` store hook (exactly
+     * what the shipped Files tab does with `sessions.byId[sessionId]?.cwd`).
+     * The hook is called unconditionally — with an empty-store fallback when the
+     * prop is absent — so the hook order stays stable across renders.
+     */
+    function resolveWorkspaceRoot(props) {
+      const source = props || {};
+      const sessionId = source.sessionId;
+      const useSessions =
+        typeof source.useSessions === 'function'
+          ? source.useSessions
+          : (selector) => selector({ byId: {} });
+      const cwd = useSessions((sessions) => {
+        const byId = sessions && typeof sessions === 'object' ? sessions.byId : undefined;
+        const session =
+          byId && sessionId !== undefined && sessionId !== null ? byId[sessionId] : undefined;
+        const value = session && typeof session === 'object' ? session.cwd : undefined;
+        return typeof value === 'string' && value.length > 0 ? value : undefined;
+      });
+      return typeof cwd === 'string' && cwd.length > 0 ? cwd : undefined;
+    }
+
+    /**
      * Body of the `sidebar.right.pane.tab` seat: the same panel as before, still
-     * wrapped in its own error boundary. Only `t` is taken from the tab context.
+     * wrapped in its own error boundary, but scoped to the session's workspace.
+     * The `key` remounts the panel when the workspace changes, so the previous
+     * workspace's snapshot is discarded instead of being shown.
      */
     function PanelBody(props) {
       const t = typeof props.t === 'function' ? props.t : (key) => key;
-      return React.createElement(PanelRoot, { t });
+      const workspaceRoot = resolveWorkspaceRoot(props);
+      return React.createElement(PanelRoot, {
+        key: workspaceRoot === undefined ? 'pending' : workspaceRoot,
+        t,
+        workspaceRoot,
+      });
     }
 
     /** Chip text in the right-bar tab strip; icon + label, width-adaptive. */
@@ -2059,10 +2152,6 @@ window.__ModuleLoader__.load({
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}
-.project-flow-roots{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;font-size:11px;color:var(--dsw-alias-label-secondary);}
-.project-flow-rootsLabel{color:var(--dsw-alias-label-secondary);}
-.project-flow-select{box-sizing:border-box;height:26px;max-width:100%;padding:0 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;}
-.project-flow-select:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 .project-flow-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;margin-top:10px;align-items:start;}
 .project-flow-col{display:flex;flex-direction:column;gap:10px;min-width:0;}
 .project-flow-card{box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:10px 12px;min-width:0;}
@@ -2171,8 +2260,6 @@ window.__ModuleLoader__.load({
 .project-flow-chip{height:22px;padding:0 8px;border-radius:11px;font-size:11px;}
 .project-flow-stale{gap:8px;margin-top:12px;padding:8px 12px;border-radius:10px;font-size:12px;}
 .project-flow-staleMark{width:16px;height:16px;font-size:11px;}
-.project-flow-roots{margin-top:12px;font-size:12px;}
-.project-flow-select{height:28px;font-size:12px;}
 .project-flow-grid{grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr);gap:16px;margin-top:16px;}
 .project-flow-col{gap:16px;}
 .project-flow-card{padding:14px 16px;border-radius:12px;}

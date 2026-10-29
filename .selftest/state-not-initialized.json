@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "generatedAt": "2026-10-28T20:04:35+08:00",
+  "root": "/tmp/project-flow-selftest/plain",
+  "roots": [
+    {
+      "path": "/tmp/project-flow-selftest/plain",
+      "name": "PlainWorkspace"
+    }
+  ],
+  "error": {
+    "code": "not-initialized",
+    "message": "no flow ledger in /tmp/project-flow-selftest/plain; run: node bin/flow.mjs init"
+  }
+}

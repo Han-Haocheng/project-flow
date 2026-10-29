@@ -1,7 +1,8 @@
 # project-flow-usage
 
 技能名：`project-flow-usage`。用 `flow` CLI 维护 `.dsh/flow/` 里的实验、任务与门禁；
-面板只读同一份 store。所有命令都接受全局 `--root <dir>` 与 `--json`。
+面板读同一份 store（唯一写动作是未初始化空态上的「初始化」按钮，同样走 core）。
+所有命令都接受全局 `--root <dir>` 与 `--json`。
 
 ## 实验：生命周期与谱系
 

@@ -2,6 +2,6 @@
   "ok": false,
   "error": {
     "code": "unknown-root",
-    "message": "root is neither a registered workspace nor a directory with a flow manifest"
+    "message": "root is neither a registered workspace, inside one, nor a directory with a flow manifest"
   }
 }

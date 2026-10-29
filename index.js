@@ -1,16 +1,21 @@
 // project-flow — Host half.
 //
-// Registers one read-only JSON endpoint, /api/project-flow/state, that reports
-// whatever ledger layout a project declares in its flow contract: experiment
-// trailers, tasks, gate log, subagent heartbeats and recently written run
-// output. When the project owns a `.dsh/flow/` store (schema 2) the same
-// endpoint reports that store instead, and four agent tools plus two skills
-// expose the store to the model through lib/core.mjs — the one writer shared
-// with the CLI. Discovery happens per request; the HTTP surface stays
-// read-only, with no watchers and no dependencies beyond node built-ins.
+// Registers two JSON endpoints, both same-origin gated: one read endpoint,
+// /api/project-flow/state, and ONE init write endpoint,
+// /api/project-flow/init. The read endpoint reports the ledger of exactly one
+// workspace: the directory the panel passes as `?root=<dir>` (the current
+// session workspace), or the process working directory when the parameter is
+// omitted. A workspace with no `.dsh/flow` store is reported as a legacy ledger
+// (git trailers, `.agents` markers) or as a "not initialized" empty state — the
+// endpoint never substitutes or lists another project. The write endpoint is
+// the only write on the HTTP surface: it creates the ledger of that same
+// workspace by reusing lib/core.mjs, the one writer shared with the CLI, so the
+// same validation and atomic write apply. Four agent tools plus two skills
+// expose the store to the model. Root resolution happens per request; there are
+// no watchers and no dependencies beyond node built-ins.
 
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -18,6 +23,10 @@ export const inject = ['webServer']
 
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
 const ROUTE_PATH = '/api/project-flow/state'
+const INIT_ROUTE_PATH = '/api/project-flow/init'
+const MAX_INIT_BODY_BYTES = 8 * 1024
+const MAX_INIT_CREATED = 50
+const MAX_INIT_WARNINGS = 20
 const GIT_TIMEOUT_MS = 4000
 const GIT_MAX_BUFFER = 16 * 1024 * 1024
 const MAX_STRING = 400
@@ -164,7 +173,6 @@ function defaultContract() {
     name: '',
     experiments: {
       source: 'git-trailers',
-      groupBy: 'Factor',
       ungroupedLabel: '未分组',
       limit: 400,
       keys: {
@@ -249,7 +257,6 @@ function mergeContract(raw, root) {
     const section = raw.experiments
     const target = contract.experiments
     target.source = pickSource(section.source, SOURCE_EXPERIMENTS, target.source)
-    target.groupBy = pickNonEmpty(section.groupBy, target.groupBy)
     target.ungroupedLabel = pickString(section.ungroupedLabel, target.ungroupedLabel)
     target.limit = pickInteger(section.limit, target.limit, 1, 10_000)
     if (isPlainObject(section.keys)) {
@@ -339,7 +346,7 @@ function loadContract(root, warnings) {
   return { contract: mergeContract(undefined, root), source: 'defaults', invalid: false }
 }
 
-// ---------------------------------------------------------------- candidates
+// ------------------------------------------------------- workspace inspection
 
 function readManifestName(root) {
   if (hasStore(root)) {
@@ -405,80 +412,111 @@ function hasManifest(root) {
   return false
 }
 
-/** A root is a candidate when it carries a manifest or one of the default markers. */
+/** A root owns a ledger when it carries a manifest or one of the default markers. */
 function hasContract(root) {
   if (hasManifest(root)) return true
   return hasDefaultLayout(root)
 }
 
-/**
- * Every registered workspace that opted in with a flow contract. Falls back to
- * the process working directory when the registry service is unavailable.
- */
-function listCandidates(ctx) {
-  const candidates = []
-  const seen = new Set()
-  const add = (path) => {
-    if (typeof path !== 'string' || path.length === 0) return
-    let canonical
-    try {
-      canonical = resolve(path)
-    } catch {
-      return
-    }
-    if (seen.has(canonical)) return
-    seen.add(canonical)
-    if (!hasContract(canonical)) return
-    candidates.push({ path: canonical, name: readManifestName(canonical) })
-  }
+// ------------------------------------------------------------ workspace scope
+//
+// The panel is scoped to one workspace. There is no global candidate list any
+// more: a requested root is canonicalized, validated against the registered
+// workspaces (or its own manifest) and then read in isolation.
 
+/** Canonical form of one path: resolved, then realpath when the path exists. */
+function canonicalRoot(path) {
+  let resolved
+  try {
+    resolved = resolve(path)
+  } catch {
+    resolved = String(path)
+  }
+  try {
+    return realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+/** Whether one path is an existing directory. */
+function isDirectory(path) {
+  try {
+    return statSync(path).isDirectory() === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The registered workspaces as `{ path, title }` rows, canonicalized. An
+ * unavailable or broken registry projection yields an empty list rather than an
+ * error: the endpoint then accepts only roots with their own manifest.
+ */
+function listWorkspaces(ctx) {
+  const workspaces = []
   let registry
   try {
     registry = ctx.get('workspaceRegistry')
   } catch {
     registry = undefined
   }
-  if (registry !== undefined && registry !== null && typeof registry.list === 'function') {
-    try {
-      for (const workspace of registry.list()) {
-        if (workspace === null || workspace === undefined) continue
-        let path
-        try {
-          path = workspace.path
-        } catch {
-          path = undefined
-        }
-        add(path)
-      }
-    } catch {
-      // A broken registry projection must not kill the endpoint.
-    }
-  }
-  if (candidates.length === 0) add(process.cwd())
-  return candidates
-}
+  if (registry === undefined || registry === null || typeof registry.list !== 'function') return workspaces
 
-function tasksDirMtime(root) {
+  let rows
   try {
-    return statSync(join(root, '.agents', 'tasks')).mtimeMs
+    rows = registry.list()
   } catch {
-    return Number.NEGATIVE_INFINITY
+    return workspaces
   }
+  for (const workspace of Array.isArray(rows) ? rows : []) {
+    if (workspace === null || workspace === undefined) continue
+    let path
+    let title
+    try {
+      path = workspace.path
+      title = workspace.title
+    } catch {
+      continue
+    }
+    if (typeof path !== 'string' || path.length === 0) continue
+    workspaces.push({
+      path: canonicalRoot(path),
+      title: typeof title === 'string' ? title.trim() : '',
+    })
+  }
+  return workspaces
 }
 
-function pickRoot(candidates) {
-  if (candidates.length === 0) return undefined
-  if (candidates.length === 1) return candidates[0]
-  let best = candidates[0]
-  let bestMtime = tasksDirMtime(best.path)
-  for (const candidate of candidates.slice(1)) {
-    const mtime = tasksDirMtime(candidate.path)
-    if (mtime > bestMtime) {
-      best = candidate
-      bestMtime = mtime
-    }
+/** Whether `root` is `base` itself or lives below it. */
+function rootWithin(root, base) {
+  if (root === base) return true
+  const prefix = base.endsWith(sep) ? base : base + sep
+  return root.startsWith(prefix)
+}
+
+/** Whether a root is a registered workspace, inside one, or declares its own flow manifest. */
+function rootAccepted(root, workspaces) {
+  for (const workspace of workspaces) {
+    if (rootWithin(root, workspace.path)) return true
   }
-  return best
+  return hasManifest(root)
+}
+
+/**
+ * Display name: the manifest name, else the title of the innermost registered
+ * workspace containing the root (workspaces may nest, e.g. /Project and
+ * /Project/app), else the folder name.
+ */
+function rootName(root, workspaces) {
+  if (hasManifest(root)) return readManifestName(root)
+  let owner
+  for (const workspace of workspaces) {
+    if (rootWithin(root, workspace.path) === false) continue
+    if (owner === undefined || workspace.path.length > owner.path.length) owner = workspace
+  }
+  if (owner !== undefined) return owner.title.length > 0 ? owner.title : basename(root)
+  return basename(root)
 }
 
 // ---------------------------------------------------------------- experiments
@@ -526,7 +564,7 @@ function parseExpLog(raw, keys) {
       expected: clip(get('expected')),
       measured: clip(get('measured')),
       scale: get('scale'),
-      // `groupBy` names an actual git trailer key, which may be any mapped key.
+      // Raw trailer values keyed by the configured trailer key; grouping reads `keys.factor`.
       byKey,
     })
   }
@@ -540,7 +578,7 @@ function buildExperiments(rows, experiments) {
   for (const row of rows) {
     if (row.verdict === 'confirmed') confirmed += 1
     else if (row.verdict === 'refuted') refuted += 1
-    const rawFactor = row.byKey.get(experiments.groupBy) ?? ''
+    const rawFactor = row.byKey.get(experiments.keys.factor) ?? ''
     const key = rawFactor.length > 0 ? rawFactor : experiments.ungroupedLabel
     if (!grouped.has(key)) grouped.set(key, [])
     grouped.get(key).push({
@@ -1221,27 +1259,27 @@ function recentDoneOf(records, limit) {
 }
 
 /** Store-mode payload: contract + collections read through lib/core.mjs. */
-async function buildStoreState(root, candidate, now, warnings) {
+async function buildStoreState(root, entry, now, warnings) {
   const c = requireCore()
   let loaded
   try {
     loaded = c.loadContract(root)
   } catch (error) {
     warnings.push(`store contract unreadable: ${brief(error)}`)
-    return buildLegacyState(root, candidate, now, warnings)
+    return buildLegacyState(root, entry, now, warnings)
   }
   for (const warning of Array.isArray(loaded.warnings) ? loaded.warnings : []) {
     warnings.push(`contract: ${warning}`)
   }
   const contract = loaded.contract
-  candidate.name = contract.name
+  entry.name = contract.name
 
   let state
   try {
     state = c.readStoreState(root, contract)
   } catch (error) {
     warnings.push(`store unreadable: ${brief(error)}`)
-    return buildLegacyState(root, candidate, now, warnings)
+    return buildLegacyState(root, entry, now, warnings)
   }
 
   const head = await readHead(root, warnings)
@@ -1308,9 +1346,9 @@ async function buildStoreState(root, candidate, now, warnings) {
 }
 
 /** Legacy payload: experiment trailers, `.agents` ledgers and the observation log. */
-async function buildLegacyState(root, candidate, now, warnings) {
+async function buildLegacyState(root, entry, now, warnings) {
   const { contract, source } = loadContract(root, warnings)
-  candidate.name = contract.name
+  entry.name = contract.name
 
   const [head, legacyExperiments] = await Promise.all([
     readHead(root, warnings),
@@ -1346,13 +1384,13 @@ async function buildLegacyState(root, candidate, now, warnings) {
   }
 }
 
-async function buildState(root, candidate, now) {
+async function buildState(root, entry, now) {
   const warnings = mountWarnings.slice()
   let payload
   if (coreAvailable() && hasStore(root)) {
-    payload = await buildStoreState(root, candidate, now, warnings)
+    payload = await buildStoreState(root, entry, now, warnings)
   } else {
-    payload = await buildLegacyState(root, candidate, now, warnings)
+    payload = await buildLegacyState(root, entry, now, warnings)
     if (hasStore(root)) {
       warnings.push(`store present but lib/core.mjs is unavailable: ${coreFailure || 'unknown error'}`)
     }
@@ -1438,55 +1476,72 @@ async function handleState(ctx, request, response) {
     return
   }
 
-  let candidates
+  const now = Date.now()
+
+  let workspaces
   try {
-    candidates = listCandidates(ctx)
+    workspaces = listWorkspaces(ctx)
   } catch (error) {
     sendError(response, 500, 'internal', brief(error))
     return
   }
 
+  // Exactly one root: the workspace the panel asks for. There is no fallback to
+  // another project — an uninitialized workspace reports its empty state.
   const requested = url.searchParams.get('root')
-  let chosen
+  let root
   if (requested !== null) {
-    let canonical
-    try {
-      canonical = resolve(requested)
-    } catch (error) {
-      sendError(response, 400, 'bad-root', brief(error))
+    if (requested.trim().length === 0) {
+      sendError(response, 400, 'bad-root', 'root must name the workspace directory')
       return
     }
-    chosen = candidates.find((candidate) => candidate.path === canonical)
-    if (chosen === undefined) {
-      // An explicit root is also accepted when it opts in with its own flow
-      // manifest, even if no workspace registry row points at it yet.
-      if (hasManifest(canonical)) {
-        chosen = { path: canonical, name: readManifestName(canonical) }
-        candidates.push(chosen)
-      } else {
-        sendError(response, 400, 'unknown-root', 'root is neither a registered workspace nor a directory with a flow manifest')
-        return
-      }
+    root = canonicalRoot(requested)
+    if (isDirectory(root) === false) {
+      sendError(response, 400, 'bad-root', `root is not an existing directory: ${root}`)
+      return
+    }
+    if (rootAccepted(root, workspaces) === false) {
+      sendError(
+        response,
+        400,
+        'unknown-root',
+        'root is neither a registered workspace, inside one, nor a directory with a flow manifest',
+      )
+      return
     }
   } else {
-    chosen = pickRoot(candidates)
+    root = canonicalRoot(process.cwd())
+    // Without an explicit root there is no chosen workspace: it must both be
+    // accepted and actually carry a ledger, otherwise nothing is scoped.
+    if (rootAccepted(root, workspaces) === false || hasContract(root) === false) {
+      sendJson(response, 200, {
+        ok: false,
+        generatedAt: isoLocal(new Date(now)),
+        roots: [],
+        root: null,
+        error: { code: 'no-project', message: 'no workspace declares a flow contract or a default ledger layout' },
+      })
+      return
+    }
   }
 
-  const now = Date.now()
-  if (chosen === undefined) {
+  const entry = { path: root, name: rootName(root, workspaces) }
+
+  if (hasContract(root) === false) {
     sendJson(response, 200, {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
-      roots: [],
-      root: null,
-      error: { code: 'no-project', message: 'no workspace declares a flow contract or a default ledger layout' },
+      root,
+      roots: [entry],
+      error: { code: 'not-initialized', message: `no flow ledger in ${root}; run: node bin/flow.mjs init` },
     })
     return
   }
 
   try {
-    const payload = await buildState(chosen.path, chosen, now)
-    payload.roots = candidates.map((candidate) => ({ path: candidate.path, name: candidate.name }))
+    const payload = await buildState(root, entry, now)
+    payload.root = root
+    payload.roots = [{ path: entry.path, name: entry.name }]
     const body = capPayload(payload)
     response.writeHead(200, {
       'content-type': 'application/json; charset=utf-8',
@@ -1498,11 +1553,162 @@ async function handleState(ctx, request, response) {
     sendJson(response, 200, {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
-      roots: candidates.map((candidate) => ({ path: candidate.path, name: candidate.name })),
-      root: chosen.path,
+      roots: [{ path: entry.path, name: entry.name }],
+      root,
       error: { code: 'internal', message: brief(error, 400) },
     })
   }
+}
+
+// ------------------------------------------------------------------ init HTTP
+//
+// The only write on the HTTP surface. It never touches the store directly: after
+// the same root scoping as the read endpoint it hands the directory to
+// lib/core.mjs, so validation, locking and the atomic write stay in one place.
+
+/**
+ * Read the request body as UTF-8 text, bounded by `limit` bytes. Oversized
+ * bodies resolve immediately with `{ tooLarge: true }` and are drained in the
+ * background, so the caller can answer 400 without waiting for — or stalling on
+ * — the rest of the stream. A request without a readable stream yields ''.
+ */
+function readBody(request, limit = MAX_INIT_BODY_BYTES) {
+  return new Promise((settle) => {
+    if (request === null || request === undefined || typeof request.on !== 'function') {
+      settle({ text: '', tooLarge: false })
+      return
+    }
+    const chunks = []
+    let size = 0
+    let done = false
+    const finish = (result) => {
+      if (done) return
+      done = true
+      settle(result)
+    }
+    request.on('data', (chunk) => {
+      if (done) return
+      let buffer
+      try {
+        buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+      } catch {
+        return
+      }
+      size += buffer.length
+      if (size > limit) {
+        finish({ text: '', tooLarge: true })
+        // Keep consuming (and ignoring) the rest instead of leaving the socket
+        // paused: the response is already on its way.
+        try {
+          if (typeof request.resume === 'function') request.resume()
+        } catch {
+          // ignore
+        }
+        return
+      }
+      chunks.push(buffer)
+    })
+    request.on('end', () => finish({ text: Buffer.concat(chunks).toString('utf8'), tooLarge: false }))
+    request.on('error', () => finish({ text: '', tooLarge: false }))
+  })
+}
+
+async function handleInit(ctx, request, response) {
+  const method = String(request.method ?? 'POST').toUpperCase()
+  if (method !== 'POST') {
+    try {
+      response.setHeader('allow', 'POST')
+    } catch {
+      // ignore
+    }
+    sendError(response, 405, 'method-not-allowed')
+    return
+  }
+
+  if (!originAllowed(ctx, request)) {
+    sendError(response, 403, 'forbidden')
+    return
+  }
+
+  const body = await readBody(request)
+  if (body.tooLarge) {
+    sendError(response, 400, 'bad-request', `request body exceeds ${MAX_INIT_BODY_BYTES} bytes`)
+    return
+  }
+
+  let parsed
+  try {
+    parsed = JSON.parse(body.text)
+  } catch (error) {
+    sendError(response, 400, 'bad-request', brief(error))
+    return
+  }
+  if (!isPlainObject(parsed)) {
+    sendError(response, 400, 'bad-request', 'request body must be a JSON object')
+    return
+  }
+
+  const requested = parsed.root
+  if (typeof requested !== 'string' || requested.trim().length === 0) {
+    sendError(response, 400, 'bad-root', 'root must name the workspace directory')
+    return
+  }
+  const root = canonicalRoot(requested)
+  if (isDirectory(root) === false) {
+    sendError(response, 400, 'bad-root', `root is not an existing directory: ${root}`)
+    return
+  }
+
+  let workspaces
+  try {
+    workspaces = listWorkspaces(ctx)
+  } catch (error) {
+    sendError(response, 500, 'internal', brief(error))
+    return
+  }
+  if (rootAccepted(root, workspaces) === false) {
+    sendError(
+      response,
+      400,
+      'unknown-root',
+      'root is neither a registered workspace, inside one, nor a directory with a flow manifest',
+    )
+    return
+  }
+
+  const name = rootName(root, workspaces)
+
+  let result
+  try {
+    // The shared writer: requireCore() reports an unavailable lib/core.mjs in a
+    // readable message instead of taking the plugin down.
+    const c = requireCore()
+    result = c.initProject(root, { name })
+  } catch (error) {
+    const conflict = error !== null && error !== undefined && typeof error === 'object' && error.code === 'conflict'
+    sendError(response, conflict ? 409 : 500, 'init-failed', brief(error, 300))
+    return
+  }
+
+  const created = Array.isArray(result?.created)
+    ? result.created.filter((item) => typeof item === 'string').slice(0, MAX_INIT_CREATED)
+    : []
+  const warnings = Array.isArray(result?.warnings)
+    ? result.warnings.filter((item) => typeof item === 'string').slice(0, MAX_INIT_WARNINGS)
+    : []
+  // Nothing created + the writer's own "already-initialized" warning means the
+  // store was there before this call.
+  const alreadyInitialized = created.length === 0 && warnings.some((line) => line.startsWith('already-initialized:'))
+
+  sendJson(response, 200, {
+    ok: true,
+    root,
+    name,
+    alreadyInitialized,
+    created,
+    imported: isPlainObject(result?.imported) ? result.imported : { trailers: 0, tasks: 0 },
+    warnings,
+  })
 }
 
 // ------------------------------------------------------------------- tools
@@ -2034,7 +2240,44 @@ const SKILL_META = [
     whenToUse:
       'Use when the user asks about project flow status, experiments, tasks or gates, or wants to record an experiment, task or gate run.',
   },
+  {
+    /* Directory layout: skills/<name>/SKILL.md plus references/, assets/, scripts/. */
+    name: 'ai-collaborative-dev-workflow',
+    description:
+      'Multi-agent (and single-agent) development workflow: project profiles, command contracts, quality gates, release cadence, session continuity, and collaboration discipline.',
+    whenToUse:
+      'Use when starting or resuming a development task in a long-maintained project, coordinating several agents or sessions, preparing a commit/release, or recovering after an interrupted session. Read its references only for the section you need.',
+  },
 ]
+
+/**
+ * Read the simple frontmatter of a skill file: the top-level `description` and
+ * `when-to-use` inside the `metadata:` block. Only `key: value` scalars are
+ * supported; folded/quoted multiline values are ignored so the SKILL_META
+ * fallback still applies.
+ */
+function readSkillFrontmatter(content) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(content)
+  if (match === null) return { description: '', whenToUse: '' }
+  const seen = {}
+  let block = ''
+  for (const line of match[1].split(/\r?\n/)) {
+    if (line.trim().length === 0) continue
+    const pair = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line.trim())
+    if (pair === null) continue
+    if (/^[ \t]/.test(line)) {
+      if (block === 'metadata') seen[`metadata.${pair[1]}`] = pair[2].trim()
+    } else {
+      block = pair[1]
+      seen[block] = pair[2].trim()
+    }
+  }
+  const unquote = (value) => (typeof value === 'string' ? value.replace(/^["']|["']$/g, '').trim() : '')
+  return {
+    description: unquote(seen.description),
+    whenToUse: unquote(seen['metadata.when-to-use']),
+  }
+}
 
 function registerSkills(ctx) {
   provide(ctx, 'skills', 'skills', (scoped) => {
@@ -2042,8 +2285,15 @@ function registerSkills(ctx) {
     if (skills === undefined || typeof skills.register !== 'function') return () => {}
     const disposers = []
     for (const meta of SKILL_META) {
-      const relativePath = join('skills', `${meta.name}.md`)
-      const file = join(PACKAGE_ROOT, relativePath)
+      // Two layouts: a directory skill (skills/<name>/SKILL.md) may carry
+      // references/, assets/ and scripts/, a flat skill (skills/<name>.md) is
+      // the instruction file alone. The directory wins when both exist.
+      const dir = join(PACKAGE_ROOT, 'skills', meta.name)
+      const dirRelative = join('skills', meta.name, 'SKILL.md')
+      const flatRelative = join('skills', `${meta.name}.md`)
+      const directory = existsSync(join(dir, 'SKILL.md'))
+      const relativePath = directory ? dirRelative : flatRelative
+      const file = directory ? join(dir, 'SKILL.md') : join(PACKAGE_ROOT, flatRelative)
       let content
       try {
         content = readFileSync(file, 'utf8')
@@ -2056,11 +2306,22 @@ function registerSkills(ctx) {
         continue
       }
       try {
+        /* A directory skill is a file the package author can edit: its own
+           frontmatter wins over the SKILL_META fallback. */
+        const front = readSkillFrontmatter(content)
         const dispose = skills.register({
           name: meta.name,
-          description: meta.description,
-          whenToUse: meta.whenToUse,
-          content,
+          description: front.description.length > 0 ? front.description : meta.description,
+          whenToUse: front.whenToUse.length > 0 ? front.whenToUse : meta.whenToUse,
+          /* SkillSummary requires a string source; these ship with the bundle. */
+          source: 'bundled',
+          /* The filesystem provider strips the frontmatter from a loaded body;
+             do the same, or the model sees the metadata block twice. */
+          content: content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trimStart(),
+          /* A directory skill renders "Base directory for this skill: <path>" and
+             the model resolves relative references against it; the flat layout
+             has no resources, so it carries no resourceBase. */
+          ...(directory ? { resourceBase: { kind: 'directory', path: dir } } : {}),
         })
         if (typeof dispose === 'function') disposers.push(dispose)
       } catch (error) {
@@ -2112,6 +2373,39 @@ export function apply(ctx) {
       }
     }
   }, 'project-flow: state route')
+
+  const initRoute = {
+    kind: 'exact',
+    path: INIT_ROUTE_PATH,
+    handler: (request, response) => {
+      Promise.resolve()
+        .then(() => handleInit(ctx, request, response))
+        .catch((error) => {
+          try {
+            if (response.headersSent) {
+              response.destroy()
+              return
+            }
+            sendError(response, 500, 'internal', brief(error))
+          } catch {
+            // The socket is already gone; nothing left to report to.
+          }
+        })
+    },
+  }
+
+  ctx.effect(() => {
+    const webServer = service(ctx, 'webServer')
+    if (webServer === undefined || typeof webServer.register !== 'function') return () => {}
+    const dispose = webServer.register(initRoute)
+    return () => {
+      try {
+        if (typeof dispose === 'function') dispose()
+      } catch {
+        // Disposal must never throw into the host.
+      }
+    }
+  }, 'project-flow: init route')
 
   // Optional services: a host without tools/skills (or a plain test double)
   // must still get the endpoint. Never let one of these take the plugin down.

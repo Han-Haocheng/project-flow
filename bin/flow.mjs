@@ -3,8 +3,11 @@
 //
 // 唯一写入口：本文件不自己读写台账、不做校验，所有存储/校验/门禁执行都委托给
 // lib/core.mjs。core 只依赖 node:fs/path/child_process，CLI 只做参数解析与输出。
+// `flow check` 另委托 lib/checks.mjs（只读，不写 store）。
 //
 // 退出码：0 成功 · 1 用法 · 2 校验 · 3 未找到 · 4 IO
+// `flow check` 复用同一组数字但含义按检查归一：0 通过 · 1 检查失败 ·
+// 2 用法/配置错误 · 3 脚本或解释器缺失 · 4 启动/IO 失败/超时。
 
 import path from 'node:path'
 import process from 'node:process'
@@ -47,6 +50,15 @@ const USAGE = `project-flow CLI（schema 2）
   gate run <id> [--timeout SECONDS]
   gate logs <id> [--limit N]
 
+  check list
+  check staged --allow <path> [--allow <path> ...]
+  check release-baseline --marker <text> [--threshold <N>]
+  check state [--file <path>]
+  check doc --file <path> --type task|design|incident|release
+
+  机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
+  scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
+
 全局
   --root <dir>   项目根目录（默认当前目录）
   --json         机器可读输出：{ok:true,data} 或 {ok:false,error:{code,message}}
@@ -54,10 +66,25 @@ const USAGE = `project-flow CLI（schema 2）
 
 退出码
   0 成功 · 1 用法错误 · 2 校验失败 · 3 未找到 · 4 IO/环境错误
-  注意：gate run 的门禁失败以 data.ok=false 表达，命令本身成功时仍退出 0。`
+  注意：gate run 的门禁失败以 data.ok=false 表达，命令本身成功时仍退出 0。
+  check 复用同一组数字：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
+  3 脚本或解释器缺失 · 4 启动/IO 失败（含超时）。`
 
 const EXIT = { usage: 1, invalid: 2, notFound: 3, io: 4 }
 const EXIT_BY_CODE = { usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4 }
+
+// `flow check` 的退出码词汇（数字与插件一致，语义按检查归一，见 CONTRACT §6）。
+const CHECK_EXIT_BY_CODE = {
+  usage: 2,
+  'check-failed': 1,
+  'check-missing': 3,
+  'check-io': 4,
+  'not-found': 3,
+  io: 4,
+}
+
+// status 只逐条展示最近的心跳，其余用总数提示。
+const STATUS_HEARTBEAT_ROWS = 5
 
 const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help'])
 const VALUE_FLAGS = new Set([
@@ -66,8 +93,9 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
+  'allow', 'marker', 'threshold', 'file', 'type',
 ])
-const REPEAT_FLAGS = new Set(['step'])
+const REPEAT_FLAGS = new Set(['step', 'allow'])
 
 class CliError extends Error {
   constructor(code, message) {
@@ -140,12 +168,14 @@ function parseArgv(argv) {
     positional.push(tok)
   }
 
-  return { flags, steps: repeated.step || [], positional, errors }
+  return { flags, steps: repeated.step || [], allows: repeated.allow || [], positional, errors }
 }
 
 // ---------------------------------------------------------------- 输出工具
 
 let jsonMode = false
+// 顶层命令名：catch 里据此选择退出码词汇（`flow check` 用检查语义）。
+let topCommand = ''
 
 function out(text) {
   process.stdout.write(`${text}\n`)
@@ -232,6 +262,17 @@ function fmtDuration(ms) {
   return `${Math.round(value / 1000)}s`
 }
 
+/** Relative age for heartbeat rows ("刚刚", "3 小时前", …). */
+function fmtAge(seconds) {
+  const value = Number(seconds)
+  if (!Number.isFinite(value)) return '-'
+  const total = Math.max(0, value)
+  if (total < 60) return '刚刚'
+  if (total < 3600) return `${Math.round(total / 60)} 分钟前`
+  if (total < 86400) return `${Math.round(total / 3600)} 小时前`
+  return `${Math.round(total / 86400)} 天前`
+}
+
 function showWarnings(warnings) {
   if (!Array.isArray(warnings) || warnings.length === 0) return
   for (const warning of warnings) errOut(`警告: ${typeof warning === 'string' ? warning : JSON.stringify(warning)}`)
@@ -249,6 +290,15 @@ function readInteger(flags, name) {
   const value = Number(flags[name])
   if (!Number.isInteger(value) || value < 0) {
     throw new CliError('usage', `--${name} 需要一个非负整数`)
+  }
+  return value
+}
+
+function readPositiveInteger(flags, name, hint) {
+  if (flags[name] === undefined) return undefined
+  const value = Number(flags[name])
+  if (!Number.isInteger(value) || value < 1) {
+    throw new CliError('usage', hint || `--${name} 需要一个正整数`)
   }
   return value
 }
@@ -392,6 +442,9 @@ async function cmdStatus(ctx) {
     recentRuns.sort((a, b) => String(b.started_at || '').localeCompare(String(a.started_at || '')))
   }
 
+  // 心跳独立于 store 聚合，未初始化也读取（与面板一致）。
+  const heartbeats = core.readHeartbeatSection(ctx.root, contract)
+
   const expCounts = countsOf(experiments, ['open', 'confirmed', 'refuted', 'abandoned'])
   const taskCounts = countsOf(tasks, ['draft', 'active', 'done', 'archived'])
   const gateEnabled = gates.filter((gate) => gate.enabled !== false).length
@@ -408,6 +461,7 @@ async function cmdStatus(ctx) {
       tasks: { total: tasks.length, ...taskCounts },
       gates: { total: gates.length, enabled: gateEnabled },
     },
+    heartbeats,
     recent: {
       experiments: experiments.slice(0, 3),
       tasks: tasks.slice(0, 3),
@@ -435,9 +489,25 @@ async function cmdStatus(ctx) {
         `${tasks.length}（draft ${taskCounts.draft} · active ${taskCounts.active} · done ${taskCounts.done} · archived ${taskCounts.archived}）`,
       ])
       lines.push(['门禁', `${gates.length}（启用 ${gateEnabled}）`])
+      lines.push(['心跳', `${heartbeats.counts.total}（可能已停 ${heartbeats.counts.stale}）`])
     }
     const labelWidth = Math.max(...lines.map(([label]) => textWidth(label)))
     for (const [label, value] of lines) out(`${pad(label, labelWidth)}  ${value}`)
+
+    if (initialized) {
+      const beats = heartbeats.items
+      if (beats.length > 0) {
+        const shown = beats.slice(0, STATUS_HEARTBEAT_ROWS)
+        const nameWidth = Math.max(...shown.map((beat) => textWidth(beat.file)))
+        const ageWidth = Math.max(...shown.map((beat) => textWidth(fmtAge(beat.ageSeconds))))
+        for (const beat of shown) {
+          out(`  ${pad(beat.file, nameWidth)}  ${pad(fmtAge(beat.ageSeconds), ageWidth)}  ${clip(beat.statusLine || '-', 60)}`)
+        }
+        if (beats.length > STATUS_HEARTBEAT_ROWS) {
+          out(`  … 其余 ${beats.length - STATUS_HEARTBEAT_ROWS} 条（共 ${beats.length} 条）`)
+        }
+      }
+    }
 
     if (initialized) {
       if (data.recent.experiments.length > 0) {
@@ -765,6 +835,65 @@ async function cmdGate(ctx, sub) {
   throw new CliError('usage', `未知子命令 gate ${sub}（可用 list|show|add|update|rm|run|logs）`)
 }
 
+// ---------------------------------------------------------------- flow check
+
+async function loadChecks() {
+  try {
+    return await import(new URL('../lib/checks.mjs', import.meta.url).href)
+  } catch (error) {
+    const missing =
+      error?.code === 'ERR_MODULE_NOT_FOUND' && /lib[/\\]checks\.mjs/.test(String(error.message))
+    const detail = missing
+      ? '缺少 lib/checks.mjs（flow check 的检查目录未随包提供）'
+      : error?.message || String(error)
+    throw new CliError('io', `无法加载检查模块：${detail}`)
+  }
+}
+
+async function cmdCheck(ctx, sub) {
+  const checks = await loadChecks()
+  const names = checks.CHECKS.map((entry) => entry.name)
+  const { flags } = ctx
+
+  if (!sub) {
+    throw new CliError('usage', `用法: flow check <list|${names.join('|')}> [options]`)
+  }
+
+  if (sub === 'list') {
+    const items = checks.listChecks()
+    if (!ctx.json) {
+      out('机械检查（脚本相对包根路径；只读，不写 .dsh/flow）')
+      out('')
+      items.forEach((item, index) => {
+        if (index > 0) out('')
+        out(`${item.name}  [${item.interpreter}]  ${item.description}`)
+        out(`  脚本  ${item.script}`)
+        out(`  用法  flow check ${item.name} ${item.args}`)
+      })
+    }
+    return { checks: items }
+  }
+
+  const timeoutSeconds = readPositiveInteger(
+    flags,
+    'timeout',
+    '--timeout 需要正整数秒（单次检查的超时，默认 120）',
+  )
+  const threshold = readInteger(flags, 'threshold')
+
+  const result = await checks.runCheck(sub, {
+    root: ctx.root,
+    allows: ctx.allows,
+    marker: readString(flags, 'marker'),
+    threshold,
+    file: readString(flags, 'file'),
+    type: readString(flags, 'type'),
+    timeoutSeconds,
+    passthrough: !ctx.json,
+  })
+  return result
+}
+
 // ---------------------------------------------------------------- 展示辅助
 
 function printRecord(record) {
@@ -891,14 +1020,17 @@ async function dispatch(ctx, parsed) {
       return cmdTask(ctx, sub)
     case 'gate':
       return cmdGate(ctx, sub)
+    case 'check':
+      return cmdCheck(ctx, sub)
     default:
-      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate；-h 查看帮助）`)
+      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|check；-h 查看帮助）`)
   }
 }
 
 async function main() {
   const parsed = parseArgv(process.argv.slice(2))
   jsonMode = parsed.flags.json === true
+  topCommand = parsed.positional[0] ?? ''
 
   if (parsed.flags.help === true) {
     out(USAGE)
@@ -917,6 +1049,7 @@ async function main() {
     root,
     flags: parsed.flags,
     steps: parsed.steps,
+    allows: parsed.allows,
     json: jsonMode,
     contract: null,
   }
@@ -951,10 +1084,14 @@ main()
     process.exitCode = code ?? 0
   })
   .catch((error) => {
-    const code = error?.name === 'FlowError' || typeof error?.code === 'string' ? error.code : 'io'
-    const mapped = exitCodeOf(code)
-    const payload = { code: typeof code === 'string' ? code : 'io', message: error?.message || String(error) }
+    const code = typeof error?.code === 'string' ? error.code : 'io'
+    const detail = { code, message: error?.message || String(error) }
+    // CheckError 自带检查上下文（check/exitCode/stdout/stderr），直接并入 error 对象。
+    const payload =
+      error?.payload && typeof error.payload === 'object' ? { ...error.payload, ...detail } : detail
+    const mapped =
+      (topCommand === 'check' ? CHECK_EXIT_BY_CODE[code] : undefined) ?? exitCodeOf(code)
     if (jsonMode) emitJson({ ok: false, error: payload })
-    else errOut(`错误（${payload.code}）：${payload.message}`)
+    else if (error?.silent !== true) errOut(`错误（${payload.code}）：${payload.message}`)
     process.exitCode = mapped
   })

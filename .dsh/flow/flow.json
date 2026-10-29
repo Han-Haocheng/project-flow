@@ -1,0 +1,48 @@
+{
+  "schema": 2,
+  "name": "project-flow",
+  "store": {
+    "root": ".dsh/flow"
+  },
+  "experiments": {
+    "source": "store",
+    "dir": ".dsh/flow/experiments",
+    "fallbackTrailers": true
+  },
+  "tasks": {
+    "source": "json",
+    "dir": ".dsh/flow/tasks",
+    "current": null,
+    "recentLimit": 6
+  },
+  "gates": {
+    "dir": ".dsh/flow/gates",
+    "logs": ".dsh/flow/logs"
+  },
+  "gate": {
+    "log": null
+  },
+  "heartbeats": {
+    "source": "md",
+    "dir": ".agents/heartbeat",
+    "max": 20
+  },
+  "runs": {
+    "dirs": [
+      ".agents/tmp",
+      "build/agent-*"
+    ],
+    "maxDepth": 3,
+    "maxAgeMinutes": 15,
+    "max": 4,
+    "tailLines": 15,
+    "maxBytes": 2000000,
+    "extensions": [
+      ".txt",
+      ".log",
+      ".out",
+      ".json",
+      ".csv"
+    ]
+  }
+}

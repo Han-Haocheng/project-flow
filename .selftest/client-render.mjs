@@ -6,8 +6,11 @@
  * field into the returned object (one literal string replacement, asserted),
  * then renders every panel component against a full fixture, an empty payload,
  * `gate: null`, a missing `contract` and hostile values. It also replays the
- * Host-side state-*.json fixtures when they exist, which proves the client and
- * the real Host payload agree on the contract shape.
+ * Host-side state-*.json fixtures when they exist (including a
+ * `not-initialized` workspace response), which proves the client and the real
+ * Host payload agree on the contract shape. The panel is workspace-scoped, so
+ * `PanelBody` resolves `sessionId` + `useSessions` into the `workspaceRoot` the
+ * `Panel` polls and keys on.
  *
  * No network, no host access.
  *
@@ -37,7 +40,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, GatesCard, SignalsCard, TopBar, Footer, ProjectPicker, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -128,10 +131,7 @@ const fixture = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
   contract: { source: 'flow.json', schema: 1, name: 'alpha' },
-  roots: [
-    { path: '/tmp/pf-demo/alpha', name: 'alpha' },
-    { path: '/tmp/other', name: 'other' },
-  ],
+  roots: [{ path: '/tmp/pf-demo/alpha', name: 'alpha' }],
   root: '/tmp/pf-demo/alpha',
   head: { sha: 'f5f176bc1234', subject: 'feat: demo', branch: 'dev', dirty: 2 },
   experiments: {
@@ -229,6 +229,17 @@ function collectType(node, type) {
   return found;
 }
 
+/** Text nodes of an expanded element tree (function components included). */
+function textOf(node) {
+  const out = [];
+  walk(node, (element) => {
+    (element.children || []).forEach((child) => {
+      if (typeof child === 'string' || typeof child === 'number') out.push(String(child));
+    });
+  });
+  return out.join('\n');
+}
+
 function clickEverything(node) {
   let clicks = 0;
   walk(node, (element) => {
@@ -245,7 +256,7 @@ const view = probe.normalize(fixture);
 // ------------------------------------------------------------------- checks
 check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.root, '/tmp/pf-demo/alpha');
-  assert.equal(view.roots.length, 2);
+  assert.equal(view.roots.length, 1);
   assert.equal(view.roots[0].name, 'alpha');
   assert.equal(view.contract.source, 'flow.json');
   assert.equal(view.contract.schema, 1);
@@ -520,37 +531,83 @@ check('Footer: contract source line (file source, defaults, missing)', () => {
   assert.equal(collect(hidden, 'project-flow-contract').length, 0, 'contract line must hide when absent');
 });
 
-check('ProjectPicker: shows project names, keeps paths as values/titles', () => {
-  const changes = [];
-  const picker = probe.ProjectPicker({
-    roots: view.roots,
+check('ErrorState: not-initialized shows the init guidance and one Initialize button', () => {
+  const element = probe.ErrorState({
     t,
-    value: view.root,
-    onChange: (next) => changes.push(next),
+    info: { code: 'not-initialized', message: 'no ledger' },
+    workspaceRoot: '/tmp/pf-demo/Alpha',
+    onInitialized: () => {},
   });
-  assert.equal(collect(picker, 'project-flow-roots').length, 1);
-  assert.equal(collect(picker, 'project-flow-select').length, 1);
-  const options = collectType(picker, 'option');
-  assert.equal(options.length, 2);
-  assert.equal(options[0].props.value, '/tmp/pf-demo/alpha');
-  assert.equal(options[0].props.title, '/tmp/pf-demo/alpha');
-  assert.equal(options[0].children[0], 'alpha');
-  assert.equal(options[1].children[0], 'other');
-  const label = collectType(picker, 'label')[0];
-  assert.equal(label.children[0], '项目');
-  const select = collectType(picker, 'select')[0];
-  assert.equal(select.props.value, view.root);
-  assert.equal(select.props.id, 'project-flow-project-select');
-  select.props.onChange({ target: { value: '/tmp/other' } });
-  assert.deepEqual(changes, ['/tmp/other']);
+  const text = JSON.stringify(element);
+  assert.ok(text.includes('未初始化'), 'empty.title copy missing');
+  assert.ok(text.includes('这个工作区还没有项目流台账。'), 'error.notInitialized copy missing');
+  assert.ok(text.includes('node bin/flow.mjs init'), 'error.initHint copy missing');
+  assert.ok(text.includes('点「初始化」'), 'error.initHint does not lead with the button');
+  assert.ok(!text.includes('重试'), 'generic retry label leaked into the not-initialized card');
+  const buttons = collect(element, 'project-flow-btn');
+  assert.equal(buttons.length, 1, 'init button missing');
+  assert.equal(buttons[0].children[0], '初始化');
+  assert.equal(buttons[0].props.disabled, false, 'init button starts enabled');
+
+  const english = probe.ErrorState({
+    t: tEn,
+    info: { code: 'not-initialized', message: 'no ledger' },
+    workspaceRoot: '/tmp/pf-demo/Alpha',
+    onInitialized: () => {},
+  });
+  const englishText = JSON.stringify(english);
+  assert.ok(englishText.includes('Click Initialize'), 'en init hint copy missing');
+  assert.ok(englishText.includes('node bin/flow.mjs init'), 'en init hint command missing');
+  assert.equal(collect(english, 'project-flow-btn')[0].children[0], 'Initialize');
+
+  // Every other code keeps today's copy (and must not show the init hint).
+  const generic = probe.ErrorState({ t, info: { code: 'no-project' }, onRetry: () => {} });
+  const genericText = JSON.stringify(generic);
+  assert.ok(genericText.includes('无法读取实验状态'), 'error.title copy missing');
+  assert.ok(genericText.includes('当前目录不是可读取的项目。'), 'error.noProject copy missing');
+  assert.ok(!genericText.includes('node bin/flow.mjs'), 'init hint leaked into a generic error');
+  assert.ok(!genericText.includes('初始化'), 'init button label leaked into a generic error');
+  const genericButtons = collect(generic, 'project-flow-btn');
+  assert.equal(genericButtons.length, 1, 'generic retry button missing');
+  assert.equal(genericButtons[0].children[0], '重试');
+});
+
+check('normalize: a not-initialized payload is tolerated', () => {
+  const notInitialized = {
+    ok: false,
+    root: '/tmp/pf-demo/Alpha',
+    roots: [{ path: '/tmp/pf-demo/Alpha', name: 'Alpha' }],
+    error: { code: 'not-initialized', message: 'this workspace has no ledger' },
+  };
+  const normalized = probe.normalize(notInitialized);
+  assert.equal(normalized.root, '/tmp/pf-demo/Alpha');
+  assert.equal(normalized.roots.length, 1);
+  assert.equal(normalized.roots[0].name, 'Alpha');
+  assert.equal(normalized.exp.total, 0);
+  assert.equal(normalized.contract, null);
+  assert.ok(JSON.stringify(renderParts(notInitialized)).length > 100, 'payload parts rendered nothing');
 });
 
 check('Panel: first render is the loading skeleton', () => {
+  const element = probe.Panel({ t, workspaceRoot: '/tmp/pf-demo/Alpha' });
+  assert.equal(element.type, 'div');
+  assert.equal(collect(element, 'project-flow-spinner').length, 1, 'loading spinner missing');
+  assert.ok(textOf(element).includes('读取中…'), 'generic loading copy missing');
+  assert.ok(!textOf(element).includes('只读'), 'top bar rendered before data');
+});
+
+check('Panel: no workspaceRoot renders the pending card and no snapshot', () => {
+  // useEffect is stubbed out, so the polling effect never runs here; the point is
+  // the workspace-pending copy plus the spinner, not a top bar.
   const element = probe.Panel({ t });
   assert.equal(element.type, 'div');
-  const text = JSON.stringify(element);
-  assert.ok(text.includes('project-flow-spinner'), 'loading spinner missing');
-  assert.ok(text.includes('只读') === false, 'top bar rendered before data');
+  const card = collect(element, 'project-flow-loadingCard');
+  assert.equal(card.length, 1, 'loading card missing');
+  const cardText = textOf(card[0]);
+  assert.ok(cardText.includes('正在读取当前工作区…'), 'workspace.pending copy missing');
+  assert.ok(!cardText.includes('读取中…'), 'generic loading copy leaked into the pending card');
+  assert.equal(collect(card[0], 'project-flow-spinner').length, 1, 'spinner missing in the pending card');
+  assert.ok(!textOf(element).includes('只读'), 'top bar rendered before a workspace is known');
 });
 
 check('PanelRoot: wraps Panel in the error boundary', () => {
@@ -580,6 +637,42 @@ check('PanelBody: wraps the panel in the error boundary and forwards t', () => {
   assert.ok(boundaryEl, 'body did not render');
   const inner = probe.PanelRoot({ t });
   assert.equal(inner.children[0].type.name, 'Panel');
+});
+
+check('PanelBody: resolves the session workspace and keys the panel by it', () => {
+  const element = probe.PanelBody({
+    t,
+    sessionId: 'session-x',
+    useSessions: (selector) =>
+      selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/Alpha' } } }),
+  });
+  assert.equal(element.props.workspaceRoot, '/tmp/pf-demo/Alpha');
+  assert.equal(element.props.key, '/tmp/pf-demo/Alpha');
+  const rootElement = element.type(element.props);
+  assert.ok(rootElement.type.prototype instanceof Component, 'panel root is not the boundary class');
+  const panelElement = rootElement.children[0];
+  assert.equal(panelElement.type.name, 'Panel');
+  assert.equal(panelElement.props.workspaceRoot, '/tmp/pf-demo/Alpha');
+
+  // No session / no cwd yet: the panel is keyed as pending and gets no root.
+  const pending = probe.PanelBody({ t });
+  assert.equal(pending.props.workspaceRoot, undefined);
+  assert.equal(pending.props.key, 'pending');
+
+  const unknownSession = probe.PanelBody({
+    t,
+    sessionId: 'session-y',
+    useSessions: (selector) => selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/Alpha' } } }),
+  });
+  assert.equal(unknownSession.props.workspaceRoot, undefined);
+  assert.equal(unknownSession.props.key, 'pending');
+
+  const emptyCwd = probe.PanelBody({
+    t,
+    sessionId: 'session-x',
+    useSessions: (selector) => selector({ byId: { 'session-x': { cwd: '' } } }),
+  });
+  assert.equal(emptyCwd.props.workspaceRoot, undefined, 'empty cwd must stay pending');
 });
 
 check('PanelTitle: renders the localized chip text and a 16px glyph', () => {
@@ -613,7 +706,6 @@ function renderParts(payload) {
     probe.GatesCard({ gates: v.gates, t, now: NOW }),
     probe.SignalsCard({ gate: v.gate, heartbeats: v.heartbeats, runs: v.runs, t, now: NOW }),
     probe.Footer({ view: v, t }),
-    probe.ProjectPicker({ roots: v.roots, t, value: v.root, onChange: () => {} }),
   ];
 }
 
@@ -629,7 +721,13 @@ function renderedClassNames(parts) {
   return names;
 }
 
-const hostFixtures = ['state-alpha.json', 'state-iqb.json', 'state-auto.json', 'state-store.json'];
+const hostFixtures = [
+  'state-alpha.json',
+  'state-iqb.json',
+  'state-auto.json',
+  'state-store.json',
+  'state-not-initialized.json',
+];
 let replayed = 0;
 for (const name of hostFixtures) {
   const path = fileURLToPath(new URL('./' + name, import.meta.url));

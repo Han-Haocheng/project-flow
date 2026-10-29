@@ -1,24 +1,12 @@
 {
   "ok": true,
-  "generatedAt": "2026-10-28T17:25:38+08:00",
+  "generatedAt": "2026-10-28T20:04:35+08:00",
   "contract": {
     "source": "defaults",
     "schema": 1,
     "name": "broken"
   },
   "roots": [
-    {
-      "path": "/tmp/pf-demo/alpha",
-      "name": "alpha"
-    },
-    {
-      "path": "/tmp/pf-demo/qbank",
-      "name": "qbank"
-    },
-    {
-      "path": "/tmp/project-flow-selftest/fake",
-      "name": "FakeProject"
-    },
     {
       "path": "/tmp/project-flow-selftest/broken",
       "name": "broken"

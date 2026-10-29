@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Read-only project flow panel: experiment tree, tasks, gate log, subagent heartbeats and running output, driven by a per-project flow contract.",
+  "description": "Project flow panel (read-only, plus one-click init): experiment tree, tasks, gate log, subagent heartbeats and running output, driven by a per-project flow contract.",
   "bin": {
     "flow": "./bin/flow.mjs"
   },

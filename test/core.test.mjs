@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   FlowError,
+  HEARTBEAT_STALE_SECONDS,
   SCHEMA_VERSION,
   addExperiment,
   addGate,
@@ -30,6 +31,7 @@ import {
   loadContract,
   migrateLegacyTasks,
   migrateTrailers,
+  readHeartbeats,
   readStoreState,
   removeExperiment,
   removeGate,
@@ -161,6 +163,8 @@ test('initProject 幂等：重复初始化不覆盖，force 才重写；未初�
   assert.equal(before.contract.name, path.basename(path.resolve(root)))
 
   initProject(root, { name: 'alpha' })
+  const fresh = loadContract(root).contract
+  assert.equal(Object.prototype.hasOwnProperty.call(fresh.experiments, 'groupBy'), false)
   const second = initProject(root, { name: 'beta' })
   assert.deepEqual(second.created, [])
   assert.ok(second.warnings.some((item) => item.startsWith('already-initialized')))
@@ -172,9 +176,12 @@ test('initProject 幂等：重复初始化不覆盖，force 才重写；未初�
 
 test('saveContract 原子落盘并补齐默认值，未知字段保留', () => {
   const root = tempRoot('contract')
-  const saved = saveContract(root, { name: 'custom', experiments: { groupBy: 'factor' }, extra: { keep: true } })
+  const saved = saveContract(root, { name: 'custom', experiments: { dir: 'custom/experiments' }, extra: { keep: true } })
 
   assert.equal(saved.schema, 2)
+  assert.equal(saved.experiments.dir, 'custom/experiments')
+  /* `groupBy` 已从 schema 2 移除：默认值不再生成它。 */
+  assert.equal(Object.prototype.hasOwnProperty.call(saved.experiments, 'groupBy'), false)
   assert.deepEqual(saved.extra, { keep: true })
   const loaded = loadContract(root)
   assert.equal(loaded.source, '.dsh/flow/flow.json')
@@ -560,6 +567,106 @@ test('listGateRuns 新→旧排序并可 limit；readStoreState 附 lastRun 与�
   assert.equal(state.gates.items[0].lastRun.steps.length, 1)
 })
 
+// -------------------------------------------------------------------- 心跳
+
+/** 写一个心跳文件并把 mtime 固定到 ageSeconds 秒前。 */
+function writeHeartbeat(root, name, body, ageSeconds = 0) {
+  const dir = path.join(root, '.agents/heartbeat')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, name)
+  fs.writeFileSync(file, body)
+  const stamp = new Date(Date.now() - ageSeconds * 1000)
+  fs.utimesSync(file, stamp, stamp)
+  return file
+}
+
+test('readStoreState 心跳：目录缺失为空集且不产生 warning', () => {
+  const { root, contract } = freshProject('heartbeat-missing')
+  drainWarnings()
+  const state = readStoreState(root, contract)
+  assert.equal(state.heartbeats.dir, '.agents/heartbeat')
+  assert.deepEqual(state.heartbeats.items, [])
+  assert.deepEqual(state.heartbeats.counts, { total: 0, stale: 0 })
+  assert.deepEqual(drainWarnings(), [])
+})
+
+test('心跳 md：优先「状态」行去掉列表前缀，否则取第一条非空非标题行', () => {
+  const { root, contract } = freshProject('heartbeat-md')
+  writeHeartbeat(root, 'alpha.md', '# alpha 标题\n\n- 状态：运行中（等待）\n- 更新：x\n', 30)
+  writeHeartbeat(root, 'beta.md', '# beta 标题\n\n## 小节\n\n正文摘要\n', 60)
+
+  const items = readHeartbeats(root, contract)
+  assert.equal(items.length, 2)
+  assert.deepEqual(items.map((item) => item.file), ['alpha.md', 'beta.md'], '按 mtime 新→旧')
+  assert.equal(items[0].title, 'alpha 标题')
+  assert.equal(items[0].statusLine, '状态：运行中（等待）')
+  assert.equal(items[1].title, 'beta 标题')
+  assert.equal(items[1].statusLine, '正文摘要')
+  assert.ok(items[0].ageSeconds >= 30 && items[0].ageSeconds < 120)
+})
+
+test('心跳 json：status + last_action 拼接，updated_at 解析失败回退 mtime', () => {
+  const { root, contract } = freshProject('heartbeat-json')
+  writeHeartbeat(root, 'worker.json', JSON.stringify({
+    status: 'running',
+    last_action: 'node --test test/',
+    updated_at: new Date(Date.now() - 120 * 1000).toISOString(),
+  }), 10)
+  writeHeartbeat(root, 'broken-stamp.json', JSON.stringify({
+    status: 'blocked',
+    last_action: 'waiting',
+    updated_at: 'not-a-date',
+  }), 7200)
+
+  const byFile = Object.fromEntries(readHeartbeats(root, contract).map((item) => [item.file, item]))
+  assert.equal(byFile['worker.json'].statusLine, 'running · node --test test/')
+  assert.equal(byFile['worker.json'].title, 'worker')
+  assert.ok(byFile['worker.json'].ageSeconds >= 100 && byFile['worker.json'].ageSeconds < 180, '用 updated_at 计算年龄')
+  assert.equal(byFile['broken-stamp.json'].statusLine, 'blocked · waiting')
+  assert.ok(byFile['broken-stamp.json'].ageSeconds >= 7100, 'updated_at 非法时回退 mtime')
+})
+
+test('心跳按 mtime 倒序并按 contract.heartbeats.max 截断', () => {
+  const { root, contract } = freshProject('heartbeat-max')
+  for (let index = 0; index < 4; index++) {
+    writeHeartbeat(root, `beat-${index}.md`, `# beat ${index}\n\n- 状态：第 ${index} 条\n`, (index + 1) * 60)
+  }
+  const limited = { ...contract, heartbeats: { ...contract.heartbeats, max: 2 } }
+  const items = readHeartbeats(root, limited)
+  assert.deepEqual(items.map((item) => item.file), ['beat-0.md', 'beat-1.md'])
+  assert.equal(items[0].statusLine, '状态：第 0 条')
+
+  const state = readStoreState(root, limited)
+  assert.equal(state.heartbeats.counts.total, 2)
+  assert.equal(state.heartbeats.counts.stale, 0)
+})
+
+test('心跳 stale 计数以 6 小时为界', () => {
+  const { root, contract } = freshProject('heartbeat-stale')
+  writeHeartbeat(root, 'fresh.md', '# fresh\n\n- 状态：在跑\n', 60)
+  writeHeartbeat(root, 'old.md', '# old\n\n- 状态：停在 10 小时前\n', 10 * 3600)
+  writeHeartbeat(root, 'edge.md', '# edge\n\n- 状态：刚好过 6 小时\n', HEARTBEAT_STALE_SECONDS + 5)
+
+  const state = readStoreState(root, contract)
+  assert.equal(state.heartbeats.counts.total, 3)
+  assert.equal(state.heartbeats.counts.stale, 2)
+  const fresh = state.heartbeats.items.find((item) => item.file === 'fresh.md')
+  assert.ok(fresh.ageSeconds < 300)
+})
+
+test('心跳坏文件：非法 JSON 与非对象只记 warning 并跳过', () => {
+  const { root, contract } = freshProject('heartbeat-bad')
+  writeHeartbeat(root, 'bad.json', '{ not json', 10)
+  writeHeartbeat(root, 'array.json', '[]', 20)
+  writeHeartbeat(root, 'ok.md', '# ok\n\n- 状态：ok\n', 30)
+  drainWarnings()
+  const state = readStoreState(root, contract)
+  assert.equal(state.heartbeats.counts.total, 1)
+  const warnings = drainWarnings()
+  assert.ok(warnings.some((item) => item.startsWith('heartbeat-invalid: bad.json')), warnings.join('\n'))
+  assert.ok(warnings.some((item) => item.startsWith('heartbeat-invalid: array.json')), warnings.join('\n'))
+})
+
 // -------------------------------------------------------------------- 迁移
 
 test('migrateTrailers：从临时 git 仓库的 trailer 导入、verdict 映射、重复运行跳过', () => {
@@ -756,6 +863,29 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   assert.equal(status.json.data.counts.experiments.total, 1)
   assert.equal(status.json.data.counts.tasks.total, 1)
   assert.equal(status.json.data.counts.gates.total, 1)
+})
+
+test('CLI status 输出心跳小节，--json 带 heartbeats 段', () => {
+  const { root } = freshProject('cli-heartbeats')
+  for (let index = 0; index < 6; index++) {
+    writeHeartbeat(root, `hb-${index}.md`, `# hb ${index}\n\n- 状态：运行中 ${index}\n`, (index + 1) * 8 * 3600)
+  }
+
+  const text = runCli(root, ['status'])
+  assert.equal(text.code, 0)
+  assert.match(text.stdout, /心跳\s+6（可能已停 6）/)
+  assert.ok(text.stdout.includes('hb-0.md'))
+  assert.ok(text.stdout.includes('状态：运行中 0'))
+  assert.ok(!text.stdout.includes('hb-5.md'), '只逐条展示前 5 条')
+  assert.ok(text.stdout.includes('其余 1 条（共 6 条）'))
+
+  const json = runCli(root, ['status', '--json'])
+  assert.equal(json.code, 0)
+  assert.equal(json.json.data.heartbeats.dir, '.agents/heartbeat')
+  assert.equal(json.json.data.heartbeats.counts.total, 6)
+  assert.equal(json.json.data.heartbeats.counts.stale, 6)
+  assert.equal(json.json.data.heartbeats.items.length, 6)
+  assert.equal(json.json.data.heartbeats.items[0].file, 'hb-0.md')
 })
 
 test('CLI 门禁失败退出 0 但 data.ok=false', () => {

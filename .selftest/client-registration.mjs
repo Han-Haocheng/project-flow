@@ -13,7 +13,8 @@
  *     `sidebar.right.pane.tab.title`, `conversation.session.header.utilities`
  *     (id `project-flow`);
  *   - zh/en key sets identical, the four right-bar keys plus the new contract /
- *     project / gate-disabled / other-task keys present;
+ *     workspace / gate-disabled / other-task keys present (the global project
+ *     switcher key `project.select` is gone);
  *   - no `alpha` residue anywhere in the source (case-insensitive).
  *
  * No network, no host access, no install.
@@ -243,7 +244,13 @@ check('locale: new behaviour keys exist in both languages', () => {
   const keys = [
     'footer.contract',
     'contract.defaults',
-    'project.select',
+    'workspace.pending',
+    'error.notInitialized',
+    'error.initHint',
+    'error.initFailed',
+    'empty.title',
+    'empty.init',
+    'empty.initializing',
     'tasks.status.other',
     'signals.gate.disabled',
   ];
@@ -255,6 +262,24 @@ check('locale: new behaviour keys exist in both languages', () => {
   assert.equal(en['contract.defaults'], 'default layout');
   assert.equal(zh['signals.gate.disabled'], '该项目未启用门禁日志。');
   assert.equal(en['signals.gate.disabled'], 'This project has no gate log.');
+  assert.equal(zh['workspace.pending'], '正在读取当前工作区…');
+  assert.equal(en['workspace.pending'], 'Reading the current workspace…');
+  assert.equal(zh['empty.title'], '未初始化');
+  assert.equal(en['empty.title'], 'Not initialized');
+  assert.equal(zh['error.notInitialized'], '这个工作区还没有项目流台账。');
+  assert.equal(en['error.notInitialized'], 'This workspace has no project flow ledger yet.');
+  assert.ok(zh['error.initHint'].includes('node bin/flow.mjs init'), 'zh init hint has no command');
+  assert.ok(en['error.initHint'].includes('node bin/flow.mjs init'), 'en init hint has no command');
+  assert.ok(zh['error.initHint'].includes('初始化'), 'zh init hint does not lead with the button');
+  assert.ok(en['error.initHint'].includes('Initialize'), 'en init hint does not lead with the button');
+  assert.equal(zh['empty.init'], '初始化');
+  assert.equal(en['empty.init'], 'Initialize');
+  assert.equal(zh['empty.initializing'], '初始化中…');
+  assert.equal(en['empty.initializing'], 'Initializing…');
+  assert.equal(zh['error.initFailed'], '初始化失败：{message}');
+  assert.equal(en['error.initFailed'], 'Initialization failed: {message}');
+  assert.ok(!Object.prototype.hasOwnProperty.call(zh, 'project.select'), 'zh still has project.select');
+  assert.ok(!Object.prototype.hasOwnProperty.call(en, 'project.select'), 'en still has project.select');
   assert.ok(zh['footer.contract'].includes('{source}'), 'zh footer.contract has no {source} slot');
   assert.ok(en['footer.contract'].includes('{source}'), 'en footer.contract has no {source} slot');
   assert.ok(!Object.prototype.hasOwnProperty.call(zh, 'entry.label'), 'zh still has entry.label');
@@ -487,6 +512,7 @@ check('package writes no host DOM, hardcodes no colors, requires only react', ()
     'visibilitychange',
     'no-store',
     'api/project-flow/state',
+    'api/project-flow/init',
     '2500',
   ]) {
     assert.ok(SOURCE.includes(token), `source missing "${token}"`);
