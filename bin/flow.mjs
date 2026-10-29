@@ -104,7 +104,7 @@ const VALUE_FLAGS = new Set([
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
   'allow', 'marker', 'threshold', 'file', 'type',
-  'session', 'agent', 'claim', 'note',
+  'session', 'agent', 'claim', 'note', 'task',
 ])
 const REPEAT_FLAGS = new Set(['step', 'allow', 'claim'])
 

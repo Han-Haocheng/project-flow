@@ -579,4 +579,63 @@ migrateLegacyTasks(root, contract, sourceDir = '.agents/tasks')
   `Exp-Id`/`Verdict` 只在 `--migrate trailers` 时单向导入一次，之后以 store 为准。
 - 写锁 `.lock` 是临时文件，不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
-  由 core 校验并原子写）；不要用脚本直接编辑 JSON 绕过 core 的校验与锁。
+  由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
+  JSON 绕过 core 的校验与锁。
+
+## 10 面板 HTTP 表面与 Agent Teams 投影
+
+### 10.1 三个端点
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/project-flow/state?root=<dir>[&session=<id>]` | 只读投影：实验树、任务、门禁、心跳、运行输出、团队 |
+| POST | `/api/project-flow/init` | 初始化台账（`{root}`），走 core |
+| POST | `/api/project-flow/gate` | 门禁开关（`{root, id, enabled}`），走 core |
+
+`root` 缺省取宿主 cwd；`session` 可选，只用于团队投影，不参与 root 校验。
+
+### 10.2 `team` 字段（只读投影，不双写）
+
+payload 里**始终有** `team`：不可用时为 `null`。命中时来自 Agent Teams 服务
+（`agentTeams.tryMembership / listMembers / listTasks`），本插件**只读、从不写**：
+
+```jsonc
+"team": {
+  "ok": true,
+  "teamId": "…", "role": "lead|teammate", "name": "…",
+  "members": [{ "id": "session-…", "name": "…", "role": "lead|teammate",
+                "status": "running|inactive|provisioning|failed",
+                "description": "", "model": "", "diagnostics": [] }],
+  "tasks": [{ "id": "…", "revision": 3, "subject": "…",
+              "status": "pending|in_progress|completed|deleted",
+              "ownerName": "", "ready": true, "blockedBy": [],
+              "writeScopes": [], "writeScopeWarnings": [] }],
+  "counts": { "members": 3, "tasks": 5, "ready": 2, "blocked": 1, "running": 1 }
+}
+```
+
+- 上限：members ≤ 64、tasks ≤ 256、每行字符串 400 字符、每行列表 64 项；截断只影响数组，
+  `counts` 用截断前全量，并 push `team-members-truncated` / `team-tasks-truncated` warning。
+- `blocked` = 未完成/未删除 + `ready !== true` + `blockedBy` 非空；面板的「被阻塞」标记同口径
+  （`deleted` 不算阻塞）。
+- **为什么只投影不双向同步**：Teams 任务存在 Lead 会话日志里（随会话消失），本插件任务存在
+  项目 `.dsh/flow/`（随 git 永久）。两者的真源本来就不同，同步必然要回答"谁是权威"。
+  需要关联时用 `writeScopes` ↔ 心跳 `claims` 做人工对账，不要写第二份状态。
+- 团队域与 `?root=` 的工作区可能不一致（团队跨项目），这是有意为之：面板展示"这个团队在干什么"。
+
+### 10.3 子代理心跳自动化
+
+Host 订阅 `subagent/start` / `subagent/end`（仅 `info.local === true`）：
+
+- start → 用 `agents.get(info.id)` + `workingDirectory` 反推该子代理的工作区，若该工作区有
+  store，则 `startHeartbeat({ session: info.id, agent: 'subagent', claims: [],
+  createTask: false, last_action: 'subagent/start 自动登记' })`。
+- end → `endHeartbeat({ session: info.id, status: 'done', note: 'subagent/end: <stopReason>' })`。
+- **`createTask: false`**：自动心跳绝不建任务卡，避免子代理把台账灌满草稿。
+- 取不到 root / 没有 store / 老 core 无该 API → **静默跳过**，不报错、不写 warning。
+
+### 10.4 与工具的关系
+
+模型侧另有 5 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`。
+`flow_heartbeat` 的 `action` 为 `start|update|end|list|status`，session 取当前会话 id，
+语义与 CLI `flow heartbeat ...` 完全一致（同一 `lib/core.mjs`）。

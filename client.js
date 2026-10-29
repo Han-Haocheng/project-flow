@@ -13,10 +13,11 @@
  *
  * The panel is scoped to ONE workspace. `PanelBody` reads the tab's `sessionId`
  * and resolves that session's `cwd` through the `useSessions` prop, then the
- * panel polls `api/project-flow/state?root=<workspace cwd>` (document relative)
- * every 2500 ms, keeps the last good snapshot on failure, and renders:
+ * panel polls `api/project-flow/state?root=<workspace cwd>` — adding
+ * `&session=<sessionId>` when the tab has one — every 2500 ms, keeps the last
+ * good snapshot on failure, and renders:
  *   experiment lineage tree · task ledger progress · gate definitions ·
- *   gate log tail · agent heartbeats · recent run output.
+ *   gate log tail · agent heartbeats · team roster · recent run output.
  *
  * Host payload notes (all optional, all tolerated when missing):
  *   - `root` is the workspace the snapshot describes; `roots[]` is only
@@ -44,7 +45,10 @@
  *   - `POST api/project-flow/gate { root, id, enabled }` flips one gate and
  *     answers `{ ok:true, root, gate:{ id, enabled } }` (or `{ ok:false,
  *     error:{ code, message } }`);
- *   - `tasks.counts.other` covers markdown / no-ledger task sources.
+ *   - `tasks.counts.other` covers markdown / no-ledger task sources;
+ *   - `team` is `null` when the session has no team (the card is omitted);
+ *     otherwise it is the read-only `{ ok, role, members, tasks, counts }`
+ *     projection rendered next to the live signals.
  *
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
@@ -82,6 +86,10 @@ window.__ModuleLoader__.load({
     const MAX_RUN_LINES = 8;
     const MAX_WARNINGS = 10;
     const MAX_LIST_ROWS = 25;
+    /** Members/tasks are capped per list; the remainder collapses to "+N 条未显示". */
+    const MAX_TEAM_MEMBERS = 50;
+    const MAX_TEAM_TASKS = 50;
+    const MAX_TEAM_DIAGNOSTICS = 3;
     const STALE_AFTER_SECONDS = 6 * 60 * 60;
 
     const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -193,6 +201,29 @@ window.__ModuleLoader__.load({
       'hb.goal': '目标',
       'hb.claims': '文件域',
       'hb.claimsHint': '独占文件域，其他会话不应修改',
+      'team.title': '团队',
+      'team.role.lead': '负责人',
+      'team.role.teammate': '成员',
+      'team.members': '成员',
+      'team.tasks': '任务',
+      'team.counts': '成员 {members} · 任务 {tasks} · 就绪 {ready}',
+      'team.member.status.running': '运行中',
+      'team.member.status.inactive': '未活动',
+      'team.member.status.provisioning': '启动中',
+      'team.member.status.failed': '失败',
+      'team.task.status.pending': '待处理',
+      'team.task.status.in_progress': '进行中',
+      'team.task.status.completed': '已完成',
+      'team.task.status.deleted': '已删除',
+      'team.blocked': '被阻塞',
+      'team.blockedBy': '阻塞于',
+      'team.claims': '写域',
+      'team.conflicts': '写域冲突',
+      'team.diagnostics': '诊断',
+      'team.members.empty': '没有团队成员。',
+      'team.tasks.empty': '没有团队任务。',
+      'team.more': '+{n} 条未显示',
+      'team.expand': '展开任务详情',
       'signals.runs': '运行输出',
       'signals.runs.empty': '近 15 分钟没有运行中的输出。',
       'signals.runs.lines': '尾部 {n} 行',
@@ -320,6 +351,29 @@ window.__ModuleLoader__.load({
       'hb.goal': 'Goal',
       'hb.claims': 'Claims',
       'hb.claimsHint': 'Exclusive file scope; other sessions should not modify these',
+      'team.title': 'Team',
+      'team.role.lead': 'lead',
+      'team.role.teammate': 'teammate',
+      'team.members': 'Members',
+      'team.tasks': 'Tasks',
+      'team.counts': 'members {members} · tasks {tasks} · ready {ready}',
+      'team.member.status.running': 'running',
+      'team.member.status.inactive': 'inactive',
+      'team.member.status.provisioning': 'provisioning',
+      'team.member.status.failed': 'failed',
+      'team.task.status.pending': 'pending',
+      'team.task.status.in_progress': 'in progress',
+      'team.task.status.completed': 'completed',
+      'team.task.status.deleted': 'deleted',
+      'team.blocked': 'blocked',
+      'team.blockedBy': 'Blocked by',
+      'team.claims': 'Write scopes',
+      'team.conflicts': 'Write-scope conflicts',
+      'team.diagnostics': 'Diagnostics',
+      'team.members.empty': 'No team members.',
+      'team.tasks.empty': 'No team tasks.',
+      'team.more': '+{n} more not shown',
+      'team.expand': 'Expand task details',
       'signals.runs': 'Run output',
       'signals.runs.empty': 'No run output in the last 15 minutes.',
       'signals.runs.lines': 'last {n} lines',
@@ -645,6 +699,93 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /** One team member; unknown fields fall back to empty text, never throw. */
+    function normalizeTeamMember(raw) {
+      const member = asObject(raw);
+      const role = asText(member.role).trim().toLowerCase();
+      const status = asText(member.status).trim().toLowerCase();
+      return {
+        id: asText(member.id),
+        name: asText(member.name),
+        role: role === 'lead' || role === 'teammate' ? role : '',
+        status,
+        description: asText(member.description),
+        model: asText(member.model),
+        diagnostics: asArray(member.diagnostics)
+          .map((entry) => asText(entry).trim())
+          .filter(Boolean),
+      };
+    }
+
+    /** One team task; `ready` keeps a tri-state so an absent flag is not "blocked". */
+    function normalizeTeamTask(raw) {
+      const task = asObject(raw);
+      return {
+        id: asText(task.id),
+        revision: asNumber(task.revision, null),
+        subject: asText(task.subject),
+        status: asText(task.status).trim().toLowerCase(),
+        ownerName: asText(task.ownerName),
+        ready: task.ready === true ? true : task.ready === false ? false : null,
+        blockedBy: asArray(task.blockedBy)
+          .map((entry) => asText(entry).trim())
+          .filter(Boolean),
+        writeScopes: asArray(task.writeScopes)
+          .map((entry) => asText(entry).trim())
+          .filter(Boolean),
+        writeScopeWarnings: asArray(task.writeScopeWarnings)
+          .map((entry) => asText(entry).trim())
+          .filter(Boolean),
+      };
+    }
+
+    /** A blocked row is explicitly `ready:false` and not yet completed. */
+    function teamTaskBlocked(task) {
+      return task && task.ready === false && task.status !== 'completed' && task.status !== 'deleted';
+    }
+
+    /**
+     * Read-only team projection of the current session. `undefined`/`null` and
+     * any payload without `ok:true` mean "no team card" (rendered as nothing).
+     */
+    function normalizeTeam(raw) {
+      if (raw === undefined || raw === null) return null;
+      const team = asObject(raw);
+      if (team.ok !== true) return null;
+
+      const members = asArray(team.members)
+        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+        .map(normalizeTeamMember);
+      const tasks = asArray(team.tasks)
+        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+        .map(normalizeTeamTask);
+      const countsSrc = asObject(team.counts);
+      const derivedReady = tasks.filter((task) => task.ready === true && task.status !== 'completed').length;
+      const derivedBlocked = tasks.filter(teamTaskBlocked).length;
+      const role = asText(team.role).trim().toLowerCase();
+
+      return {
+        ok: true,
+        teamId: asText(team.teamId),
+        role: role === 'lead' || role === 'teammate' ? role : '',
+        name: asText(team.name),
+        members: members.slice(0, MAX_TEAM_MEMBERS),
+        memberOverflow: Math.max(0, members.length - MAX_TEAM_MEMBERS),
+        tasks: tasks.slice(0, MAX_TEAM_TASKS),
+        taskOverflow: Math.max(0, tasks.length - MAX_TEAM_TASKS),
+        counts: {
+          members: asNumber(countsSrc.members, members.length),
+          tasks: asNumber(countsSrc.tasks, tasks.length),
+          ready: asNumber(countsSrc.ready, derivedReady),
+          blocked: asNumber(countsSrc.blocked, derivedBlocked),
+          running: asNumber(
+            countsSrc.running,
+            members.filter((member) => member.status === 'running').length
+          ),
+        },
+      };
+    }
+
     /** Tolerant mapping of the host payload; never throws on missing fields. */
     function normalize(payload) {
       const src = asObject(payload);
@@ -773,6 +914,8 @@ window.__ModuleLoader__.load({
         },
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
+        /* `null` hides the read-only team card entirely (no empty placeholder). */
+        team: normalizeTeam(src.team),
         runs: asArray(src.runs)
           .filter((entry) => entry && typeof entry === 'object')
           .map((entry) => ({
@@ -1873,6 +2016,250 @@ window.__ModuleLoader__.load({
         )
       );
     }
+    /** Member status chip; unknown values stay visible in the neutral chip. */
+    function teamMemberStatusOf(status, t) {
+      const value = asText(status);
+      if (value === 'running') return { tone: 'ok', text: t('team.member.status.running') };
+      if (value === 'inactive') return { tone: 'muted', text: t('team.member.status.inactive') };
+      if (value === 'provisioning') return { tone: 'warn', text: t('team.member.status.provisioning') };
+      if (value === 'failed') return { tone: 'error', text: t('team.member.status.failed') };
+      return value ? { tone: null, text: value } : null;
+    }
+
+    /** Task status chip; unknown values stay visible in the neutral chip. */
+    function teamTaskStatusOf(status, t) {
+      const value = asText(status);
+      if (value === 'pending') return { tone: 'muted', text: t('team.task.status.pending') };
+      if (value === 'in_progress') return { tone: 'brand', text: t('team.task.status.in_progress') };
+      if (value === 'completed') return { tone: 'ok', text: t('team.task.status.completed') };
+      if (value === 'deleted') return { tone: 'muted', text: t('team.task.status.deleted') };
+      return value ? { tone: null, text: value } : null;
+    }
+
+    /** Expanded team task: blockers, write scopes and (in error color) conflicts. */
+    function TeamTaskDetail(props) {
+      const task = asObject(props.task);
+      const t = props.t;
+      const listText = (items) => (items.length > 0 ? items.join('\n') : t('misc.dash'));
+      const blockedBy = asArray(task.blockedBy);
+      const writeScopes = asArray(task.writeScopes);
+      const warnings = asArray(task.writeScopeWarnings);
+      return React.createElement(
+        'div',
+        { className: 'project-flow-detail' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-detailItem' },
+          React.createElement('span', { className: 'project-flow-detailLabel' }, t('team.blockedBy')),
+          React.createElement('pre', { className: 'project-flow-detailValue' }, listText(blockedBy))
+        ),
+        React.createElement(
+          'div',
+          { className: 'project-flow-detailItem' },
+          React.createElement('span', { className: 'project-flow-detailLabel' }, t('team.claims')),
+          React.createElement('pre', { className: 'project-flow-detailValue' }, listText(writeScopes))
+        ),
+        warnings.length > 0
+          ? React.createElement(
+              'div',
+              { className: 'project-flow-detailItem' },
+              React.createElement(
+                'span',
+                { className: 'project-flow-detailLabel project-flow-teamConflictLabel' },
+                t('team.conflicts')
+              ),
+              React.createElement(
+                'pre',
+                { className: 'project-flow-detailValue project-flow-teamConflict' },
+                warnings.join('\n')
+              )
+            )
+          : null
+      );
+    }
+
+    /**
+     * Read-only team projection of the current session: roster status, task
+     * readiness and write-scope conflicts. No control here writes anything; the
+     * only interaction is expanding a task's details. `null` or `ok:false`
+     * means no team scope, so the whole card is omitted rather than left empty.
+     */
+    function TeamCard(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
+      const team = props.team;
+      const [openTasks, setOpenTasks] = useState({});
+      if (!team || team.ok !== true) return null;
+
+      const toggleTask = (key) => {
+        setOpenTasks((previous) => {
+          const next = Object.assign({}, previous);
+          if (next[key]) delete next[key];
+          else next[key] = true;
+          return next;
+        });
+      };
+
+      const counts = asObject(team.counts);
+      const members = asArray(team.members);
+      const tasks = asArray(team.tasks);
+      const roleChip = team.role
+        ? React.createElement(
+            Chip,
+            { tone: team.role === 'lead' ? 'brand' : null },
+            t('team.role.' + team.role)
+          )
+        : null;
+
+      const memberRows = members.map((member, index) => {
+        const status = teamMemberStatusOf(member.status, t);
+        const sub = member.model || member.description;
+        const diagnostics = asArray(member.diagnostics);
+        const diagMore = diagnostics.length - MAX_TEAM_DIAGNOSTICS;
+        return React.createElement(
+          'li',
+          { className: 'project-flow-teamMember', key: 'team-member-' + index + '-' + (member.id || '') },
+          React.createElement(
+            'div',
+            { className: 'project-flow-teamMemberHead' },
+            React.createElement(
+              'span',
+              {
+                className:
+                  'project-flow-teamName' + (member.role === 'lead' ? ' project-flow-teamName--lead' : ''),
+                title: member.id || undefined,
+              },
+              member.name || member.id || t('misc.dash')
+            ),
+            status ? React.createElement(Chip, { tone: status.tone }, status.text) : null
+          ),
+          sub
+            ? React.createElement(
+                'p',
+                {
+                  className:
+                    'project-flow-teamSub' + (member.model ? ' project-flow-teamSub--mono' : ''),
+                  title: sub,
+                },
+                sub
+              )
+            : null,
+          diagnostics.length > 0
+            ? React.createElement(
+                'details',
+                { className: 'project-flow-teamDiag' },
+                React.createElement(
+                  'summary',
+                  { className: 'project-flow-teamDiagSummary' },
+                  t('team.diagnostics') + ' (' + diagnostics.length + ')'
+                ),
+                React.createElement(
+                  'ul',
+                  { className: 'project-flow-teamDiagList' },
+                  diagnostics.slice(0, MAX_TEAM_DIAGNOSTICS).map((entry, diagIndex) =>
+                    React.createElement(
+                      'li',
+                      { className: 'project-flow-teamDiagItem', key: 'diag-' + diagIndex, title: entry },
+                      entry
+                    )
+                  ),
+                  diagMore > 0
+                    ? React.createElement('li', { className: 'project-flow-teamDiagMore' }, '+' + diagMore)
+                    : null
+                )
+              )
+            : null
+        );
+      });
+
+      const taskRows = tasks.map((task, index) => {
+        const key = 'team-task-' + index + '-' + (task.id || '');
+        const expanded = openTasks[key] === true;
+        const status = teamTaskStatusOf(task.status, t);
+        const blocked = teamTaskBlocked(task);
+        return React.createElement(
+          'div',
+          {
+            className:
+              'project-flow-teamTask' + (task.status === 'deleted' ? ' project-flow-teamTask--deleted' : ''),
+            key,
+          },
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'project-flow-teamTaskHead',
+              'aria-expanded': expanded ? true : false,
+              title: expanded ? t('section.collapse') : t('team.expand'),
+              onClick: () => toggleTask(key),
+            },
+            React.createElement(Caret, { open: expanded }),
+            React.createElement(
+              'span',
+              { className: 'project-flow-teamTaskSubject', title: task.subject || undefined },
+              task.subject || t('misc.dash')
+            ),
+            status ? React.createElement(Chip, { tone: status.tone }, status.text) : null,
+            task.ownerName
+              ? React.createElement('span', { className: 'project-flow-teamOwner' }, task.ownerName)
+              : null,
+            blocked
+              ? React.createElement(
+                  'span',
+                  { className: 'project-flow-teamBlocked', title: t('team.blocked') },
+                  t('team.blocked')
+                )
+              : null
+          ),
+          expanded ? React.createElement(TeamTaskDetail, { task, t }) : null
+        );
+      });
+
+      return React.createElement(
+        'section',
+        { className: 'project-flow-card' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-teamHead' },
+          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('team.title')),
+          roleChip,
+          React.createElement(
+            'span',
+            { className: 'project-flow-count project-flow-teamCounts' },
+            t('team.counts', {
+              members: asNumber(counts.members, members.length),
+              tasks: asNumber(counts.tasks, tasks.length),
+              ready: asNumber(counts.ready, 0),
+            })
+          )
+        ),
+        React.createElement(
+          'h3',
+          { className: 'project-flow-subTitle project-flow-teamSubTitle' },
+          t('team.members')
+        ),
+        members.length === 0
+          ? React.createElement(EmptyLine, null, t('team.members.empty'))
+          : React.createElement('ul', { className: 'project-flow-teamList' }, memberRows),
+        team.memberOverflow > 0
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-more' },
+              t('team.more', { n: team.memberOverflow })
+            )
+          : null,
+        React.createElement('h3', { className: 'project-flow-subTitle' }, t('team.tasks')),
+        tasks.length === 0
+          ? React.createElement(EmptyLine, null, t('team.tasks.empty'))
+          : React.createElement('div', { className: 'project-flow-teamTasks' }, taskRows),
+        team.taskOverflow > 0
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-more' },
+              t('team.more', { n: team.taskOverflow })
+            )
+          : null
+      );
+    }
     // #endregion
 
     // #region top bar / footer / states
@@ -2132,7 +2519,7 @@ window.__ModuleLoader__.load({
       const t = typeof props.t === 'function' ? props.t : (key) => key;
       /* The one workspace this panel may show; undefined until the tab resolves it. */
       const workspaceRoot = props.workspaceRoot;
-      /* Used only to highlight the current session's heartbeat; absent = none. */
+      /* Scopes the state request to this session and highlights its heartbeat. */
       const sessionId = props.sessionId;
       const [data, setData] = useState(null);
       const [errorInfo, setErrorInfo] = useState(null);
@@ -2158,7 +2545,12 @@ window.__ModuleLoader__.load({
 
         setRefreshing(false);
 
-        const url = STATE_ENDPOINT + '?root=' + encodeURIComponent(workspaceRoot);
+        /* `&session=` is optional: an empty id keeps the workspace-scoped URL. */
+        const sessionParam = asText(sessionId).trim();
+        const url =
+          STATE_ENDPOINT +
+          '?root=' + encodeURIComponent(workspaceRoot) +
+          (sessionParam ? '&session=' + encodeURIComponent(sessionParam) : '');
 
         const load = async (manual) => {
           if (cancelled) return;
@@ -2237,7 +2629,7 @@ window.__ModuleLoader__.load({
             }
           }
         };
-      }, [workspaceRoot, reloadKey]);
+      }, [workspaceRoot, reloadKey, sessionId]);
 
       const view = useMemo(() => (data ? normalize(data) : null), [data]);
 
@@ -2287,7 +2679,9 @@ window.__ModuleLoader__.load({
                       t,
                       now,
                       sessionId,
-                    })
+                    }),
+                    /* Read-only team projection sits beside the live signals. */
+                    React.createElement(TeamCard, { team: view.team, t })
                   )
                 ),
                 React.createElement(Footer, { view, t })
@@ -2544,6 +2938,32 @@ window.__ModuleLoader__.load({
 .project-flow-chip--hb-idle{color:var(--dsw-alias-state-warn-primary);}
 .project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);opacity:.8;}
 .project-flow-chip--hb-missed{color:var(--dsw-alias-state-error-primary);}
+.project-flow-teamHead{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
+.project-flow-teamCounts{margin-left:auto;font-size:10.5px;}
+.project-flow-teamSubTitle{margin-top:8px;}
+.project-flow-teamList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
+.project-flow-teamMember{display:flex;flex-direction:column;gap:1px;padding:3px;border-radius:5px;min-width:0;}
+.project-flow-teamMember:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-teamMemberHead{display:flex;align-items:center;flex-wrap:wrap;gap:5px;min-width:0;}
+.project-flow-teamName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;}
+.project-flow-teamName--lead{font-weight:700;}
+.project-flow-teamSub{margin:0;padding-left:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
+.project-flow-teamSub--mono{font-family:${MONO};}
+.project-flow-teamDiag{margin:1px 0 0 2px;font-size:10.5px;color:var(--dsw-alias-label-secondary);}
+.project-flow-teamDiagSummary{cursor:pointer;font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-teamDiagList{margin:2px 0 0;padding:0 0 0 14px;color:var(--dsw-alias-label-secondary);}
+.project-flow-teamDiagItem{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.project-flow-teamDiagMore{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;}
+.project-flow-teamTasks{display:flex;flex-direction:column;gap:1px;}
+.project-flow-teamTask{display:block;min-width:0;}
+.project-flow-teamTaskHead{display:flex;align-items:center;gap:5px;width:100%;padding:3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
+.project-flow-teamTaskHead:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-teamTaskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
+.project-flow-teamTaskSubject{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.project-flow-teamTask--deleted .project-flow-teamTaskSubject{text-decoration:line-through;color:var(--dsw-alias-label-secondary);}
+.project-flow-teamOwner{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-teamBlocked{flex:none;color:var(--dsw-alias-state-error-primary);font-size:10px;font-weight:600;}
+.project-flow-teamConflictLabel,.project-flow-teamConflict{color:var(--dsw-alias-state-error-primary);}
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}
@@ -2715,6 +3135,10 @@ window.__ModuleLoader__.load({
 .project-flow-beatName{font-size:12px;}
 .project-flow-beatTime{font-size:10.5px;}
 .project-flow-beatStatus{font-size:11px;}
+.project-flow-teamName{font-size:12px;}
+.project-flow-teamSub{font-size:11px;}
+.project-flow-teamTaskHead{font-size:12px;}
+.project-flow-teamCounts{font-size:11px;}
 .project-flow-runHead{gap:6px;padding:4px;font-size:11.5px;}
 .project-flow-runPath{font-size:11px;}
 .project-flow-runMeta{font-size:10.5px;}

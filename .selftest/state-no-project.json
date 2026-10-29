@@ -1,8 +1,9 @@
 {
   "ok": false,
-  "generatedAt": "2026-10-29T13:38:25+08:00",
+  "generatedAt": "2026-10-29T14:05:23+08:00",
   "roots": [],
   "root": null,
+  "team": null,
   "error": {
     "code": "no-project",
     "message": "no workspace declares a flow contract or a default ledger layout"

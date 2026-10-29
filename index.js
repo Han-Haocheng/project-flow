@@ -14,8 +14,13 @@
 // the CLI, so the same validation and atomic write apply. Five agent tools plus
 // three skills expose the store to the model; a system-prompt section, a
 // per-turn pre-step reminder and an optional edit/write guard keep the heartbeat
-// discipline visible. Root resolution happens per request; there are no
-// watchers and no dependencies beyond node built-ins.
+// discipline visible. The read endpoint also accepts an optional
+// `?session=<id>`: when the Agent Teams service knows that session, the payload
+// carries a read-only `team` projection (roster, task board, counts) of that
+// session's team — a Team lives in the Lead's session log, so nothing is written
+// back to it. Two host-level listeners register and close one heartbeat per
+// local subagent run, without creating a task. Root resolution happens per
+// request; there are no watchers and no dependencies beyond node built-ins.
 
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
@@ -40,6 +45,9 @@ const MAX_STRING = 400
 const MAX_PAYLOAD_BYTES = 900 * 1000
 const MAX_STORE_ITEMS = 400
 const MAX_TOOL_ITEMS = 200
+const MAX_TEAM_MEMBERS = 64
+const MAX_TEAM_TASKS = 256
+const MAX_TEAM_LIST = 64
 const WRITE_TIMEOUT_MS = 30_000
 const STORE_CONTRACT = join('.dsh', 'flow', 'flow.json')
 const MANIFESTS = ['flow.json', join('.flow', 'flow.json'), join('.agents', 'flow.json')]
@@ -103,6 +111,12 @@ const SOURCE_EXPERIMENTS = new Set(['git-trailers', 'none'])
 const SOURCE_TASKS = new Set(['json', 'markdown', 'none'])
 const SOURCE_HEARTBEATS = new Set(['md', 'json', 'none'])
 const SAFE_TRAILER_KEY = /^[A-Za-z0-9_.-]+$/
+const TEAM_MEMBER_ROLES = new Set(['lead', 'teammate'])
+const TEAM_MEMBER_STATUSES = new Set(['running', 'inactive', 'provisioning', 'failed'])
+const TEAM_TASK_STATUSES = new Set(['pending', 'in_progress', 'completed', 'deleted'])
+const SUBAGENT_AGENT = 'subagent'
+const SUBAGENT_HEARTBEAT_PREFIX = '子代理运行 '
+const SUBAGENT_START_ACTION = 'subagent/start 自动登记'
 
 // ---------------------------------------------------------------- primitives
 
@@ -1305,6 +1319,135 @@ function recentDoneOf(records, limit) {
     }))
 }
 
+// ----------------------------------------------------------------- team view
+//
+// A read-only projection of the Agent Teams service: the roster and task board
+// of the team the requesting session belongs to. That ledger lives in the Lead
+// session's log, not in `.dsh/flow`, so this module only ever calls
+// `tryMembership` / `listMembers` / `listTasks` — never a Teams mutation, and
+// never a write of its own. Every gap (service, agent, membership, listing)
+// degrades to `team: null`, so the payload shape is stable and a host without
+// Teams is unaffected.
+
+/** Copy at most `max` strings out of a service view, each truncated. */
+function clipList(value, max = MAX_TEAM_LIST) {
+  if (Array.isArray(value) === false) return []
+  const kept = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue
+    kept.push(clip(entry))
+    if (kept.length >= max) break
+  }
+  return kept
+}
+
+/** One `TeamMemberView`, reduced to the panel-facing fields and bounded. */
+function teamMemberRow(view) {
+  if (isPlainObject(view) === false) return null
+  return {
+    id: clip(view.id),
+    name: clip(view.name),
+    role: TEAM_MEMBER_ROLES.has(view.role) ? view.role : 'teammate',
+    status: TEAM_MEMBER_STATUSES.has(view.status) ? view.status : 'inactive',
+    description: clip(view.description),
+    model: clip(view.model),
+    diagnostics: clipList(view.diagnostics, 16),
+  }
+}
+
+/** One `TeamTaskView`, reduced to the panel-facing fields and bounded. */
+function teamTaskRow(view) {
+  if (isPlainObject(view) === false) return null
+  return {
+    id: clip(view.id),
+    revision: Number.isInteger(view.revision) ? view.revision : 0,
+    subject: clip(view.subject),
+    status: TEAM_TASK_STATUSES.has(view.status) ? view.status : 'pending',
+    ownerName: clip(view.ownerName),
+    ready: view.ready === true,
+    blockedBy: clipList(view.blockedBy),
+    writeScopes: clipList(view.writeScopes),
+    writeScopeWarnings: clipList(view.writeScopeWarnings, 16),
+  }
+}
+
+/** The live agent named by one state request, or undefined when it cannot be resolved. */
+function requestAgent(ctx, session) {
+  if (typeof session !== 'string' || session.length === 0) return undefined
+  const agents = service(ctx, 'agents')
+  if (agents === undefined || typeof agents.get !== 'function') return undefined
+  try {
+    const agent = agents.get(session)
+    return agent === undefined || agent === null ? undefined : agent
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `team` for one state request: `null` unless the session is a live member of an
+ * Agent Team and both collections are readable. `ready` mirrors the service's
+ * own flag; `blocked` counts tasks that still declare an unmet dependency, so a
+ * finished task is never reported as blocked.
+ */
+function buildTeamState(ctx, session, warnings) {
+  const agent = requestAgent(ctx, session)
+  if (agent === undefined) return null
+  const agentTeams = service(ctx, 'agentTeams')
+  if (agentTeams === undefined || typeof agentTeams.tryMembership !== 'function') return null
+
+  let membership
+  try {
+    membership = agentTeams.tryMembership(agent)
+  } catch (error) {
+    warnings.push(`team membership unreadable: ${brief(error)}`)
+    return null
+  }
+  if (membership === undefined || membership === null || typeof membership !== 'object') return null
+
+  let roster
+  let board
+  try {
+    if (typeof agentTeams.listMembers !== 'function' || typeof agentTeams.listTasks !== 'function') return null
+    const listed = agentTeams.listMembers(agent)
+    const listedTasks = agentTeams.listTasks(agent)
+    roster = Array.isArray(listed) ? listed : []
+    board = Array.isArray(listedTasks) ? listedTasks : []
+  } catch (error) {
+    warnings.push(`team roster unreadable: ${brief(error)}`)
+    return null
+  }
+
+  const memberRows = roster.map(teamMemberRow).filter((row) => row !== null)
+  const taskRows = board.map(teamTaskRow).filter((row) => row !== null)
+  if (memberRows.length > MAX_TEAM_MEMBERS) {
+    warnings.push(`team-members-truncated: ${memberRows.length - MAX_TEAM_MEMBERS} beyond ${MAX_TEAM_MEMBERS}`)
+  }
+  if (taskRows.length > MAX_TEAM_TASKS) {
+    warnings.push(`team-tasks-truncated: ${taskRows.length - MAX_TEAM_TASKS} beyond ${MAX_TEAM_TASKS}`)
+  }
+
+  const blocked = taskRows.filter(
+    (row) => row.status !== 'completed' && row.status !== 'deleted' && row.ready !== true && row.blockedBy.length > 0,
+  ).length
+
+  return {
+    ok: true,
+    teamId: clip(membership.id),
+    role: membership.role === 'lead' ? 'lead' : 'teammate',
+    name: clip(membership.name),
+    members: memberRows.length > MAX_TEAM_MEMBERS ? memberRows.slice(0, MAX_TEAM_MEMBERS) : memberRows,
+    tasks: taskRows.length > MAX_TEAM_TASKS ? taskRows.slice(0, MAX_TEAM_TASKS) : taskRows,
+    counts: {
+      members: memberRows.length,
+      tasks: taskRows.length,
+      ready: taskRows.filter((row) => row.ready === true).length,
+      blocked,
+      running: memberRows.filter((row) => row.status === 'running').length,
+    },
+  }
+}
+
 /** Store-mode payload: contract + collections read through lib/core.mjs. */
 async function buildStoreState(root, entry, now, warnings) {
   const c = requireCore()
@@ -1445,7 +1588,7 @@ async function buildLegacyState(root, entry, now, warnings) {
   }
 }
 
-async function buildState(root, entry, now) {
+async function buildState(root, entry, now, ctx, session) {
   const warnings = mountWarnings.slice()
   let payload
   if (coreAvailable() && hasStore(root)) {
@@ -1456,7 +1599,16 @@ async function buildState(root, entry, now) {
       warnings.push(`store present but lib/core.mjs is unavailable: ${coreFailure || 'unknown error'}`)
     }
   }
-  return payload
+  // The Team projection is keyed by session, not by root: without `?session=`
+  // it stays `null` and the payload is otherwise unchanged.
+  let team = null
+  try {
+    team = buildTeamState(ctx, session, warnings)
+  } catch (error) {
+    warnings.push(`team projection unavailable: ${brief(error)}`)
+    team = null
+  }
+  return { ...payload, team }
 }
 
 // ----------------------------------------------------------------------- HTTP
@@ -1539,6 +1691,12 @@ async function handleState(ctx, request, response) {
 
   const now = Date.now()
 
+  // Optional Team scope: `?session=<id>` names the live agent whose read-only
+  // team projection is attached to the payload. A missing or empty parameter
+  // keeps the previous behaviour (`team: null`).
+  const requestedSession = url.searchParams.get('session')
+  const session = requestedSession === null ? '' : requestedSession.trim()
+
   let workspaces
   try {
     workspaces = listWorkspaces(ctx)
@@ -1580,6 +1738,7 @@ async function handleState(ctx, request, response) {
         generatedAt: isoLocal(new Date(now)),
         roots: [],
         root: null,
+        team: null,
         error: { code: 'no-project', message: 'no workspace declares a flow contract or a default ledger layout' },
       })
       return
@@ -1594,13 +1753,14 @@ async function handleState(ctx, request, response) {
       generatedAt: isoLocal(new Date(now)),
       root,
       roots: [entry],
+      team: null,
       error: { code: 'not-initialized', message: `no flow ledger in ${root}; run: node bin/flow.mjs init` },
     })
     return
   }
 
   try {
-    const payload = await buildState(root, entry, now)
+    const payload = await buildState(root, entry, now, ctx, session)
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
     const body = capPayload(payload)
@@ -1616,6 +1776,7 @@ async function handleState(ctx, request, response) {
       generatedAt: isoLocal(new Date(now)),
       roots: [{ path: entry.path, name: entry.name }],
       root,
+      team: null,
       error: { code: 'internal', message: brief(error, 400) },
     })
   }
@@ -2155,6 +2316,126 @@ function registerHeartbeatReminder(ctx) {
     }, 'project-flow: heartbeat reminder')
   } catch (error) {
     warnMount(`heartbeat reminder unavailable: ${brief(error)}`, ctx)
+  }
+}
+
+// ------------------------------------------------------- subagent heartbeats
+//
+// One delegation is one bounded unit of work inside the parent's workspace, so
+// each local subagent run gets a heartbeat of its own — registered on
+// `subagent/start` and closed on `subagent/end`. Two rules keep the ledger
+// clean: `createTask: false`, because delegation bookkeeping must never mint a
+// task, and a per-run root resolved from the child's own agent, because the
+// child may run in another project. Only local children are handled: a remote
+// one owns no local cwd. Everything here is optional — a host without the
+// events, the `agents` service or a newer core is simply not served.
+
+/**
+ * The project root of one subagent run, or undefined. `undefined` covers every
+ * silent skip: a remote child, an unknown agent, no derivable root, or a
+ * workspace without a store.
+ */
+function subagentRootOf(ctx, info) {
+  try {
+    if (info === null || typeof info !== 'object') return undefined
+    if (info.local !== true) return undefined
+    const session = usableSessionId(info.id)
+    if (session === '') return undefined
+    const agents = service(ctx, 'agents')
+    if (agents === undefined || typeof agents.get !== 'function') return undefined
+    const agent = agents.get(session)
+    if (agent === undefined || agent === null) return undefined
+    const root = agentRoot(ctx, agent)
+    if (typeof root !== 'string' || root.length === 0) return undefined
+    if (hasStore(root) === false) return undefined
+    return root
+  } catch {
+    return undefined
+  }
+}
+
+/** Core + contract for one subagent root, or undefined when the core cannot serve it. */
+function subagentCore(root) {
+  if (coreAvailable() === false) return undefined
+  const c = core
+  if (typeof c.loadContract !== 'function') return undefined
+  if (typeof c.startHeartbeat !== 'function' || typeof c.endHeartbeat !== 'function') return undefined
+  const loaded = c.loadContract(root)
+  const contract = isPlainObject(loaded) ? loaded.contract : undefined
+  return contract === undefined ? undefined : { c, contract }
+}
+
+/** `subagent/start`: register this run's heartbeat. Never creates a task. */
+function startSubagentHeartbeat(ctx, info) {
+  try {
+    const root = subagentRootOf(ctx, info)
+    if (root === undefined) return
+    const session = usableSessionId(info.id)
+    if (session === '') return
+    const resolved = subagentCore(root)
+    if (resolved === undefined) return
+    resolved.c.startHeartbeat(root, resolved.contract, {
+      session,
+      agent: SUBAGENT_AGENT,
+      goal: clip(`${SUBAGENT_HEARTBEAT_PREFIX}${session.slice(-8)}`, 120),
+      claims: [],
+      createTask: false,
+      last_action: SUBAGENT_START_ACTION,
+    })
+  } catch (error) {
+    warnMount(`subagent start: heartbeat not registered: ${brief(error)}`, ctx)
+  }
+}
+
+/** `subagent/end`: close that heartbeat with the stop reason in `last_action`. */
+function endSubagentHeartbeat(ctx, info) {
+  try {
+    const root = subagentRootOf(ctx, info)
+    if (root === undefined) return
+    const session = usableSessionId(info.id)
+    if (session === '') return
+    const resolved = subagentCore(root)
+    if (resolved === undefined) return
+    // A run that began before this plugin was mounted has no heartbeat to
+    // close; `endHeartbeat` would throw `not-found`, and a mount warning would
+    // then stick to every later payload. Skip that case silently.
+    if (typeof resolved.c.heartbeatStatus === 'function') {
+      const status = resolved.c.heartbeatStatus(root, resolved.contract, session)
+      if (isPlainObject(status) === false || status.record === null || status.record === undefined) return
+    }
+    const reason =
+      typeof info.stopReason === 'string' && info.stopReason.length > 0 ? clip(info.stopReason, 80) : 'completed'
+    resolved.c.endHeartbeat(root, resolved.contract, { session, status: 'done', note: `subagent/end: ${reason}` })
+  } catch (error) {
+    warnMount(`subagent end: heartbeat not closed: ${brief(error)}`, ctx)
+  }
+}
+
+/**
+ * Register the two subagent lifecycle listeners. Each is its own effect, so
+ * unload unregisters them; a failure in either only warns.
+ */
+function registerSubagentHooks(ctx) {
+  const hooks = [
+    ['subagent/start', startSubagentHeartbeat, 'subagent start heartbeat'],
+    ['subagent/end', endSubagentHeartbeat, 'subagent end heartbeat'],
+  ]
+  for (const [event, handler, label] of hooks) {
+    try {
+      if (typeof ctx.on !== 'function') return
+      ctx.effect(() => {
+        const dispose = ctx.on(event, (info) => handler(ctx, info))
+        return () => {
+          try {
+            if (typeof dispose === 'function') dispose()
+          } catch {
+            // A listener disposer must never break plugin unload.
+          }
+        }
+      }, `project-flow: ${label}`)
+    } catch (error) {
+      warnMount(`${label} unavailable: ${brief(error)}`, ctx)
+    }
   }
 }
 
@@ -2962,5 +3243,10 @@ export function apply(ctx, config) {
     registerHeartbeatReminder(ctx)
   } catch (error) {
     warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
+  }
+  try {
+    registerSubagentHooks(ctx)
+  } catch (error) {
+    warnMount(`subagent heartbeats: registration failed: ${brief(error)}`, ctx)
   }
 }

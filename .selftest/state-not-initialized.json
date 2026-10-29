@@ -1,6 +1,6 @@
 {
   "ok": false,
-  "generatedAt": "2026-10-29T13:38:25+08:00",
+  "generatedAt": "2026-10-29T14:05:23+08:00",
   "root": "/tmp/project-flow-selftest/plain",
   "roots": [
     {
@@ -8,6 +8,7 @@
       "name": "PlainWorkspace"
     }
   ],
+  "team": null,
   "error": {
     "code": "not-initialized",
     "message": "no flow ledger in /tmp/project-flow-selftest/plain; run: node bin/flow.mjs init"

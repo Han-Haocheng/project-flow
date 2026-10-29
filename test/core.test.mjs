@@ -1395,6 +1395,19 @@ test('CLI heartbeat：start 自动建任务、status --require-active 退出码�
     assert.equal(startedData.status, 'working')
     assert.equal(listTasks(root, loadContract(root).contract).length, 1)
 
+    /* `--task` 曾从 CLI 的 VALUE_FLAGS 白名单里漏掉（帮助有、解析报未知参数），回归锁定。 */
+    const explicit = addTask(root, loadContract(root).contract, {
+      id: `T-${stamp()}-09`,
+      title: '显式指定任务',
+      status: 'active',
+      owner: 'lead',
+    })
+    const pinned = runCli(root, ['heartbeat', 'start', '--session', session, '--task', explicit.id, '--json'])
+    assert.equal(pinned.code, 0, pinned.stderr)
+    assert.equal(pinned.json.data.task, explicit.id)
+    assert.equal(pinned.json.data.goal, '显式指定任务', 'goal 缺省取指定任务标题')
+    assert.equal(pinned.json.data.createdTask, null)
+
     const human = runCli(root, ['heartbeat', 'start', '--session', session, '--note', '第二轮'])
     assert.equal(human.code, 0)
     assert.ok(human.stdout.includes('第二轮'), human.stdout)
