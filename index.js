@@ -117,6 +117,8 @@ const TEAM_TASK_STATUSES = new Set(['pending', 'in_progress', 'completed', 'dele
 const SUBAGENT_AGENT = 'subagent'
 const SUBAGENT_HEARTBEAT_PREFIX = '子代理运行 '
 const SUBAGENT_START_ACTION = 'subagent/start 自动登记'
+/** Bound on remembered subagent roots: a crashed run must not leak entries. */
+const SUBAGENT_ROOT_LIMIT = 256
 
 // ---------------------------------------------------------------- primitives
 
@@ -2329,6 +2331,39 @@ function registerHeartbeatReminder(ctx) {
 // child may run in another project. Only local children are handled: a remote
 // one owns no local cwd. Everything here is optional — a host without the
 // events, the `agents` service or a newer core is simply not served.
+//
+// Root resolution cannot depend on the child being live at `subagent/end`: the
+// host disposes the child's activation handle *before* it emits the terminal
+// edge, so `agents.get(childId)` is already gone there and the end hook would
+// silently skip, leaving the heartbeat `working` forever. `subagent/start` runs
+// while the child is still resident, so it records the resolved root in
+// `subagentRoots` and the end hook reads (and deletes) that entry, falling back
+// to live resolution only when this plugin was mounted after the run began. The
+// map is bounded by `SUBAGENT_ROOT_LIMIT` in insertion order, so a run whose
+// end never arrives (crash, kill) cannot grow it without limit.
+
+/** Roots resolved at `subagent/start`, so `subagent/end` survives child disposal. */
+const subagentRoots = new Map()
+
+/** Remember one run's root, evicting the oldest entry beyond `SUBAGENT_ROOT_LIMIT`. */
+function rememberSubagentRoot(session, root) {
+  // Re-inserting refreshes the position, so the bound drops the stalest run.
+  subagentRoots.delete(session)
+  subagentRoots.set(session, { root })
+  while (subagentRoots.size > SUBAGENT_ROOT_LIMIT) {
+    const oldest = subagentRoots.keys().next()
+    if (oldest.done === true) break
+    subagentRoots.delete(oldest.value)
+  }
+}
+
+/** Take and forget one run's remembered root; `undefined` when never recorded. */
+function takeSubagentRoot(session) {
+  const entry = subagentRoots.get(session)
+  subagentRoots.delete(session)
+  if (entry === null || typeof entry !== 'object') return undefined
+  return typeof entry.root === 'string' && entry.root.length > 0 ? entry.root : undefined
+}
 
 /**
  * The project root of one subagent run, or undefined. `undefined` covers every
@@ -2372,6 +2407,9 @@ function startSubagentHeartbeat(ctx, info) {
     if (root === undefined) return
     const session = usableSessionId(info.id)
     if (session === '') return
+    // The child is still resident here, so this is the only moment its root can
+    // be resolved: `subagent/end` runs after the activation handle is disposed.
+    rememberSubagentRoot(session, root)
     const resolved = subagentCore(root)
     if (resolved === undefined) return
     resolved.c.startHeartbeat(root, resolved.contract, {
@@ -2390,10 +2428,17 @@ function startSubagentHeartbeat(ctx, info) {
 /** `subagent/end`: close that heartbeat with the stop reason in `last_action`. */
 function endSubagentHeartbeat(ctx, info) {
   try {
-    const root = subagentRootOf(ctx, info)
-    if (root === undefined) return
+    if (info === null || typeof info !== 'object') return
+    if (info.local !== true) return
     const session = usableSessionId(info.id)
     if (session === '') return
+    // Prefer the root recorded at `subagent/start`: by now the child is out of
+    // the `agents` registry, so live resolution cannot find it. The fallback
+    // covers only a run that started before this plugin was mounted.
+    let root = takeSubagentRoot(session)
+    if (root !== undefined && hasStore(root) === false) root = undefined
+    if (root === undefined) root = subagentRootOf(ctx, info)
+    if (root === undefined) return
     const resolved = subagentCore(root)
     if (resolved === undefined) return
     // A run that began before this plugin was mounted has no heartbeat to

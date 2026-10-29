@@ -629,8 +629,15 @@ Host 订阅 `subagent/start` / `subagent/end`（仅 `info.local === true`）：
 
 - start → 用 `agents.get(info.id)` + `workingDirectory` 反推该子代理的工作区，若该工作区有
   store，则 `startHeartbeat({ session: info.id, agent: 'subagent', claims: [],
-  createTask: false, last_action: 'subagent/start 自动登记' })`。
+  createTask: false, last_action: 'subagent/start 自动登记' })`，并把 `session → root`
+  记进一张**有界内存表**（≤256 条，按插入序淘汰最旧）。
 - end → `endHeartbeat({ session: info.id, status: 'done', note: 'subagent/end: <stopReason>' })`。
+- **为什么 end 必须查表**：宿主 settle 子代理的顺序是 `activation.handle.dispose()` →
+  `resident.delete(childId)` → 然后才 emit `subagent/end`（见 `@deepseek-ai/dsh-subagent`），
+  所以 end 到达时 `agents.get(childId)` 已经拿不到 agent、反推不出 root。start 是唯一还能拿到
+  child 的时机，故在那里缓存；end 先查表（取出即删），未命中才回退反推（兼容插件晚挂载）。
+- 表项只在正常 end 时删除。进程崩溃导致 end 不来时，该 run 的心跳会停在 `working`，需要人工
+  `flow heartbeat end --session <id>` 收尾——容量上界只防内存泄漏，不提供持久化。
 - **`createTask: false`**：自动心跳绝不建任务卡，避免子代理把台账灌满草稿。
 - 取不到 root / 没有 store / 老 core 无该 API → **静默跳过**，不报错、不写 warning。
 
