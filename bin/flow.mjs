@@ -24,7 +24,7 @@ const USAGE = `project-flow CLI（schema 2）
   flow --root <dir> <command> [--json]
 
 命令
-  init      初始化 .dsh/flow（--name X --force --migrate trailers|tasks|all）
+  init      初始化 .dsh/flow（--name X --force --no-gates --migrate trailers|tasks|all）
   status    项目名、契约源、实验/任务/门禁计数与最近记录
 
   exp list | show <id> | tree
@@ -46,9 +46,19 @@ const USAGE = `project-flow CLI（schema 2）
   gate add --id SLUG --title T --phase commit|release|manual [--step 'id=run>>expect' ...]
   gate update <id> [--title T] [--phase commit|release|manual]
            [--enabled true|false] [--step 'id=run>>expect' ...]
+  gate enable <id> | disable <id>
   gate rm <id> [--yes]
-  gate run <id> [--timeout SECONDS]
+  gate run <id> [--timeout SECONDS] [--force]
+  gate run --phase commit|release|manual [--timeout SECONDS] [--force]
   gate logs <id> [--limit N]
+
+  heartbeat start [--goal G] [--task ID] [--claim PATH]... [--agent A]
+                  [--session S] [--note T]
+  heartbeat update [--status working|idle] [--note T] [--goal G] [--task ID]
+                   [--claim PATH]... [--session S]
+  heartbeat end [--note T] [--session S]
+  heartbeat list
+  heartbeat status [--require-active] [--session S]
 
   check list
   check staged --allow <path> [--allow <path> ...]
@@ -86,7 +96,7 @@ const CHECK_EXIT_BY_CODE = {
 // status 只逐条展示最近的心跳，其余用总数提示。
 const STATUS_HEARTBEAT_ROWS = 5
 
-const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help'])
+const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active'])
 const VALUE_FLAGS = new Set([
   'root', 'name', 'migrate',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
@@ -94,8 +104,9 @@ const VALUE_FLAGS = new Set([
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
   'allow', 'marker', 'threshold', 'file', 'type',
+  'session', 'agent', 'claim', 'note',
 ])
-const REPEAT_FLAGS = new Set(['step', 'allow'])
+const REPEAT_FLAGS = new Set(['step', 'allow', 'claim'])
 
 class CliError extends Error {
   constructor(code, message) {
@@ -168,7 +179,7 @@ function parseArgv(argv) {
     positional.push(tok)
   }
 
-  return { flags, steps: repeated.step || [], allows: repeated.allow || [], positional, errors }
+  return { flags, steps: repeated.step || [], allows: repeated.allow || [], claims: repeated.claim || [], positional, errors }
 }
 
 // ---------------------------------------------------------------- 输出工具
@@ -273,6 +284,18 @@ function fmtAge(seconds) {
   return `${Math.round(total / 86400)} 天前`
 }
 
+/** Short session label for tables (drops a `session-` prefix, keeps 8 chars). */
+function shortSession(value) {
+  const text = String(value ?? '').trim().replace(/^session-/, '')
+  if (text === '') return '-'
+  return text.length <= 10 ? text : text.slice(0, 8)
+}
+
+function fmtClaims(claims) {
+  if (!Array.isArray(claims) || claims.length === 0) return '-'
+  return claims.join(', ')
+}
+
 function showWarnings(warnings) {
   if (!Array.isArray(warnings) || warnings.length === 0) return
   for (const warning of warnings) errOut(`警告: ${typeof warning === 'string' ? warning : JSON.stringify(warning)}`)
@@ -366,6 +389,7 @@ async function cmdInit(ctx) {
   const name = readString(flags, 'name')
   if (name !== undefined) options.name = name
   if (flags.force === true) options.force = true
+  if (flags['no-gates'] === true) options.noGates = true
   const migrate = readString(flags, 'migrate')
   if (migrate !== undefined) {
     if (migrate === 'all') options.migrate = ['trailers', 'tasks']
@@ -381,6 +405,10 @@ async function cmdInit(ctx) {
     if (Array.isArray(result?.created) && result.created.length > 0) {
       out(`新建 ${result.created.length} 个文件：`)
       for (const file of result.created) out(`  ${file}`)
+    }
+    if (Array.isArray(result?.seededGates) && result.seededGates.length > 0) {
+      out(`种入默认门禁 ${result.seededGates.length} 条：${result.seededGates.join(', ')}`)
+      out('  用 flow gate list 查看；不需要的用 flow gate disable <id>，已有一条门禁时不会再种。')
     }
     for (const [kind, label] of [['trailers', '实验 trailer'], ['tasks', '旧任务']]) {
       const imported = result?.imported?.[kind]
@@ -501,7 +529,10 @@ async function cmdStatus(ctx) {
         const nameWidth = Math.max(...shown.map((beat) => textWidth(beat.file)))
         const ageWidth = Math.max(...shown.map((beat) => textWidth(fmtAge(beat.ageSeconds))))
         for (const beat of shown) {
-          out(`  ${pad(beat.file, nameWidth)}  ${pad(fmtAge(beat.ageSeconds), ageWidth)}  ${clip(beat.statusLine || '-', 60)}`)
+          const label = beat.status
+            ? `${beat.status}${beat.last_action ? ` · ${beat.last_action}` : ''}`
+            : beat.last_action
+          out(`  ${pad(beat.file, nameWidth)}  ${pad(fmtAge(beat.ageSeconds), ageWidth)}  ${clip(label || '-', 60)}`)
         }
         if (beats.length > STATUS_HEARTBEAT_ROWS) {
           out(`  … 其余 ${beats.length - STATUS_HEARTBEAT_ROWS} 条（共 ${beats.length} 条）`)
@@ -788,6 +819,13 @@ async function cmdGate(ctx, sub) {
     return gate
   }
 
+  if (sub === 'enable' || sub === 'disable') {
+    const id = requireString(flags, 'id', `用法: flow gate ${sub} <id>`)
+    const gate = await core.updateGate(ctx.root, contract, id, { enabled: sub === 'enable' })
+    if (!ctx.json) out(`已${sub === 'enable' ? '启用' : '禁用'}门禁 ${gate.id}  ${gate.title}`)
+    return gate
+  }
+
   if (sub === 'rm') {
     const id = requireString(flags, 'id', '用法: flow gate rm <id> [--yes]')
     await confirmDelete(ctx, `门禁 ${id}`)
@@ -797,10 +835,21 @@ async function cmdGate(ctx, sub) {
   }
 
   if (sub === 'run') {
-    const id = requireString(flags, 'id', '用法: flow gate run <id> [--timeout SECONDS]')
+    const phase = readString(flags, 'phase')
     const timeoutSeconds = readInteger(flags, 'timeout')
-    const options = {}
+    const options = { force: flags.force === true }
     if (timeoutSeconds !== undefined) options.timeoutMs = timeoutSeconds * 1000
+    if (phase !== undefined) {
+      if (flags.id !== undefined) throw new CliError('usage', 'gate run 的 --phase 与 <id> 不能同时使用')
+      const summary = await core.runGatesByPhase(ctx.root, contract, phase, options)
+      if (!ctx.json) printGatePhaseRun(summary)
+      return summary
+    }
+    const id = requireString(
+      flags,
+      'id',
+      '用法: flow gate run <id>|--phase commit|release|manual [--timeout SECONDS] [--force]',
+    )
     const run = await core.runGate(ctx.root, contract, id, options)
     if (!ctx.json) printRun(run)
     return run
@@ -832,7 +881,150 @@ async function cmdGate(ctx, sub) {
     return runs
   }
 
-  throw new CliError('usage', `未知子命令 gate ${sub}（可用 list|show|add|update|rm|run|logs）`)
+  throw new CliError('usage', `未知子命令 gate ${sub}（可用 list|show|add|update|enable|disable|rm|run|logs）`)
+}
+
+// ---------------------------------------------------------------- 心跳
+
+/** Human-readable heartbeat summary (start/update/end/status all reuse it). */
+function printHeartbeat(record) {
+  const updatedAt = typeof record.updated_at === 'string' ? Date.parse(record.updated_at) : Number.NaN
+  const age = Number.isFinite(updatedAt) ? Math.max(0, Math.round((Date.now() - updatedAt) / 1000)) : null
+  const rows = [
+    ['session', shortSession(record.session)],
+    ['agent', record.agent || '-'],
+    ['goal', record.goal || '-'],
+    ['task', record.task || '-'],
+    ['claims', fmtClaims(record.claims)],
+    ['status', record.status || '-'],
+    ['年龄', age === null ? '-' : fmtAge(age)],
+    ['turn', record.turn ?? '-'],
+    ['last_action', record.last_action || '-'],
+    ['started_at', fmtTime(record.started_at)],
+    ['updated_at', fmtTime(record.updated_at)],
+    ['ended_at', record.ended_at ? fmtTime(record.ended_at) : '-'],
+    ['stats', record.stats ? `turns ${record.stats.turns ?? '-'} · missed ${record.stats.missed ?? '-'}` : '-'],
+  ]
+  const width = Math.max(...rows.map(([label]) => textWidth(label)))
+  for (const [label, value] of rows) out(`${pad(label, width)}  ${value}`)
+}
+
+function printHeartbeatList(section) {
+  const items = Array.isArray(section?.items) ? section.items : []
+  const counts = section?.counts ?? { total: 0, active: 0, stale: 0 }
+  out(`心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale}）  目录 ${section?.dir ?? '-'}`)
+  if (items.length === 0) {
+    out('（没有心跳记录）')
+    return
+  }
+  out('')
+  out(
+    table(
+      ['session', 'agent', 'status', '年龄', 'task', 'claims', 'goal'],
+      items.map((item) => [
+        shortSession(item.session),
+        clip(item.agent || '-', 12),
+        item.status || '-',
+        fmtAge(item.ageSeconds),
+        item.task || '-',
+        clip(fmtClaims(item.claims), 36),
+        clip(item.goal || item.last_action || '-', 40),
+      ]),
+    ),
+  )
+  const stale = items.filter((item) => item.stale === true)
+  if (stale.length > 0) out(`可能已停：${stale.map((item) => item.file).join(', ')}`)
+}
+
+async function cmdHeartbeat(ctx, sub) {
+  const { core, flags } = ctx
+  if (!sub) throw new CliError('usage', '用法: flow heartbeat <start|update|end|list|status>')
+  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  const sessionFlag = readString(flags, 'session')
+  const note = readString(flags, 'note')
+
+  if (sub === 'start') {
+    const options = {}
+    if (sessionFlag !== undefined) options.session = sessionFlag
+    for (const [key, option] of [['agent', 'agent'], ['goal', 'goal'], ['task', 'task']]) {
+      const value = readString(flags, key)
+      if (value !== undefined) options[option] = value
+    }
+    if (ctx.claims.length > 0) options.claims = ctx.claims
+    if (note !== undefined) options.last_action = note
+    const record = await core.startHeartbeat(ctx.root, contract, options)
+    if (!ctx.json) {
+      out(`已开始心跳${record.createdTask ? `（新建任务 ${record.createdTask}）` : ''}`)
+      printHeartbeat(record)
+    }
+    return record
+  }
+
+  if (sub === 'update') {
+    const patch = {}
+    const status = readString(flags, 'status')
+    if (status !== undefined) {
+      if (status !== 'working' && status !== 'idle') throw new CliError('usage', '--status 只接受 working | idle')
+      patch.status = status
+    }
+    if (note !== undefined) patch.last_action = note
+    const goal = readString(flags, 'goal')
+    if (goal !== undefined) patch.goal = goal
+    const task = readString(flags, 'task')
+    if (task !== undefined) patch.task = task === '' ? null : task
+    if (ctx.claims.length > 0) patch.claims = ctx.claims
+    if (Object.keys(patch).length === 0) {
+      throw new CliError('usage', 'heartbeat update 至少需要一个字段参数（如 --status idle / --note T）')
+    }
+    const record = await core.updateHeartbeat(ctx.root, contract, sessionFlag, patch)
+    if (!ctx.json) {
+      out('已更新心跳')
+      printHeartbeat(record)
+    }
+    return record
+  }
+
+  if (sub === 'end') {
+    const options = {}
+    if (sessionFlag !== undefined) options.session = sessionFlag
+    const status = readString(flags, 'status')
+    if (status !== undefined) {
+      if (status !== 'done' && status !== 'missed') throw new CliError('usage', 'heartbeat end 的 --status 只接受 done | missed')
+      options.status = status
+    }
+    if (note !== undefined) options.note = note
+    const record = await core.endHeartbeat(ctx.root, contract, options)
+    if (!ctx.json) {
+      out(`已结束心跳 ${shortSession(record.session)}  ${record.status}`)
+      printHeartbeat(record)
+    }
+    return record
+  }
+
+  if (sub === 'list') {
+    const section = core.readHeartbeatSection(ctx.root, contract)
+    if (!ctx.json) printHeartbeatList(section)
+    return section
+  }
+
+  if (sub === 'status') {
+    const result = core.heartbeatStatus(ctx.root, contract, sessionFlag)
+    const requireActive = flags['require-active'] === true
+    if (!ctx.json) {
+      if (result.record === null) {
+        out(`无心跳记录（session ${shortSession(sessionFlag ?? process.env.DSH_SESSION_ID)}）`)
+      } else {
+        printHeartbeat(result.record)
+      }
+    }
+    if (requireActive && result.active !== true) {
+      const detail = result.record === null ? '没有心跳文件' : `心跳状态为 ${result.record.status || '未知'}`
+      throw new CliError('usage', `没有 active 心跳（${detail}）；先运行 flow heartbeat start`)
+    }
+    return result
+  }
+
+  throw new CliError('usage', `未知子命令 heartbeat ${sub}（可用 start|update|end|list|status）`)
 }
 
 // ---------------------------------------------------------------- flow check
@@ -949,6 +1141,32 @@ function printRun(run) {
   if (run.log) out(`日志  ${run.log}`)
 }
 
+/** Batch result of `gate run --phase`: runs, skips and failures in one summary. */
+function printGatePhaseRun(summary) {
+  const runs = Array.isArray(summary?.runs) ? summary.runs : []
+  const skipped = Array.isArray(summary?.skipped) ? summary.skipped : []
+  const failed = runs.filter((run) => run.ok !== true)
+  out(
+    `phase ${summary?.phase ?? '-'}：运行 ${runs.length} 条 · 通过 ${runs.length - failed.length} · 失败 ${failed.length} · 跳过 ${skipped.length}`,
+  )
+  for (const run of runs) {
+    const steps = Array.isArray(run.steps) ? run.steps : []
+    const passed = steps.filter((step) => step.ok).length
+    const error = run.error ? `  ${run.error.code}: ${run.error.message}` : ''
+    out(`  ${run.ok === true ? '✓' : '✗'} ${run.gate}${run.title ? `（${run.title}）` : ''}  ${passed}/${steps.length} 步  ${fmtDuration(run.durationMs)}${error}`)
+    if (run.ok !== true) {
+      for (const step of steps) {
+        if (step.ok === true || !step.tail) continue
+        out(`      ${step.id} → exit ${step.exit ?? '?'}`)
+        for (const line of String(step.tail).split('\n').slice(-10)) out(`        ${line}`)
+      }
+    }
+  }
+  for (const item of skipped) out(`  ↷ ${item.id} 跳过（${item.reason}）`)
+  if (failed.length > 0) out(`失败 ${failed.length} 条：${failed.map((run) => run.gate).join(', ')}`)
+  if (failed.length === 0 && skipped.length === 0) out('全部通过')
+}
+
 function printTree(nodes, prefix = '') {
   nodes.forEach((node, index) => {
     const last = index === nodes.length - 1
@@ -1020,10 +1238,12 @@ async function dispatch(ctx, parsed) {
       return cmdTask(ctx, sub)
     case 'gate':
       return cmdGate(ctx, sub)
+    case 'heartbeat':
+      return cmdHeartbeat(ctx, sub)
     case 'check':
       return cmdCheck(ctx, sub)
     default:
-      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|check；-h 查看帮助）`)
+      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|check；-h 查看帮助）`)
   }
 }
 
@@ -1050,6 +1270,7 @@ async function main() {
     flags: parsed.flags,
     steps: parsed.steps,
     allows: parsed.allows,
+    claims: parsed.claims,
     json: jsonMode,
     contract: null,
   }
@@ -1061,7 +1282,9 @@ async function main() {
   }
   if (
     ['exp', 'task', 'gate'].includes(command) &&
-    ['show', 'update', 'rm', 'run', 'logs'].includes(action)
+    ['show', 'update', 'rm', 'run', 'logs', 'enable', 'disable'].includes(action) &&
+    // `gate run --phase X` takes no id.
+    !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined)
   ) {
     if (extra.length === 0 && parsed.flags.id === undefined) {
       throw new CliError('usage', `用法: flow ${command} ${action} <id> [options]`)

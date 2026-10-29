@@ -36,13 +36,22 @@
  *     empty array shows its empty state;
  *   - `gate: null` means the project turned gate logging off — the gate log
  *     section shows a localized empty state instead of an empty log;
+ *   - `heartbeats` is a `{ dir, items, counts }` section in store mode and a
+ *     plain array on legacy hosts; each item is either the rich shape
+ *     (`session/agent/status/goal/task/claims/...`) or the old md shape
+ *     (`file/title/statusLine/...`). The two are told apart by field presence,
+ *     never by the contract `source`;
+ *   - `POST api/project-flow/gate { root, id, enabled }` flips one gate and
+ *     answers `{ ok:true, root, gate:{ id, enabled } }` (or `{ ok:false,
+ *     error:{ code, message } }`);
  *   - `tasks.counts.other` covers markdown / no-ledger task sources.
  *
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
  *
- * Read-only apart from that one init POST: no other writes, no host DOM
- * access, colors only through `--dsw-alias-*` theme tokens.
+ * Read-only apart from two documented POSTs — `init` (create the ledger) and
+ * `gate` (flip one gate definition on/off): no host DOM access, colors only
+ * through `--dsw-alias-*` theme tokens.
  */
 window.__ModuleLoader__.load({
   id: '@local/project-flow',
@@ -60,8 +69,10 @@ window.__ModuleLoader__.load({
     /** Fixed id of the conversation-header action that opens the tab. */
     const HEADER_ACTION_ID = 'project-flow';
     const STATE_ENDPOINT = 'api/project-flow/state';
-    /** The one write the panel may perform: create the ledger in this workspace. */
+    /** Create the ledger in this workspace (the panel's other write is below). */
     const INIT_ENDPOINT = 'api/project-flow/init';
+    /** Flip one gate definition on/off; the body is `{ root, id, enabled }`. */
+    const GATE_ENDPOINT = 'api/project-flow/gate';
     const POLL_MS = 2500;
     const CLOCK_MS = 1000;
     const MAX_TREE_ROWS = 300;
@@ -156,6 +167,14 @@ window.__ModuleLoader__.load({
       'gates.run.ok': '✔ {time}',
       'gates.run.fail': '✘ {time}',
       'gates.steps': '步骤',
+      'gates.summary': '启用 {on} / 共 {total}',
+      'gate.enable': '启用',
+      'gate.disable': '禁用',
+      'gate.busy': '切换中…',
+      'gate.disabled': '已禁用',
+      'gate.toggleAria': '切换门禁：{title}',
+      'gate.noId': '缺少 id，无法切换',
+      'gate.error': '切换失败：{message}',
       'signals.title': '实时信号',
       'signals.gate': '门禁日志',
       'signals.gate.updated': '更新于 {time}',
@@ -164,6 +183,16 @@ window.__ModuleLoader__.load({
       'signals.heartbeat': '心跳',
       'signals.heartbeat.empty': '没有心跳文件。',
       'signals.heartbeat.stale': '可能已停',
+      'hb.status.working': '工作中',
+      'hb.status.idle': '空闲',
+      'hb.status.done': '已完成',
+      'hb.status.missed': '已错过',
+      'hb.counts': '活跃 {active} / 共 {total}',
+      'hb.current': '本会话',
+      'hb.task': '任务',
+      'hb.goal': '目标',
+      'hb.claims': '文件域',
+      'hb.claimsHint': '独占文件域，其他会话不应修改',
       'signals.runs': '运行输出',
       'signals.runs.empty': '近 15 分钟没有运行中的输出。',
       'signals.runs.lines': '尾部 {n} 行',
@@ -265,6 +294,14 @@ window.__ModuleLoader__.load({
       'gates.run.ok': '✔ {time}',
       'gates.run.fail': '✘ {time}',
       'gates.steps': 'Steps',
+      'gates.summary': '{on} enabled / {total}',
+      'gate.enable': 'Enable',
+      'gate.disable': 'Disable',
+      'gate.busy': 'Toggling…',
+      'gate.disabled': 'Disabled',
+      'gate.toggleAria': 'Toggle gate: {title}',
+      'gate.noId': 'No id; cannot toggle',
+      'gate.error': 'Toggle failed: {message}',
       'signals.title': 'Live signals',
       'signals.gate': 'Gate log',
       'signals.gate.updated': 'updated {time}',
@@ -273,6 +310,16 @@ window.__ModuleLoader__.load({
       'signals.heartbeat': 'Heartbeats',
       'signals.heartbeat.empty': 'No heartbeat files.',
       'signals.heartbeat.stale': 'possibly stopped',
+      'hb.status.working': 'working',
+      'hb.status.idle': 'idle',
+      'hb.status.done': 'done',
+      'hb.status.missed': 'missed',
+      'hb.counts': '{active} active / {total}',
+      'hb.current': 'current',
+      'hb.task': 'Task',
+      'hb.goal': 'Goal',
+      'hb.claims': 'Claims',
+      'hb.claimsHint': 'Exclusive file scope; other sessions should not modify these',
       'signals.runs': 'Run output',
       'signals.runs.empty': 'No run output in the last 15 minutes.',
       'signals.runs.lines': 'last {n} lines',
@@ -383,6 +430,28 @@ window.__ModuleLoader__.load({
       if (!text) return '';
       const parts = text.split(/[\\/]/).filter(Boolean);
       return parts.length ? parts[parts.length - 1] : text;
+    }
+
+    /** Short display key of a session id: drop the `session-` prefix, keep 8. */
+    function shortSession(value) {
+      const text = asText(value).trim().replace(/^session-/, '');
+      return text ? text.slice(0, 8) : '';
+    }
+
+    /** Session ids compare without a `session-` prefix and case; empty never matches. */
+    function sameSession(left, right) {
+      const normalize = (value) => asText(value).trim().toLowerCase().replace(/^session-/, '');
+      const a = normalize(left);
+      const b = normalize(right);
+      return a !== '' && a === b;
+    }
+
+    /** A heartbeat's session key: explicit `session` first, then the file stem. */
+    function beatSessionKey(beat) {
+      const explicit = asText(beat && beat.session);
+      if (explicit) return explicit;
+      const file = basename(beat && beat.file);
+      return file ? file.replace(/\.[^.]+$/, '') : '';
     }
 
     function verdictOf(verdict) {
@@ -503,6 +572,79 @@ window.__ModuleLoader__.load({
         .map(normalizeGate);
     }
 
+    /**
+     * One heartbeat. Rich store items and legacy md items are distinguished by
+     * field presence (`session`/`agent`/`status`/`goal`/`claims`/…) — never by
+     * the contract `source` — so a missing or extra field never throws.
+     */
+    function normalizeHeartbeat(raw) {
+      const entry = asObject(raw);
+      const stats = asObject(entry.stats);
+      const updatedAt = asText(entry.updated_at);
+      const ageSeconds = asNumber(entry.ageSeconds, null);
+      const status = asText(entry.status).toLowerCase();
+      const rich =
+        entry.session !== undefined ||
+        entry.agent !== undefined ||
+        entry.goal !== undefined ||
+        entry.task !== undefined ||
+        entry.claims !== undefined ||
+        entry.status !== undefined ||
+        entry.stats !== undefined ||
+        entry.updated_at !== undefined ||
+        entry.last_action !== undefined;
+      const stale =
+        entry.stale === true ||
+        (entry.stale !== false && Number.isFinite(ageSeconds) && ageSeconds > STALE_AFTER_SECONDS);
+      return {
+        rich,
+        file: asText(entry.file),
+        title: asText(entry.title),
+        statusLine: asText(entry.statusLine),
+        ageSeconds,
+        mtime: asNumber(entry.mtime, null),
+        updatedMs: asNumber(Date.parse(updatedAt), null),
+        session: asText(entry.session),
+        agent: asText(entry.agent),
+        goal: asText(entry.goal),
+        task: asText(entry.task),
+        claims: asArray(entry.claims)
+          .map((claim) => asText(claim).trim())
+          .filter(Boolean),
+        status,
+        lastAction: asText(entry.last_action),
+        startedAt: asText(entry.started_at),
+        endedAt: asText(entry.ended_at),
+        stale,
+        turn: asNumber(entry.turn, null),
+        stats: {
+          turns: asNumber(stats.turns, 0),
+          missed: asNumber(stats.missed, 0),
+        },
+      };
+    }
+
+    /** `heartbeats` is `{ dir, items, counts }` in store mode or a plain array. */
+    function normalizeHeartbeats(raw) {
+      const section = Array.isArray(raw) ? null : asObject(raw);
+      const rawItems = Array.isArray(raw) ? raw : asArray(section.items);
+      const items = asArray(rawItems)
+        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+        .map(normalizeHeartbeat);
+      const countsSrc = asObject(section && section.counts);
+      const derivedActive = items.filter((beat) =>
+        beat.status ? beat.status === 'working' || beat.status === 'idle' : beat.stale !== true
+      ).length;
+      return {
+        items,
+        counts: {
+          total: asNumber(countsSrc.total, items.length),
+          active: asNumber(countsSrc.active, derivedActive),
+          stale: asNumber(countsSrc.stale, items.filter((beat) => beat.stale).length),
+        },
+      };
+    }
+
     /** Tolerant mapping of the host payload; never throws on missing fields. */
     function normalize(payload) {
       const src = asObject(payload);
@@ -570,6 +712,7 @@ window.__ModuleLoader__.load({
 
       const taskCountsSrc = asObject(tasksSrc.counts);
       const gates = normalizeGates(src.gates);
+      const heartbeatSection = normalizeHeartbeats(src.heartbeats);
       const warnings = asArray(src.warnings).map(asText).filter(Boolean);
 
       return {
@@ -628,15 +771,8 @@ window.__ModuleLoader__.load({
           mtime: asNumber(gateSrc.mtime, null),
           size: asNumber(gateSrc.size, null),
         },
-        heartbeats: asArray(src.heartbeats)
-          .filter((entry) => entry && typeof entry === 'object')
-          .map((entry) => ({
-            file: asText(entry.file),
-            title: asText(entry.title),
-            statusLine: asText(entry.statusLine),
-            ageSeconds: asNumber(entry.ageSeconds, null),
-            mtime: asNumber(entry.mtime, null),
-          })),
+        heartbeats: heartbeatSection.items,
+        heartbeatCounts: heartbeatSection.counts,
         runs: asArray(src.runs)
           .filter((entry) => entry && typeof entry === 'object')
           .map((entry) => ({
@@ -717,7 +853,10 @@ window.__ModuleLoader__.load({
           },
           React.createElement(Caret, { open: props.open }),
           React.createElement('span', { className: 'project-flow-sectionTitle' }, props.title),
-          Number.isFinite(props.count) ? React.createElement('span', { className: 'project-flow-count' }, ' (' + props.count + ')') : null
+          Number.isFinite(props.count) ? React.createElement('span', { className: 'project-flow-count' }, ' (' + props.count + ')') : null,
+          props.countText
+            ? React.createElement('span', { className: 'project-flow-count' }, ' (' + props.countText + ')')
+            : null
         ),
         props.open ? React.createElement('div', { className: 'project-flow-sectionBody' }, props.children) : null
       );
@@ -1204,6 +1343,15 @@ window.__ModuleLoader__.load({
       return { cls: 'other', text: value || t('misc.dash') };
     }
 
+    /** Status badge text; unknown values stay visible but use the neutral chip. */
+    function heartbeatStatusOf(status, t) {
+      const value = asText(status);
+      if (value === 'working' || value === 'idle' || value === 'done' || value === 'missed') {
+        return { cls: value, text: t('hb.status.' + value) };
+      }
+      return value ? { cls: 'unknown', text: value } : null;
+    }
+
     /** Expanded gate: one block per step definition with its latest result. */
     function GateDetail(props) {
       const gate = asObject(props.gate);
@@ -1264,12 +1412,48 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** Read-only gate definitions: title, phase, enabled flag and the last run. */
+    /**
+     * Flip one gate definition. Same-origin JSON POST; the host answers
+     * `{ ok:true, root, gate:{ id, enabled } }` or `{ ok:false, error }`.
+     */
+    async function postGateToggle(root, id, enabled) {
+      const response = await window.fetch(GATE_ENDPOINT, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ root, id, enabled }),
+      });
+      let payload = null;
+      try {
+        const raw = await response.text();
+        payload = raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        payload = null;
+      }
+      if (!response.ok || !payload || payload.ok !== true) {
+        const hostError = payload && payload.error ? payload.error : null;
+        const failure = new Error((hostError && asText(hostError.message)) || 'HTTP ' + response.status);
+        failure.code = (hostError && asText(hostError.code)) || 'http-' + response.status;
+        throw failure;
+      }
+      const gate = asObject(payload.gate);
+      return {
+        id: asText(gate.id) || id,
+        enabled: gate.enabled === undefined ? enabled === true : gate.enabled !== false,
+      };
+    }
+
+    /** Gate definitions: title, phase, last run and a per-row enable switch. */
     function GatesCard(props) {
       const gates = asArray(props.gates);
       const t = props.t;
       const now = props.now;
+      const workspaceRoot = props.workspaceRoot;
       const [openGates, setOpenGates] = useState({});
+      /* Optimistic values while a POST is in flight (and until the next poll). */
+      const [overrides, setOverrides] = useState({});
+      const [pending, setPending] = useState({});
+      const [gateError, setGateError] = useState(null);
 
       const toggleGate = (key) => {
         setOpenGates((previous) => {
@@ -1280,6 +1464,46 @@ window.__ModuleLoader__.load({
         });
       };
 
+      /* A fresh host snapshot always wins over an optimistic value. */
+      useEffect(() => {
+        setOverrides({});
+      }, [props.gates]);
+
+      const enabledOf = (gate) =>
+        Object.prototype.hasOwnProperty.call(overrides, gate.id)
+          ? overrides[gate.id] === true
+          : gate.enabled !== false;
+      const enabledCount = gates.filter(enabledOf).length;
+
+      const toggleEnabled = (gate) => {
+        const id = asText(gate.id);
+        const target = !enabledOf(gate);
+        if (!id || pending[id] === true || workspaceRoot === undefined) return;
+        setGateError(null);
+        setOverrides((previous) => Object.assign({}, previous, { [id]: target }));
+        setPending((previous) => Object.assign({}, previous, { [id]: true }));
+        postGateToggle(workspaceRoot, id, target)
+          .then((result) => {
+            setOverrides((previous) => Object.assign({}, previous, { [id]: result.enabled }));
+          })
+          .catch((error) => {
+            /* Roll the optimistic flip back; the next poll already agrees. */
+            setOverrides((previous) => {
+              const next = Object.assign({}, previous);
+              delete next[id];
+              return next;
+            });
+            setGateError({ id, message: asText(error && error.message) || t('error.generic') });
+          })
+          .finally(() => {
+            setPending((previous) => {
+              const next = Object.assign({}, previous);
+              delete next[id];
+              return next;
+            });
+          });
+      };
+
       return React.createElement(
         'section',
         { className: 'project-flow-card' },
@@ -1287,7 +1511,11 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'project-flow-cardHead' },
           React.createElement('h2', { className: 'project-flow-cardTitle' }, t('gates.title')),
-          React.createElement('span', { className: 'project-flow-muted' }, String(gates.length))
+          React.createElement(
+            'span',
+            { className: 'project-flow-muted' },
+            t('gates.summary', { on: enabledCount, total: gates.length })
+          )
         ),
         gates.length === 0
           ? React.createElement(
@@ -1301,7 +1529,10 @@ window.__ModuleLoader__.load({
               gates.map((gate, index) => {
                 const key = 'gate-' + index + '-' + gate.id;
                 const expanded = openGates[key] === true;
-                const disabled = gate.enabled === false;
+                const enabled = enabledOf(gate);
+                const disabled = !enabled;
+                const busy = gate.id !== '' && pending[gate.id] === true;
+                const label = gate.title || gate.id || t('misc.dash');
                 const phase = phaseOf(gate.phase, t);
                 const run = gate.lastRun;
                 const when = run && Number.isFinite(run.startedMs) ? relativeMoment(run.startedMs, now, t) : null;
@@ -1311,6 +1542,7 @@ window.__ModuleLoader__.load({
                   ? t(run.ok ? 'gates.run.ok' : 'gates.run.fail', { time: whenText || t('misc.dash') })
                   : t('gates.never');
                 const runTone = run ? (run.ok ? ' project-flow-gateRun--ok' : ' project-flow-gateRun--fail') : '';
+                const error = gateError && gateError.id === gate.id ? gateError : null;
 
                 return React.createElement(
                   'div',
@@ -1319,19 +1551,54 @@ window.__ModuleLoader__.load({
                     key,
                   },
                   React.createElement(
-                    'button',
-                    {
-                      type: 'button',
-                      className: 'project-flow-gateHead',
-                      'aria-expanded': expanded ? true : false,
-                      title: gate.title || gate.id || undefined,
-                      onClick: () => toggleGate(key),
-                    },
-                    React.createElement(Caret, { open: expanded }),
-                    React.createElement('span', { className: 'project-flow-gateTitle' }, gate.title || gate.id || t('misc.dash')),
-                    React.createElement(Chip, { tone: phase.cls === 'other' ? null : 'phase' }, phase.text),
-                    React.createElement('span', { className: 'project-flow-gateRun' + runTone }, runText)
+                    'div',
+                    { className: 'project-flow-gateRow' },
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'project-flow-gateHead',
+                        'aria-expanded': expanded ? true : false,
+                        title: gate.title || gate.id || undefined,
+                        onClick: () => toggleGate(key),
+                      },
+                      React.createElement(Caret, { open: expanded }),
+                      React.createElement('span', { className: 'project-flow-gateTitle' }, label),
+                      disabled ? React.createElement(Chip, { tone: 'muted' }, t('gate.disabled')) : null,
+                      React.createElement(Chip, { tone: phase.cls === 'other' ? null : 'phase' }, phase.text),
+                      React.createElement('span', { className: 'project-flow-gateRun' + runTone }, runText)
+                    ),
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'project-flow-switch' + (enabled ? ' project-flow-switch--on' : ''),
+                        role: 'switch',
+                        'aria-checked': enabled ? true : false,
+                        'aria-label': t('gate.toggleAria', { title: label }),
+                        title: !gate.id
+                          ? t('gate.noId')
+                          : busy
+                            ? t('gate.busy')
+                            : enabled
+                              ? t('gate.disable')
+                              : t('gate.enable'),
+                        disabled: !gate.id || busy || workspaceRoot === undefined,
+                        onClick: () => toggleEnabled(gate),
+                      },
+                      React.createElement('span', {
+                        className: 'project-flow-switchThumb',
+                        'aria-hidden': 'true',
+                      })
+                    )
                   ),
+                  error
+                    ? React.createElement(
+                        'p',
+                        { className: 'project-flow-gateError', role: 'alert' },
+                        t('gate.error', { message: error.message })
+                      )
+                    : null,
                   expanded ? React.createElement(GateDetail, { gate, t, now }) : null
                 );
               })
@@ -1342,10 +1609,26 @@ window.__ModuleLoader__.load({
     function SignalsCard(props) {
       /* Every list is tolerated when absent or not an array. */
       const gate = props.gate;
-      const heartbeats = asArray(props.heartbeats);
+      /* Accept either the flattened array or a raw `{ items, counts }` section. */
+      const heartbeatSection = Array.isArray(props.heartbeats) ? null : asObject(props.heartbeats);
+      const heartbeatItems = Array.isArray(props.heartbeats)
+        ? props.heartbeats
+        : asArray(heartbeatSection.items);
+      /* Items straight from `state` may be raw; already-normalized ones are kept. */
+      const heartbeats = heartbeatItems
+        .map((beat) =>
+          beat && typeof beat === 'object' && beat.rich === undefined ? normalizeHeartbeat(beat) : beat
+        )
+        .filter((beat) => beat && typeof beat === 'object');
+      const heartbeatCounts = asObject(
+        props.heartbeatCounts !== undefined
+          ? props.heartbeatCounts
+          : asObject(heartbeatSection).counts
+      );
       const runs = asArray(props.runs);
       const t = props.t;
       const now = props.now;
+      const sessionId = props.sessionId;
 
       const [closed, setClosed] = useState({});
       const [openRuns, setOpenRuns] = useState({});
@@ -1374,6 +1657,13 @@ window.__ModuleLoader__.load({
       const gateAll = gateDisabled ? [] : asArray(gateInfo.lines);
       const gateLines = gateAll.slice(-MAX_GATE_LINES);
       const gateAge = gateDisabled ? null : relativeMoment(gateInfo.mtime, now, t);
+      const hbActive = asNumber(
+        heartbeatCounts.active,
+        heartbeats.filter((beat) =>
+          beat.status ? beat.status === 'working' || beat.status === 'idle' : beat.stale !== true
+        ).length
+      );
+      const hbTotal = asNumber(heartbeatCounts.total, heartbeats.length);
 
       return React.createElement(
         'section',
@@ -1400,7 +1690,7 @@ window.__ModuleLoader__.load({
             title: t('signals.heartbeat'),
             open: !closed.heartbeat,
             onToggle: () => toggleSection('heartbeat'),
-            count: heartbeats.length,
+            countText: t('hb.counts', { active: hbActive, total: hbTotal }),
           },
           heartbeats.length === 0
             ? React.createElement(EmptyLine, null, t('signals.heartbeat.empty'))
@@ -1409,30 +1699,123 @@ window.__ModuleLoader__.load({
                 { className: 'project-flow-list' },
                 heartbeats.map((beat, index) => {
                   const age = Number.isFinite(beat.ageSeconds) ? beat.ageSeconds : null;
-                  const stale = Number.isFinite(age) && age > STALE_AFTER_SECONDS;
-                  const timeText = ageText(age, beat.mtime, now, t);
+                  const stale =
+                    beat.stale === true ||
+                    (beat.stale !== false && Number.isFinite(age) && age > STALE_AFTER_SECONDS);
+                  const timeText = ageText(
+                    age,
+                    Number.isFinite(beat.mtime) ? beat.mtime : beat.updatedMs,
+                    now,
+                    t
+                  );
+                  const sessionKey = beatSessionKey(beat);
+                  const current = sameSession(sessionKey, sessionId);
+                  const key = 'beat-' + index + '-' + (beat.file || sessionKey);
+                  const currentChip = current
+                    ? React.createElement(Chip, { tone: 'brand' }, t('hb.current'))
+                    : null;
+                  const staleChip = stale
+                    ? React.createElement(
+                        'span',
+                        { className: 'project-flow-chip project-flow-chip--warn' },
+                        t('signals.heartbeat.stale')
+                      )
+                    : null;
+
+                  /* Legacy md/json heartbeat: keep the title + statusLine layout. */
+                  if (beat.rich !== true) {
+                    return React.createElement(
+                      'li',
+                      { className: 'project-flow-beat' + (current ? ' project-flow-beat--current' : ''), key },
+                      React.createElement(
+                        'div',
+                        { className: 'project-flow-beatHead' },
+                        React.createElement(
+                          'span',
+                          { className: 'project-flow-beatName', title: beat.file || undefined },
+                          beat.title || basename(beat.file) || t('misc.dash')
+                        ),
+                        currentChip,
+                        timeText ? React.createElement('span', { className: 'project-flow-beatTime' }, timeText) : null,
+                        staleChip
+                      ),
+                      beat.statusLine
+                        ? React.createElement('p', { className: 'project-flow-beatStatus', title: beat.statusLine }, beat.statusLine)
+                        : null
+                    );
+                  }
+
+                  const status = heartbeatStatusOf(beat.status, t);
+                  const displayName =
+                    beat.agent || shortSession(beat.session) || beat.title || basename(beat.file) || t('misc.dash');
+                  const note = beat.lastAction || beat.statusLine;
                   return React.createElement(
                     'li',
-                    { className: 'project-flow-beat', key: 'beat-' + index },
+                    {
+                      className: 'project-flow-beat project-flow-beat--rich' + (current ? ' project-flow-beat--current' : ''),
+                      key,
+                    },
                     React.createElement(
                       'div',
                       { className: 'project-flow-beatHead' },
                       React.createElement(
                         'span',
-                        { className: 'project-flow-beatName', title: beat.file || undefined },
-                        beat.title || basename(beat.file) || t('misc.dash')
+                        { className: 'project-flow-beatName', title: beat.session || beat.file || undefined },
+                        displayName
                       ),
-                      timeText ? React.createElement('span', { className: 'project-flow-beatTime' }, timeText) : null,
-                      stale
+                      beat.agent && beat.session
                         ? React.createElement(
                             'span',
-                            { className: 'project-flow-chip project-flow-chip--warn' },
-                            t('signals.heartbeat.stale')
+                            { className: 'project-flow-beatSession', title: beat.session },
+                            shortSession(beat.session)
                           )
-                        : null
+                        : null,
+                      status
+                        ? React.createElement(
+                            Chip,
+                            { tone: status.cls === 'unknown' ? null : 'hb-' + status.cls },
+                            status.text
+                          )
+                        : null,
+                      beat.task
+                        ? React.createElement('span', { className: 'project-flow-beatTask', title: t('hb.task') }, beat.task)
+                        : null,
+                      currentChip,
+                      timeText ? React.createElement('span', { className: 'project-flow-beatTime' }, timeText) : null,
+                      staleChip
                     ),
-                    beat.statusLine
-                      ? React.createElement('p', { className: 'project-flow-beatStatus', title: beat.statusLine }, beat.statusLine)
+                    beat.goal
+                      ? React.createElement(
+                          'p',
+                          { className: 'project-flow-beatGoal', title: beat.goal },
+                          React.createElement('span', { className: 'project-flow-beatGoalLabel' }, t('hb.goal')),
+                          beat.goal
+                        )
+                      : null,
+                    beat.claims.length > 0
+                      ? React.createElement(
+                          'div',
+                          { className: 'project-flow-beatClaims' },
+                          React.createElement(
+                            'span',
+                            { className: 'project-flow-beatClaimsLabel', title: t('hb.claimsHint') },
+                            t('hb.claims')
+                          ),
+                          beat.claims.map((claim, claimIndex) =>
+                            React.createElement(
+                              'span',
+                              {
+                                className: 'project-flow-beatClaim',
+                                key: 'claim-' + claimIndex,
+                                title: joinParts([claim, t('hb.claimsHint')]),
+                              },
+                              claim
+                            )
+                          )
+                        )
+                      : null,
+                    note
+                      ? React.createElement('p', { className: 'project-flow-beatStatus', title: note }, note)
                       : null
                   );
                 })
@@ -1749,6 +2132,8 @@ window.__ModuleLoader__.load({
       const t = typeof props.t === 'function' ? props.t : (key) => key;
       /* The one workspace this panel may show; undefined until the tab resolves it. */
       const workspaceRoot = props.workspaceRoot;
+      /* Used only to highlight the current session's heartbeat; absent = none. */
+      const sessionId = props.sessionId;
       const [data, setData] = useState(null);
       const [errorInfo, setErrorInfo] = useState(null);
       const [lastOkAt, setLastOkAt] = useState(0);
@@ -1891,13 +2276,17 @@ window.__ModuleLoader__.load({
                     { className: 'project-flow-col' },
                     React.createElement(TasksCard, { tasks: view.tasks, t, now }),
                     /* Gate definitions sit between tasks and live signals (store mode only). */
-                    view.gates ? React.createElement(GatesCard, { gates: view.gates, t, now }) : null,
+                    view.gates
+                      ? React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot })
+                      : null,
                     React.createElement(SignalsCard, {
                       gate: view.gate,
                       heartbeats: view.heartbeats,
+                      heartbeatCounts: view.heartbeatCounts,
                       runs: view.runs,
                       t,
                       now,
+                      sessionId,
                     })
                   )
                 ),
@@ -2056,6 +2445,7 @@ window.__ModuleLoader__.load({
         key: workspaceRoot === undefined ? 'pending' : workspaceRoot,
         t,
         workspaceRoot,
+        sessionId: props.sessionId,
       });
     }
 
@@ -2149,6 +2539,11 @@ window.__ModuleLoader__.load({
 .project-flow-chip--error{color:var(--dsw-alias-state-error-primary);}
 .project-flow-chip--warn{color:var(--dsw-alias-state-warn-primary);}
 .project-flow-chip--brand{color:var(--dsw-alias-brand-primary);}
+.project-flow-chip--muted{color:var(--dsw-alias-label-secondary);opacity:.75;}
+.project-flow-chip--hb-working{color:var(--dsw-alias-state-success-primary);}
+.project-flow-chip--hb-idle{color:var(--dsw-alias-state-warn-primary);}
+.project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);opacity:.8;}
+.project-flow-chip--hb-missed{color:var(--dsw-alias-state-error-primary);}
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}
@@ -2172,6 +2567,25 @@ window.__ModuleLoader__.load({
 .project-flow-gateMark{font-size:11px;line-height:1;}
 .project-flow-gateMark--ok{color:var(--dsw-alias-state-success-primary);}
 .project-flow-gateMark--error{color:var(--dsw-alias-state-error-primary);}
+.project-flow-gates{display:flex;flex-direction:column;gap:1px;}
+.project-flow-gate{min-width:0;border-radius:6px;}
+.project-flow-gateRow{display:flex;align-items:center;gap:4px;min-width:0;}
+.project-flow-gateHead{display:flex;flex:1 1 auto;align-items:center;gap:6px;min-width:0;padding:3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
+.project-flow-gateHead:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-gateHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
+.project-flow-gateTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.project-flow-gateRun{flex:none;margin-left:auto;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.project-flow-gateRun--ok{color:var(--dsw-alias-state-success-primary);}
+.project-flow-gateRun--fail{color:var(--dsw-alias-state-error-primary);}
+.project-flow-gate--disabled .project-flow-gateHead{opacity:.55;}
+.project-flow-gate--disabled .project-flow-gateBody{opacity:.55;}
+.project-flow-gateError{margin:2px 0 3px;padding-left:4px;color:var(--dsw-alias-state-error-primary);font-size:10.5px;overflow-wrap:anywhere;}
+.project-flow-switch{box-sizing:border-box;flex:none;display:inline-flex;align-items:center;width:28px;height:16px;padding:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);cursor:pointer;transition:background-color .12s ease,border-color .12s ease;}
+.project-flow-switch--on{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);}
+.project-flow-switch:disabled{opacity:.55;cursor:default;}
+.project-flow-switch:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
+.project-flow-switchThumb{display:block;width:10px;height:10px;border-radius:50%;background:var(--dsw-alias-label-secondary);transform:translateX(3px);transition:transform .12s ease,background-color .12s ease;}
+.project-flow-switch--on .project-flow-switchThumb{background:var(--dsw-alias-bg-base);transform:translateX(13px);}
 .project-flow-guide{margin-top:5px;padding:10px;border-radius:9px;border:1px dashed var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);}
 .project-flow-guideTitle{margin:0 0 3px;font-size:12.5px;}
 .project-flow-guide p{margin:0;}
@@ -2180,7 +2594,7 @@ window.__ModuleLoader__.load({
 .project-flow-groupHead:hover{background:var(--dsw-alias-bg-layer-2);}
 .project-flow-groupHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
 .project-flow-groupName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.project-flow-count{color:var(--dsw-alias-label-secondary);font-weight:400;font-variant-numeric:tabular-nums;}
+.project-flow-count{color:var(--dsw-alias-label-secondary);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-caret{display:inline-block;flex:none;width:10px;color:var(--dsw-alias-label-secondary);font-size:10px;line-height:1;transition:transform .12s ease;}
 .project-flow-caret--collapsed{transform:rotate(-90deg);}
 .project-flow-treeItem{display:block;}
@@ -2218,6 +2632,14 @@ window.__ModuleLoader__.load({
 .project-flow-beatName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:500;}
 .project-flow-beatTime{flex:none;color:var(--dsw-alias-label-secondary);font-size:10px;font-variant-numeric:tabular-nums;}
 .project-flow-beatStatus{margin:0;padding-left:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
+.project-flow-beat--current{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary);}
+.project-flow-beatSession{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-beatTask{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-beatGoal{margin:0;padding-left:2px;color:var(--dsw-alias-label-primary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}
+.project-flow-beatGoalLabel{margin-right:4px;color:var(--dsw-alias-label-secondary);font-size:10px;}
+.project-flow-beatClaims{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:1px;padding-left:2px;min-width:0;}
+.project-flow-beatClaimsLabel{flex:none;color:var(--dsw-alias-label-secondary);font-size:10px;}
+.project-flow-beatClaim{display:inline-flex;align-items:center;max-width:100%;height:16px;padding:0 5px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-family:${MONO};font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .project-flow-runList{display:flex;flex-direction:column;gap:1px;}
 .project-flow-run{display:block;min-width:0;}
 .project-flow-runHead{display:flex;align-items:center;gap:5px;width:100%;padding:3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;text-align:left;cursor:pointer;}

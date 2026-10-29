@@ -154,7 +154,7 @@ async function call(route, url) {
 // --------------------------------------------------------------- fixtures
 
 const storeRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-store-'))
-const initResult = core.initProject(storeRoot, { name: 'Host2Test' })
+const initResult = core.initProject(storeRoot, { name: 'Host2Test', noGates: true })
 
 const legacyRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-legacy-'))
 mkdirSync(join(legacyRoot, 'ledger', 'tasks'), { recursive: true })
@@ -202,16 +202,18 @@ const ctx = makeCtx({
 apply(ctx)
 
 check('store fixture initialized', initResult.created.includes('.dsh/flow/flow.json'), JSON.stringify(initResult))
-eq('routes registered', routes.length, 2)
+eq('routes registered', routes.length, 3)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
 const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
+const gateRoute = routes.find((entry) => entry.path === '/api/project-flow/gate')
 check('state route present', route !== undefined && route.kind === 'exact')
 check('init route present', initRoute !== undefined && initRoute.kind === 'exact')
+check('gate route present', gateRoute !== undefined && gateRoute.kind === 'exact')
 
 // ------------------------------------------------------------- tool surface
 
-const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate']
-check('four tools registered', registeredTools.size === 4, `got ${[...registeredTools.keys()].join(', ')}`)
+const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat']
+check('five tools registered', registeredTools.size === 5, `got ${[...registeredTools.keys()].join(', ')}`)
 for (const name of EXPECTED_TOOLS) {
   const definition = registeredTools.get(name)
   if (check(`${name}: registered`, definition !== undefined) === false) continue
@@ -650,7 +652,7 @@ const injectCtx = {
 }
 
 apply(injectCtx)
-eq('inject path: four tools registered', injectedTools.size, 4)
+eq('inject path: five tools registered', injectedTools.size, 5)
 eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()

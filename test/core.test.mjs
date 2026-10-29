@@ -19,10 +19,12 @@ import {
   addGate,
   addTask,
   drainWarnings,
+  endHeartbeat,
   experimentTree,
   getExperiment,
   getGate,
   getTask,
+  heartbeatStatus,
   initProject,
   listExperiments,
   listGateRuns,
@@ -31,16 +33,20 @@ import {
   loadContract,
   migrateLegacyTasks,
   migrateTrailers,
+  readHeartbeatSection,
   readHeartbeats,
   readStoreState,
   removeExperiment,
   removeGate,
   removeTask,
   runGate,
+  runGatesByPhase,
   saveContract,
+  startHeartbeat,
   storePaths,
   updateExperiment,
   updateGate,
+  updateHeartbeat,
   updateTask,
 } from '../lib/core.mjs'
 
@@ -67,9 +73,14 @@ function tempRoot(label = 'case') {
   return dir
 }
 
+/**
+ * Isolated project for core/CLI CRUD tests. `noGates` keeps the fixture free of
+ * the default gate seeds (`flow init` seeds an empty gates dir); seeding itself
+ * is covered by its own tests further below.
+ */
 function freshProject(label = 'project') {
   const root = tempRoot(label)
-  initProject(root, { name: label })
+  initProject(root, { name: label, noGates: true })
   const { contract } = loadContract(root)
   return { root, contract }
 }
@@ -586,7 +597,7 @@ test('readStoreState 心跳：目录缺失为空集且不产生 warning', () => 
   const state = readStoreState(root, contract)
   assert.equal(state.heartbeats.dir, '.agents/heartbeat')
   assert.deepEqual(state.heartbeats.items, [])
-  assert.deepEqual(state.heartbeats.counts, { total: 0, stale: 0 })
+  assert.deepEqual(state.heartbeats.counts, { total: 0, active: 0, stale: 0 })
   assert.deepEqual(drainWarnings(), [])
 })
 
@@ -809,7 +820,7 @@ test('CLI --help 退出 0 且列出全部命令', () => {
 test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   const root = tempRoot('cli-flow')
 
-  const init = runCli(root, ['init', '--name', 'cli-proj', '--json'])
+  const init = runCli(root, ['init', '--name', 'cli-proj', '--no-gates', '--json'])
   assert.equal(init.code, 0)
   assert.equal(init.json.ok, true)
   assert.ok(init.json.data.created.includes('.dsh/flow/flow.json'))
@@ -950,4 +961,616 @@ test('CLI 未初始化项目上 status 提示 init，写命令退出 1', () => {
   const add = runCli(root, ['exp', 'add', '--title', 'x', '--json'])
   assert.equal(add.code, 1)
   assert.equal(add.json.error.code, 'usage')
+})
+
+// ============================================================ 心跳写入 API
+//
+// 以下是「心跳写入 + 门禁开关 + 默认门禁种子」新增用例。全部在临时目录里跑，
+// 不触碰任何真实项目台账。
+
+const SESSION = 'session-79c1c4e6-ecf5-40a9-98c2-fd7a373a2a85'
+const HEARTBEAT_KEYS = [
+  'file', 'session', 'agent', 'goal', 'task', 'claims', 'status', 'last_action',
+  'started_at', 'updated_at', 'ended_at', 'ageSeconds', 'stale', 'turn', 'stats', 'mtime',
+]
+
+function heartbeatPath(root, session = SESSION) {
+  return path.join(root, '.agents/heartbeat', `${session}.json`)
+}
+
+test('heartbeat start：显式任务下标 goal 取任务标题、claims 取 scope.allow', () => {
+  const { root, contract } = freshProject('hb-start')
+  const task = addTask(root, contract, {
+    id: `T-${stamp()}-01`,
+    title: '任务甲',
+    status: 'active',
+    owner: SESSION,
+    scope: { allow: ['lib/core.mjs', 'bin/flow.mjs'] },
+  })
+
+  const record = startHeartbeat(root, contract, { session: SESSION })
+  assert.equal(record.schema, 1)
+  assert.equal(record.session, SESSION)
+  assert.equal(record.task, task.id)
+  assert.equal(record.task, `T-${stamp()}-01`)
+  assert.equal(record.goal, '任务甲')
+  assert.deepEqual(record.claims, ['lib/core.mjs', 'bin/flow.mjs'])
+  assert.equal(record.status, 'working')
+  assert.equal(record.turn, 1)
+  assert.deepEqual(record.stats, { turns: 1, missed: 0 })
+  assert.equal(record.ended_at, null)
+  assert.match(record.started_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
+  assert.equal(record.createdTask, null, '已有任务时不应新建')
+
+  const stored = readJson(heartbeatPath(root))
+  assert.equal(stored.schema, 1)
+  assert.equal(stored.task, task.id)
+  assert.equal(stored.createdTask, undefined, 'createdTask 只是 API 附加信息，不落盘')
+  assert.deepEqual(new Set(Object.keys(stored)), new Set([
+    'schema', 'session', 'agent', 'goal', 'task', 'claims', 'status', 'turn',
+    'last_action', 'started_at', 'updated_at', 'ended_at', 'stats',
+  ]))
+})
+
+test('heartbeat start：没有任务时自动建 draft 任务并回填 task；createTask:false 不建', () => {
+  const { root, contract } = freshProject('hb-create')
+  const started = startHeartbeat(root, contract, { session: SESSION, goal: '自动建任务' })
+
+  assert.ok(started.createdTask, '应返回新建任务 id')
+  assert.equal(started.task, started.createdTask)
+  assert.equal(started.goal, '自动建任务')
+  const tasks = listTasks(root, contract)
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].id, started.createdTask)
+  assert.equal(tasks[0].title, '自动建任务')
+  assert.equal(tasks[0].status, 'draft')
+  assert.equal(tasks[0].owner, SESSION)
+
+  // 无任务 + 无 goal → 标题用默认「未命名任务」
+  // 新会话会复用全库最新的 active/draft 任务，所以「完全没有任务可复用」要用干净项目。
+  const empty = freshProject('hb-create-unnamed')
+  const unnamed = startHeartbeat(empty.root, empty.contract, { session: 'session-unnamed' })
+  assert.equal(unnamed.goal, '未命名任务')
+  assert.equal(getTask(empty.root, empty.contract, unnamed.task).title, '未命名任务')
+  assert.equal(listTasks(empty.root, empty.contract).length, 1)
+
+  // createTask:false → 心跳照写，但不建任务（同样用干净项目，避免复用他人 draft）
+  const bare = freshProject('hb-create-guarded')
+  const guarded = startHeartbeat(bare.root, bare.contract, {
+    session: 'session-guarded',
+    goal: '不建任务',
+    createTask: false,
+  })
+  assert.equal(guarded.task, null)
+  assert.equal(guarded.createdTask, null)
+  assert.equal(listTasks(bare.root, bare.contract).length, 0)
+})
+
+test('heartbeat 重复 start：started_at 保留、turn/stats 递增、ended_at 清空、status 回 working', () => {
+  const { root, contract } = freshProject('hb-repeat')
+  const first = startHeartbeat(root, contract, { session: SESSION, goal: '任务', claims: ['lib/a.mjs'] })
+  const ended = endHeartbeat(root, contract, { session: SESSION })
+  assert.ok(ended.ended_at)
+
+  const second = startHeartbeat(root, contract, { session: SESSION, last_action: '第二轮' })
+  assert.equal(second.started_at, first.started_at, 'started_at 保留首次值')
+  assert.equal(second.turn, 2)
+  assert.deepEqual(second.stats, { turns: 2, missed: 0 })
+  assert.equal(second.ended_at, null)
+  assert.equal(second.status, 'working')
+  assert.equal(second.goal, '任务')
+  assert.deepEqual(second.claims, ['lib/a.mjs'])
+  assert.equal(second.last_action, '第二轮')
+
+  const third = startHeartbeat(root, contract, { session: SESSION, turn: 7 })
+  assert.equal(third.turn, 7, '显式 turn 优先')
+  assert.equal(third.stats.turns, 3, 'stats.turns 仍然递增')
+})
+
+test('heartbeat update：白名单字段、刷新 updated_at；end 后 active=false 且文件保留', () => {
+  const { root, contract } = freshProject('hb-update')
+  startHeartbeat(root, contract, { session: SESSION, goal: '旧目标' })
+  const file = heartbeatPath(root)
+  assert.equal(heartbeatStatus(root, contract, SESSION).active, true)
+
+  const seeded = readJson(file)
+  fs.writeFileSync(file, JSON.stringify({ ...seeded, updated_at: '2000-01-01T00:00:00+08:00' }))
+  const updated = updateHeartbeat(root, contract, SESSION, {
+    status: 'idle',
+    goal: '新目标',
+    claims: ['x', 'y'],
+    turn: 4,
+    task: null,
+    last_action: '记一笔',
+  })
+  assert.equal(updated.status, 'idle')
+  assert.equal(updated.goal, '新目标')
+  assert.deepEqual(updated.claims, ['x', 'y'])
+  assert.equal(updated.turn, 4)
+  assert.equal(updated.task, null)
+  assert.equal(updated.last_action, '记一笔')
+  assert.ok(Date.parse(updated.updated_at) > Date.parse('2000-01-01T00:00:00+08:00'), 'update 应刷新 updated_at')
+  assert.equal(heartbeatStatus(root, contract, SESSION).active, true, 'idle 仍算 active')
+
+  for (const [patch, pattern] of [
+    [{ schema: 2 }, /cannot be changed/],
+    [{ session: 'other' }, /cannot be changed/],
+    [{ status: 'bogus' }, /status must be one of/],
+    [{ turn: 'x' }, /turn/],
+    [{ claims: [1] }, /array of strings/],
+  ]) {
+    expectFlowError(() => updateHeartbeat(root, contract, SESSION, patch), 'invalid', pattern)
+  }
+  expectFlowError(() => updateHeartbeat(root, contract, 'session-missing', { status: 'idle' }), 'not-found')
+
+  const ended = endHeartbeat(root, contract, { session: SESSION, note: '收尾' })
+  assert.equal(ended.status, 'done')
+  assert.equal(ended.last_action, '记一笔 · 收尾', 'note 并入 last_action')
+  assert.ok(ended.ended_at)
+  assert.equal(heartbeatStatus(root, contract, SESSION).active, false)
+  assert.ok(fs.existsSync(file), 'end 后文件必须保留')
+
+  const section = readHeartbeatSection(root, contract)
+  assert.equal(section.counts.total, 1)
+  assert.equal(section.counts.active, 0)
+  assert.equal(section.items[0].status, 'done')
+  assert.ok(section.items[0].ended_at)
+})
+
+test('readHeartbeatSection：md 与 json 同时可读，source 的 md/json 只是遗留值，none 才关闭', () => {
+  const { root, contract } = freshProject('hb-section')
+  startHeartbeat(root, contract, { session: SESSION, goal: '联合视图', claims: ['lib/a.mjs'], agent: 'lead', last_action: '跑测试' })
+  writeHeartbeat(root, 'legacy.md', '# legacy\n\n- 状态：在跑\n', 10)
+
+  for (const source of ['md', 'json', 'store', 'both']) {
+    const section = readHeartbeatSection(root, { ...contract, heartbeats: { ...contract.heartbeats, source } })
+    assert.equal(section.items.length, 2, `source=${source} 应同时读 md+json`)
+    assert.equal(section.counts.total, 2)
+    assert.equal(section.counts.active, 1)
+    assert.equal(section.counts.stale, 0)
+    assert.equal(section.dir, '.agents/heartbeat')
+
+    const json = section.items.find((item) => item.file === `${SESSION}.json`)
+    for (const key of HEARTBEAT_KEYS) assert.ok(Object.hasOwn(json, key), `缺字段 ${key}`)
+    assert.equal(json.session, SESSION)
+    assert.equal(json.agent, 'lead')
+    assert.equal(json.goal, '联合视图')
+    assert.match(json.task, /^T-\d{8}-\d{2}$/)
+    assert.deepEqual(json.claims, ['lib/a.mjs'])
+    assert.equal(json.status, 'working')
+    assert.equal(json.last_action, '跑测试')
+    assert.equal(json.turn, 1)
+    assert.deepEqual(json.stats, { turns: 1, missed: 0 })
+    assert.equal(json.ended_at, null)
+    assert.equal(json.stale, false)
+    assert.ok(json.ageSeconds < 300)
+
+    const md = section.items.find((item) => item.file === 'legacy.md')
+    assert.equal(md.session, 'legacy')
+    assert.equal(md.status, '')
+    assert.equal(md.last_action, '状态：在跑')
+    assert.equal(md.task, null)
+  }
+
+  // 旧形状保持
+  const legacyItems = readHeartbeats(root, contract)
+  assert.deepEqual(Object.keys(legacyItems[0]).sort(), ['ageSeconds', 'file', 'mtime', 'statusLine', 'title'])
+
+  // JSON 心跳按 updated_at 计算 stale（不看 mtime）
+  const file = heartbeatPath(root)
+  const raw = readJson(file)
+  fs.writeFileSync(file, JSON.stringify({
+    ...raw,
+    updated_at: new Date(Date.now() - (HEARTBEAT_STALE_SECONDS + 60) * 1000).toISOString(),
+  }))
+  const stale = readHeartbeatSection(root, contract)
+  assert.equal(stale.items.find((item) => item.file === `${SESSION}.json`).stale, true)
+  assert.equal(stale.counts.stale, 1)
+  assert.equal(stale.counts.active, 1, 'stale 也算 active')
+
+  // source:none 关闭整个小节
+  const none = readHeartbeatSection(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } })
+  assert.deepEqual(none.items, [])
+  assert.deepEqual(none.counts, { total: 0, active: 0, stale: 0 })
+  assert.deepEqual(readHeartbeats(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } }), [])
+})
+
+test('心跳 session 安全校验：空、过长、路径穿越、控制字符都拒绝；缺省回落 DSH_SESSION_ID', () => {
+  const { root, contract } = freshProject('hb-session')
+  const saved = process.env.DSH_SESSION_ID
+  delete process.env.DSH_SESSION_ID
+  try {
+    expectFlowError(() => startHeartbeat(root, contract, {}), 'usage', /session is required/)
+    expectFlowError(() => startHeartbeat(root, contract, { session: '   ' }), 'usage', /session is required/)
+    expectFlowError(() => startHeartbeat(root, contract, { session: 's'.repeat(81) }), 'invalid', /too long/)
+    for (const bad of ['../evil', 'a/b', 'a\\b', '..', 'a\u0000b', 'a\nb']) {
+      expectFlowError(() => startHeartbeat(root, contract, { session: bad }), 'invalid', /not a safe file name/)
+    }
+    expectFlowError(() => updateHeartbeat(root, contract, '../x', { status: 'idle' }), 'invalid', /not a safe file name/)
+    expectFlowError(() => heartbeatStatus(root, contract, 'a/b'), 'invalid', /not a safe file name/)
+
+    process.env.DSH_SESSION_ID = 'session-from-env'
+    const record = startHeartbeat(root, contract, {})
+    assert.equal(record.session, 'session-from-env')
+    assert.equal(heartbeatStatus(root, contract).active, true, 'status 也吃环境变量')
+    assert.ok(fs.existsSync(heartbeatPath(root, 'session-from-env')))
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
+})
+
+test('heartbeat 未 init：写入抛 usage，读取不抛', () => {
+  const root = tempRoot('hb-uninitialized')
+  const { contract } = loadContract(root)
+  expectFlowError(() => startHeartbeat(root, contract, { session: SESSION }), 'usage', /run flow init first/)
+  expectFlowError(() => updateHeartbeat(root, contract, SESSION, { status: 'idle' }), 'usage')
+  expectFlowError(() => endHeartbeat(root, contract, { session: SESSION }), 'usage')
+  assert.equal(heartbeatStatus(root, contract, SESSION).active, false)
+  assert.deepEqual(readHeartbeatSection(root, contract).counts, { total: 0, active: 0, stale: 0 })
+})
+
+// ------------------------------------------------------------ 门禁开关生效
+
+test('runGate：disabled 门禁拒绝运行，force:true 才可跑', async () => {
+  const { root, contract } = freshProject('gate-disabled')
+  addGate(root, contract, {
+    id: 'off-gate',
+    title: '关闭的门禁',
+    phase: 'manual',
+    enabled: false,
+    steps: [{ id: 'ok', run: 'true' }],
+  })
+
+  await assert.rejects(
+    runGate(root, contract, 'off-gate'),
+    (error) => error instanceof FlowError && error.code === 'usage' && /gate off-gate is disabled/.test(error.message),
+  )
+  const forced = await runGate(root, contract, 'off-gate', { force: true })
+  assert.equal(forced.ok, true)
+  assert.equal(forced.steps.length, 1)
+
+  updateGate(root, contract, 'off-gate', { enabled: true })
+  assert.equal((await runGate(root, contract, 'off-gate')).ok, true, '重新启用后无需 force')
+})
+
+test('runGatesByPhase：跳过 disabled、失败不中断、id 升序、force 不唤醒 disabled、非法 phase 拒绝', async () => {
+  const { root, contract } = freshProject('gate-phase')
+  addGate(root, contract, { id: 'a-fail', title: '甲失败', phase: 'commit', steps: [{ id: 'bad', run: 'exit 3' }] })
+  addGate(root, contract, { id: 'b-ok', title: '乙通过', phase: 'commit', steps: [{ id: 'ok', run: 'true' }] })
+  addGate(root, contract, { id: 'c-off', title: '丙关闭', phase: 'commit', enabled: false, steps: [{ id: 'ok', run: 'true' }] })
+  addGate(root, contract, { id: 'd-manual', title: '丁手工', phase: 'manual', steps: [{ id: 'ok', run: 'true' }] })
+
+  const summary = await runGatesByPhase(root, contract, 'commit')
+  assert.equal(summary.phase, 'commit')
+  assert.deepEqual(summary.runs.map((run) => run.gate), ['a-fail', 'b-ok'], '按 id 升序且失败不中断')
+  assert.deepEqual(summary.runs.map((run) => run.ok), [false, true])
+  assert.deepEqual(summary.skipped, [{ id: 'c-off', reason: 'disabled' }])
+  assert.equal(listGateRuns(root, contract, 'a-fail').length, 1, '失败的运行也写日志')
+  assert.equal(listGateRuns(root, contract, 'c-off').length, 0, '跳过的不写日志')
+
+  const forced = await runGatesByPhase(root, contract, 'commit', { force: true })
+  assert.deepEqual(forced.skipped, [{ id: 'c-off', reason: 'disabled' }], '批量运行不因 force 唤醒 disabled')
+  assert.deepEqual(forced.runs.map((run) => run.gate), ['a-fail', 'b-ok'])
+
+  const release = await runGatesByPhase(root, contract, 'release')
+  assert.deepEqual(release.runs, [])
+  assert.deepEqual(release.skipped, [])
+
+  const manual = await runGatesByPhase(root, contract, 'manual')
+  assert.deepEqual(manual.runs.map((run) => run.gate), ['d-manual'])
+  assert.equal(manual.runs[0].ok, true)
+
+  for (const phase of ['bogus', 'commit ', 'Commit', '']) {
+    await assert.rejects(
+      runGatesByPhase(root, contract, phase),
+      (error) => error instanceof FlowError && error.code === 'invalid' && /phase must be one of/.test(error.message),
+    )
+  }
+})
+
+test('runGatesByPhase：单条门禁出错时汇总成失败记录，不影响后续', async () => {
+  const { root, contract } = freshProject('gate-phase-error')
+  addGate(root, contract, { id: 'a-missing', title: '甲缺步骤', phase: 'release', steps: [{ id: 's', run: 'true' }] })
+  addGate(root, contract, { id: 'b-ok', title: '乙通过', phase: 'release', steps: [{ id: 'ok', run: 'true' }] })
+  // 删除 a 的门禁文件，制造「运行期读不到记录」的错误路径
+  fs.rmSync(path.join(root, '.dsh/flow/gates/a-missing.json'))
+
+  const summary = await runGatesByPhase(root, contract, 'release')
+  assert.deepEqual(summary.runs.map((run) => run.gate), ['b-ok'])
+  assert.deepEqual(summary.skipped, [])
+})
+
+// ------------------------------------------------------ flow init 默认门禁
+
+test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种、noGates 跳过', () => {
+  const root = tempRoot('seed-gates')
+  const first = initProject(root, { name: 'seed' })
+  assert.deepEqual(first.seededGates, ['session-open', 'precommit', 'tests', 'staged-files', 'release'])
+  assert.deepEqual(first.warnings, [])
+  assert.deepEqual(first.created, ['.dsh/flow/flow.json'], '种子门禁不混进 created 清单')
+
+  const { contract } = loadContract(root)
+  const gates = listGates(root, contract)
+  assert.equal(gates.length, 5)
+  const byId = Object.fromEntries(gates.map((gate) => [gate.id, gate]))
+  assert.deepEqual(Object.keys(byId).sort(), ['precommit', 'release', 'session-open', 'staged-files', 'tests'])
+
+  assert.equal(byId['session-open'].phase, 'manual')
+  assert.equal(byId['session-open'].enabled, true)
+  assert.equal(byId.precommit.phase, 'commit')
+  assert.equal(byId.precommit.enabled, true)
+  assert.equal(byId.tests.phase, 'commit')
+  assert.equal(byId.tests.enabled, false)
+  assert.equal(byId['staged-files'].phase, 'commit')
+  assert.equal(byId['staged-files'].enabled, false)
+  assert.equal(byId.release.phase, 'release')
+  assert.equal(byId.release.enabled, false)
+
+  for (const gate of gates) {
+    assert.ok(gate.title.trim().length > 0, `${gate.id} 需要中文标题`)
+    for (const step of gate.steps) assert.equal(step.expect, 'exit 0')
+  }
+
+  // 本插件 CLI 用运行时解析出的包内绝对路径（门禁 cwd 是项目根）
+  const expectedBin = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+  assert.ok(byId['session-open'].steps[0].run.includes(expectedBin), byId['session-open'].steps[0].run)
+  assert.match(byId['session-open'].steps[0].run, /heartbeat status --require-active/)
+  assert.ok(byId['staged-files'].steps[0].run.includes(expectedBin))
+  assert.match(byId['staged-files'].steps[0].run, /check staged --allow src/)
+  assert.match(byId.release.steps[0].run, /check release-baseline --marker RELEASE/)
+  assert.equal(byId.precommit.steps[0].run, 'git diff --cached --check')
+  assert.equal(byId.tests.steps[0].run, 'node --test test/')
+
+  // 幂等：再 init 一条都不加
+  const second = initProject(root, { name: 'seed' })
+  assert.deepEqual(second.seededGates, [])
+  assert.equal(listGates(root, contract).length, 5)
+
+  // 已有一条自定义门禁 → 不种
+  const custom = tempRoot('seed-custom')
+  initProject(custom, { name: 'custom', noGates: true })
+  const customContract = loadContract(custom).contract
+  addGate(custom, customContract, { id: 'only-one', title: '唯一门禁', phase: 'commit' })
+  const again = initProject(custom, { name: 'custom' })
+  assert.deepEqual(again.seededGates, [])
+  assert.deepEqual(listGates(custom, customContract).map((gate) => gate.id), ['only-one'])
+
+  // noGates 完全不种
+  const bare = tempRoot('seed-none')
+  const bareResult = initProject(bare, { name: 'bare', noGates: true })
+  assert.deepEqual(bareResult.seededGates, [])
+  assert.deepEqual(listGates(bare, loadContract(bare).contract), [])
+
+  // gates 目录里只要有 .json（哪怕坏的）就不算空，不再种
+  const broken = tempRoot('seed-broken')
+  initProject(broken, { name: 'broken', noGates: true })
+  fs.writeFileSync(path.join(broken, '.dsh/flow/gates/zz-broken.json'), '{ not json')
+  drainWarnings()
+  const brokenAgain = initProject(broken, { name: 'broken' })
+  assert.deepEqual(brokenAgain.seededGates, [])
+  assert.deepEqual(fs.readdirSync(path.join(broken, '.dsh/flow/gates')), ['zz-broken.json'])
+})
+
+test('CLI init：默认种门禁，--no-gates 不种，人类输出提示', () => {
+  const seeded = tempRoot('cli-init-seed')
+  const init = runCli(seeded, ['init', '--name', 'seeded', '--json'])
+  assert.equal(init.code, 0)
+  assert.deepEqual(init.json.data.seededGates, ['session-open', 'precommit', 'tests', 'staged-files', 'release'])
+  assert.equal(runCli(seeded, ['gate', 'list', '--json']).json.data.length, 5)
+
+  const human = tempRoot('cli-init-human')
+  const humanRun = runCli(human, ['init', '--name', 'human'])
+  assert.equal(humanRun.code, 0)
+  assert.ok(humanRun.stdout.includes('种入默认门禁 5 条'), humanRun.stdout)
+
+  const bare = tempRoot('cli-init-bare')
+  const bareRun = runCli(bare, ['init', '--name', 'bare', '--no-gates', '--json'])
+  assert.equal(bareRun.code, 0)
+  assert.deepEqual(bareRun.json.data.seededGates, [])
+  assert.deepEqual(runCli(bare, ['gate', 'list', '--json']).json.data, [])
+})
+
+// ------------------------------------------------------------------ CLI 心跳
+
+test('CLI heartbeat：start 自动建任务、status --require-active 退出码、update/end/list', () => {
+  const root = tempRoot('cli-heartbeat')
+  runCli(root, ['init', '--name', 'hb-cli', '--no-gates'])
+  const session = 'session-cli-e2e'
+  const saved = process.env.DSH_SESSION_ID
+  delete process.env.DSH_SESSION_ID
+
+  try {
+    const started = runCli(root, [
+      'heartbeat', 'start', '--session', session, '--goal', 'CLI 心跳',
+      '--claim', 'lib/core.mjs', '--claim', 'bin/flow.mjs', '--agent', 'lead', '--json',
+    ])
+    assert.equal(started.code, 0)
+    const startedData = started.json.data
+    assert.equal(startedData.session, session)
+    assert.equal(startedData.goal, 'CLI 心跳')
+    assert.match(startedData.task, /^T-\d{8}-\d{2}$/)
+    assert.equal(startedData.createdTask, startedData.task, '自动建任务并回填')
+    assert.deepEqual(startedData.claims, ['lib/core.mjs', 'bin/flow.mjs'])
+    assert.equal(startedData.status, 'working')
+    assert.equal(listTasks(root, loadContract(root).contract).length, 1)
+
+    const human = runCli(root, ['heartbeat', 'start', '--session', session, '--note', '第二轮'])
+    assert.equal(human.code, 0)
+    assert.ok(human.stdout.includes('第二轮'), human.stdout)
+    assert.ok(human.stdout.includes('working'), human.stdout)
+    assert.ok(human.stdout.includes('lib/core.mjs, bin/flow.mjs'), human.stdout)
+
+    const active = runCli(root, ['heartbeat', 'status', '--session', session, '--require-active'])
+    assert.equal(active.code, 0)
+
+    const updated = runCli(root, [
+      'heartbeat', 'update', '--session', session, '--status', 'idle', '--goal', '改目标', '--json',
+    ])
+    assert.equal(updated.code, 0)
+    assert.equal(updated.json.data.status, 'idle')
+    assert.equal(updated.json.data.goal, '改目标')
+    assert.equal(runCli(root, ['heartbeat', 'status', '--session', session, '--require-active']).code, 0, 'idle 仍 active')
+
+    const badStatus = runCli(root, ['heartbeat', 'update', '--session', session, '--status', 'done', '--json'])
+    assert.equal(badStatus.code, 1)
+    assert.equal(badStatus.json.error.code, 'usage')
+    const emptyUpdate = runCli(root, ['heartbeat', 'update', '--session', session, '--json'])
+    assert.equal(emptyUpdate.code, 1)
+
+    const list = runCli(root, ['heartbeat', 'list', '--json'])
+    assert.equal(list.code, 0)
+    assert.equal(list.json.data.counts.total, 1)
+    assert.equal(list.json.data.counts.active, 1)
+    assert.equal(list.json.data.items[0].task, startedData.task)
+    const listText = runCli(root, ['heartbeat', 'list'])
+    assert.equal(listText.code, 0)
+    assert.ok(listText.stdout.includes('改目标'), listText.stdout)
+    assert.ok(listText.stdout.includes('lib/core.mjs, bin/flow.mjs'), listText.stdout)
+    assert.ok(listText.stdout.includes('active 1'), listText.stdout)
+
+    const ended = runCli(root, ['heartbeat', 'end', '--session', session, '--note', '收尾', '--json'])
+    assert.equal(ended.code, 0)
+    assert.equal(ended.json.data.status, 'done')
+    assert.ok(ended.json.data.ended_at)
+    assert.ok(ended.json.data.last_action.includes('收尾'))
+    assert.ok(fs.existsSync(path.join(root, '.agents/heartbeat', `${session}.json`)), 'end 后文件保留')
+
+    const inactive = runCli(root, ['heartbeat', 'status', '--session', session, '--require-active'])
+    assert.equal(inactive.code, 1, '无 active 心跳时退出 1')
+    const inactiveJson = runCli(root, ['heartbeat', 'status', '--session', session, '--require-active', '--json'])
+    assert.equal(inactiveJson.code, 1)
+    assert.equal(inactiveJson.json.ok, false)
+
+    const neverStarted = runCli(root, ['heartbeat', 'status', '--session', 'session-never', '--require-active'])
+    assert.equal(neverStarted.code, 1, '没有心跳文件时 --require-active 也退出 1')
+
+    const noSession = runCli(root, ['heartbeat', 'status', '--json'])
+    assert.equal(noSession.code, 1)
+    assert.equal(noSession.json.error.code, 'usage')
+    const badSub = runCli(root, ['heartbeat', 'bogus', '--json'])
+    assert.equal(badSub.code, 1)
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
+})
+
+test('CLI gate：disabled 拒绝、--force 可跑、enable/disable 糖、run --phase 汇总', () => {
+  const root = tempRoot('cli-gate-phase')
+  runCli(root, ['init', '--name', 'gates-cli', '--no-gates'])
+  runCli(root, ['gate', 'add', '--id', 'a-ok', '--title', '甲通过', '--phase', 'commit', '--step', 'ok=true'])
+  runCli(root, ['gate', 'add', '--id', 'b-fail', '--title', '乙失败', '--phase', 'commit', '--step', 'bad=exit 3'])
+  runCli(root, ['gate', 'add', '--id', 'c-off', '--title', '丙关闭', '--phase', 'commit', '--step', 'ok=true'])
+
+  const disabled = runCli(root, ['gate', 'disable', 'c-off', '--json'])
+  assert.equal(disabled.code, 0)
+  assert.equal(disabled.json.data.enabled, false)
+
+  const rejected = runCli(root, ['gate', 'run', 'c-off', '--json'])
+  assert.equal(rejected.code, 1)
+  assert.equal(rejected.json.error.code, 'usage')
+  assert.match(rejected.json.error.message, /disabled/)
+
+  const forced = runCli(root, ['gate', 'run', 'c-off', '--force', '--json'])
+  assert.equal(forced.code, 0)
+  assert.equal(forced.json.data.ok, true)
+
+  const enabled = runCli(root, ['gate', 'enable', 'c-off', '--json'])
+  assert.equal(enabled.code, 0)
+  assert.equal(enabled.json.data.enabled, true)
+  assert.equal(runCli(root, ['gate', 'disable', 'c-off', '--json']).code, 0)
+
+  const phase = runCli(root, ['gate', 'run', '--phase', 'commit', '--json'])
+  assert.equal(phase.code, 0)
+  assert.deepEqual(phase.json.data.runs.map((run) => run.gate), ['a-ok', 'b-fail'])
+  assert.deepEqual(phase.json.data.runs.map((run) => run.ok), [true, false])
+  assert.deepEqual(phase.json.data.skipped, [{ id: 'c-off', reason: 'disabled' }])
+
+  const text = runCli(root, ['gate', 'run', '--phase', 'commit'])
+  assert.equal(text.code, 0, '批量运行门禁失败仍退出 0，用汇总表达')
+  assert.ok(text.stdout.includes('运行 2 条'), text.stdout)
+  assert.ok(text.stdout.includes('通过 1'), text.stdout)
+  assert.ok(text.stdout.includes('失败 1 条'), text.stdout)
+  assert.ok(text.stdout.includes('c-off 跳过（disabled）'), text.stdout)
+
+  const badPhase = runCli(root, ['gate', 'run', '--phase', 'bogus', '--json'])
+  assert.equal(badPhase.code, 2)
+  assert.equal(badPhase.json.error.code, 'invalid')
+
+  const both = runCli(root, ['gate', 'run', 'a-ok', '--phase', 'commit'])
+  assert.equal(both.code, 1, 'id 与 --phase 不能同时给')
+})
+
+// ------------------------------------------- 心跳任务选择（owner 为角色/代理名）
+
+test('heartbeat start：复用 owner 为 agent 角色的 active 任务，不重复建卡', () => {
+  const { root, contract } = freshProject('hb-reuse-agent')
+  const task = addTask(root, contract, {
+    id: `T-${stamp()}-01`,
+    title: '角色任务',
+    status: 'active',
+    owner: 'lead',
+  })
+
+  const record = startHeartbeat(root, contract, { session: 'session-abc', agent: 'lead' })
+  assert.equal(record.createdTask, null, '已有 active 任务时不应新建')
+  assert.equal(record.task, task.id)
+  assert.equal(record.goal, '角色任务')
+  assert.equal(listTasks(root, contract).length, 1, '任务总数不变')
+})
+
+test('heartbeat start：owner 为空时复用全库唯一 active 任务', () => {
+  const { root, contract } = freshProject('hb-reuse-global')
+  const task = addTask(root, contract, {
+    id: `T-${stamp()}-01`,
+    title: '无主任务',
+    status: 'active',
+    owner: '',
+  })
+
+  const record = startHeartbeat(root, contract, { session: 'session-xyz', agent: 'lead' })
+  assert.equal(record.createdTask, null, '无主 active 任务应被复用')
+  assert.equal(record.task, task.id)
+  assert.equal(record.goal, '无主任务')
+  assert.equal(listTasks(root, contract).length, 1, '任务总数不变')
+})
+
+test('heartbeat start：他人名下的 active 任务不被抢占，改为新建', () => {
+  const { root, contract } = freshProject('hb-no-steal')
+  const other = addTask(root, contract, {
+    id: `T-${stamp()}-01`,
+    title: '别人的任务',
+    status: 'active',
+    owner: 'someone-else',
+  })
+
+  const record = startHeartbeat(root, contract, { session: 'session-xyz', agent: 'lead' })
+  assert.notEqual(record.createdTask, null, '不能把心跳挂到他人任务上，应新建')
+  assert.notEqual(record.task, other.id)
+  assert.equal(listTasks(root, contract).length, 2, '原任务保留 + 新建一张')
+})
+
+test('heartbeat start：多条 active 时取 updated_at 最新的一条', () => {
+  const { root, contract } = freshProject('hb-reuse-newest')
+  addTask(root, contract, {
+    id: `T-${stamp()}-01`,
+    title: '旧任务',
+    status: 'active',
+    owner: '',
+    updated_at: '2026-01-01T09:00:00+08:00',
+  })
+  const newer = addTask(root, contract, {
+    id: `T-${stamp()}-02`,
+    title: '新任务',
+    status: 'active',
+    owner: '',
+    updated_at: '2026-02-01T09:00:00+08:00',
+  })
+
+  const record = startHeartbeat(root, contract, { session: 'session-pick', agent: 'lead' })
+  assert.equal(record.createdTask, null, '多条 active 也只复用，不新建')
+  assert.equal(record.task, newer.id, '取 updated_at 最新的一条')
+  assert.equal(record.goal, '新任务')
+  assert.equal(listTasks(root, contract).length, 2)
 })

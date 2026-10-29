@@ -193,9 +193,11 @@ rmSync(join(INIT, '.dsh'), { recursive: true, force: true })
 // --------------------------------------------------------------------- run
 
 apply(makeCtx([alpha, IQB, fakeRoot, brokenRoot, PLAIN, INIT]))
-check('routes registered', routes.length === 2, `routes=${routes.length}`)
+check('routes registered', routes.length === 3, `routes=${routes.length}`)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
 const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
+const gateRoute = routes.find((entry) => entry.path === '/api/project-flow/gate')
+check('gate route is exact POST path', gateRoute?.kind === 'exact' && gateRoute?.path === '/api/project-flow/gate', JSON.stringify(gateRoute?.kind))
 check('state route is exact GET path', route?.kind === 'exact' && route?.path === '/api/project-flow/state', JSON.stringify(route?.kind))
 check(
   'init route is exact POST path',

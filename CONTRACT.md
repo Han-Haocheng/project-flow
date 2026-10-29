@@ -56,6 +56,11 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `keys.factor` 重复。store 模式的分组键就是实验记录里的 `factor` 字段；旧 `flow.json`
 若残留该键，按未知键保留，不报错。
 
+`heartbeats.source` 只有 `none` 一个真实开关（关闭整个心跳小节）。`md` / `json` 是
+**遗留兼容值**，语义完全相同：只要不是 `none`，就同时读心跳目录下的 `*.md` 与
+`*.json`（旧实现按值二选一，导致 `source: "md"` 时面板看不见 JSON 心跳，已修复）。
+默认值保留 `"md"` 以免改写既有契约。
+
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
 `gates` / `logs`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根；
 写绝对路径则原样使用。
@@ -143,6 +148,33 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 - 步骤未写 `expect` 时统一落盘为 `exit 0`（core 与 CLI 一致）；未知写法在 `runGate`
   运行时按 `exit 0` 处理并记 `gate-expect-unknown` warning。
 - `gate update` 的 `--step` 是**整体替换** `steps`，不是追加。
+- `enabled` 是真实开关，不只是面板标记：
+  - `runGate(...)`（单条）在 `enabled === false` 时抛
+    `FlowError('usage', 'gate <id> is disabled; pass --force to run it')`，
+    只有 `options.force === true`（CLI `--force`）才执行。
+  - `runGatesByPhase(...)`（按 phase 批量）直接**跳过** disabled 的门禁并在
+    `skipped` 里记 `{id, reason:'disabled'}`；批量运行不会因为 `force` 唤醒它们。
+  - `gate enable <id>` / `gate disable <id>` 是 `gate update --enabled true|false` 的糖。
+
+### 3.3.1 `flow init` 种入的默认门禁
+
+`initProject` 在 **gates 目录为空** 时种入下表 5 条（`seededGates` 返回 id 数组）。
+只要目录里已有一条门禁就一条都不加（幂等）；`options.noGates: true` / CLI `--no-gates`
+跳过。种子是尽力而为的：任一条构造/写入失败只记 `default-gate-failed:` warning，
+不会让 `flow init` 失败，也不计入 `created` 清单。
+
+| id | phase | enabled | 步骤（`expect` 均为 `exit 0`） | 标题 |
+|---|---|---|---|---|
+| `session-open` | manual | true | `"<包内绝对路径>/bin/flow.mjs" heartbeat status --require-active` | 会话心跳检查 |
+| `precommit` | commit | true | `git diff --cached --check` | 提交前暂存区检查 |
+| `tests` | commit | false | `node --test test/` | 单元测试（默认关闭，按项目自填命令） |
+| `staged-files` | commit | false | `"<包内绝对路径>/bin/flow.mjs" check staged --allow src` | 暂存文件归属检查（占位） |
+| `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` | 发布基线检查（占位） |
+
+引用本插件 CLI 的两个步骤用 `import.meta.url` 在运行时解析出的**包内绝对路径**
+（`PLUGIN_BIN`），因为门禁的 cwd 是项目根，不能假设根下存在 `bin/flow.mjs`。
+`tests` / `staged-files` / `release` 默认关闭：`node --test test/` 与 `--allow src`
+只是模板，必须由项目改成自己的命令/路径后再 `gate enable`。
 
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
 
@@ -170,6 +202,50 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   输出总量截到 512 KiB。
 - 文件名由 `started_at` 生成（冒号/点替换为 `-`）；同一秒内两次运行会写同一个文件名
   （后者覆盖前者），这是已知限制。
+- 批量运行 `runGatesByPhase(root, contract, phase, {force?, timeoutMs?, tailLines?})`
+  按 id 升序跑该 phase 下所有 `enabled !== false` 的门禁，返回
+  `{phase, runs:[运行记录], skipped:[{id, reason}]}`；单条失败/抛错**不中断**后续，
+  抛错的门禁以 `{gate, title, ok:false, steps:[], error:{code,message}}` 形式进入 `runs`。
+  `phase` 必须是 `commit|release|manual`，否则 `FlowError('invalid')`。
+
+### 3.5 心跳 `<heartbeats.dir>/<session>.json`（schema 1）
+
+心跳写在 `contract.heartbeats.dir`（默认 `.agents/heartbeat`），目录不存在会自动创建
+（`.agents/` 已在 `.gitignore` 里）。文件名就是 session id，一个 session 一个文件。
+
+```jsonc
+{
+  "schema": 1,
+  "session": "session-79c1c4e6-ecf5-40a9-98c2-fd7a373a2a85",
+  "agent": "lead",
+  "goal": "当前任务名或 AI 自定义的一句话目标",
+  "task": "T-20261029-01",              // 所属任务 id，可为 null
+  "claims": ["lib/core.mjs", "bin/flow.mjs"],
+  "status": "working",                  // working | idle | done | missed
+  "turn": 3,
+  "last_action": "本轮正在做的事",
+  "started_at": "2026-10-29T11:10:37+08:00",
+  "updated_at": "2026-10-29T11:14:02+08:00",
+  "ended_at": null,
+  "stats": { "turns": 3, "missed": 0 }
+}
+```
+
+- **`claims` 语义**：本会话**独占写入的文件域**，对外广播「这些文件别碰」；默认取
+  所属任务的 `scope.allow`。它不改变 core 的写入权限，只是协作约定。
+- `session` 缺省取 `DSH_SESSION_ID`；仍为空 → `FlowError('usage')`。session 会当文件名用：
+  禁止 `/`、`\`、`..`、控制字符，长度上限 80，否则 `FlowError('invalid')`。
+- `status` 只有 `working` / `idle` 算 active；`done` / `missed` 是结束态。
+  `ageSeconds` 按 `updated_at` 计算（解析失败回退文件 mtime），`> 6h`
+  （`HEARTBEAT_STALE_SECONDS`）记 `stale`。
+- 写操作（start/update/end）与 store 共用同一把锁与原子写（`withLock` +
+  `writeJsonAtomic`），要求项目已 `flow init`（否则 `usage`）。
+- `endHeartbeat` 只写 `ended_at` 并保留文件（面板仍要列出），不删除。
+- 读取统一：`readHeartbeats` 保留旧形状 `{file,title,statusLine,ageSeconds,mtime}`；
+  `readHeartbeatSection` 返回富形状
+  `{file,session,agent,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime}`
+  与计数 `{total, active, stale}`。`.md` 心跳按尽力而为填充（`session` 取文件名词干，
+  `goal` 取标题，`last_action` 取状态行，其余为 `null`/空）。
 
 ## 4 写入语义
 
@@ -202,7 +278,7 @@ flow --root <dir> <command> [--json]
 ### 5.1 命令
 
 ```
-flow init [--name X] [--force] [--migrate trailers|tasks|all]
+flow init [--name X] [--force] [--no-gates] [--migrate trailers|tasks|all]
 flow status
 
 flow exp list | show <id> | tree
@@ -226,9 +302,20 @@ flow gate add    --id SLUG --title T --phase commit|release|manual
                  [--step 'id=run>>expect' ...]
 flow gate update <id> [--title T] [--phase commit|release|manual]
                  [--enabled true|false] [--step 'id=run>>expect' ...]
+flow gate enable <id>
+flow gate disable <id>
 flow gate rm <id> [--yes]
-flow gate run  <id> [--timeout SECONDS]
+flow gate run  <id> [--timeout SECONDS] [--force]
+flow gate run  --phase commit|release|manual [--timeout SECONDS] [--force]
 flow gate logs <id> [--limit N]
+
+flow heartbeat start  [--goal G] [--task ID] [--claim PATH]... [--agent A]
+                      [--session S] [--note T]
+flow heartbeat update [--status working|idle] [--note T] [--goal G]
+                      [--task ID] [--claim PATH]... [--session S]
+flow heartbeat end    [--note T] [--status done|missed] [--session S]
+flow heartbeat list
+flow heartbeat status [--require-active] [--session S]
 
 flow check list
 flow check staged --allow <path> [--allow <path> ...]
@@ -237,7 +324,29 @@ flow check state [--file <path>]
 flow check doc --file <path> --type task|design|incident|release
 ```
 
-- `show|update|rm|run|logs` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
+- `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
+- `gate run --phase X` 不接 id（同时给 `--phase` 和 id → 用法错误）；批量结果在
+  `data` 里是 `{phase, runs, skipped}`，人类输出显示「运行 N 条 · 通过 · 失败 · 跳过」
+  以及失败门禁清单。任一门禁失败**不改变退出码**（同单条 `gate run`，用 `data.runs[].ok` 表达）。
+- `--force` 只对单条 `gate run` 有意义（跑 disabled 门禁）；批量运行永远跳过 disabled。
+- `gate enable|disable <id>` 等价 `gate update <id> --enabled true|false`。
+- `heartbeat start/update/end` 的 session 缺省取 `DSH_SESSION_ID`（`--session` 覆盖）。
+  `--claim` 可重复，是「本会话独占写入的文件域」，缺省取所属任务的 `scope.allow`。
+  `start` 省略 `--task` 时按优先级认领任务：① `owner === session`；② `owner === --agent`
+  （或上次心跳的 agent）；③ 最新的**无主**（`owner` 为空）`active`；④ 最新的**无主** `draft`
+  （③④ 多条取 `updated_at` 最新）。**他人名下的任务不会被抢**——并行会话/子代理各建各的卡，
+  `claims` 才不会串味。都不命中才新建一条 `draft` 任务（标题取 `--goal`，缺省
+  「未命名任务」，owner 为 session）并回填 `task`。显式 `--task` 始终优先，不存在则 `not-found`。
+  重复 `start` 保留首次 `started_at`，`turn` +1（core 的 `startHeartbeat` 也接受显式 `turn`），
+  `stats.turns` 递增，
+  清空 `ended_at`，`status` 回 `working`。
+- `heartbeat update` 只接受 `status`/`last_action`/`goal`/`task`/`claims`/`turn`，其它键
+  → 校验失败；CLI 的 `--status` 只允许 `working|idle`（结束用 `heartbeat end`）。
+- `heartbeat end` 默认 `status: done`，写 `ended_at`，`--note` 并入 `last_action`；文件保留。
+- `heartbeat status` 无 `--require-active` 时永远退出 0（只打印状态）；带
+  `--require-active` 且没有 active 心跳（无文件，或 status 不是 working/idle）→ 退出 **1**，
+  供 `session-open` 这类门禁直接使用。
+- `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
 - `exp update` 的 `--metrics` 必须是 JSON 对象，如 `'{"tie":0.4}'`；`--commits` 逗号分隔。
 - `--step` 格式 `id=命令>>expect`，可重复；`expect` 可为 `exit 0`、`exit 2`、
@@ -261,6 +370,11 @@ flow check doc --file <path> --type task|design|incident|release
 `flow check` 复用同一组数字但语义按检查归一：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
 3 脚本或解释器缺失 · 4 启动/IO 失败（含超时），见 §6.2。
 
+补充：`gate run`（单条或 `--phase` 批量）的门禁失败仍是退出 0（用 `data.ok` /
+`data.runs[].ok` 表达）；`heartbeat status --require-active` 在没有 active 心跳时退出 1
+（用法语义，专门给 `session-open` 门禁当开关）；`runGate` 遇到 disabled 门禁且无
+`--force` 时抛 `usage`（退出 1）。
+
 ### 5.3 `flow status`
 
 人类输出：项目名、根目录、契约源 + schema、存储目录、实验/任务/门禁计数，随后是心跳
@@ -268,13 +382,20 @@ flow check doc --file <path> --type task|design|incident|release
 再往后是最近 3 条实验、最近 3 条任务、最近 3 次门禁运行。未初始化时提示 `flow init`，退出
 码仍为 0。
 
-心跳读自 `contract.heartbeats.dir`（默认 `.agents/heartbeat`）下的 `*.md` 与 `*.json`：
+心跳读自 `contract.heartbeats.dir`（默认 `.agents/heartbeat`）下的 `*.md` 与 `*.json`
+（只有 `source: 'none'` 关闭，`md`/`json` 只是遗留兼容值）：
 md 取首条含「状态」的行（去列表前缀），否则取首条非空非标题行；json 拼 `status · last_action`；
 按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；`ageSeconds > 6h` 记为可能已停
 （`HEARTBEAT_STALE_SECONDS`，与面板一致）。目录不存在按空集处理，不报错。
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
-其中 `heartbeats` 为 `{ dir, items: [{ file, title, statusLine, ageSeconds, mtime }], counts: { total, stale } }`。
+其中 `heartbeats` 为
+`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime }], counts: { total, active, stale } }`
+（富形状来自 `readHeartbeatSection`；`readHeartbeats` 仍返回旧的
+`{file,title,statusLine,ageSeconds,mtime}` 以免破坏既有调用）。
+
+`flow heartbeat list` 用同一份富形状输出表格（session 短名 / agent / status / 年龄 /
+task / claims / goal），并额外打印一条汇总与可能已停的文件名。
 
 ## 6 机械检查（`flow check`）
 
@@ -370,12 +491,15 @@ flow gate add --id precommit --title 提交前检查 --phase commit \
 
 ```js
 SCHEMA_VERSION                       // 2
+HEARTBEAT_SCHEMA                     // 1（心跳文件 schema，独立于 store）
+HEARTBEAT_STALE_SECONDS              // 6 * 60 * 60
 class FlowError extends Error        // code: invalid|not-found|conflict|io|usage
 
 loadContract(root)                   // {contract, source, warnings}
 saveContract(root, contract)         // 原子写，schema 强制 2
-initProject(root, {name?, force?, migrate?:['trailers'|'tasks'], taskSourceDir?})
-                                     // {root, created[], imported:{trailers,tasks}, warnings[]}
+initProject(root, {name?, force?, noGates?, migrate?:['trailers'|'tasks'], taskSourceDir?})
+                                     // {root, created[], imported:{trailers,tasks},
+                                     //  warnings[], seededGates[]}
 storePaths(root, contract)           // {store, experiments, tasks, gates, logs}（绝对路径）
 drainWarnings()                      // 取走并清空全局诊断 warning（非契约 API）
 
@@ -383,19 +507,41 @@ listExperiments / getExperiment / addExperiment / updateExperiment / removeExper
 listTasks       / getTask       / addTask       / updateTask       / removeTask
 listGates       / getGate       / addGate       / updateGate       / removeGate
 
-runGate(root, contract, id, {timeoutMs?, tailLines?})  // async，写日志并返回运行记录
+runGate(root, contract, id, {timeoutMs?, tailLines?, force?})
+                                     // async；disabled 且无 force → usage
+runGatesByPhase(root, contract, phase, {timeoutMs?, tailLines?, force?})
+                                     // async；{phase, runs[], skipped[{id,reason}]}
 listGateRuns(root, contract, gateId, limit = 5)        // 新→旧
+
+// 心跳（写入口；读写都在 core，CLI 只解析参数）
+startHeartbeat(root, contract, {session?, agent?, goal?, task?, claims?,
+                                turn?, last_action?, createTask?})
+                                     // 心跳记录 + createdTask（新建任务 id 或 null）
+updateHeartbeat(root, contract, session, patch)
+                                     // 只允许 status/last_action/goal/task/claims/turn
+endHeartbeat(root, contract, {session?, status?='done', note?})
+heartbeatStatus(root, contract, session)   // {active, record|null}
+readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]
+readHeartbeatSection(root, contract)       // 富形状 {dir, items[], counts{total,active,stale}}
 
 experimentTree(records)              // [{...record, children:[...]}]，环安全
 readStoreState(root, contract)       // 面板聚合：experiments{items,counts,source}
                                      // tasks{items,counts,current,source}
                                      // gates{items(含 lastRun),counts}
+                                     // heartbeats（= readHeartbeatSection）
 migrateTrailers(root, contract)      // {imported, skipped, ids, warnings}
 migrateLegacyTasks(root, contract, sourceDir = '.agents/tasks')
 ```
 
-`created` 是根相对 POSIX 路径数组。`get*` 未找到抛 `not-found`；`add*`/`update*`/`remove*`
-在未初始化时抛 `usage`（`initProject`/`migrate*` 除外；`migrate*` 要求已初始化）。
+`created` 是根相对 POSIX 路径数组；`seededGates` 是本次种入的默认门禁 id 数组
+（空数组表示已有门禁或 `noGates`），种子不写入 `created`。`get*` 未找到抛 `not-found`；
+`add*`/`update*`/`remove*` 与三个心跳写入口在未初始化时抛 `usage`
+（`initProject`/`migrate*`/心跳读操作除外；`migrate*` 要求已初始化）。
+
+心跳写入口的 session 缺省取 `DSH_SESSION_ID`；`startHeartbeat` 在无任务且
+`createTask !== false` 时新建 draft 任务（`title` 取 goal，缺省「未命名任务」，
+`scope.allow` 取 claims），并把新 id 写回心跳的 `task`。返回值比落盘记录多一个
+`createdTask`（新任务 id 或 `null`），不写入文件。
 
 ## 8 迁移
 

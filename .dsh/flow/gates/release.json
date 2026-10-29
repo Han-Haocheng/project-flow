@@ -1,0 +1,17 @@
+{
+  "id": "release",
+  "title": "发布基线检查（占位，需项目自填 --marker）",
+  "phase": "release",
+  "enabled": false,
+  "steps": [
+    {
+      "id": "baseline",
+      "run": "\"./bin/flow.mjs\" check release-baseline --marker RELEASE",
+      "expect": "exit 0",
+      "timeoutSeconds": 600
+    }
+  ],
+  "schema": 1,
+  "created_at": "2026-10-29T11:46:55+08:00",
+  "updated_at": "2026-10-29T11:46:55+08:00"
+}
