@@ -27,7 +27,7 @@ const USAGE = `project-flow CLI（schema 2）
   flow --root <dir> <command> [--json]
 
 命令
-  init      初始化 .dsh/flow（--name X --force --no-gates --migrate trailers|tasks|all）
+  init      初始化 .dsh/flow（--name X --force --no-gates）
   status    项目名、契约源、实验/任务/门禁计数与最近记录
 
   exp list | show <id> | tree
@@ -106,7 +106,7 @@ const STATUS_HEARTBEAT_ROWS = 5
 
 const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run'])
 const VALUE_FLAGS = new Set([
-  'root', 'name', 'migrate',
+  'root', 'name',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal',
@@ -493,13 +493,6 @@ async function cmdInit(ctx) {
   if (name !== undefined) options.name = name
   if (flags.force === true) options.force = true
   if (flags['no-gates'] === true) options.noGates = true
-  const migrate = readString(flags, 'migrate')
-  if (migrate !== undefined) {
-    if (migrate === 'all') options.migrate = ['trailers', 'tasks']
-    else if (migrate === 'trailers' || migrate === 'tasks') options.migrate = [migrate]
-    else throw new CliError('usage', '--migrate 只接受 trailers | tasks | all')
-  }
-
   const result = await core.initProject(ctx.root, options)
 
   if (!ctx.json) {
@@ -512,17 +505,6 @@ async function cmdInit(ctx) {
     if (Array.isArray(result?.seededGates) && result.seededGates.length > 0) {
       out(`种入默认门禁 ${result.seededGates.length} 条：${result.seededGates.join(', ')}`)
       out('  用 flow gate list 查看；不需要的用 flow gate disable <id>，已有一条门禁时不会再种。')
-    }
-    for (const [kind, label] of [['trailers', '实验 trailer'], ['tasks', '旧任务']]) {
-      const imported = result?.imported?.[kind]
-      if (imported === undefined) continue
-      if (typeof imported === 'number') {
-        out(`迁移 ${label}: ${imported}`)
-      } else if (imported && typeof imported === 'object') {
-        const count = imported.imported ?? imported.count ?? 0
-        const skipped = imported.skipped ?? 0
-        out(`迁移 ${label}: 新增 ${count} · 跳过 ${skipped}`)
-      }
     }
   }
   showWarnings(result?.warnings)

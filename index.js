@@ -2,30 +2,26 @@
 //
 // Registers three JSON endpoints, all same-origin gated: one read endpoint,
 // /api/project-flow/state, and two write endpoints, /api/project-flow/init
-// (create the ledger of the requested workspace) and /api/project-flow/gate
-// (toggle one gate's `enabled` flag). The read endpoint reports the ledger of
+// (create the store of the requested workspace) and /api/project-flow/gate
+// (toggle one gate's `enabled` flag). The read endpoint reports the store of
 // exactly one workspace: the directory the panel passes as `?root=<dir>` (the
 // current session workspace), or the process working directory when the
 // parameter is omitted. A workspace with no `.dsh/flow` store is reported as a
-// legacy ledger (git trailers, `.agents` markers) or as a "not initialized"
-// empty state — the endpoint never substitutes or lists another project.
+// "not initialized" empty state — the endpoint never substitutes, scans or
+// lists another project, and there is no legacy ledger mode.
 // Neither write endpoint touches the store directly: after the same root
 // scoping they hand the directory to lib/core.mjs, the one writer shared with
 // the CLI, so the same validation and atomic write apply. Five agent tools plus
 // three skills expose the store to the model; a system-prompt section, a
 // per-turn pre-step reminder and an optional edit/write guard keep the heartbeat
-// discipline visible. The read endpoint also accepts an optional
-// `?session=<id>`: when the Agent Teams service knows that session, the payload
-// carries a read-only `team` projection (roster, task board, counts) of that
-// session's team — a Team lives in the Lead's session log, so nothing is written
-// back to it. The heartbeat discipline serves *main* sessions only: subagent
-// sessions neither create heartbeats nor face the reminder or the write guard,
-// and the ledger lives in the project's main worktree so linked-worktree
+// discipline visible. The heartbeat discipline serves *main* sessions only:
+// subagent sessions neither create heartbeats nor face the reminder or the write
+// guard, and the ledger lives in the project's main worktree so linked-worktree
 // sessions share one ledger. Root resolution happens per request; there are no
 // watchers and no dependencies beyond node built-ins.
 
 import { execFile } from 'node:child_process'
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -48,24 +44,15 @@ const MAX_PAYLOAD_BYTES = 900 * 1000
 const MAX_STORE_ITEMS = 400
 const MAX_DRAFT_TASKS = 50
 const MAX_TOOL_ITEMS = 200
-const MAX_TEAM_MEMBERS = 64
-const MAX_TEAM_TASKS = 256
-const MAX_TEAM_LIST = 64
 const WRITE_TIMEOUT_MS = 30_000
 const STORE_CONTRACT = join('.dsh', 'flow', 'flow.json')
-const MANIFESTS = ['flow.json', join('.flow', 'flow.json'), join('.agents', 'flow.json')]
-const DEFAULT_MARKERS = [
-  join('.agents', 'tasks'),
-  join('.agents', 'gate-observe.log'),
-  join('.agents', 'scripts', 'exp.py'),
-]
 
 // --------------------------------------------------------------- core module
 //
 // The store writer lives in lib/core.mjs and is shared with bin/flow.mjs. It is
-// optional: a broken or absent module degrades the plugin to read-only legacy
-// ledgers and makes the tools report an actionable error instead of failing the
-// whole plugin load.
+// optional: a broken or absent module makes the state endpoint report an empty
+// store payload with a `core-unavailable` warning and the tools report an
+// actionable error, instead of failing the whole plugin load.
 
 let core = null
 let coreFailure = ''
@@ -108,15 +95,6 @@ function requireCore() {
   return core
 }
 
-const EXP_TRAILER_KEYS = ['id', 'hypothesis', 'expected', 'measured', 'verdict', 'scale', 'factor']
-const TASK_COUNTS = ['draft', 'active', 'done', 'archived', 'other']
-const SOURCE_EXPERIMENTS = new Set(['git-trailers', 'none'])
-const SOURCE_TASKS = new Set(['json', 'markdown', 'none'])
-const SOURCE_HEARTBEATS = new Set(['md', 'json', 'none'])
-const SAFE_TRAILER_KEY = /^[A-Za-z0-9_.-]+$/
-const TEAM_MEMBER_ROLES = new Set(['lead', 'teammate'])
-const TEAM_MEMBER_STATUSES = new Set(['running', 'inactive', 'provisioning', 'failed'])
-const TEAM_TASK_STATUSES = new Set(['pending', 'in_progress', 'completed', 'deleted'])
 const SUBAGENT_ORIGIN = 'subagent'
 
 // ---------------------------------------------------------------- primitives
@@ -170,13 +148,11 @@ function toPosix(path) {
 
 // --------------------------------------------------------- path containment
 //
-// Local mirror of `containedPath` in lib/core.mjs, because the legacy readers
-// below must also work when lib/core.mjs is unavailable. Every root-relative
-// path declared by the manifest (`tasks.dir`, `tasks.current`, `gate.log`,
-// `heartbeats.dir`, `runs.dirs`, ...) is resolved through it: absolute input is
-// rejected, `..` escapes are rejected, and existing/ancestor targets are
-// re-checked through realpath so a symlink cannot lead outside the project
-// root. Unsafe values never throw: the caller degrades to its default and one
+// Local mirror of `containedPath` in lib/core.mjs, used by the state payload to
+// re-validate a root-relative path echoed by the store reader (`tasks.current`):
+// absolute input is rejected, `..` escapes are rejected, and existing/ancestor
+// targets are re-checked through realpath so a symlink cannot lead outside the
+// project root. Unsafe values never throw: the caller hides the value and one
 // warning names the key and raw value (never file content).
 
 function rejectManifestPath(warnings, label, value, reason) {
@@ -245,13 +221,6 @@ function containedPath(root, value, label, warnings, options = {}) {
   return target
 }
 
-/** Contained directory or the given root-relative fallback when absent/unsafe. */
-function containedDir(root, value, label, warnings, fallbackRelative) {
-  const absRoot = resolve(root)
-  const contained = containedPath(absRoot, value, label, warnings)
-  return contained === undefined ? join(absRoot, fallbackRelative) : contained
-}
-
 /** Run git with a hard timeout. Never rejects: failures are reported in the result. */
 function git(cwd, args, timeout = GIT_TIMEOUT_MS) {
   return new Promise((settle) => {
@@ -273,61 +242,6 @@ function git(cwd, args, timeout = GIT_TIMEOUT_MS) {
 
 // ------------------------------------------------------------------ contract
 
-function defaultContract() {
-  return {
-    schema: 1,
-    name: '',
-    experiments: {
-      source: 'git-trailers',
-      ungroupedLabel: '未分组',
-      limit: 400,
-      keys: {
-        id: 'Exp-Id',
-        hypothesis: 'Hypothesis',
-        factor: 'Factor',
-        scale: 'Scale',
-        expected: 'Expected',
-        measured: 'Measured',
-        verdict: 'Verdict',
-      },
-    },
-    tasks: {
-      source: 'json',
-      dir: '.agents/tasks',
-      current: '.agents/.current',
-      recentLimit: 6,
-      fields: {
-        id: 'id',
-        title: 'title',
-        status: 'status',
-        owner: 'owner',
-        goal: 'goal',
-        updatedAt: 'updated_at',
-        commits: 'commits',
-      },
-    },
-    gate: { log: '.agents/gate-observe.log', lines: 40 },
-    heartbeats: { source: 'md', dir: '.agents/heartbeat', max: 20 },
-    runs: {
-      dirs: ['.agents/tmp', 'build/agent-*'],
-      maxDepth: 3,
-      maxAgeMinutes: 15,
-      max: 4,
-      tailLines: 15,
-      maxBytes: 2000000,
-      extensions: ['.txt', '.log', '.out', '.json', '.csv'],
-    },
-  }
-}
-
-function pickString(value, fallback) {
-  return typeof value === 'string' && value.length > 0 ? value : fallback
-}
-
-function pickNonEmpty(value, fallback) {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback
-}
-
 function pickInteger(value, fallback, min, max) {
   if (typeof value !== 'number' || Number.isFinite(value) === false) return fallback
   const rounded = Math.trunc(value)
@@ -336,146 +250,17 @@ function pickInteger(value, fallback, min, max) {
   return rounded
 }
 
-function pickStringArray(value, fallback) {
-  if (!Array.isArray(value)) return fallback
-  const out = value.filter((item) => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
-  return out
-}
-
-function pickSource(value, allowed, fallback) {
-  return typeof value === 'string' && allowed.has(value) ? value : fallback
-}
-
-/**
- * Merge one manifest object onto the defaults: objects shallow-merge per section,
- * arrays replace wholesale, unknown keys are ignored. Never throws.
- */
-function mergeContract(raw, root) {
-  const contract = defaultContract()
-  contract.name = basename(root)
-
-  if (!isPlainObject(raw)) return contract
-
-  contract.schema = pickInteger(raw.schema, 1, 0, 1_000_000)
-  contract.name = pickNonEmpty(raw.name, basename(root))
-
-  if (isPlainObject(raw.experiments)) {
-    const section = raw.experiments
-    const target = contract.experiments
-    target.source = pickSource(section.source, SOURCE_EXPERIMENTS, target.source)
-    target.ungroupedLabel = pickString(section.ungroupedLabel, target.ungroupedLabel)
-    target.limit = pickInteger(section.limit, target.limit, 1, 10_000)
-    if (isPlainObject(section.keys)) {
-      for (const name of Object.keys(target.keys)) {
-        const key = section.keys[name]
-        if (typeof key === 'string' && SAFE_TRAILER_KEY.test(key)) target.keys[name] = key
-      }
-    }
-  }
-
-  if (isPlainObject(raw.tasks)) {
-    const section = raw.tasks
-    const target = contract.tasks
-    target.source = pickSource(section.source, SOURCE_TASKS, target.source)
-    target.dir = pickNonEmpty(section.dir, target.dir)
-    target.current = typeof section.current === 'string' ? section.current.trim() : target.current
-    target.recentLimit = pickInteger(section.recentLimit, target.recentLimit, 0, 500)
-    if (isPlainObject(section.fields)) {
-      for (const name of Object.keys(target.fields)) {
-        const field = section.fields[name]
-        if (typeof field === 'string' && field.length > 0) target.fields[name] = field
-      }
-    }
-  }
-
-  if (isPlainObject(raw.gate)) {
-    const section = raw.gate
-    const target = contract.gate
-    if (section.log === null || section.log === 'none') target.log = null
-    else if (typeof section.log === 'string' && section.log.trim().length > 0) target.log = section.log.trim()
-    target.lines = pickInteger(section.lines, target.lines, 0, 5000)
-  }
-
-  if (isPlainObject(raw.heartbeats)) {
-    const section = raw.heartbeats
-    const target = contract.heartbeats
-    target.source = pickSource(section.source, SOURCE_HEARTBEATS, target.source)
-    target.dir = pickNonEmpty(section.dir, target.dir)
-    target.max = pickInteger(section.max, target.max, 0, 1000)
-  }
-
-  if (isPlainObject(raw.runs)) {
-    const section = raw.runs
-    const target = contract.runs
-    const dirs = pickStringArray(section.dirs, target.dirs)
-    target.dirs = dirs.length > 0 ? dirs : target.dirs
-    target.maxDepth = pickInteger(section.maxDepth, target.maxDepth, 0, 20)
-    target.maxAgeMinutes = pickInteger(section.maxAgeMinutes, target.maxAgeMinutes, 0, 60 * 24 * 365)
-    target.max = pickInteger(section.max, target.max, 0, 200)
-    target.tailLines = pickInteger(section.tailLines, target.tailLines, 0, 5000)
-    target.maxBytes = pickInteger(section.maxBytes, target.maxBytes, 1, 64 * 1024 * 1024)
-    const extensions = pickStringArray(section.extensions, null)
-    if (extensions !== null) {
-      target.extensions = extensions.map((extension) =>
-        extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`,
-      )
-    }
-  }
-
-  return contract
-}
-
-/**
- * Read the manifest of one root. Returns `{ contract, source, invalid }` where
- * source is the root-relative manifest path or the literal "defaults".
- */
-function loadContract(root, warnings) {
-  for (const manifest of MANIFESTS) {
-    const path = join(root, manifest)
-    let text
-    try {
-      const stats = statSync(path)
-      if (stats.isFile() !== true) continue
-      text = readFileSync(path, 'utf8')
-    } catch {
-      continue
-    }
-    try {
-      const parsed = JSON.parse(text)
-      if (!isPlainObject(parsed)) throw new Error('manifest is not a JSON object')
-      return { contract: mergeContract(parsed, root), source: toPosix(manifest), invalid: false }
-    } catch (error) {
-      warnings.push(`manifest-invalid: ${toPosix(manifest)}: ${brief(error)}`)
-      return { contract: mergeContract(undefined, root), source: 'defaults', invalid: true }
-    }
-  }
-  return { contract: mergeContract(undefined, root), source: 'defaults', invalid: false }
-}
 
 // ------------------------------------------------------- workspace inspection
 
 function readManifestName(root) {
-  if (hasStore(root)) {
-    try {
-      const parsed = JSON.parse(readFileSync(storeContractPath(root), 'utf8'))
-      if (isPlainObject(parsed) && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
-        return parsed.name.trim()
-      }
-    } catch {
-      // Fall through to the directory name.
+  try {
+    const parsed = JSON.parse(readFileSync(storeContractPath(root), 'utf8'))
+    if (isPlainObject(parsed) && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
+      return parsed.name.trim()
     }
-    return basename(root)
-  }
-  for (const manifest of MANIFESTS) {
-    try {
-      const parsed = JSON.parse(readFileSync(join(root, manifest), 'utf8'))
-      if (isPlainObject(parsed) && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
-        return parsed.name.trim()
-      }
-      return basename(root)
-    } catch {
-      continue
-    }
+  } catch {
+    // Fall through to the directory name.
   }
   return basename(root)
 }
@@ -493,36 +278,6 @@ function hasStore(root) {
   }
 }
 
-function hasDefaultLayout(root) {
-  for (const marker of DEFAULT_MARKERS) {
-    try {
-      if (existsSync(join(root, marker))) return true
-    } catch {
-      // Unreadable path: not a marker for us.
-    }
-  }
-  return false
-}
-
-/** Whether one root carries an explicit flow manifest (store contract or legacy name). */
-function hasManifest(root) {
-  if (hasStore(root)) return true
-  for (const manifest of MANIFESTS) {
-    try {
-      const stats = statSync(join(root, manifest))
-      if (stats.isFile()) return true
-    } catch {
-      // keep looking
-    }
-  }
-  return false
-}
-
-/** A root owns a ledger when it carries a manifest or one of the default markers. */
-function hasContract(root) {
-  if (hasManifest(root)) return true
-  return hasDefaultLayout(root)
-}
 
 // ------------------------------------------------------------ workspace scope
 //
@@ -601,12 +356,12 @@ function rootWithin(root, base) {
   return root.startsWith(prefix)
 }
 
-/** Whether a root is a registered workspace, inside one, or declares its own flow manifest. */
+/** Whether a root is a registered workspace, inside one, or declares its own flow store. */
 function rootAccepted(root, workspaces) {
   for (const workspace of workspaces) {
     if (rootWithin(root, workspace.path)) return true
   }
-  return hasManifest(root)
+  return hasStore(root)
 }
 
 /**
@@ -615,7 +370,7 @@ function rootAccepted(root, workspaces) {
  * /Project/app), else the folder name.
  */
 function rootName(root, workspaces) {
-  if (hasManifest(root)) return readManifestName(root)
+  if (hasStore(root)) return readManifestName(root)
   let owner
   for (const workspace of workspaces) {
     if (rootWithin(root, workspace.path) === false) continue
@@ -625,113 +380,6 @@ function rootName(root, workspaces) {
   return basename(root)
 }
 
-// ---------------------------------------------------------------- experiments
-
-function expFormat(keys) {
-  const parts = ['%H', '%ad', '%s']
-  for (const name of EXP_TRAILER_KEYS) {
-    const key = SAFE_TRAILER_KEY.test(keys[name]) ? keys[name] : defaultContract().experiments.keys[name]
-    parts.push(`%(trailers:key=${key},valueonly)`)
-  }
-  return parts.join('%x1f') + '%x1e'
-}
-
-function emptyExperiments() {
-  return { total: 0, confirmed: 0, refuted: 0, open: 0, groups: [] }
-}
-
-function parseExpLog(raw, keys) {
-  const rows = []
-  for (const chunk of String(raw).split('\x1e')) {
-    const record = chunk.replace(/^\n+/, '')
-    if (record.trim().length === 0) continue
-    const parts = record.split('\x1f')
-    if (parts.length < 3 + EXP_TRAILER_KEYS.length) continue
-    const values = parts.map((value) => (typeof value === 'string' ? value.trim() : ''))
-    const sha = values[0]
-    const date = values[1]
-    const subject = values[2]
-    const byKey = new Map()
-    for (let index = 0; index < EXP_TRAILER_KEYS.length; index += 1) {
-      const name = EXP_TRAILER_KEYS[index]
-      byKey.set(keys[name], values[3 + index])
-    }
-    const get = (name) => byKey.get(keys[name]) ?? ''
-    const id = get('id')
-    if (id.length === 0) continue
-    const verdict = get('verdict')
-    rows.push({
-      id,
-      verdict: verdict === 'confirmed' || verdict === 'refuted' ? verdict : null,
-      date,
-      sha: sha.slice(0, 8),
-      subject,
-      hypothesis: clip(get('hypothesis')),
-      expected: clip(get('expected')),
-      measured: clip(get('measured')),
-      scale: get('scale'),
-      // Raw trailer values keyed by the configured trailer key; grouping reads `keys.factor`.
-      byKey,
-    })
-  }
-  return rows
-}
-
-function buildExperiments(rows, experiments) {
-  let confirmed = 0
-  let refuted = 0
-  const grouped = new Map()
-  for (const row of rows) {
-    if (row.verdict === 'confirmed') confirmed += 1
-    else if (row.verdict === 'refuted') refuted += 1
-    const rawFactor = row.byKey.get(experiments.keys.factor) ?? ''
-    const key = rawFactor.length > 0 ? rawFactor : experiments.ungroupedLabel
-    if (!grouped.has(key)) grouped.set(key, [])
-    grouped.get(key).push({
-      id: row.id,
-      verdict: row.verdict,
-      date: row.date,
-      sha: row.sha,
-      subject: row.subject,
-      hypothesis: row.hypothesis,
-      expected: row.expected,
-      measured: row.measured,
-      scale: row.scale,
-    })
-  }
-  const factors = [...grouped.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-  return {
-    total: rows.length,
-    confirmed,
-    refuted,
-    open: rows.length - confirmed - refuted,
-    groups: factors.map((factor) => ({ factor, items: grouped.get(factor) })),
-  }
-}
-
-async function readExperiments(root, contract, warnings) {
-  const experiments = contract.experiments
-  if (experiments.source === 'none') return emptyExperiments()
-
-  const format = expFormat(experiments.keys)
-  const log = await git(root, [
-    'log',
-    '--date=short',
-    `-n`,
-    String(experiments.limit),
-    `--pretty=format:${format}`,
-  ])
-  if (!log.ok) {
-    warnings.push(`git log (experiments) failed: ${brief(log.error)}`)
-    return emptyExperiments()
-  }
-  try {
-    return buildExperiments(parseExpLog(log.stdout, experiments.keys), experiments)
-  } catch (error) {
-    warnings.push(`experiment trailers unparsable: ${brief(error)}`)
-    return emptyExperiments()
-  }
-}
 
 // ----------------------------------------------------------------------- head
 
@@ -782,34 +430,6 @@ async function readHead(root, warnings) {
 
 // ---------------------------------------------------------------------- tasks
 
-function emptyTasks() {
-  return {
-    total: 0,
-    counts: { draft: 0, active: 0, done: 0, archived: 0, other: 0 },
-    current: null,
-    active: [],
-    recentDone: [],
-    draft: [],
-  }
-}
-
-function readCurrent(root, contract, warnings) {
-  const relativePath = contract.tasks.current
-  if (typeof relativePath !== 'string' || relativePath.length === 0) return null
-  const currentPath = containedPath(root, relativePath, 'tasks.current', warnings)
-  if (currentPath === undefined) return null
-  try {
-    const text = readFileSync(currentPath, 'utf8')
-    const trimmed = text.trim()
-    return trimmed.length > 0 ? trimmed : null
-  } catch (error) {
-    const code = error !== null && error !== undefined ? error.code : undefined
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      warnings.push(`current task unreadable: ${brief(error)}`)
-    }
-    return null
-  }
-}
 
 function timeValue(value) {
   const stamp = Date.parse(typeof value === 'string' ? value : '')
@@ -824,361 +444,10 @@ function lastCheckpointGate(task) {
   return typeof last.gate === 'string' ? last.gate : null
 }
 
-function listDirFiles(dir, extension) {
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return undefined
-  }
-  const files = []
-  for (const entry of entries) {
-    if (entry.isFile() !== true) continue
-    if (extension !== undefined && entry.name.toLowerCase().endsWith(extension) === false) continue
-    files.push({ name: entry.name, path: join(dir, entry.name) })
-  }
-  return files
-}
 
-function readTasksJson(root, contract, warnings) {
-  const tasks = emptyTasks()
-  tasks.current = readCurrent(root, contract, warnings)
-
-  const dir = containedDir(root, contract.tasks.dir, 'tasks.dir', warnings, '.agents/tasks')
-  const files = listDirFiles(dir, '.json')
-  if (files === undefined) {
-    warnings.push(`tasks dir unreadable: ${toPosix(contract.tasks.dir)}`)
-    return tasks
-  }
-
-  const fields = contract.tasks.fields
-  const read = (task, name) => task[fields[name]]
-  // `draftTasksOf` projects canonical row names; only the timestamp key differs
-  // between them (`updated_at`) and the contract's field table (`updatedAt`).
-  const readDraft = (task, name) => read(task, name === 'updated_at' ? 'updatedAt' : name)
-  const parsed = []
-  for (const file of files) {
-    let raw
-    try {
-      raw = readFileSync(file.path, 'utf8')
-    } catch (error) {
-      warnings.push(`task ${file.name} unreadable: ${brief(error)}`)
-      continue
-    }
-    let value
-    try {
-      value = JSON.parse(raw)
-    } catch (error) {
-      warnings.push(`task ${file.name} not JSON: ${brief(error)}`)
-      continue
-    }
-    if (!isPlainObject(value)) {
-      warnings.push(`task ${file.name} is not an object`)
-      continue
-    }
-    parsed.push(value)
-  }
-
-  tasks.total = parsed.length
-  const done = []
-  for (const task of parsed) {
-    const status = typeof read(task, 'status') === 'string' ? read(task, 'status') : ''
-    if (TASK_COUNTS.includes(status) && status !== 'other') tasks.counts[status] += 1
-    else tasks.counts.other += 1
-
-    if (status === 'active') {
-      tasks.active.push({
-        id: clip(read(task, 'id')),
-        title: clip(read(task, 'title')),
-        status,
-        owner: clip(read(task, 'owner')),
-        updated_at: clip(read(task, 'updatedAt')),
-        goal: clip(read(task, 'goal')),
-      })
-    }
-    if (status === 'done') done.push(task)
-  }
-
-  done.sort((a, b) => timeValue(read(b, 'updatedAt')) - timeValue(read(a, 'updatedAt')))
-  tasks.recentDone = done.slice(0, contract.tasks.recentLimit).map((task) => {
-    const commits = read(task, 'commits')
-    return {
-      id: clip(read(task, 'id')),
-      title: clip(read(task, 'title')),
-      updated_at: clip(read(task, 'updatedAt')),
-      commits: Array.isArray(commits) ? commits.filter((sha) => typeof sha === 'string').map((sha) => clip(sha)) : [],
-      gate: lastCheckpointGate(task),
-    }
-  })
-
-  tasks.active.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-  // Same projection as the store path; `readDraft` maps this contract's field names.
-  tasks.draft = draftTasksOf(parsed, MAX_DRAFT_TASKS, readDraft)
-  return tasks
-}
-
-function markdownTitle(lines) {
-  for (const line of lines) {
-    if (line.startsWith('# ')) return line.slice(2).trim().slice(0, 200)
-  }
-  return ''
-}
-
-function frontMatterStatus(text) {
-  if (!text.startsWith('---')) return undefined
-  const lines = text.split('\n')
-  for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index]
-    if (line.trim() === '---') return undefined
-    const match = /^status\s*:\s*(.+)$/.exec(line.trim())
-    if (match !== null) {
-      const value = match[1].trim().replace(/^["']|["']$/g, '')
-      if (value.length > 0) return value
-    }
-  }
-  return undefined
-}
-
-function readTasksMarkdown(root, contract, warnings) {
-  const tasks = emptyTasks()
-  tasks.current = readCurrent(root, contract, warnings)
-
-  const dir = containedDir(root, contract.tasks.dir, 'tasks.dir', warnings, '.agents/tasks')
-  const files = listDirFiles(dir, '.md')
-  if (files === undefined) {
-    warnings.push(`tasks dir unreadable: ${toPosix(contract.tasks.dir)}`)
-    return tasks
-  }
-
-  const draftRecords = []
-  for (const file of files) {
-    let text
-    try {
-      text = readFileSync(file.path, 'utf8')
-    } catch (error) {
-      warnings.push(`task ${file.name} unreadable: ${brief(error)}`)
-      continue
-    }
-    let stats
-    try {
-      stats = statSync(file.path)
-    } catch {
-      stats = undefined
-    }
-    const status = frontMatterStatus(text) ?? 'unknown'
-    tasks.total += 1
-    if (TASK_COUNTS.includes(status) && status !== 'other') tasks.counts[status] += 1
-    else tasks.counts.other += 1
-    const updatedAt = stats !== undefined ? isoLocal(new Date(stats.mtimeMs)) : ''
-    if (status === 'active') {
-      tasks.active.push({
-        id: clip(file.name.replace(/\.[^.]+$/, '')),
-        title: clip(markdownTitle(splitLines(text))),
-        status,
-        owner: '',
-        updated_at: updatedAt,
-        goal: '',
-      })
-    }
-    if (status === 'draft') {
-      draftRecords.push({
-        id: clip(file.name.replace(/\.[^.]+$/, '')),
-        title: clip(markdownTitle(splitLines(text))),
-        status: 'draft',
-        owner: '',
-        updated_at: updatedAt,
-      })
-    }
-    if (status === 'done') {
-      tasks.recentDone.push({
-        id: clip(file.name.replace(/\.[^.]+$/, '')),
-        title: clip(markdownTitle(splitLines(text))),
-        updated_at: updatedAt,
-        commits: [],
-        gate: null,
-      })
-    }
-  }
-
-  tasks.recentDone.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-  tasks.recentDone = tasks.recentDone.slice(0, contract.tasks.recentLimit)
-  tasks.active.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-  tasks.draft = draftTasksOf(draftRecords)
-  return tasks
-}
-
-function readTasks(root, contract, warnings) {
-  if (contract.tasks.source === 'none') return emptyTasks()
-  if (contract.tasks.source === 'markdown') return readTasksMarkdown(root, contract, warnings)
-  return readTasksJson(root, contract, warnings)
-}
-
-// ----------------------------------------------------------------------- gate
-
-function readGate(root, contract, warnings) {
-  if (contract.gate.log === null) return null
-  const path = containedPath(root, contract.gate.log, 'gate.log', warnings)
-  // An unsafe log path is not a missing log: null keeps the content unread.
-  if (path === undefined) return null
-  let stats
-  try {
-    stats = statSync(path)
-  } catch (error) {
-    const code = error !== null && error !== undefined ? error.code : undefined
-    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-      warnings.push(`gate log unreadable: ${brief(error)}`)
-    } else {
-      warnings.push(`gate log missing: ${toPosix(contract.gate.log)}`)
-    }
-    return { lines: [], mtime: null, size: 0 }
-  }
-  if (stats.isFile() !== true) return { lines: [], mtime: null, size: 0 }
-  try {
-    const text = readFileSync(path, 'utf8')
-    return {
-      lines: splitLines(text)
-        .slice(-contract.gate.lines)
-        .map((line) => clip(line)),
-      mtime: Math.round(stats.mtimeMs),
-      size: stats.size,
-    }
-  } catch (error) {
-    warnings.push(`gate log unreadable: ${brief(error)}`)
-    return { lines: [], mtime: null, size: 0 }
-  }
-}
 
 // ----------------------------------------------------------------- heartbeats
 
-/** Drop a leading list marker so "- 状态：..." becomes "状态：...". */
-function stripMarker(line) {
-  const trimmed = line.trim()
-  const stripped = trimmed.replace(/^[-*+]\s+/, '')
-  return stripped.length > 0 ? stripped : trimmed
-}
-
-function readHeartbeatsMd(root, contract, now, warnings) {
-  const dir = containedDir(root, contract.heartbeats.dir, 'heartbeats.dir', warnings, '.agents/heartbeat')
-  const files = listDirFiles(dir, '.md')
-  if (files === undefined) {
-    // A missing heartbeat directory is a normal, silent empty section.
-    if (existsSync(dir)) warnings.push(`heartbeat dir unreadable: ${toPosix(contract.heartbeats.dir)}`)
-    return []
-  }
-
-  const heartbeats = []
-  for (const file of files) {
-    let stats
-    let text
-    try {
-      stats = statSync(file.path)
-      text = readFileSync(file.path, 'utf8')
-    } catch (error) {
-      warnings.push(`heartbeat ${file.name} unreadable: ${brief(error)}`)
-      continue
-    }
-    const lines = splitLines(text)
-    let statusLine = ''
-    for (const line of lines) {
-      if (line.includes('状态')) {
-        statusLine = stripMarker(line)
-        break
-      }
-    }
-    if (statusLine.length === 0) {
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (trimmed.length === 0 || trimmed.startsWith('#')) continue
-        statusLine = trimmed
-        break
-      }
-    }
-    heartbeats.push({
-      file: file.name,
-      title: clip(markdownTitle(lines)),
-      statusLine: clip(statusLine),
-      ageSeconds: Math.max(0, Math.floor((now - stats.mtimeMs) / 1000)),
-      mtime: Math.round(stats.mtimeMs),
-    })
-  }
-
-  heartbeats.sort((a, b) => b.mtime - a.mtime)
-  return heartbeats.slice(0, contract.heartbeats.max)
-}
-
-function parseStamp(value) {
-  if (typeof value !== 'string') return Number.NaN
-  const text = value.trim()
-  if (text.length === 0) return Number.NaN
-  const loose = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(text)
-  if (loose !== null) {
-    const date = new Date(
-      Number(loose[1]),
-      Number(loose[2]) - 1,
-      Number(loose[3]),
-      Number(loose[4]),
-      Number(loose[5]),
-      loose[6] === undefined ? 0 : Number(loose[6]),
-    )
-    return date.getTime()
-  }
-  return Date.parse(text)
-}
-
-function readHeartbeatsJson(root, contract, now, warnings) {
-  const dir = containedDir(root, contract.heartbeats.dir, 'heartbeats.dir', warnings, '.agents/heartbeat')
-  const files = listDirFiles(dir, '.json')
-  if (files === undefined) {
-    if (existsSync(dir)) warnings.push(`heartbeat dir unreadable: ${toPosix(contract.heartbeats.dir)}`)
-    return []
-  }
-
-  const heartbeats = []
-  for (const file of files) {
-    let stats
-    let raw
-    try {
-      stats = statSync(file.path)
-      raw = readFileSync(file.path, 'utf8')
-    } catch (error) {
-      warnings.push(`heartbeat ${file.name} unreadable: ${brief(error)}`)
-      continue
-    }
-    let value
-    try {
-      value = JSON.parse(raw)
-    } catch (error) {
-      warnings.push(`heartbeat ${file.name} not JSON: ${brief(error)}`)
-      continue
-    }
-    if (!isPlainObject(value)) {
-      warnings.push(`heartbeat ${file.name} is not an object`)
-      continue
-    }
-    const parts = []
-    if (typeof value.status === 'string' && value.status.trim().length > 0) parts.push(value.status.trim())
-    if (typeof value.last_action === 'string' && value.last_action.trim().length > 0) parts.push(value.last_action.trim())
-    const statusLine = clip(parts.join(' · '), 200)
-    const stamp = parseStamp(value.updated_at)
-    const reference = Number.isFinite(stamp) ? stamp : stats.mtimeMs
-    heartbeats.push({
-      file: file.name,
-      title: clip(file.name.replace(/\.[^.]+$/, '')),
-      statusLine,
-      ageSeconds: Math.max(0, Math.floor((now - reference) / 1000)),
-      mtime: Math.round(stats.mtimeMs),
-    })
-  }
-
-  heartbeats.sort((a, b) => b.mtime - a.mtime)
-  return heartbeats.slice(0, contract.heartbeats.max)
-}
-
-function readHeartbeats(root, contract, now, warnings) {
-  if (contract.heartbeats.source === 'none') return []
-  if (contract.heartbeats.source === 'json') return readHeartbeatsJson(root, contract, now, warnings)
-  return readHeartbeatsMd(root, contract, now, warnings)
-}
 
 /**
  * Project one rich heartbeat item (`{file, title?, session, goal, status,
@@ -1220,107 +489,6 @@ function panelHeartbeats(section) {
   return rows
 }
 
-// ----------------------------------------------------------------------- runs
-
-function expandRunDirs(root, patterns, warnings) {
-  const dirs = []
-  for (const pattern of patterns) {
-    const full = containedPath(root, pattern, 'runs.dirs', warnings)
-    // One unsafe pattern is skipped; safe siblings keep working.
-    if (full === undefined) continue
-    const name = basename(full)
-    if (!name.includes('*')) {
-      dirs.push(full)
-      continue
-    }
-    const parent = dirname(full)
-    const star = name.indexOf('*')
-    const prefix = name.slice(0, star)
-    const suffix = name.slice(star + 1)
-    let entries
-    try {
-      entries = readdirSync(parent, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory() !== true) continue
-      if (!entry.name.startsWith(prefix)) continue
-      if (suffix.length > 0 && !entry.name.endsWith(suffix)) continue
-      dirs.push(join(parent, entry.name))
-    }
-  }
-  return dirs
-}
-
-function collectRunFiles(dir, depth, now, runs, out) {
-  if (depth > runs.maxDepth) return
-  let entries
-  try {
-    entries = readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return
-  }
-  for (const entry of entries) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) {
-      collectRunFiles(path, depth + 1, now, runs, out)
-      continue
-    }
-    if (entry.isFile() !== true) continue
-    const dot = entry.name.lastIndexOf('.')
-    if (dot < 0) continue
-    const extension = entry.name.slice(dot).toLowerCase()
-    if (runs.extensions.includes(extension) === false) continue
-    let stats
-    try {
-      stats = statSync(path)
-    } catch {
-      continue
-    }
-    if (Number.isFinite(now - stats.mtimeMs) === false) continue
-    if (now - stats.mtimeMs > runs.maxAgeMinutes * 60_000) continue
-    if (stats.size < 1 || stats.size > runs.maxBytes) continue
-    out.push({ path, mtime: stats.mtimeMs, size: stats.size })
-  }
-}
-
-function readRuns(root, contract, now, warnings) {
-  const runs = contract.runs
-  const patterns = Array.isArray(runs.dirs) ? runs.dirs : []
-  if (runs.max === 0 || patterns.length === 0) return []
-  const found = []
-  for (const dir of expandRunDirs(root, patterns, warnings)) collectRunFiles(dir, 0, now, runs, found)
-
-  const seen = new Set()
-  const unique = []
-  for (const item of found) {
-    if (seen.has(item.path)) continue
-    seen.add(item.path)
-    unique.push(item)
-  }
-  unique.sort((a, b) => b.mtime - a.mtime)
-
-  const output = []
-  for (const item of unique.slice(0, runs.max)) {
-    let text
-    try {
-      text = readFileSync(item.path, 'utf8')
-    } catch (error) {
-      warnings.push(`run output unreadable: ${brief(error)}`)
-      continue
-    }
-    output.push({
-      path: toPosix(relative(root, item.path)),
-      ageSeconds: Math.max(0, Math.floor((now - item.mtime) / 1000)),
-      size: item.size,
-      lines: splitLines(text)
-        .slice(-runs.tailLines)
-        .map((line) => clip(line)),
-    })
-  }
-  return output
-}
 
 // -------------------------------------------------------------------- payload
 
@@ -1343,44 +511,20 @@ function capPayload(payload) {
 
   payload.warnings.push('payload-truncated')
 
+  const items = Array.isArray(payload.experiments.items) ? payload.experiments.items : []
   let truncated = false
-  if (payload.experiments.source === 'store') {
-    const items = Array.isArray(payload.experiments.items) ? payload.experiments.items : []
-    while (items.length > 0) {
-      items.pop()
-      truncated = true
-      const ids = new Set(items.map((item) => (isPlainObject(item) ? item.id : undefined)))
-      payload.experiments.tree = pruneTree(payload.experiments.tree, ids)
-      body = JSON.stringify(payload)
-      if (Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) return body
-    }
-  } else {
-    const groups = payload.experiments.groups
-    for (;;) {
-      let biggest = null
-      for (const group of groups) {
-        if (group.items.length === 0) continue
-        if (biggest === null || group.items.length > biggest.items.length) biggest = group
-      }
-      if (biggest === null) break
-      biggest.items.pop()
-      truncated = true
-      body = JSON.stringify(payload)
-      if (Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) return body
-    }
-  }
-  if (truncated) payload.warnings.push('items-truncated')
-
-  while (payload.runs.length > 0) {
-    payload.runs.pop()
+  while (items.length > 0) {
+    items.pop()
+    truncated = true
+    const ids = new Set(items.map((item) => (isPlainObject(item) ? item.id : undefined)))
+    payload.experiments.tree = pruneTree(payload.experiments.tree, ids)
     body = JSON.stringify(payload)
     if (Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) return body
   }
+  if (truncated) payload.warnings.push('items-truncated')
 
-  payload.gate = { lines: [], mtime: null, size: 0 }
   payload.warnings = payload.warnings.slice(0, 20)
-  body = JSON.stringify(payload)
-  return body
+  return JSON.stringify(payload)
 }
 
 function taskCountsOf(records) {
@@ -1410,23 +554,21 @@ function activeTasksOf(records) {
 /**
  * Newest draft tasks, projected for the panel's 待办 block.
  *
- * `read` exists for the legacy readers, which see a task document through the
- * contract's configurable field names instead of canonical store fields. A
- * non-array `records` or a non-object record degrades to "no row" rather than
+ * A non-array `records` or a non-object record degrades to "no row" rather than
  * throwing, and every projected field goes through `clip`, so an odd
  * `owner`/`updated_at` type becomes an empty string.
  */
-function draftTasksOf(records, limit = MAX_DRAFT_TASKS, read = (record, name) => record[name]) {
+function draftTasksOf(records, limit = MAX_DRAFT_TASKS) {
   if (Array.isArray(records) === false) return []
   const drafts = []
   for (const record of records) {
     if (isPlainObject(record) === false) continue
-    if (read(record, 'status') !== 'draft') continue
+    if (record.status !== 'draft') continue
     drafts.push({
-      id: clip(read(record, 'id')),
-      title: clip(read(record, 'title')),
-      owner: clip(read(record, 'owner')),
-      updated_at: clip(read(record, 'updated_at')),
+      id: clip(record.id),
+      title: clip(record.title),
+      owner: clip(record.owner),
+      updated_at: clip(record.updated_at),
     })
   }
   drafts.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
@@ -1449,136 +591,39 @@ function recentDoneOf(records, limit) {
     }))
 }
 
-// ----------------------------------------------------------------- team view
-//
-// A read-only projection of the Agent Teams service: the roster and task board
-// of the team the requesting session belongs to. That ledger lives in the Lead
-// session's log, not in `.dsh/flow`, so this module only ever calls
-// `tryMembership` / `listMembers` / `listTasks` — never a Teams mutation, and
-// never a write of its own. Every gap (service, agent, membership, listing)
-// degrades to `team: null`, so the payload shape is stable and a host without
-// Teams is unaffected.
-
-/** Copy at most `max` strings out of a service view, each truncated. */
-function clipList(value, max = MAX_TEAM_LIST) {
-  if (Array.isArray(value) === false) return []
-  const kept = []
-  for (const entry of value) {
-    if (typeof entry !== 'string') continue
-    kept.push(clip(entry))
-    if (kept.length >= max) break
-  }
-  return kept
-}
-
-/** One `TeamMemberView`, reduced to the panel-facing fields and bounded. */
-function teamMemberRow(view) {
-  if (isPlainObject(view) === false) return null
-  return {
-    id: clip(view.id),
-    name: clip(view.name),
-    role: TEAM_MEMBER_ROLES.has(view.role) ? view.role : 'teammate',
-    status: TEAM_MEMBER_STATUSES.has(view.status) ? view.status : 'inactive',
-    description: clip(view.description),
-    model: clip(view.model),
-    diagnostics: clipList(view.diagnostics, 16),
-  }
-}
-
-/** One `TeamTaskView`, reduced to the panel-facing fields and bounded. */
-function teamTaskRow(view) {
-  if (isPlainObject(view) === false) return null
-  return {
-    id: clip(view.id),
-    revision: Number.isInteger(view.revision) ? view.revision : 0,
-    subject: clip(view.subject),
-    status: TEAM_TASK_STATUSES.has(view.status) ? view.status : 'pending',
-    ownerName: clip(view.ownerName),
-    ready: view.ready === true,
-    blockedBy: clipList(view.blockedBy),
-    writeScopes: clipList(view.writeScopes),
-    writeScopeWarnings: clipList(view.writeScopeWarnings, 16),
-  }
-}
-
-/** The live agent named by one state request, or undefined when it cannot be resolved. */
-function requestAgent(ctx, session) {
-  if (typeof session !== 'string' || session.length === 0) return undefined
-  const agents = service(ctx, 'agents')
-  if (agents === undefined || typeof agents.get !== 'function') return undefined
-  try {
-    const agent = agents.get(session)
-    return agent === undefined || agent === null ? undefined : agent
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * `team` for one state request: `null` unless the session is a live member of an
- * Agent Team and both collections are readable. `ready` mirrors the service's
- * own flag; `blocked` counts tasks that still declare an unmet dependency, so a
- * finished task is never reported as blocked.
- */
-function buildTeamState(ctx, session, warnings) {
-  const agent = requestAgent(ctx, session)
-  if (agent === undefined) return null
-  const agentTeams = service(ctx, 'agentTeams')
-  if (agentTeams === undefined || typeof agentTeams.tryMembership !== 'function') return null
-
-  let membership
-  try {
-    membership = agentTeams.tryMembership(agent)
-  } catch (error) {
-    warnings.push(`team membership unreadable: ${brief(error)}`)
-    return null
-  }
-  if (membership === undefined || membership === null || typeof membership !== 'object') return null
-
-  let roster
-  let board
-  try {
-    if (typeof agentTeams.listMembers !== 'function' || typeof agentTeams.listTasks !== 'function') return null
-    const listed = agentTeams.listMembers(agent)
-    const listedTasks = agentTeams.listTasks(agent)
-    roster = Array.isArray(listed) ? listed : []
-    board = Array.isArray(listedTasks) ? listedTasks : []
-  } catch (error) {
-    warnings.push(`team roster unreadable: ${brief(error)}`)
-    return null
-  }
-
-  const memberRows = roster.map(teamMemberRow).filter((row) => row !== null)
-  const taskRows = board.map(teamTaskRow).filter((row) => row !== null)
-  if (memberRows.length > MAX_TEAM_MEMBERS) {
-    warnings.push(`team-members-truncated: ${memberRows.length - MAX_TEAM_MEMBERS} beyond ${MAX_TEAM_MEMBERS}`)
-  }
-  if (taskRows.length > MAX_TEAM_TASKS) {
-    warnings.push(`team-tasks-truncated: ${taskRows.length - MAX_TEAM_TASKS} beyond ${MAX_TEAM_TASKS}`)
-  }
-
-  const blocked = taskRows.filter(
-    (row) => row.status !== 'completed' && row.status !== 'deleted' && row.ready !== true && row.blockedBy.length > 0,
-  ).length
-
+/** Panel payload with no readable store: every section empty. */
+async function emptyStoreState(root, entry, now, warnings) {
+  entry.name = readManifestName(root)
   return {
     ok: true,
-    teamId: clip(membership.id),
-    role: membership.role === 'lead' ? 'lead' : 'teammate',
-    name: clip(membership.name),
-    members: memberRows.length > MAX_TEAM_MEMBERS ? memberRows.slice(0, MAX_TEAM_MEMBERS) : memberRows,
-    tasks: taskRows.length > MAX_TEAM_TASKS ? taskRows.slice(0, MAX_TEAM_TASKS) : taskRows,
-    counts: {
-      members: memberRows.length,
-      tasks: taskRows.length,
-      ready: taskRows.filter((row) => row.ready === true).length,
-      blocked,
-      running: memberRows.filter((row) => row.status === 'running').length,
+    generatedAt: isoLocal(new Date(now)),
+    contract: { source: 'defaults', schema: 2, name: entry.name },
+    roots: [],
+    root,
+    head: await readHead(root, warnings),
+    experiments: {
+      source: 'store',
+      total: 0,
+      counts: { total: 0, open: 0, confirmed: 0, refuted: 0, abandoned: 0 },
+      items: [],
+      tree: [],
+      groups: [],
     },
+    tasks: {
+      total: 0,
+      counts: { draft: 0, active: 0, done: 0, archived: 0, other: 0 },
+      current: null,
+      active: [],
+      recentDone: [],
+      draft: [],
+    },
+    gates: [],
+    heartbeats: [],
+    warnings,
   }
 }
 
-/** Store-mode payload: contract + collections read through lib/core.mjs. */
+/** Store payload: contract + collections read through lib/core.mjs. */
 async function buildStoreState(root, entry, now, warnings) {
   const c = requireCore()
   let loaded
@@ -1586,7 +631,7 @@ async function buildStoreState(root, entry, now, warnings) {
     loaded = c.loadContract(root)
   } catch (error) {
     warnings.push(`store contract unreadable: ${brief(error)}`)
-    return buildLegacyState(root, entry, now, warnings)
+    return emptyStoreState(root, entry, now, warnings)
   }
   for (const warning of Array.isArray(loaded.warnings) ? loaded.warnings : []) {
     warnings.push(`contract: ${warning}`)
@@ -1599,7 +644,7 @@ async function buildStoreState(root, entry, now, warnings) {
     state = c.readStoreState(root, contract)
   } catch (error) {
     warnings.push(`store unreadable: ${brief(error)}`)
-    return buildLegacyState(root, entry, now, warnings)
+    return emptyStoreState(root, entry, now, warnings)
   }
 
   const head = await readHead(root, warnings)
@@ -1628,7 +673,6 @@ async function buildStoreState(root, entry, now, warnings) {
   const recentLimit = pickInteger(contract.tasks && contract.tasks.recentLimit, 6, 0, 500)
   // `tasks.current` is a manifest-declared path even though the store reader
   // only echoes it; an unsafe value is hidden and warned about like everywhere else.
-  // Validate the raw contract value: core already nulls an unsafe `current`.
   const currentValue = typeof contract.tasks.current === 'string' ? contract.tasks.current : null
   const currentSafe =
     currentValue !== null && containedPath(root, currentValue, 'tasks.current', warnings) !== undefined
@@ -1646,32 +690,17 @@ async function buildStoreState(root, entry, now, warnings) {
     lastRun: gate.lastRun === undefined ? null : gate.lastRun,
   }))
 
-  const gateSection = isPlainObject(contract.gate) ? contract.gate : {}
-  const gateContract = {
-    gate: {
-      log: gateSection.log === undefined ? null : gateSection.log,
-      lines: pickInteger(gateSection.lines, 40, 0, 5000),
-    },
-  }
-  const gate = readGate(root, gateContract, warnings)
-
-  // The store mode reads heartbeats through lib/core.mjs: its section reads
-  // BOTH `*.md` and `*.json` unless `source` is 'none', which is what the panel
-  // and the CLI must agree on. The legacy mode below keeps its local reader.
-  let heartbeats
+  let heartbeats = []
   try {
-    if (typeof c.readHeartbeatSection === 'function') {
-      const section = c.readHeartbeatSection(root, contract)
-      // The section reads the project main worktree; a degraded resolution names
-      // the reason once so the panel shows why the ledger is local to the cwd.
-      if (isPlainObject(section) && section.degraded === true) {
-        warnings.push(`heartbeat-root-degraded: ${typeof section.reason === 'string' && section.reason !== '' ? section.reason : root}`)
-      }
-      heartbeats = panelHeartbeats(section)
+    const section = c.readHeartbeatSection(root, contract)
+    // The section reads the project main worktree; a degraded resolution names
+    // the reason once so the panel shows why the ledger is local to the cwd.
+    if (isPlainObject(section) && section.degraded === true) {
+      warnings.push(`heartbeat-root-degraded: ${typeof section.reason === 'string' && section.reason !== '' ? section.reason : root}`)
     }
+    heartbeats = panelHeartbeats(section)
   } catch (error) {
     warnings.push(`heartbeats unreadable: ${brief(error)}`)
-    heartbeats = undefined
   }
 
   return {
@@ -1684,77 +713,16 @@ async function buildStoreState(root, entry, now, warnings) {
     experiments: { source: 'store', total: records.length, counts, items, tree, groups: [] },
     tasks,
     gates,
-    gate,
-    heartbeats: heartbeats === undefined ? readHeartbeats(root, contract, now, warnings) : heartbeats,
-    runs: readRuns(root, contract, now, warnings),
-    warnings,
-  }
-}
-
-/** Legacy payload: experiment trailers, `.agents` ledgers and the observation log. */
-async function buildLegacyState(root, entry, now, warnings) {
-  const { contract, source } = loadContract(root, warnings)
-  entry.name = contract.name
-
-  const [head, legacyExperiments] = await Promise.all([
-    readHead(root, warnings),
-    readExperiments(root, contract, warnings),
-  ])
-
-  const tasks = readTasks(root, contract, warnings)
-  // The legacy readers project `draft` (newest first, capped) next to
-  // `active`/`recentDone`; this keeps the section shape stable for every
-  // fallback, including `tasks.source: 'none'` and an unreadable tasks dir.
-  if (Array.isArray(tasks.draft) === false) tasks.draft = []
-  const gate = readGate(root, contract, warnings)
-  const heartbeats = readHeartbeats(root, contract, now, warnings)
-  const runs = readRuns(root, contract, now, warnings)
-
-  const experiments = {
-    ...legacyExperiments,
-    source: 'git-trailers',
-    items: [],
-    tree: [],
-  }
-
-  return {
-    ok: true,
-    generatedAt: isoLocal(new Date(now)),
-    contract: { source, schema: contract.schema, name: contract.name },
-    roots: [],
-    root,
-    head,
-    experiments,
-    tasks,
-    gates: [],
-    gate,
     heartbeats,
-    runs,
     warnings,
   }
 }
 
-async function buildState(root, entry, now, ctx, session) {
+async function buildState(root, entry, now) {
   const warnings = mountWarnings.slice()
-  let payload
-  if (coreAvailable() && hasStore(root)) {
-    payload = await buildStoreState(root, entry, now, warnings)
-  } else {
-    payload = await buildLegacyState(root, entry, now, warnings)
-    if (hasStore(root)) {
-      warnings.push(`store present but lib/core.mjs is unavailable: ${coreFailure || 'unknown error'}`)
-    }
-  }
-  // The Team projection is keyed by session, not by root: without `?session=`
-  // it stays `null` and the payload is otherwise unchanged.
-  let team = null
-  try {
-    team = buildTeamState(ctx, session, warnings)
-  } catch (error) {
-    warnings.push(`team projection unavailable: ${brief(error)}`)
-    team = null
-  }
-  return { ...payload, team }
+  if (coreAvailable()) return buildStoreState(root, entry, now, warnings)
+  warnings.push(`core-unavailable: ${coreFailure || 'unknown error'}`)
+  return emptyStoreState(root, entry, now, warnings)
 }
 
 // ----------------------------------------------------------------------- HTTP
@@ -1837,12 +805,6 @@ async function handleState(ctx, request, response) {
 
   const now = Date.now()
 
-  // Optional Team scope: `?session=<id>` names the live agent whose read-only
-  // team projection is attached to the payload. A missing or empty parameter
-  // keeps the previous behaviour (`team: null`).
-  const requestedSession = url.searchParams.get('session')
-  const session = requestedSession === null ? '' : requestedSession.trim()
-
   let workspaces
   try {
     workspaces = listWorkspaces(ctx)
@@ -1870,7 +832,7 @@ async function handleState(ctx, request, response) {
         response,
         400,
         'unknown-root',
-        'root is neither a registered workspace, inside one, nor a directory with a flow manifest',
+        'root is neither a registered workspace, inside one, nor a directory with a flow store',
       )
       return
     }
@@ -1878,14 +840,13 @@ async function handleState(ctx, request, response) {
     root = canonicalRoot(process.cwd())
     // Without an explicit root there is no chosen workspace: it must both be
     // accepted and actually carry a ledger, otherwise nothing is scoped.
-    if (rootAccepted(root, workspaces) === false || hasContract(root) === false) {
+    if (rootAccepted(root, workspaces) === false || hasStore(root) === false) {
       sendJson(response, 200, {
         ok: false,
         generatedAt: isoLocal(new Date(now)),
         roots: [],
         root: null,
-        team: null,
-        error: { code: 'no-project', message: 'no workspace declares a flow contract or a default ledger layout' },
+        error: { code: 'no-project', message: 'no workspace declares a flow store' },
       })
       return
     }
@@ -1893,20 +854,19 @@ async function handleState(ctx, request, response) {
 
   const entry = { path: root, name: rootName(root, workspaces) }
 
-  if (hasContract(root) === false) {
+  if (hasStore(root) === false) {
     sendJson(response, 200, {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
       root,
       roots: [entry],
-      team: null,
-      error: { code: 'not-initialized', message: `no flow ledger in ${root}; run: node bin/flow.mjs init` },
+      error: { code: 'not-initialized', message: `no flow store in ${root}; run: node bin/flow.mjs init` },
     })
     return
   }
 
   try {
-    const payload = await buildState(root, entry, now, ctx, session)
+    const payload = await buildState(root, entry, now)
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
     const body = capPayload(payload)
@@ -1922,7 +882,6 @@ async function handleState(ctx, request, response) {
       generatedAt: isoLocal(new Date(now)),
       roots: [{ path: entry.path, name: entry.name }],
       root,
-      team: null,
       error: { code: 'internal', message: brief(error, 400) },
     })
   }
@@ -2040,7 +999,7 @@ async function handleInit(ctx, request, response) {
       response,
       400,
       'unknown-root',
-      'root is neither a registered workspace, inside one, nor a directory with a flow manifest',
+      'root is neither a registered workspace, inside one, nor a directory with a flow store',
     )
     return
   }
@@ -2075,7 +1034,6 @@ async function handleInit(ctx, request, response) {
     name,
     alreadyInitialized,
     created,
-    imported: isPlainObject(result?.imported) ? result.imported : { trailers: 0, tasks: 0 },
     warnings,
   })
 }
@@ -2144,7 +1102,7 @@ async function handleGate(ctx, request, response) {
       response,
       400,
       'unknown-root',
-      'root is neither a registered workspace, inside one, nor a directory with a flow manifest',
+      'root is neither a registered workspace, inside one, nor a directory with a flow store',
     )
     return
   }
@@ -2197,6 +1155,7 @@ const ROOT_PROPERTY = {
   description: 'Project root (absolute or relative). Defaults to the session working directory.',
 }
 const ID_PROPERTY = { type: 'string', description: 'Record id, e.g. E-20261028-01 or T-20261028-01.' }
+const EMPTY_STORE_NOTE = 'no flow store in this workspace; run: node bin/flow.mjs init'
 
 /** Registry-ready output contract: render the result value as pretty JSON text. */
 function toolOutput() {
@@ -2581,116 +1540,41 @@ function heartbeatGuardReason(ctx, execution) {
   }
 }
 
-function legacyExperimentItems(payload) {
-  const items = []
-  for (const group of Array.isArray(payload.groups) ? payload.groups : []) {
-    for (const item of Array.isArray(group.items) ? group.items : []) {
-      items.push({
-        id: item.id,
-        title: item.subject,
-        status: item.verdict ?? 'open',
-        verdict: item.verdict,
-        factor: group.factor,
-        hypothesis: item.hypothesis,
-        expected: item.expected,
-        measured: item.measured,
-        scale: item.scale,
-        sha: item.sha,
-        date: item.date,
-      })
-    }
-  }
-  return items
-}
-
-async function legacyExpList(root) {
-  const warnings = []
-  const { contract } = loadContract(root, warnings)
-  const payload = await readExperiments(root, contract, warnings)
-  const items = legacyExperimentItems(payload).slice(0, MAX_TOOL_ITEMS)
-  return {
-    root,
-    store: false,
-    source: 'git-trailers',
-    total: payload.total,
-    counts: { total: payload.total, open: payload.open, confirmed: payload.confirmed, refuted: payload.refuted, abandoned: 0 },
-    items,
-    ...(items.length < payload.total ? { truncated: true } : {}),
-    warnings,
-  }
-}
-
-function legacyTaskList(root) {
-  const warnings = []
-  const { contract } = loadContract(root, warnings)
-  const payload = readTasks(root, contract, warnings)
-  const items = [...payload.active, ...payload.recentDone].slice(0, MAX_TOOL_ITEMS)
-  return {
-    root,
-    store: false,
-    source: contract.tasks.source,
-    total: payload.total,
-    counts: payload.counts,
-    current: payload.current,
-    items,
-    ...(items.length < payload.total ? { truncated: true } : {}),
-    warnings,
-  }
-}
-
 function buildToolDefinitions(ctx) {
   return [
     {
       name: 'flow_status',
       description:
-        'Report the project flow ledger: contract source, experiment and task totals, and gate definitions with their last result. Read-only. Works with the .dsh/flow store or a legacy ledger (.agents/ + git trailers).',
+        'Report the project flow ledger: contract source, experiment and task totals, and gate definitions with their last result. Read-only. Works with the .dsh/flow store; an uninitialized workspace reports empty totals.',
       parameters: { type: 'object', properties: { root: ROOT_PROPERTY }, required: [], additionalProperties: false },
       output: toolOutput(),
       isConcurrencySafe: true,
       timeoutMs: 15_000,
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
-        if (coreAvailable() && hasStore(root)) {
-          const c = requireCore()
-          const loaded = c.loadContract(root)
-          const state = c.readStoreState(root, loaded.contract)
-          const experiments = state.experiments
-          const tasks = state.tasks
-          return {
-            root,
-            store: true,
-            contract: { source: loaded.source, schema: loaded.contract.schema, name: loaded.contract.name },
-            experiments: { total: experiments.counts.total, counts: experiments.counts },
-            tasks: { total: tasks.counts.total, counts: tasks.counts },
-            gates: (Array.isArray(state.gates.items) ? state.gates.items : []).map((gate) => ({
-              id: gate.id,
-              ok: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.ok === true,
-              at: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.started_at,
-            })),
-          }
-        }
-        const warnings = []
-        const { contract, source } = loadContract(root, warnings)
-        const experiments = await readExperiments(root, contract, warnings)
-        const tasks = readTasks(root, contract, warnings)
+        const c = requireCore()
+        const loaded = c.loadContract(root)
+        const state = c.readStoreState(root, loaded.contract)
+        const experiments = state.experiments
+        const tasks = state.tasks
         return {
           root,
-          store: false,
-          contract: { source, schema: contract.schema, name: contract.name },
-          experiments: {
-            total: experiments.total,
-            counts: { open: experiments.open, confirmed: experiments.confirmed, refuted: experiments.refuted, abandoned: 0 },
-          },
-          tasks: { total: tasks.total, counts: tasks.counts },
-          gates: [],
-          warnings,
+          store: hasStore(root),
+          contract: { source: loaded.source, schema: loaded.contract.schema, name: loaded.contract.name },
+          experiments: { total: experiments.counts.total, counts: experiments.counts },
+          tasks: { total: tasks.counts.total, counts: tasks.counts },
+          gates: (Array.isArray(state.gates.items) ? state.gates.items : []).map((gate) => ({
+            id: gate.id,
+            ok: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.ok === true,
+            at: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.started_at,
+          })),
         }
       },
     },
     {
       name: 'flow_exp',
       description:
-        'List, inspect, add, update or remove project-flow experiments (id, hypothesis, factor, expected, measured, status, parent lineage). Writes require a .dsh/flow store; list also reads legacy git trailers. `tree` returns the parent/child forest.',
+        'List, inspect, add, update or remove project-flow experiments (id, hypothesis, factor, expected, measured, status, parent lineage). All actions require the .dsh/flow store. `tree` returns the parent/child forest.',
       parameters: {
         type: 'object',
         properties: {
@@ -2718,12 +1602,21 @@ function buildToolDefinitions(ctx) {
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
         const action = args.action
-        if (action === 'list' && hasStore(root) === false) return legacyExpList(root)
-        if (action !== 'list' && action !== 'show' && action !== 'tree') requireStore(root)
-        if (action === 'show' || action === 'tree') requireStore(root)
+        if (action !== 'list') requireStore(root)
 
         const c = requireCore()
         const { contract } = c.loadContract(root)
+        if (action === 'list' && hasStore(root) === false) {
+          return {
+            root,
+            store: false,
+            source: 'store',
+            total: 0,
+            counts: { total: 0, open: 0, confirmed: 0, refuted: 0, abandoned: 0 },
+            items: [],
+            note: EMPTY_STORE_NOTE,
+          }
+        }
         if (action === 'list') {
           const records = c.listExperiments(root, contract)
           const counts = { total: records.length, open: 0, confirmed: 0, refuted: 0, abandoned: 0 }
@@ -2786,7 +1679,7 @@ function buildToolDefinitions(ctx) {
     {
       name: 'flow_task',
       description:
-        'List, inspect, add, update or remove project-flow tasks (title, status, owner, goal, scope, acceptance, commits). Writes require a .dsh/flow store; list also reads legacy .agents task ledgers.',
+        'List, inspect, add, update or remove project-flow tasks (title, status, owner, goal, scope, acceptance, commits). All actions require the .dsh/flow store.',
       parameters: {
         type: 'object',
         properties: {
@@ -2818,11 +1711,22 @@ function buildToolDefinitions(ctx) {
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
         const action = args.action
-        if (action === 'list' && hasStore(root) === false) return legacyTaskList(root)
         if (action !== 'list') requireStore(root)
 
         const c = requireCore()
         const { contract } = c.loadContract(root)
+        if (action === 'list' && hasStore(root) === false) {
+          return {
+            root,
+            store: false,
+            source: 'store',
+            total: 0,
+            counts: { draft: 0, active: 0, done: 0, archived: 0, other: 0 },
+            current: null,
+            items: [],
+            note: EMPTY_STORE_NOTE,
+          }
+        }
         if (action === 'list') {
           const records = c.listTasks(root, contract)
           return {
@@ -2989,45 +1893,32 @@ function buildToolDefinitions(ctx) {
             warnings.push(`heartbeat-root-degraded: ${heartbeat.reason || root}`)
           }
           const store = hasStore(root)
-          let contract
-          if (store && coreAvailable() && typeof core.loadContract === 'function') {
-            contract = core.loadContract(root).contract
-          } else {
-            contract = loadContract(root, warnings).contract
-          }
-          if (coreAvailable() && typeof core.readHeartbeatSection === 'function') {
-            const section = core.readHeartbeatSection(root, contract)
-            const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
-            const counts = isPlainObject(section) && isPlainObject(section.counts)
-              ? section.counts
-              : { total: items.length, active: 0, stale: 0 }
+          if (coreAvailable() === false || store === false) {
+            if (coreAvailable() === false) warnings.push(`core-unavailable: ${coreFailure || 'unknown error'}`)
             return {
               root,
               workspace,
               store,
-              dir: isPlainObject(section) && typeof section.dir === 'string'
-                ? section.dir
-                : toPosix(contract.heartbeats.dir),
-              items: items.slice(0, MAX_TOOL_ITEMS),
-              counts,
-              ...(items.length > MAX_TOOL_ITEMS ? { truncated: true } : {}),
+              dir: '.agents/heartbeat',
+              items: [],
+              counts: { total: 0, active: 0, stale: 0, hidden: 0 },
               warnings,
             }
           }
-          const items = readHeartbeats(root, contract, Date.now(), warnings)
-          const staleAfter =
-            coreAvailable() && Number.isFinite(core.HEARTBEAT_STALE_SECONDS) ? core.HEARTBEAT_STALE_SECONDS : 6 * 60 * 60
+          const c = requireCore()
+          const { contract } = c.loadContract(root)
+          const section = c.readHeartbeatSection(root, contract)
+          const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
+          const counts = isPlainObject(section) && isPlainObject(section.counts)
+            ? section.counts
+            : { total: items.length, active: 0, stale: 0, hidden: 0 }
           return {
             root,
             workspace,
             store,
-            dir: toPosix(contract.heartbeats.dir),
+            dir: isPlainObject(section) && typeof section.dir === 'string' ? section.dir : '.agents/heartbeat',
             items: items.slice(0, MAX_TOOL_ITEMS),
-            counts: {
-              total: items.length,
-              active: 0,
-              stale: items.filter((item) => item.ageSeconds > staleAfter).length,
-            },
+            counts,
             ...(items.length > MAX_TOOL_ITEMS ? { truncated: true } : {}),
             warnings,
           }
@@ -3040,10 +1931,7 @@ function buildToolDefinitions(ctx) {
             throw new Error('flow_heartbeat status needs a newer lib/core.mjs: heartbeat support is missing')
           }
           const warnings = []
-          const contract =
-            hasStore(root) && typeof c.loadContract === 'function'
-              ? c.loadContract(root).contract
-              : loadContract(root, warnings).contract
+          const { contract } = c.loadContract(root)
           const result = c.heartbeatStatus(root, contract, session)
           return {
             root,
@@ -3191,9 +2079,9 @@ function registerTools(ctx, settings) {
 const SKILL_META = [
   {
     name: 'project-flow-init',
-    description: 'Initialize or migrate a project to the .dsh/flow store (schema 2) and inspect the resulting layout.',
+    description: 'Initialize a project to the .dsh/flow store (schema 2) and inspect the resulting layout.',
     whenToUse:
-      'Use when the project has no .dsh/flow/flow.json, when the user asks to set up or migrate project flow, or when flow tools report a missing store.',
+      'Use when the project has no .dsh/flow/flow.json, when the user asks to set up project flow, or when flow tools report a missing store.',
   },
   {
     name: 'project-flow-usage',

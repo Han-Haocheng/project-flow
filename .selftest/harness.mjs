@@ -5,8 +5,8 @@
 // init write and error paths — with plain request/response doubles.
 //
 // Every fixture is synthesized under os.tmpdir(): two initialized store
-// projects (a full one and a minimal one), a legacy manifest, a broken
-// manifest, an uninitialized workspace and a stranger directory. Response
+// projects (a full one and a minimal one), a retired legacy layout, a broken
+// store manifest, an uninitialized workspace and a stranger directory. Response
 // bodies are written to a throwaway directory for inspection, never back into
 // the tracked .selftest/ tree.
 
@@ -158,37 +158,31 @@ function summary(label, res) {
   console.log(
     `${label}: status=${res.status} ok=${json.ok} root=${json.root} contract=${
       json.contract === undefined ? '-' : `${json.contract.source}/${json.contract.name}`
-    } exp=${json.experiments?.total ?? '-'} tasks=${json.tasks?.total ?? '-'} gate=${
-      json.gate === null ? 'null' : (json.gate?.lines?.length ?? '-')
-    } hb=${json.heartbeats?.length ?? '-'} runs=${json.runs?.length ?? '-'} warnings=${json.warnings?.length ?? '-'}`,
+    } exp=${json.experiments?.total ?? '-'} tasks=${json.tasks?.total ?? '-'} hb=${
+      json.heartbeats?.length ?? '-'
+    } warnings=${json.warnings?.length ?? '-'}`,
   )
 }
 
-// ------------------------------------------------- fixture: fake (legacy)
+// ------------------------------------------ fixture: legacy layout (retired)
+//
+// A project that still has the old root `flow.json` + `.agents` ledger is *not*
+// a flow store any more: without `.dsh/flow/flow.json` the endpoint reports the
+// uninitialized empty state instead of reading the legacy files.
 
-const fakeRoot = join(TMP, 'fake')
-mkdirSync(join(fakeRoot, 'ledger/tasks'), { recursive: true })
-mkdirSync(join(fakeRoot, 'out'), { recursive: true })
+const legacyRoot = join(TMP, 'legacy')
+mkdirSync(join(legacyRoot, 'ledger/tasks'), { recursive: true })
 writeFileSync(
-  join(fakeRoot, 'flow.json'),
-  JSON.stringify(
-    {
-      schema: 1,
-      name: 'FakeProject',
-      experiments: { source: 'none' },
-      tasks: { source: 'json', dir: 'ledger/tasks' },
-      gate: { log: 'ledger/gate.log' },
-      heartbeats: { source: 'md', dir: 'ledger/hb' },
-      runs: { dirs: ['out', 'build/agent-*'] },
-    },
-    null,
-    2,
-  ),
+  join(legacyRoot, 'flow.json'),
+  JSON.stringify({ schema: 1, name: 'LegacyProject', experiments: { source: 'none' }, tasks: { source: 'json', dir: 'ledger/tasks' } }),
 )
+writeFileSync(join(legacyRoot, 'ledger/tasks', 'task-1.json'), JSON.stringify({ id: 'T-LEGACY-01', title: 'legacy', status: 'active' }))
 
+// A broken store contract: schema 2 exists but its JSON is invalid, so the
+// reader falls back to defaults and reports a manifest warning.
 const brokenRoot = join(TMP, 'broken')
-mkdirSync(brokenRoot, { recursive: true })
-writeFileSync(join(brokenRoot, 'flow.json'), '{ this is not json }')
+mkdirSync(join(brokenRoot, '.dsh', 'flow'), { recursive: true })
+writeFileSync(join(brokenRoot, '.dsh/flow/flow.json'), '{ this is not json }')
 
 // ------------------------------------------------- fixtures: store projects
 //
@@ -196,13 +190,12 @@ writeFileSync(join(brokenRoot, 'flow.json'), '{ this is not json }')
 // manifest declares. Both projects below are synthesized from scratch, so the
 // harness never depends on a developer machine's real project paths.
 
-function writeStoreManifest(root, { name, gateLog = null }) {
+function writeStoreManifest(root, { name }) {
   mkdirSync(join(root, '.dsh/flow/experiments'), { recursive: true })
   mkdirSync(join(root, '.dsh/flow/tasks'), { recursive: true })
   mkdirSync(join(root, '.dsh/flow/gates'), { recursive: true })
   mkdirSync(join(root, '.dsh/flow/logs'), { recursive: true })
   mkdirSync(join(root, '.agents/heartbeat'), { recursive: true })
-  mkdirSync(join(root, 'out'), { recursive: true })
   writeFileSync(
     join(root, '.dsh/flow/flow.json'),
     JSON.stringify(
@@ -210,12 +203,10 @@ function writeStoreManifest(root, { name, gateLog = null }) {
         schema: 2,
         name,
         store: { root: '.dsh/flow' },
-        experiments: { source: 'store', dir: '.dsh/flow/experiments', fallbackTrailers: true },
+        experiments: { source: 'store', dir: '.dsh/flow/experiments' },
         tasks: { source: 'json', dir: '.dsh/flow/tasks', current: null, recentLimit: 6 },
         gates: { dir: '.dsh/flow/gates', logs: '.dsh/flow/logs' },
-        gate: { log: gateLog },
-        heartbeats: { source: 'md', dir: '.agents/heartbeat', max: 20 },
-        runs: { dirs: ['out'], maxDepth: 3, maxAgeMinutes: 15, max: 4, tailLines: 15 },
+        heartbeats: { source: 'json', dir: '.agents/heartbeat', max: 20 },
       },
       null,
       2,
@@ -284,7 +275,7 @@ function storeHeartbeat(session, overrides = {}) {
 
 // alpha: a full store project — parent/child experiments, tasks in all three
 // open states, one gate definition, an enabled gate log and one heartbeat.
-writeStoreManifest(ALPHA, { name: 'demo-alpha', gateLog: '.dsh/flow/gate.log' })
+writeStoreManifest(ALPHA, { name: 'demo-alpha' })
 writeStoreRecord(
   ALPHA,
   'experiments',
@@ -309,7 +300,6 @@ writeStoreRecord(ALPHA, 'gates', {
   created_at: '2026-10-28T10:00:00+08:00',
   updated_at: '2026-10-28T10:00:00+08:00',
 })
-writeFileSync(join(ALPHA, '.dsh/flow/gate.log'), 'gate: smoke ok\nrun: 1 passed in 0.1s\n')
 writeFileSync(
   join(ALPHA, '.agents/heartbeat', 'session-alpha.json'),
   JSON.stringify(storeHeartbeat('session-alpha', { goal: 'alpha 目标', task: 'T-20261028-02' })),
@@ -344,7 +334,7 @@ mkdirSync(INIT, { recursive: true })
 
 // --------------------------------------------------------------------- run
 
-apply(makeCtx([ALPHA, QBANK, fakeRoot, brokenRoot, PLAIN, INIT]))
+apply(makeCtx([ALPHA, QBANK, legacyRoot, brokenRoot, PLAIN, INIT]))
 check('routes registered', routes.length === 3, `routes=${routes.length}`)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
 const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
@@ -361,25 +351,19 @@ check(
 
 const originalCwd = process.cwd()
 
-process.chdir(fakeRoot)
+process.chdir(ALPHA)
 const auto = await call(route)
 save('auto', auto.json)
-summary(`auto(root omitted, cwd=${fakeRoot})`, auto)
+summary(`auto(root omitted, cwd=${ALPHA})`, auto)
 check('auto: 200 + ok', auto.status === 200 && auto.json?.ok === true)
-check('auto: root is the cwd workspace', auto.json?.root === fakeRoot, auto.json?.root)
+check('auto: root is the cwd workspace', auto.json?.root === ALPHA, auto.json?.root)
 check('auto: exactly one root listed', Array.isArray(auto.json?.roots) && auto.json.roots.length === 1, `roots=${auto.json?.roots?.length}`)
-check('auto: listed root is the cwd workspace', auto.json?.roots?.[0]?.path === fakeRoot, JSON.stringify(auto.json?.roots))
+check('auto: listed root is the cwd workspace', auto.json?.roots?.[0]?.path === ALPHA, JSON.stringify(auto.json?.roots))
 check('auto: no-store header', auto.headers['cache-control'] === 'no-store')
 
 process.chdir(PLAIN)
-const cwdPlain = await call(route)
-summary(`auto(root omitted, cwd=${PLAIN})`, cwdPlain)
-check('cwd plain: 200', cwdPlain.status === 200)
-check('cwd plain: ok false + no-project', cwdPlain.json?.ok === false && cwdPlain.json?.error?.code === 'no-project', JSON.stringify(cwdPlain.json?.error))
-check('cwd plain: roots empty', Array.isArray(cwdPlain.json?.roots) && cwdPlain.json.roots.length === 0, `roots=${cwdPlain.json?.roots?.length}`)
-check('cwd plain: root null', cwdPlain.json?.root === null)
 
-process.chdir(originalCwd)
+process.chdir(ALPHA)
 
 // ---------------------------------------- initialized store project (alpha)
 
@@ -425,14 +409,9 @@ check(
   JSON.stringify(alpha.json?.gates),
 )
 check(
-  'alpha: gate log object with lines',
-  Array.isArray(alpha.json?.gate?.lines) && alpha.json.gate.lines.length === 2,
-  alpha.json?.gate === null ? 'null' : JSON.stringify(alpha.json?.gate?.lines),
-)
-check(
-  'alpha: gate has mtime/size when enabled',
-  typeof alpha.json?.gate?.mtime === 'number' && alpha.json.gate.size > 0,
-  JSON.stringify(alpha.json?.gate),
+  'alpha: retired gate/runs/team sections are absent',
+  alpha.json?.gate === undefined && alpha.json?.runs === undefined && alpha.json?.team === undefined,
+  JSON.stringify(Object.keys(alpha.json ?? {})),
 )
 check(
   'alpha: one heartbeat with statusLine',
@@ -447,7 +426,6 @@ check(
   JSON.stringify(alpha.json?.head) === JSON.stringify({ sha: null, subject: null, branch: null, dirty: null }),
   JSON.stringify(alpha.json?.head),
 )
-check('alpha: runs empty', Array.isArray(alpha.json?.runs) && alpha.json.runs.length === 0)
 check('alpha: root is the requested workspace', alpha.json?.root === ALPHA, alpha.json?.root)
 check('alpha: exactly one root listed', alpha.json?.roots?.length === 1, JSON.stringify(alpha.json?.roots))
 check(
@@ -481,7 +459,6 @@ check(
   qbank.json?.tasks?.recentDone?.length === 1 && qbank.json.tasks.recentDone[0].id === 'T-20261028-11',
   JSON.stringify(qbank.json?.tasks?.recentDone),
 )
-check('qbank: gate == null', qbank.json?.gate === null)
 check('qbank: experiments.total == 0', qbank.json?.experiments?.total === 0, qbank.json?.experiments?.total)
 check(
   'qbank: heartbeats from json adapter',
@@ -503,27 +480,26 @@ check(
   JSON.stringify(qbank.json?.roots),
 )
 
-const fake = await call(route, { url: `${route.path}?root=${encodeURIComponent(fakeRoot)}` })
-save('fake', fake.json)
-summary('fake', fake)
-check('fake: 200 + ok', fake.status === 200 && fake.json?.ok === true)
-check('fake: contract.source flow.json', fake.json?.contract?.source === 'flow.json')
-check('fake: experiments empty', fake.json?.experiments?.total === 0 && fake.json.experiments.groups.length === 0)
-check('fake: tasks empty', fake.json?.tasks?.total === 0 && fake.json.tasks.counts.other === 0)
-check('fake: gate shape with missing file', fake.json?.gate?.lines.length === 0 && fake.json.gate.size === 0)
-check('fake: heartbeats empty', Array.isArray(fake.json?.heartbeats) && fake.json.heartbeats.length === 0)
-check('fake: runs empty', Array.isArray(fake.json?.runs) && fake.json.runs.length === 0)
-check('fake: head nulls (non-git)', JSON.stringify(fake.json?.head) === JSON.stringify({ sha: null, subject: null, branch: null, dirty: null }), JSON.stringify(fake.json?.head))
-check('fake: gate-missing warning', (fake.json?.warnings ?? []).some((line) => line.includes('gate log missing')))
-check('fake: root is the requested workspace', fake.json?.root === fakeRoot, fake.json?.root)
-check('fake: exactly one root listed', fake.json?.roots?.length === 1, JSON.stringify(fake.json?.roots))
+// ------------------------------------------ retired legacy layout
+//
+// The old root `flow.json` is not a store: the workspace is reported as
+// uninitialized, with no ledger section and no legacy read path.
+
+const legacy = await call(route, { url: `${route.path}?root=${encodeURIComponent(legacyRoot)}` })
+save('legacy', legacy.json)
+summary('legacy', legacy)
+check('legacy: 200', legacy.status === 200)
+check('legacy: ok false + not-initialized', legacy.json?.ok === false && legacy.json?.error?.code === 'not-initialized', JSON.stringify(legacy.json?.error))
+check('legacy: no ledger sections', legacy.json?.experiments === undefined && legacy.json?.tasks === undefined && legacy.json?.contract === undefined)
+check('legacy: no legacy/runs/gate/team fields', legacy.json?.runs === undefined && legacy.json?.gate === undefined && legacy.json?.team === undefined)
+check('legacy: root is the requested workspace', legacy.json?.root === legacyRoot, legacy.json?.root)
 
 const broken = await call(route, { url: `${route.path}?root=${encodeURIComponent(brokenRoot)}` })
 save('broken', broken.json)
 summary('broken', broken)
 check('broken: 200 + ok', broken.status === 200 && broken.json?.ok === true)
 check('broken: falls back to defaults', broken.json?.contract?.source === 'defaults')
-check('broken: manifest-invalid warning', (broken.json?.warnings ?? []).some((line) => line.startsWith('manifest-invalid')), JSON.stringify(broken.json?.warnings))
+check('broken: manifest-invalid warning', (broken.json?.warnings ?? []).some((line) => line.includes('manifest-invalid')), JSON.stringify(broken.json?.warnings))
 check('broken: root is the requested workspace', broken.json?.root === brokenRoot, broken.json?.root)
 check('broken: exactly one root listed', broken.json?.roots?.length === 1, JSON.stringify(broken.json?.roots))
 

@@ -6,8 +6,9 @@
 ## 何时用
 
 - 项目第一次需要记录可证伪实验、任务状态或可执行门禁时；
-- 项目已有 `.agents/tasks/*.json` 或提交里的 `Exp-Id` trailer，想迁进 store 时；
-- 从别处拷来一个已有 `.dsh/flow/` 的项目：**不要**重新 init，先 `flow status` 确认。
+- 项目从别处拷来、已有 `.dsh/flow/`：**不要**重新 init，先 `flow status` 确认。
+- 旧台账（`.agents/tasks/*.json`、git `Exp-Id` trailer）**不再自动迁移**；如需保留历史，
+  请手动整理成 store 记录（`flow task add` / `flow exp add`）。
 
 ## 初始化
 
@@ -40,22 +41,11 @@ flow init --name MyProject
 .dsh/flow/.lock
 ```
 
-## 从旧台账迁移
+## 旧台账（不再自动迁移）
 
-```bash
-# 从 .agents/tasks/*.json 导入任务（id 冲突跳过，不覆盖）
-flow init --migrate tasks
-
-# 从 git 提交 trailer（Exp-Id/Hypothesis/Factor/Scale/Expected/Measured/Verdict）导入实验
-flow init --migrate trailers
-
-# 两者都迁
-flow init --migrate all
-```
-
-- 已初始化过的项目也会执行迁移，迁移是幂等的：已存在的 id 跳过。
-- 迁移不会删除旧文件；确认 store 内容无误后再自行决定旧台账去留。
-- 非 git 仓库跑 `--migrate trailers` 只产生 warning，不会失败。
+- `flow init` 只创建空 store；`--migrate` 与旧 `git Exp-Id` trailer 读取已在 v0.2 移除。
+- 旧 `.agents/tasks/`、`.agents/heartbeat/` 等文件会原样保留，但**不再被读取**；需要历史时
+  用 `flow task add` / `flow exp add` 手工补录，或按 `.dsh/flow/` 的 JSON 格式自行导入。
 
 ## 初始化后验收
 

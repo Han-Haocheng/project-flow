@@ -12,10 +12,11 @@
  *   - exactly three slot registrations: `sidebar.right.pane.tab`,
  *     `sidebar.right.pane.tab.title`, `conversation.session.header.utilities`
  *     (id `project-flow`);
- *   - zh/en key sets identical, the four right-bar keys plus the new contract /
- *     workspace / gate-disabled / other-task keys present (the global project
- *     switcher key `project.select` is gone);
- *   - no legacy plugin-name residue anywhere in the source (case-insensitive).
+ *   - zh/en key sets identical, the four right-bar keys plus the contract /
+ *     workspace / other-task keys present (the global project switcher key
+ *     `project.select` is gone), and every dictionary key referenced;
+ *   - no removed-module residue anywhere in the source: no Agent Teams card,
+ *     no run-output card, no gate log and no `&session=` query.
  *
  * No network, no host access, no install.
  *
@@ -252,7 +253,6 @@ check('locale: new behaviour keys exist in both languages', () => {
     'empty.init',
     'empty.initializing',
     'tasks.status.other',
-    'signals.gate.disabled',
   ];
   for (const key of keys) {
     assert.ok(Object.prototype.hasOwnProperty.call(zh, key), `zh missing '${key}'`);
@@ -260,8 +260,6 @@ check('locale: new behaviour keys exist in both languages', () => {
   }
   assert.equal(zh['contract.defaults'], '默认布局');
   assert.equal(en['contract.defaults'], 'default layout');
-  assert.equal(zh['signals.gate.disabled'], '该项目未启用门禁日志。');
-  assert.equal(en['signals.gate.disabled'], 'This project has no gate log.');
   assert.equal(zh['workspace.pending'], '正在读取当前工作区…');
   assert.equal(en['workspace.pending'], 'Reading the current workspace…');
   assert.equal(zh['empty.title'], '未初始化');
@@ -286,8 +284,35 @@ check('locale: new behaviour keys exist in both languages', () => {
   assert.ok(!Object.prototype.hasOwnProperty.call(en, 'entry.label'), 'en still has entry.label');
 });
 
-check('source: no legacy entry.label residue', () => {
-  assert.ok(!SOURCE.includes('entry.label'), 'source still references entry.label');
+check('locale: every dictionary key is referenced by client.js', () => {
+  const { zh } = localeDicts[0].dicts;
+  const dictStart = SOURCE.indexOf('const zh = {');
+  const enStart = SOURCE.indexOf('const en = {');
+  const dictEnd = SOURCE.indexOf('// #endregion', enStart);
+  assert.ok(dictStart > 0 && enStart > dictStart && dictEnd > enStart, 'locale blocks not located');
+  const usage = SOURCE.slice(0, dictStart) + SOURCE.slice(dictEnd);
+  const used = new Set();
+  for (const match of usage.matchAll(/\bt\(\s*'([^']+)'/g)) used.add(match[1]);
+  for (const match of usage.matchAll(/\?\s*'([^']+)'\s*:\s*'([^']+)'/g)) {
+    used.add(match[1]);
+    used.add(match[2]);
+  }
+  for (const match of usage.matchAll(/\|\|\s*'([^']+)'/g)) used.add(match[1]);
+  /* Keys passed as data (for example `message: 'workspace.pending'`). */
+  for (const match of usage.matchAll(/'([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)'/g)) used.add(match[1]);
+  const dynamicPrefixes = ['tasks.status.', 'hb.status.', 'gates.phase.'].filter((prefix) =>
+    usage.includes("'" + prefix + "' +")
+  );
+  const unused = Object.keys(zh).filter(
+    (key) => !used.has(key) && !dynamicPrefixes.some((prefix) => key.startsWith(prefix))
+  );
+  assert.deepEqual(unused, [], 'unused locale keys: ' + unused.join(', '));
+});
+
+check('source: no removed-module residue', () => {
+  for (const token of ['TeamCard', 'normalizeTeam', 'signals.runs', 'gate.log', 'signals.gate', 'git-trailer', '&session=', 'section.collapse']) {
+    assert.ok(!SOURCE.includes(token), `source still references '${token}'`);
+  }
 });
 
 // ---------------------------------------------------------------- tab type

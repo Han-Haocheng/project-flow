@@ -89,8 +89,8 @@ flow --json status     # 同上 + data.store 绝对路径
 ## 与 git 的关系
 
 - `.dsh/flow/` 是真相源：可以提交，实验的 `commits` 字段负责回指提交；
-- 提交信息里的 `Exp-Id`/`Verdict` trailer 只在 `flow init --migrate trailers` 时导入一次，
-  之后改实验请用 `flow exp update`，不要再靠 trailer 当输入；
+- 提交信息里的 `Exp-Id`/`Verdict` trailer **不再被读取或迁移**；实验与提交的关联改用
+  `flow exp update <id> --commits <sha>` 维护。
 - 写锁 `.dsh/flow/.lock` 不要提交；并发写会得到 `conflict`（退出码 2），重试即可；
 - 需要给面板/他人看时不用导出：面板直接读同一份 store。
 

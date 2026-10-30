@@ -34,16 +34,10 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   "schema": 2,
   "name": "<basename(root)>",
   "store": { "root": ".dsh/flow" },
-  "experiments": { "source": "store", "dir": ".dsh/flow/experiments", "fallbackTrailers": true },
+  "experiments": { "source": "store", "dir": ".dsh/flow/experiments" },
   "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6 },
   "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
-  "gate": { "log": null },                  // 旧观察日志，保留可选
-  "heartbeats": { "source": "md", "dir": ".agents/heartbeat", "max": 20 },
-  "runs": {
-    "dirs": [".agents/tmp", "build/agent-*"], "maxDepth": 3, "maxAgeMinutes": 15,
-    "max": 4, "tailLines": 15, "maxBytes": 2000000,
-    "extensions": [".txt", ".log", ".out", ".json", ".csv"]
-  }
+  "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 }
 }
 ```
 
@@ -52,14 +46,10 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 或 `defaults`（文件不存在）；文件坏掉时回退默认值并带 `manifest-invalid` warning。
 `schema` 不是 2 时只记一条 warning，仍按 schema 2 归一化。
 
-`experiments.groupBy` 已在 schema 2 移除：它只影响旧 `git-trailers` 读法的分组键，且与
-`keys.factor` 重复。store 模式的分组键就是实验记录里的 `factor` 字段；旧 `flow.json`
-若残留该键，按未知键保留，不报错。
-
-`heartbeats.source` 只有 `none` 一个真实开关（关闭整个心跳小节）。`md` / `json` 是
-**遗留兼容值**，语义完全相同：只要不是 `none`，就同时读心跳目录下的 `*.md` 与
-`*.json`（旧实现按值二选一，导致 `source: "md"` 时面板看不见 JSON 心跳，已修复）。
-默认值保留 `"md"` 以免改写既有契约。
+`experiments.source` 与 `tasks.source` 声明读法，store 模式固定为 `store` / `json`。
+`heartbeats.source` 只有 `none` 一个真实开关（关闭整个心跳小节）；心跳只读
+`contract.heartbeats.dir` 下的 `*.json`。旧 manifest 残留的 `gate` / `runs` 等键按未知键
+保留，但不再被读取，也不再参与默认值或面板投影。
 
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
 `gates` / `logs`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
@@ -68,15 +58,14 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 ### 2.1 manifest 路径 containment
 
 manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`、`gates.dir`、
-`gates.logs`、`gate.log`、`tasks.current`、`heartbeats.dir`、`runs.dirs`）都必须是
-**项目根内的相对路径**。core 的 `containedPath` 与 Host 侧的本地镜像按同一规则校验：
+`gates.logs`、`tasks.current`、`heartbeats.dir`）都必须是**项目根内的相对路径**。core 的
+`containedPath` 与 Host 侧的本地镜像按同一规则校验：
 
 - 绝对路径输入（`store.root` 例外，见下）、`..` 解析后逃出根、以及符号链接逃逸
   （目标已存在时看 `realpath`；目标不存在时逐级向上检查最近已存在的祖先，例如
   `link -> /etc`）一律**拒绝**；
 - 拒绝后不抛异常，也不读取根外内容，而是按该 section 的默认值降级：
-  `store.root` → `.dsh/flow`，各节目录 → 该节的默认目录，`gate.log` /
-  `tasks.current` → `null`，`runs.dirs` 的非法项 → 跳过（合法项继续生效）；
+  `store.root` → `.dsh/flow`，各节目录 → 该节的默认目录，`tasks.current` → `null`；
 - 每个被拒绝的原值记一条概括性 warning：
   `manifest-path-rejected: <key>: <原值>: <原因>`（只回显原值，不回显文件内容）。
 - 唯一例外：`store.root` 写成绝对路径时，若 `realpath` 后仍在项目根内则照常使用
@@ -276,14 +265,12 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - **旧子会话心跳**：已移除的「子代理自动开合心跳」留下的 `agent: "subagent"` 记录是历史
   数据。读侧把它投影为 `legacy: true` / `hidden: true`，**不进入面板与 CLI list**，只计入
   `counts.hidden`；`flow heartbeat gc [--dry-run]` 清理这些文件（其余心跳保留）。
-- 读取统一：`readHeartbeats` 保留旧形状 `{file,title,statusLine,ageSeconds,mtime}`（隐藏
-  旧子会话记录）；`readHeartbeatSection` 返回富形状
-  `{root,dir,items,counts}`，item 含
+- **读取只认 `*.json`**（心跳目录下的 `.md` 不再读取）：`readHeartbeats` 保留旧形状
+  `{file,title,statusLine,ageSeconds,mtime}`（隐藏旧子会话记录）；`readHeartbeatSection`
+  返回富形状 `{root,dir,items,counts}`，item 含
   `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime}`，
   计数 `{total, active, stale, hidden}`（total/active/stale 只统计可见项；`root` 是解析后的
-  主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。`.md` 心跳按尽力而为填充
-  （`session` 取文件名词干，`goal` 取标题，`last_action` 取状态行，其余为 `null`/空，
-  `agent` 为空、`legacy/hidden` 为 false）。
+  主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。
 
 ## 4 写入语义
 
@@ -316,7 +303,7 @@ flow --root <dir> <command> [--json]
 ### 5.1 命令
 
 ```
-flow init [--name X] [--force] [--no-gates] [--migrate trailers|tasks|all]
+flow init [--name X] [--force] [--no-gates]
 flow status
 
 flow exp list | show <id> | tree
@@ -422,18 +409,17 @@ flow check doc --file <path> --type task|design|incident|release
 码仍为 0。
 
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
-会话也读主工作区；解析/降级规则见 §3.5）下的 `*.md` 与 `*.json`（只有 `source: 'none'`
-关闭，`md`/`json` 只是遗留兼容值）：
-md 取首条含「状态」的行（去列表前缀），否则取首条非空非标题行；json 拼 `status · last_action`；
-按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；`ageSeconds > 6h` 记为可能已停
-（`HEARTBEAT_STALE_SECONDS`，与面板一致）。目录不存在按空集处理，不报错。
-`agent: "subagent"` 的旧记录不展示（只提示隐藏条数，`flow heartbeat gc` 可清理）。
+会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
+拼 `status · last_action`，按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；
+`ageSeconds > 6h` 记为可能已停（`HEARTBEAT_STALE_SECONDS`，与面板一致）。
+目录不存在按空集处理，不报错。`agent: "subagent"` 的旧记录不展示
+（只提示隐藏条数，`flow heartbeat gc` 可清理）。心跳目录下的 `.md` 不再读取。
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
 其中 `heartbeats` 为
-`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime }], counts: { total, active, stale } }`
+`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime }], counts: { total, active, stale, hidden } }`
 （富形状来自 `readHeartbeatSection`；`readHeartbeats` 仍返回旧的
-`{file,title,statusLine,ageSeconds,mtime}` 以免破坏既有调用）。
+`{file,title,statusLine,ageSeconds,mtime}` 以免破坏既有调用，同样只读 json）。
 
 `flow heartbeat list` 用同一份富形状输出表格（session 短名 / agent / status / 年龄 /
 task / claims / goal），并额外打印一条汇总与可能已停的文件名。
@@ -538,9 +524,8 @@ class FlowError extends Error        // code: invalid|not-found|conflict|io|usag
 
 loadContract(root)                   // {contract, source, warnings}
 saveContract(root, contract)         // 原子写，schema 强制 2
-initProject(root, {name?, force?, noGates?, migrate?:['trailers'|'tasks'], taskSourceDir?})
-                                     // {root, created[], imported:{trailers,tasks},
-                                     //  warnings[], seededGates[]}
+initProject(root, {name?, force?, noGates?})
+                                     // {root, created[], warnings[], seededGates[]}
 storePaths(root, contract)           // {store, experiments, tasks, gates, logs}（绝对路径，恒在根内）
 containedPath(root, value, label, {allowAbsolute?})
                                      // manifest 路径 containment：根内绝对路径，
@@ -565,7 +550,7 @@ updateHeartbeat(root, contract, session, patch)
                                      // 只允许 status/last_action/goal/task/claims/turn
 endHeartbeat(root, contract, {session?, status?='done', note?})
 heartbeatStatus(root, contract, session)   // {active, record|null}
-readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]，隐藏旧子会话
+readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]，只读 json
 readHeartbeatSection(root, contract)       // 富形状 {root, dir, items[], counts{total,active,stale,hidden}}
 resolveHeartbeatWorkspace(root)            // {root, degraded, reason}：心跳根=项目主工作区
 gcLegacyHeartbeats(root, contract, {dryRun?})  // {root, dir, removed[], kept, dryRun}
@@ -575,14 +560,12 @@ readStoreState(root, contract)       // 面板聚合：experiments{items,counts,
                                      // tasks{items,counts,current,source}
                                      // gates{items(含 lastRun),counts}
                                      // heartbeats（= readHeartbeatSection）
-migrateTrailers(root, contract)      // {imported, skipped, ids, warnings}
-migrateLegacyTasks(root, contract, sourceDir = '.agents/tasks')
 ```
 
 `created` 是根相对 POSIX 路径数组；`seededGates` 是本次种入的默认门禁 id 数组
 （空数组表示已有门禁或 `noGates`），种子不写入 `created`。`get*` 未找到抛 `not-found`；
 `add*`/`update*`/`remove*` 与三个心跳写入口在未初始化时抛 `usage`
-（`initProject`/`migrate*`/心跳读操作除外；`migrate*` 要求已初始化）。
+（`initProject` 与心跳读操作除外）。
 
 心跳写入口与读入口都先把 root 解析到**项目主工作区**（`resolveHeartbeatWorkspace`），因此
 linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbeat-root-degraded` warning。
@@ -591,87 +574,30 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 `scope.allow` 取 claims），并把新 id 写回心跳的 `task`。返回值比落盘记录多一个
 `createdTask`（新任务 id 或 `null`），不写入文件。
 
-## 8 迁移
-
-### 8.1 `--migrate trailers` / `migrateTrailers`
-
-读 `git -C root log` 的提交正文，识别 trailer（大小写不敏感，键名）：
-
-| trailer | 落到实验字段 |
-|---|---|
-| `Exp-Id` | `id`（逗号/空白分隔可多个；不符 `^[A-Z]+-\d{8}-\d{2}$` → warning） |
-| `Hypothesis` | `hypothesis`，同时截 80 字符作 `title` |
-| `Factor` / `Scale` / `Expected` | 同名字段 |
-| `Measured` | `measured` |
-| `Verdict` | `status`：`confirmed/confirm`→confirmed，`refuted/refute`→refuted，`abandoned/abandon`→abandoned，其余→open |
-
-- 同一 `Exp-Id` 的多个提交合并成一条：`commits` 收集 7 位短 sha，后出现的非空
-  `hypothesis`/`measured`/`verdict` 覆盖旧值，`updated_at` 取最新提交时间，`created_at`
-  取最早提交时间。
-- 已存在的 id **跳过**（不合并）；`skipped` 按“已存在 id 在提交中出现的次数”计数。
-- 非 git 仓库 / git 失败只进 `warnings`，不抛错。
-- `parent` 迁移为 `null`（trailer 没有谱系信息）。
-
-### 8.2 `--migrate tasks` / `migrateLegacyTasks`
-
-读 `<sourceDir>/*.json`（默认 `.agents/tasks`），按任务 schema 校验后写入 store：
-
-- 缺 `title` 时用 `id`；缺 `created_at`/`updated_at` 用文件 mtime。
-- id 冲突跳过（不覆盖）；非法 id、坏 JSON 记 warning 后跳过。
-- `initProject({migrate:['tasks']})` 时迁移结果同时计入 `imported.tasks` 与 `created[]`。
-
-## 9 与 git 的关系
+## 8 与 git 的关系
 
 - `.dsh/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
-- git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha，提交信息里的
-  `Exp-Id`/`Verdict` 只在 `--migrate trailers` 时单向导入一次，之后以 store 为准。
+- git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
 - 写锁 `.lock` 是临时文件，不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。
 
-## 10 面板 HTTP 表面与 Agent Teams 投影
+## 9 面板 HTTP 表面
 
-### 10.1 三个端点
+### 9.1 三个端点
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/api/project-flow/state?root=<dir>[&session=<id>]` | 只读投影：实验树、任务、门禁、心跳、运行输出、团队 |
+| GET | `/api/project-flow/state?root=<dir>` | 只读投影：实验树、任务、门禁、心跳 |
 | POST | `/api/project-flow/init` | 初始化台账（`{root}`），走 core |
 | POST | `/api/project-flow/gate` | 门禁开关（`{root, id, enabled}`），走 core |
 
-`root` 缺省取宿主 cwd；`session` 可选，只用于团队投影，不参与 root 校验。
+`root` 缺省取宿主 cwd；它必须是已注册工作区、其子目录，或自带 `.dsh/flow` store 的目录。
+没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
+旧布局读法、运行输出扫描或 Agent Teams 投影。
 
-### 10.2 `team` 字段（只读投影，不双写）
-
-payload 里**始终有** `team`：不可用时为 `null`。命中时来自 Agent Teams 服务
-（`agentTeams.tryMembership / listMembers / listTasks`），本插件**只读、从不写**：
-
-```jsonc
-"team": {
-  "ok": true,
-  "teamId": "…", "role": "lead|teammate", "name": "…",
-  "members": [{ "id": "session-…", "name": "…", "role": "lead|teammate",
-                "status": "running|inactive|provisioning|failed",
-                "description": "", "model": "", "diagnostics": [] }],
-  "tasks": [{ "id": "…", "revision": 3, "subject": "…",
-              "status": "pending|in_progress|completed|deleted",
-              "ownerName": "", "ready": true, "blockedBy": [],
-              "writeScopes": [], "writeScopeWarnings": [] }],
-  "counts": { "members": 3, "tasks": 5, "ready": 2, "blocked": 1, "running": 1 }
-}
-```
-
-- 上限：members ≤ 64、tasks ≤ 256、每行字符串 400 字符、每行列表 64 项；截断只影响数组，
-  `counts` 用截断前全量，并 push `team-members-truncated` / `team-tasks-truncated` warning。
-- `blocked` = 未完成/未删除 + `ready !== true` + `blockedBy` 非空；面板的「被阻塞」标记同口径
-  （`deleted` 不算阻塞）。
-- **为什么只投影不双向同步**：Teams 任务存在 Lead 会话日志里（随会话消失），本插件任务存在
-  项目 `.dsh/flow/`（随 git 永久）。两者的真源本来就不同，同步必然要回答"谁是权威"。
-  需要关联时用 `writeScopes` ↔ 心跳 `claims` 做人工对账，不要写第二份状态。
-- 团队域与 `?root=` 的工作区可能不一致（团队跨项目），这是有意为之：面板展示"这个团队在干什么"。
-
-### 10.3 心跳作用域：只面向主会话
+### 9.2 心跳作用域：只面向主会话
 
 心跳是**主会话之间**的协作面：同一项目的多个主会话（不同窗口、不同工作树）靠它登记
 goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）**没有心跳**。
@@ -694,7 +620,7 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 - 子代理的进度通过**最终报告**回到主会话，由主会话统一登记/收尾心跳；这与 Agent Teams
   的任务板 + 最终报告模型一致。
 
-### 10.4 与工具的关系
+### 9.3 与工具的关系
 
 模型侧另有 5 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`。
 `flow_heartbeat` 的 `action` 为 `start|update|end|list|status`，session 取当前会话 id，

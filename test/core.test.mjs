@@ -33,8 +33,6 @@ import {
   listGates,
   listTasks,
   loadContract,
-  migrateLegacyTasks,
-  migrateTrailers,
   readHeartbeatSection,
   readHeartbeats,
   readStoreState,
@@ -113,19 +111,6 @@ function git(root, args) {
   return result.stdout
 }
 
-function commitWithMessage(root, file, message) {
-  const full = path.join(root, file)
-  fs.mkdirSync(path.dirname(full), { recursive: true })
-  fs.writeFileSync(full, `${message}\n`, 'utf8')
-  git(root, ['add', '--', file])
-  git(root, [
-    '-c', 'user.name=Flow Test',
-    '-c', 'user.email=flow-test@example.invalid',
-    '-c', 'commit.gpgsign=false',
-    'commit', '-q', '--no-verify', '-m', message,
-  ])
-}
-
 function runCli(cwd, args, env) {
   const result = spawnSync(process.execPath, [BIN, ...args], {
     cwd,
@@ -152,7 +137,6 @@ test('initProject 创建 schema 2 布局、契约与默认目录', () => {
 
   assert.equal(result.root, path.resolve(root))
   assert.deepEqual(result.created, ['.dsh/flow/flow.json'])
-  assert.deepEqual(result.imported, { trailers: 0, tasks: 0 })
   assert.deepEqual(result.warnings, [])
 
   const contract = readJson(path.join(root, '.dsh/flow/flow.json'))
@@ -232,17 +216,17 @@ test('storePaths 支持自定义 store 根并重定向默认子目录', () => {
 // 契约里的每个路径都必须是项目根内的相对路径。以下用例全部在 os.tmpdir()
 // 的临时项目里构造“根外哨兵文件”，只断言任何读取结果里都不出现哨兵内容。
 
-test('manifest containment：绝对 gate.log 被拒绝、warning 带原值且不回显内容', () => {
+test('manifest containment：绝对路径被拒绝、warning 带原值且不回显内容', () => {
   const root = tempRoot('contain-gate-abs')
   const secretDir = tempRoot('contain-gate-secret')
-  const secret = path.join(secretDir, 'gate.log')
+  const secret = path.join(secretDir, 'leak.txt')
   fs.writeFileSync(secret, 'TOP-SECRET-GATE\n')
 
   drainWarnings()
-  assert.equal(containedPath(root, secret, 'gate.log'), undefined)
+  assert.equal(containedPath(root, secret, 'tasks.current'), undefined)
   const warnings = drainWarnings()
   assert.ok(
-    warnings.some((item) => item.startsWith('manifest-path-rejected: gate.log:')),
+    warnings.some((item) => item.startsWith('manifest-path-rejected: tasks.current:')),
     warnings.join('\n'),
   )
   assert.ok(warnings.some((item) => item.includes(secret)), 'warning 应保留原值，便于定位')
@@ -758,21 +742,6 @@ test('readStoreState 心跳：目录缺失为空集且不产生 warning', () => 
   assert.deepEqual(drainWarnings(), [])
 })
 
-test('心跳 md：优先「状态」行去掉列表前缀，否则取第一条非空非标题行', () => {
-  const { root, contract } = freshProject('heartbeat-md')
-  writeHeartbeat(root, 'alpha.md', '# alpha 标题\n\n- 状态：运行中（等待）\n- 更新：x\n', 30)
-  writeHeartbeat(root, 'beta.md', '# beta 标题\n\n## 小节\n\n正文摘要\n', 60)
-
-  const items = readHeartbeats(root, contract)
-  assert.equal(items.length, 2)
-  assert.deepEqual(items.map((item) => item.file), ['alpha.md', 'beta.md'], '按 mtime 新→旧')
-  assert.equal(items[0].title, 'alpha 标题')
-  assert.equal(items[0].statusLine, '状态：运行中（等待）')
-  assert.equal(items[1].title, 'beta 标题')
-  assert.equal(items[1].statusLine, '正文摘要')
-  assert.ok(items[0].ageSeconds >= 30 && items[0].ageSeconds < 120)
-})
-
 test('心跳 json：status + last_action 拼接，updated_at 解析失败回退 mtime', () => {
   const { root, contract } = freshProject('heartbeat-json')
   writeHeartbeat(root, 'worker.json', JSON.stringify({
@@ -797,12 +766,15 @@ test('心跳 json：status + last_action 拼接，updated_at 解析失败回退 
 test('心跳按 mtime 倒序并按 contract.heartbeats.max 截断', () => {
   const { root, contract } = freshProject('heartbeat-max')
   for (let index = 0; index < 4; index++) {
-    writeHeartbeat(root, `beat-${index}.md`, `# beat ${index}\n\n- 状态：第 ${index} 条\n`, (index + 1) * 60)
+    writeHeartbeat(root, `beat-${index}.json`, JSON.stringify({
+      status: 'working',
+      last_action: `第 ${index} 条`,
+    }), (index + 1) * 60)
   }
   const limited = { ...contract, heartbeats: { ...contract.heartbeats, max: 2 } }
   const items = readHeartbeats(root, limited)
-  assert.deepEqual(items.map((item) => item.file), ['beat-0.md', 'beat-1.md'])
-  assert.equal(items[0].statusLine, '状态：第 0 条')
+  assert.deepEqual(items.map((item) => item.file), ['beat-0.json', 'beat-1.json'])
+  assert.equal(items[0].statusLine, 'working · 第 0 条')
 
   const state = readStoreState(root, limited)
   assert.equal(state.heartbeats.counts.total, 2)
@@ -811,14 +783,21 @@ test('心跳按 mtime 倒序并按 contract.heartbeats.max 截断', () => {
 
 test('心跳 stale 计数以 6 小时为界', () => {
   const { root, contract } = freshProject('heartbeat-stale')
-  writeHeartbeat(root, 'fresh.md', '# fresh\n\n- 状态：在跑\n', 60)
-  writeHeartbeat(root, 'old.md', '# old\n\n- 状态：停在 10 小时前\n', 10 * 3600)
-  writeHeartbeat(root, 'edge.md', '# edge\n\n- 状态：刚好过 6 小时\n', HEARTBEAT_STALE_SECONDS + 5)
+  const beat = (label, age) => {
+    writeHeartbeat(root, `${label}.json`, JSON.stringify({
+      status: 'working',
+      last_action: label,
+      updated_at: new Date(Date.now() - age * 1000).toISOString(),
+    }), age)
+  }
+  beat('fresh', 60)
+  beat('old', 10 * 3600)
+  beat('edge', HEARTBEAT_STALE_SECONDS + 5)
 
   const state = readStoreState(root, contract)
   assert.equal(state.heartbeats.counts.total, 3)
   assert.equal(state.heartbeats.counts.stale, 2)
-  const fresh = state.heartbeats.items.find((item) => item.file === 'fresh.md')
+  const fresh = state.heartbeats.items.find((item) => item.file === 'fresh.json')
   assert.ok(fresh.ageSeconds < 300)
 })
 
@@ -826,130 +805,13 @@ test('心跳坏文件：非法 JSON 与非对象只记 warning 并跳过', () =>
   const { root, contract } = freshProject('heartbeat-bad')
   writeHeartbeat(root, 'bad.json', '{ not json', 10)
   writeHeartbeat(root, 'array.json', '[]', 20)
-  writeHeartbeat(root, 'ok.md', '# ok\n\n- 状态：ok\n', 30)
+  writeHeartbeat(root, 'ok.json', JSON.stringify({ status: 'working', last_action: 'ok' }), 30)
   drainWarnings()
   const state = readStoreState(root, contract)
   assert.equal(state.heartbeats.counts.total, 1)
   const warnings = drainWarnings()
   assert.ok(warnings.some((item) => item.startsWith('heartbeat-invalid: bad.json')), warnings.join('\n'))
   assert.ok(warnings.some((item) => item.startsWith('heartbeat-invalid: array.json')), warnings.join('\n'))
-})
-
-// -------------------------------------------------------------------- 迁移
-
-test('migrateTrailers：从临时 git 仓库的 trailer 导入、verdict 映射、重复运行跳过', () => {
-  const root = tempRoot('trailers')
-  initProject(root, { name: 'trailer-proj' })
-  const { contract } = loadContract(root)
-  git(root, ['init', '-q'])
-
-  commitWithMessage(root, 'a.txt', [
-    'exp: normalize focus',
-    '',
-    'Exp-Id: E-20261001-01',
-    'Hypothesis: normalize keeps tie under 1',
-    'Factor: focus/normalize',
-    'Scale: small',
-    'Expected: tie_mean<=1.0',
-    'Measured: tie_mean=0.4',
-    'Verdict: confirmed',
-  ].join('\n'))
-  commitWithMessage(root, 'b.txt', [
-    'exp: normalize focus retest',
-    '',
-    'Exp-Id: E-20261001-01',
-    'Hypothesis: normalize keeps tie under 1',
-    'Factor: focus/normalize',
-    'Measured: tie_mean=1.6',
-    'Verdict: refuted',
-  ].join('\n'))
-  commitWithMessage(root, 'c.txt', [
-    'exp: bad id',
-    '',
-    'Exp-Id: bad id!',
-    'Hypothesis: should be skipped',
-    'Verdict: confirmed',
-  ].join('\n'))
-
-  const result = migrateTrailers(root, contract)
-  assert.equal(result.imported, 1)
-  assert.deepEqual(result.ids, ['E-20261001-01'])
-  assert.ok(result.warnings.some((item) => item.startsWith('exp-id-invalid:')), '非法 Exp-Id 应记 warning')
-
-  const record = getExperiment(root, contract, 'E-20261001-01')
-  assert.equal(record.hypothesis, 'normalize keeps tie under 1')
-  assert.equal(record.factor, 'focus/normalize')
-  assert.equal(record.scale, 'small')
-  assert.equal(record.expected, 'tie_mean<=1.0')
-  assert.equal(record.measured, 'tie_mean=1.6', '同一 Exp-Id 的后续提交应更新 measured')
-  assert.equal(record.status, 'refuted', 'Verdict 映射到 status，最新提交生效')
-  assert.equal(record.commits.length, 2)
-  for (const sha of record.commits) assert.match(sha, /^[0-9a-f]{7}$/)
-  assert.match(record.created_at, /^\d{4}-\d{2}-\d{2}T/)
-
-  const again = migrateTrailers(root, contract)
-  assert.equal(again.imported, 0)
-  // skipped 按“已存在的 Exp-Id 在提交中出现次数”计数：同一 id 出现在 2 个提交里。
-  assert.equal(again.skipped, 2)
-  assert.deepEqual(again.ids, [])
-  assert.equal(listExperiments(root, contract).length, 1)
-})
-
-test('migrateLegacyTasks：导入旧 .agents/tasks、id 冲突跳过、坏文件只警告', () => {
-  const { root, contract } = freshProject('legacy-tasks')
-  const legacyDir = path.join(root, '.agents/tasks')
-  fs.mkdirSync(legacyDir, { recursive: true })
-  fs.writeFileSync(path.join(legacyDir, 'T-20260101-01.json'), JSON.stringify({
-    id: 'T-20260101-01',
-    title: '旧任务一',
-    status: 'active',
-    scope: { allow: ['src/'], deny: [] },
-    acceptance: ['测试全绿'],
-    created_at: '2026-01-01T10:00:00+08:00',
-  }))
-  fs.writeFileSync(path.join(legacyDir, 'T-20260101-02.json'), JSON.stringify({
-    id: 'T-20260101-02',
-    title: '冲突任务',
-    status: 'done',
-  }))
-  fs.writeFileSync(path.join(legacyDir, 'bad.json'), JSON.stringify({ id: 'not-an-id', title: 'bad' }))
-  fs.writeFileSync(path.join(legacyDir, 'broken.json'), '{ not json')
-
-  // 预置冲突 id，验证跳过而非覆盖
-  addTask(root, contract, { id: 'T-20260101-02', title: 'store 里已有' })
-
-  const result = migrateLegacyTasks(root, contract, '.agents/tasks')
-  assert.equal(result.imported, 1)
-  assert.equal(result.skipped, 1)
-  assert.deepEqual(result.ids, ['T-20260101-01'])
-  assert.ok(result.warnings.some((item) => item.startsWith('legacy-task-invalid:')))
-  assert.ok(result.warnings.some((item) => item.startsWith('legacy-task-unreadable:')))
-
-  const imported = getTask(root, contract, 'T-20260101-01')
-  assert.equal(imported.title, '旧任务一')
-  assert.equal(imported.status, 'active')
-  assert.deepEqual(imported.acceptance, ['测试全绿'])
-  assert.equal(imported.created_at, '2026-01-01T10:00:00+08:00')
-  assert.match(imported.updated_at, /^\d{4}-\d{2}-\d{2}T/, '缺 updated_at 时按 mtime 补齐')
-  assert.equal(getTask(root, contract, 'T-20260101-02').title, 'store 里已有')
-})
-
-test('initProject 的 migrate 选项导入并回填 created 清单', () => {
-  const root = tempRoot('init-migrate')
-  const legacyDir = path.join(root, '.agents/tasks')
-  fs.mkdirSync(legacyDir, { recursive: true })
-  fs.writeFileSync(path.join(legacyDir, 'T-20260202-01.json'), JSON.stringify({
-    id: 'T-20260202-01',
-    title: 'init 迁移任务',
-    status: 'draft',
-    created_at: '2026-02-02T10:00:00+08:00',
-    updated_at: '2026-02-02T10:00:00+08:00',
-  }))
-
-  const result = initProject(root, { name: 'migrated', migrate: ['tasks'] })
-  assert.equal(result.imported.tasks, 1)
-  assert.ok(result.created.includes('.dsh/flow/tasks/T-20260202-01.json'))
-  assert.equal(listTasks(root, loadContract(root).contract).length, 1)
 })
 
 test('坏记录只警告不阻塞列表读取', () => {
@@ -1036,15 +898,20 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
 test('CLI status 输出心跳小节，--json 带 heartbeats 段', () => {
   const { root } = freshProject('cli-heartbeats')
   for (let index = 0; index < 6; index++) {
-    writeHeartbeat(root, `hb-${index}.md`, `# hb ${index}\n\n- 状态：运行中 ${index}\n`, (index + 1) * 8 * 3600)
+    const age = (index + 1) * 8 * 3600
+    writeHeartbeat(root, `hb-${index}.json`, JSON.stringify({
+      status: 'working',
+      last_action: `运行中 ${index}`,
+      updated_at: new Date(Date.now() - age * 1000).toISOString(),
+    }), age)
   }
 
   const text = runCli(root, ['status'])
   assert.equal(text.code, 0)
   assert.match(text.stdout, /心跳\s+6（可能已停 6）/)
-  assert.ok(text.stdout.includes('hb-0.md'))
-  assert.ok(text.stdout.includes('状态：运行中 0'))
-  assert.ok(!text.stdout.includes('hb-5.md'), '只逐条展示前 5 条')
+  assert.ok(text.stdout.includes('hb-0.json'))
+  assert.ok(text.stdout.includes('working · 运行中 0'))
+  assert.ok(!text.stdout.includes('hb-5.json'), '只逐条展示前 5 条')
   assert.ok(text.stdout.includes('其余 1 条（共 6 条）'))
 
   const json = runCli(root, ['status', '--json'])
@@ -1053,7 +920,7 @@ test('CLI status 输出心跳小节，--json 带 heartbeats 段', () => {
   assert.equal(json.json.data.heartbeats.counts.total, 6)
   assert.equal(json.json.data.heartbeats.counts.stale, 6)
   assert.equal(json.json.data.heartbeats.items.length, 6)
-  assert.equal(json.json.data.heartbeats.items[0].file, 'hb-0.md')
+  assert.equal(json.json.data.heartbeats.items[0].file, 'hb-0.json')
 })
 
 test('CLI 门禁失败退出 0 但 data.ok=false', () => {
@@ -1275,24 +1142,27 @@ test('heartbeat update：白名单字段、刷新 updated_at；end 后 active=fa
   assert.ok(section.items[0].ended_at)
 })
 
-test('readHeartbeatSection：md 与 json 同时可读，source 的 md/json 只是遗留值，none 才关闭', () => {
+test('readHeartbeatSection：只读 json 心跳，source 任意非 none 值均可读，none 关闭', () => {
   const { root, contract } = freshProject('hb-section')
-  startHeartbeat(root, contract, { session: SESSION, goal: '联合视图', claims: ['lib/a.mjs'], agent: 'lead', last_action: '跑测试' })
+  startHeartbeat(root, contract, { session: SESSION, goal: '主会话视图', claims: ['lib/a.mjs'], agent: 'lead', last_action: '跑测试' })
+  // 遗留 markdown 心跳不再被读取。
   writeHeartbeat(root, 'legacy.md', '# legacy\n\n- 状态：在跑\n', 10)
 
   for (const source of ['md', 'json', 'store', 'both']) {
     const section = readHeartbeatSection(root, { ...contract, heartbeats: { ...contract.heartbeats, source } })
-    assert.equal(section.items.length, 2, `source=${source} 应同时读 md+json`)
-    assert.equal(section.counts.total, 2)
+    assert.equal(section.items.length, 1, `source=${source} 只读 json 心跳`)
+    assert.equal(section.counts.total, 1)
     assert.equal(section.counts.active, 1)
     assert.equal(section.counts.stale, 0)
     assert.equal(section.dir, '.agents/heartbeat')
+    assert.equal(section.items.some((item) => item.file === 'legacy.md'), false, 'md 心跳不再读取')
 
-    const json = section.items.find((item) => item.file === `${SESSION}.json`)
+    const json = section.items[0]
     for (const key of HEARTBEAT_KEYS) assert.ok(Object.hasOwn(json, key), `缺字段 ${key}`)
+    assert.equal(json.file, `${SESSION}.json`)
     assert.equal(json.session, SESSION)
     assert.equal(json.agent, 'lead')
-    assert.equal(json.goal, '联合视图')
+    assert.equal(json.goal, '主会话视图')
     assert.match(json.task, /^T-\d{8}-\d{2}$/)
     assert.deepEqual(json.claims, ['lib/a.mjs'])
     assert.equal(json.status, 'working')
@@ -1302,16 +1172,11 @@ test('readHeartbeatSection：md 与 json 同时可读，source 的 md/json 只�
     assert.equal(json.ended_at, null)
     assert.equal(json.stale, false)
     assert.ok(json.ageSeconds < 300)
-
-    const md = section.items.find((item) => item.file === 'legacy.md')
-    assert.equal(md.session, 'legacy')
-    assert.equal(md.status, '')
-    assert.equal(md.last_action, '状态：在跑')
-    assert.equal(md.task, null)
   }
 
   // 旧形状保持
   const legacyItems = readHeartbeats(root, contract)
+  assert.equal(legacyItems.length, 1)
   assert.deepEqual(Object.keys(legacyItems[0]).sort(), ['ageSeconds', 'file', 'mtime', 'statusLine', 'title'])
 
   // JSON 心跳按 updated_at 计算 stale（不看 mtime）

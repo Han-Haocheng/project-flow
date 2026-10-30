@@ -8,7 +8,8 @@
  *   - 2500 ms interval, abort on the next request and on unmount;
  *   - no request while document.hidden, immediate refresh on visibilitychange;
  *   - a failed poll records the error but never overwrites the last snapshot;
- *   - payloads with `gate: null` or without `contract` still poll normally;
+ *   - payloads without `contract` or `gates` still poll normally, and the
+ *     tab's `sessionId` is never sent as a query parameter;
  *   - without a resolved workspace root the panel polls nothing at all.
  *
  * It also drives `ErrorState` directly: the `not-initialized` card's Initialize
@@ -69,14 +70,13 @@ const DEFAULT_ROOT = '/tmp/pf-demo/alpha';
 const PAYLOAD = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
-  contract: { source: 'flow.json', schema: 1, name: 'demo-alpha' },
+  contract: { source: 'flow.json', schema: 2, name: 'demo-alpha' },
   root: '/tmp/pf-demo/alpha',
   roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
-  experiments: { total: 0, groups: [] },
+  experiments: { source: 'store', total: 0, counts: { open: 0 }, items: [], tree: [] },
   tasks: { total: 0, counts: { other: 0 } },
-  gate: { lines: [], mtime: null },
-  heartbeats: [],
-  runs: [],
+  gates: [],
+  heartbeats: { dir: '.agents/heartbeat', items: [], counts: { total: 0 } },
   warnings: [],
 };
 
@@ -177,7 +177,8 @@ function boot(options = {}) {
   const workspaceRoot = Object.prototype.hasOwnProperty.call(options, 'workspaceRoot')
     ? options.workspaceRoot
     : DEFAULT_ROOT;
-  const element = plugin.__probe.Panel({ t: (key) => key, workspaceRoot });
+  const sessionId = options.sessionId;
+  const element = plugin.__probe.Panel({ t: (key) => key, workspaceRoot, sessionId });
   return { env, element, probe: plugin.__probe };
 }
 
@@ -351,19 +352,32 @@ await check('a transport error is captured without throwing', () => {
 });
 
 // --------------------------------------------- optional payload shapes
-const gateNullBoot = boot({
-  respond: () => okResponseFor(Object.assign({}, PAYLOAD, { gate: null, contract: undefined })),
+const bareBoot = boot({
+  respond: () => okResponseFor(Object.assign({}, PAYLOAD, { contract: undefined, gates: undefined })),
 });
 await flush();
-await check('a payload with gate:null and no contract still polls and stores', () => {
-  const stored = gateNullBoot.env.stateCalls.find((call) => call.index === 0);
-  assert.ok(stored, 'snapshot with gate:null was rejected');
-  assert.equal(stored.next.gate, null, 'raw payload should keep gate:null');
+await check('a payload without contract or gates still polls and stores', () => {
+  const stored = bareBoot.env.stateCalls.find((call) => call.index === 0);
+  assert.ok(stored, 'snapshot without contract/gates was rejected');
   assert.equal(stored.next.contract, undefined, 'contract should be absent');
-  const normalized = gateNullBoot.probe.normalize(stored.next);
-  assert.equal(normalized.gate.disabled, true, 'gate:null must map to the disabled flag');
+  assert.equal(stored.next.gates, undefined, 'gates should be absent');
+  const normalized = bareBoot.probe.normalize(stored.next);
   assert.equal(normalized.contract, null, 'missing contract must normalize to null');
-  assert.equal(gateNullBoot.env.stateCalls.filter((call) => call.index === 1)[0].next, null);
+  assert.equal(normalized.gates, null, 'missing gates must normalize to null');
+  assert.equal(bareBoot.env.stateCalls.filter((call) => call.index === 1)[0].next, null);
+});
+
+// ------------------------------------------------ session id is not a query
+const sessionBoot = boot({ sessionId: 'session-aaaa', respond: okResponse });
+await flush();
+await check('the session id is never appended to the polling URL', () => {
+  assert.equal(sessionBoot.env.fetches.length, 1, 'expected exactly one initial request');
+  assert.equal(
+    sessionBoot.env.fetches[0].url,
+    'api/project-flow/state?root=%2Ftmp%2Fpf-demo%2Falpha',
+    'sessionId leaked into the state URL'
+  );
+  assert.ok(!sessionBoot.env.fetches[0].url.includes('session='), 'query still carries a session parameter');
 });
 
 // ------------------------------------------------------- ErrorState initialize
@@ -496,6 +510,8 @@ await check('the workspace root is sent as an encoded ?root= query', () => {
     SOURCE.includes("'?root=' + encodeURIComponent(workspaceRoot)"),
     'encoded ?root= workspace wiring missing'
   );
+  assert.ok(!SOURCE.includes('&session='), 'state URL still concatenates a session parameter');
+  assert.ok(SOURCE.includes('sessionId'), 'sessionId no longer reaches the panel (heartbeat highlight lost)');
   assert.ok(!SOURCE.includes('ProjectPicker'), 'global project switcher still present');
   assert.ok(SOURCE.includes("cache: 'no-store'"), 'no-store cache mode missing');
   assert.ok(SOURCE.includes('new AbortController()'), 'AbortController missing');

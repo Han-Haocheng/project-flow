@@ -8,9 +8,9 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个
 
 | 入口 | 用途 |
 |---|---|
-| 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳、运行输出（只读；未初始化时可一键初始化） |
+| 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳（只读；未初始化时可一键初始化） |
 | 会话头小图标 / 指南卡 | 打开同一面板 |
-| `node bin/flow.mjs …` | 人改台账、跑门禁、迁移旧数据 |
+| `node bin/flow.mjs …` | 人改台账、跑门禁 |
 | agent 工具 `flow_*` | 模型改台账、跑门禁 |
 | 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及中心-贡献者协作（谁提交、谁判定、谁合并）与发布纪律 |
 
@@ -22,7 +22,7 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个
 ## 初始化一个项目
 
 ```text
-node bin/flow.mjs --root <项目根> init [--name 名称] [--migrate all]
+node bin/flow.mjs --root <项目根> init [--name 名称]
 ```
 
 会在 `<项目根>/.dsh/flow/` 下创建：
@@ -35,9 +35,6 @@ node bin/flow.mjs --root <项目根> init [--name 名称] [--migrate all]
   gates/<id>.json           门禁定义（步骤 + 期望 + 超时）
   logs/<gateId>/<时间>.json 门禁运行记录
 ```
-
-`--migrate all` 会把旧的 `git` 提交里的 `Exp-Id` trailer 和 `.agents/tasks/*.json` 一次性导入；
-之后以 store 为准，不再写 trailer。
 
 ## 常用 CLI
 
@@ -66,12 +63,6 @@ plugin_manager install_bundle  target=<仓库根目录>
 `cordis.patch.yml` 会 insert 条目 `project-flow`。安装后刷新页面；卸载用
 `plugin_manager remove_bundle target=@local/project-flow`。
 
-## 两种数据模式
-
-- **store 模式**：项目有 `.dsh/flow/flow.json` → 实验/任务/门禁读 store，面板画 `parent` 谱系树；
-- **legacy 模式**：没有 store → 沿用旧布局（git `Exp-Id` trailer、`.agents/tasks` JSON 或 Markdown、
-  `.agents/gate-observe.log`、`.agents/heartbeat`），面板只读展示，不迁移、不写。
-
 ## 边界
 
 - **面板只读（一个例外）**：面板唯一的写操作是「初始化」——`POST /api/project-flow/init`，
@@ -81,15 +72,15 @@ plugin_manager install_bundle  target=<仓库根目录>
 - **锁只防同机并发**；门禁步骤会以 `shell` 执行，命令来自项目自己的 `gates/*.json`，请只放可信命令。
 - 面板每 2.5 秒轮询 `GET /api/project-flow/state?root=<当前工作区目录>`，只展示该工作区的台账，
   不再切换或汇总其它项目；该工作区没有 `.dsh/flow` 台账时显示「未初始化」空状态。页面隐藏时暂停，无 watcher，每次请求现算。
-- 实验/门禁日志只示「最近」切片（实验 400 条、门禁日志 10 行、心跳 20 条、运行输出 4 个文件）。
+- 实验只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
 
 ## 自测
 
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：48 用例
-node .selftest/harness.mjs               # Host legacy 适配器
+node --test test/                        # core + CLI + check：79 用例
+node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、4 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
 node .selftest/client-render.mjs         # Client 渲染 + 真实 payload 回放

@@ -2,8 +2,8 @@
 //
 // Loads index.js with a mock Cordis context (webServer + tools + skills +
 // workingDirectory), builds a real `.dsh/flow` store through lib/core.mjs, and
-// drives the four tools plus the HTTP endpoint in both store and legacy modes.
-// Run: node .selftest/host2-tools.mjs
+// drives the four tools plus the HTTP endpoint in store mode, and the
+// uninitialized empty state.
 
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -220,58 +220,6 @@ async function call(route, url) {
 const storeRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-store-'))
 const initResult = core.initProject(storeRoot, { name: 'Host2Test', noGates: true })
 
-const legacyRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-legacy-'))
-mkdirSync(join(legacyRoot, 'ledger', 'tasks'), { recursive: true })
-writeFileSync(
-  join(legacyRoot, 'flow.json'),
-  JSON.stringify({
-    schema: 1,
-    name: 'LegacyTest',
-    experiments: { source: 'none' },
-    tasks: { source: 'json', dir: 'ledger/tasks' },
-    gate: { log: 'ledger/gate.log' },
-    heartbeats: { source: 'md', dir: 'ledger/hb' },
-    runs: { dirs: [] },
-  }),
-)
-writeFileSync(
-  join(legacyRoot, 'ledger', 'tasks', 'task-1.json'),
-  JSON.stringify({
-    id: 'T-LEGACY-01',
-    title: 'Legacy task',
-    status: 'active',
-    owner: 'me',
-    goal: 'stay green',
-    updated_at: '2026-10-28T10:00:00+08:00',
-  }),
-)
-// Two drafts with distinct, fixed timestamps plus one with broken field types:
-// the projection must keep newest-first order and degrade odd values to ''.
-writeFileSync(
-  join(legacyRoot, 'ledger', 'tasks', 'task-2.json'),
-  JSON.stringify({
-    id: 'T-LEGACY-02',
-    title: 'Legacy draft older',
-    status: 'draft',
-    owner: 'me',
-    updated_at: '2026-10-27T10:00:00+08:00',
-  }),
-)
-writeFileSync(
-  join(legacyRoot, 'ledger', 'tasks', 'task-3.json'),
-  JSON.stringify({
-    id: 'T-LEGACY-03',
-    title: 'Legacy draft newer',
-    status: 'draft',
-    updated_at: '2026-10-29T10:00:00+08:00',
-  }),
-)
-writeFileSync(
-  join(legacyRoot, 'ledger', 'tasks', 'task-4.json'),
-  JSON.stringify({ id: 'T-LEGACY-04', title: null, status: 'draft', owner: 42, updated_at: 1720000000000 }),
-)
-writeFileSync(join(legacyRoot, 'ledger', 'gate.log'), 'legacy gate line\n')
-
 const noStoreRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-nostore-'))
 
 // --------------------------------------------------------------- apply
@@ -285,7 +233,7 @@ const ctx = makeCtx({
       return storeRoot
     },
   },
-  registryPaths: [storeRoot, legacyRoot],
+  registryPaths: [storeRoot, noStoreRoot],
 })
 
 apply(ctx)
@@ -390,10 +338,12 @@ eq('flow_status: contract name', statusStore.contract.name, 'Host2Test')
 eq('flow_status: experiments total 0', statusStore.experiments.total, 0)
 check('flow_status: gate list empty', Array.isArray(statusStore.gates) && statusStore.gates.length === 0)
 
-const statusLegacy = await statusTool.execute({ root: legacyRoot }, exec)
-eq('flow_status: explicit root wins over session', statusLegacy.root, legacyRoot)
-eq('flow_status: legacy store false', statusLegacy.store, false)
-eq('flow_status: legacy contract source', statusLegacy.contract.source, 'flow.json')
+const statusUninitialized = await statusTool.execute({ root: noStoreRoot }, exec)
+eq('flow_status: uninitialized store false', statusUninitialized.store, false)
+eq('flow_status: uninitialized contract source', statusUninitialized.contract.source, 'defaults')
+eq('flow_status: uninitialized experiments total 0', statusUninitialized.experiments.total, 0)
+eq('flow_status: uninitialized tasks total 0', statusUninitialized.tasks.total, 0)
+check('flow_status: uninitialized gates empty', Array.isArray(statusUninitialized.gates) && statusUninitialized.gates.length === 0)
 
 // --------------------------------------------------------- flow_exp chain
 
@@ -765,7 +715,7 @@ eq('store payload: tasks draft updated_at kept', store.tasks?.draft?.[1]?.update
 check('store payload: gates array', Array.isArray(store.gates) && store.gates.length === 1)
 eq('store payload: gate lastRun ok false', store.gates?.[0]?.lastRun?.ok, false)
 check('store payload: gate lastRun steps present', Array.isArray(store.gates?.[0]?.lastRun?.steps))
-check('store payload: gate log null', store.gate === null)
+check('store payload: no legacy gate/runs/team sections', store.gate === undefined && store.runs === undefined && store.team === undefined)
 if (skillFiles.length < SKILL_NAMES.length) {
   check(
     'store payload: missing-skill warning surfaced',
@@ -775,37 +725,21 @@ if (skillFiles.length < SKILL_NAMES.length) {
   )
 }
 
-// ------------------------------------------------------- HTTP legacy payload
+// ------------------------------------------------ uninitialized workspace
 
-const legacyRes = await call(route, `${route.path}?root=${encodeURIComponent(legacyRoot)}`)
-const legacy = legacyRes.json ?? {}
-eq('legacy payload: 200', legacyRes.status, 200)
-eq('legacy payload: ok', legacy.ok, true)
-eq('legacy payload: contract source', legacy.contract?.source, 'flow.json')
-eq('legacy payload: experiments source', legacy.experiments?.source, 'git-trailers')
-check('legacy payload: items empty array', Array.isArray(legacy.experiments?.items) && legacy.experiments.items.length === 0)
-check('legacy payload: tree empty array', Array.isArray(legacy.experiments?.tree) && legacy.experiments.tree.length === 0)
-check('legacy payload: groups array', Array.isArray(legacy.experiments?.groups))
-check('legacy payload: gates empty array', Array.isArray(legacy.gates) && legacy.gates.length === 0)
-eq('legacy payload: tasks total', legacy.tasks?.total, 4)
-eq('legacy payload: tasks current null', legacy.tasks?.current, null)
-check('legacy payload: active task title', legacy.tasks?.active?.[0]?.title === 'Legacy task')
+const noStoreRes = await call(route, `${route.path}?root=${encodeURIComponent(noStoreRoot)}`)
+const noStore = noStoreRes.json ?? {}
+eq('uninitialized payload: 200', noStoreRes.status, 200)
+eq('uninitialized payload: ok false', noStore.ok, false)
+eq('uninitialized payload: not-initialized', noStore.error?.code, 'not-initialized')
 check(
-  'legacy payload: tasks draft array length',
-  Array.isArray(legacy.tasks?.draft) && legacy.tasks.draft.length === 3,
-  JSON.stringify(legacy.tasks?.draft),
+  'uninitialized payload: no ledger sections',
+  noStore.experiments === undefined && noStore.tasks === undefined && noStore.gates === undefined && noStore.heartbeats === undefined,
 )
-check('legacy payload: tasks draft newest first', draftRowsDesc(legacy.tasks?.draft), JSON.stringify(legacy.tasks?.draft))
-eq('legacy payload: tasks draft[0] is newest', legacy.tasks?.draft?.[0]?.id, 'T-LEGACY-03')
-eq('legacy payload: tasks draft[1] is older', legacy.tasks?.draft?.[1]?.id, 'T-LEGACY-02')
-check('legacy payload: tasks draft row shape', legacy.tasks?.draft?.every(draftRowOk), JSON.stringify(legacy.tasks?.draft))
-eq('legacy payload: tasks draft missing owner empty', legacy.tasks?.draft?.[0]?.owner, '')
 check(
-  'legacy payload: tasks draft broken types degrade to empty strings',
-  legacy.tasks?.draft?.[2]?.title === '' && legacy.tasks?.draft?.[2]?.owner === '' && legacy.tasks?.draft?.[2]?.updated_at === '',
-  JSON.stringify(legacy.tasks?.draft?.[2]),
+  'uninitialized payload: no legacy/runs/gate/team fields',
+  noStore.runs === undefined && noStore.gate === undefined && noStore.team === undefined,
 )
-check('legacy payload: gate log present', Array.isArray(legacy.gate?.lines) && legacy.gate.lines[0] === 'legacy gate line')
 
 // -------------------------------------------------- draft cap (MAX_DRAFT_TASKS)
 
@@ -835,43 +769,22 @@ eq('draft cap: total still counts every task', capState.tasks?.total, 55)
 
 // ----------------------------------------- malicious manifest: containment
 //
-// A manifest must not point the panel at a file or directory outside its own
-// project root. Every sentinel below lives in its own /tmp directory and uses
-// text that never appears in a path, so a hit proves the content was leaked.
+// A store contract must not point the panel at a file outside its own project
+// root. Every sentinel below lives in its own /tmp directory and uses text that
+// never appears in a path, so a hit proves the content was leaked.
 
 const secretRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-secret-'))
+const CURRENT_SECRET = 'TOP-SECRET-HOST2-CURRENT'
 const GATE_SECRET = 'TOP-SECRET-HOST2-GATE'
 const RUN_SECRET = 'TOP-SECRET-HOST2-RUN'
-const CURRENT_SECRET = 'TOP-SECRET-HOST2-CURRENT'
-const HEARTBEAT_SECRET = 'TOP-SECRET-HOST2-HEARTBEAT'
 
-const secretGateFile = join(secretRoot, 'gate.log')
-writeFileSync(secretGateFile, `${GATE_SECRET}\n`)
 const secretCurrentFile = join(secretRoot, 'current')
 writeFileSync(secretCurrentFile, `${CURRENT_SECRET}\n`)
+const secretGateFile = join(secretRoot, 'gate.log')
+writeFileSync(secretGateFile, `${GATE_SECRET}\n`)
 const secretRunDir = join(secretRoot, 'runs')
 mkdirSync(secretRunDir, { recursive: true })
 writeFileSync(join(secretRunDir, 'run.log'), `${RUN_SECRET}\n`)
-const secretHeartbeatDir = join(secretRoot, 'heartbeats')
-mkdirSync(secretHeartbeatDir, { recursive: true })
-writeFileSync(
-  join(secretHeartbeatDir, 'evil.json'),
-  JSON.stringify({ schema: 1, status: 'working', last_action: HEARTBEAT_SECRET }),
-)
-
-const evilLegacyRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-evil-legacy-'))
-writeFileSync(
-  join(evilLegacyRoot, 'flow.json'),
-  JSON.stringify({
-    schema: 1,
-    name: 'EvilLegacy',
-    experiments: { source: 'none' },
-    tasks: { source: 'json', dir: join(secretRoot, 'tasks'), current: secretCurrentFile },
-    gate: { log: secretGateFile },
-    heartbeats: { source: 'json', dir: secretHeartbeatDir },
-    runs: { dirs: [secretRunDir] },
-  }),
-)
 
 const evilStoreRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-evil-store-'))
 mkdirSync(join(evilStoreRoot, '.dsh', 'flow'), { recursive: true })
@@ -881,6 +794,7 @@ writeFileSync(
     schema: 2,
     name: 'EvilStore',
     tasks: { source: 'json', current: secretCurrentFile },
+    // Removed legacy sections are tolerated as unknown contract keys but never read.
     gate: { log: secretGateFile },
     runs: { dirs: [secretRunDir] },
   }),
@@ -891,30 +805,11 @@ function hasWarning(payload, needle) {
   return warnings.some((line) => typeof line === 'string' && line.includes(needle))
 }
 
-const evilLegacy = (await call(route, `${route.path}?root=${encodeURIComponent(evilLegacyRoot)}`)).json ?? {}
-eq('evil legacy: payload ok', evilLegacy.ok, true)
-eq('evil legacy: absolute gate.log rejected', evilLegacy.gate, null)
-check('evil legacy: gate.log warning', hasWarning(evilLegacy, 'manifest-path-rejected: gate.log:'), JSON.stringify(evilLegacy.warnings))
-check('evil legacy: runs empty', Array.isArray(evilLegacy.runs) && evilLegacy.runs.length === 0, JSON.stringify(evilLegacy.runs))
-check('evil legacy: runs.dirs warning', hasWarning(evilLegacy, 'manifest-path-rejected: runs.dirs:'), JSON.stringify(evilLegacy.warnings))
-eq('evil legacy: tasks.current null', evilLegacy.tasks?.current, null)
-check('evil legacy: tasks.current warning', hasWarning(evilLegacy, 'manifest-path-rejected: tasks.current:'), JSON.stringify(evilLegacy.warnings))
-eq('evil legacy: tasks dir fallback empty', evilLegacy.tasks?.total, 0)
-check('evil legacy: heartbeats fallback empty', Array.isArray(evilLegacy.heartbeats) && evilLegacy.heartbeats.length === 0)
-check('evil legacy: heartbeats.dir warning', hasWarning(evilLegacy, 'manifest-path-rejected: heartbeats.dir:'), JSON.stringify(evilLegacy.warnings))
-check(
-  'evil legacy: no sentinel content in payload',
-  [GATE_SECRET, RUN_SECRET, CURRENT_SECRET, HEARTBEAT_SECRET].every((secret) => JSON.stringify(evilLegacy).includes(secret) === false),
-)
-
 const evilStore = (await call(route, `${route.path}?root=${encodeURIComponent(evilStoreRoot)}`)).json ?? {}
 eq('evil store: payload ok', evilStore.ok, true)
-eq('evil store: absolute gate.log rejected', evilStore.gate, null)
-check('evil store: gate.log warning', hasWarning(evilStore, 'manifest-path-rejected: gate.log:'), JSON.stringify(evilStore.warnings))
-check('evil store: runs empty', Array.isArray(evilStore.runs) && evilStore.runs.length === 0, JSON.stringify(evilStore.runs))
-check('evil store: runs.dirs warning', hasWarning(evilStore, 'manifest-path-rejected: runs.dirs:'), JSON.stringify(evilStore.warnings))
 eq('evil store: tasks.current null', evilStore.tasks?.current, null)
 check('evil store: tasks.current warning', hasWarning(evilStore, 'manifest-path-rejected: tasks.current:'), JSON.stringify(evilStore.warnings))
+check('evil store: removed gate/runs sections are not projected', evilStore.gate === undefined && evilStore.runs === undefined)
 check(
   'evil store: no sentinel content in payload',
   [GATE_SECRET, RUN_SECRET, CURRENT_SECRET].every((secret) => JSON.stringify(evilStore).includes(secret) === false),
@@ -931,19 +826,30 @@ const noStoreWrite = await throws(
 check('no-store: error was raised', noStoreWrite)
 
 const noStoreStatus = await statusTool.execute({ root: noStoreRoot }, exec)
-eq('no-store: flow_status still reads legacy', noStoreStatus.store, false)
+eq('no-store: flow_status store false', noStoreStatus.store, false)
 eq('no-store: flow_status root', noStoreStatus.root, noStoreRoot)
+eq('no-store: flow_status contract source', noStoreStatus.contract.source, 'defaults')
+eq('no-store: flow_status experiments total 0', noStoreStatus.experiments.total, 0)
+eq('no-store: flow_status tasks total 0', noStoreStatus.tasks.total, 0)
+check('no-store: flow_status gates empty', Array.isArray(noStoreStatus.gates) && noStoreStatus.gates.length === 0)
 
-const noStoreLegacyExp = await expTool.execute({ action: 'list', root: legacyRoot }, exec)
-eq('legacy: flow_exp list falls back to git trailers', noStoreLegacyExp.store, false)
-eq('legacy: flow_exp list source', noStoreLegacyExp.source, 'git-trailers')
+const noStoreExp = await expTool.execute({ action: 'list', root: noStoreRoot }, exec)
+eq('no-store: flow_exp list store false', noStoreExp.store, false)
+eq('no-store: flow_exp list total 0', noStoreExp.total, 0)
+check(
+  'no-store: flow_exp list empty note',
+  Array.isArray(noStoreExp.items) && noStoreExp.items.length === 0 && typeof noStoreExp.note === 'string',
+)
 
-const legacyTaskList = await taskTool.execute({ action: 'list', root: legacyRoot }, exec)
-eq('legacy: flow_task list total', legacyTaskList.total, 4)
-eq('legacy: flow_task list store false', legacyTaskList.store, false)
+const noStoreTaskList = await taskTool.execute({ action: 'list', root: noStoreRoot }, exec)
+eq('no-store: flow_task list store false', noStoreTaskList.store, false)
+eq('no-store: flow_task list total 0', noStoreTaskList.total, 0)
 
-const legacyGateList = await gateTool.execute({ action: 'list', root: legacyRoot }, exec)
-check('legacy: flow_gate list explains missing store', Array.isArray(legacyGateList.gates) && legacyGateList.gates.length === 0 && typeof legacyGateList.note === 'string')
+const noStoreGateList = await gateTool.execute({ action: 'list', root: noStoreRoot }, exec)
+check(
+  'no-store: flow_gate list explains missing store',
+  Array.isArray(noStoreGateList.gates) && noStoreGateList.gates.length === 0 && typeof noStoreGateList.note === 'string',
+)
 
 // ------------------------------------------------------------- remove chain
 
@@ -1068,7 +974,7 @@ eq('inject path: disposal unregisters skills', injectedSkills.size, 0)
 
 // ------------------------------------------------------------- cleanup
 
-for (const root of [storeRoot, legacyRoot, noStoreRoot, secretRoot, evilLegacyRoot, evilStoreRoot, capRoot, wtMain, wtDir]) {
+for (const root of [storeRoot, noStoreRoot, capRoot, wtMain, wtDir, secretRoot, evilStoreRoot]) {
   try {
     rmSync(root, { recursive: true, force: true })
   } catch {

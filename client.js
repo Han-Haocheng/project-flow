@@ -13,13 +13,14 @@
  *
  * The panel is scoped to ONE workspace. `PanelBody` reads the tab's `sessionId`
  * and resolves that session's `cwd` through the `useSessions` prop, then the
- * panel polls `api/project-flow/state?root=<workspace cwd>` — adding
- * `&session=<sessionId>` when the tab has one — every 2500 ms, keeps the last
- * good snapshot on failure, and renders:
+ * panel polls `api/project-flow/state?root=<workspace cwd>` every 2500 ms,
+ * keeps the last good snapshot on failure, and renders:
  *   experiment lineage tree · task ledger progress · gate definitions ·
- *   gate log tail · agent heartbeats · team roster · recent run output.
+ *   agent heartbeats.
+ * The tab's `sessionId` is used only to highlight its own heartbeat; it is not
+ * part of the request URL.
  *
- * Host payload notes (all optional, all tolerated when missing):
+ * Host payload notes (all tolerated when missing):
  *   - `root` is the workspace the snapshot describes; `roots[]` is only
  *     informational — there is no global project switcher any more, because
  *     the panel must never show a different workspace's ledger;
@@ -29,26 +30,17 @@
  *     to `api/project-flow/init` and then reloads the ledger;
  *   - `contract: { source, schema, name }` renders one footer line saying
  *     whether the ledger is inferred ("defaults") or declared by a file;
- *   - `experiments.source` is `store` (a `.dsh/flow/` store: flat `items`, a
- *     `tree` of `{id, children}`, per-status `counts`) or `git-trailers` (the
- *     legacy `groups` per Factor); the tree renders either shape;
- *   - `gates[]` are gate definitions with an optional `lastRun`; a missing or
- *     null `gates` key (legacy payload) hides the section entirely, while an
- *     empty array shows its empty state;
- *   - `gate: null` means the project turned gate logging off — the gate log
- *     section shows a localized empty state instead of an empty log;
- *   - `heartbeats` is a `{ dir, items, counts }` section in store mode and a
- *     plain array on legacy hosts; each item is either the rich shape
- *     (`session/agent/status/goal/task/claims/...`) or the old md shape
- *     (`file/title/statusLine/...`). The two are told apart by field presence,
- *     never by the contract `source`;
+ *   - `experiments` is always the `.dsh/flow/` store: flat `items`, a `tree` of
+ *     `{id, children}`, per-status `counts` (a section without `items`/`tree`
+ *     still renders its empty state);
+ *   - `gates[]` are gate definitions with an optional `lastRun`; an absent
+ *     `gates` key hides the section, while an empty array shows its empty state;
+ *   - `heartbeats` is a `{ dir, items, counts }` section or a plain item array;
+ *     each item is the rich shape (`session/agent/status/goal/task/claims/...`);
  *   - `POST api/project-flow/gate { root, id, enabled }` flips one gate and
  *     answers `{ ok:true, root, gate:{ id, enabled } }` (or `{ ok:false,
  *     error:{ code, message } }`);
- *   - `tasks.counts.other` covers markdown / no-ledger task sources;
- *   - `team` is `null` when the session has no team (the card is omitted);
- *     otherwise it is the read-only `{ ok, role, members, tasks, counts }`
- *     projection rendered next to the live signals.
+ *   - `tasks.counts.other` covers task records whose status is unknown.
  *
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
@@ -82,14 +74,8 @@ window.__ModuleLoader__.load({
     const MAX_TREE_ROWS = 300;
     const MAX_TREE_DEPTH = 12;
     const MAX_GATE_TAIL_LINES = 8;
-    const MAX_GATE_LINES = 10;
-    const MAX_RUN_LINES = 8;
     const MAX_WARNINGS = 10;
     const MAX_LIST_ROWS = 25;
-    /** Members/tasks are capped per list; the remainder collapses to "+N 条未显示". */
-    const MAX_TEAM_MEMBERS = 50;
-    const MAX_TEAM_TASKS = 50;
-    const MAX_TEAM_DIAGNOSTICS = 3;
     const STALE_AFTER_SECONDS = 6 * 60 * 60;
 
     const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
@@ -103,7 +89,6 @@ window.__ModuleLoader__.load({
       'action.open': '打开项目流面板',
       'page.title': '项目流',
       'page.readonly': '只读',
-      'page.root': '项目',
       'top.head': 'HEAD',
       'top.branch': '分支',
       'top.dirty': '{n} 个未提交改动',
@@ -126,16 +111,10 @@ window.__ModuleLoader__.load({
       'error.badRoot': '项目路径无效。',
       'error.generic': '未知错误。',
       'exp.title': '实验树',
-      'exp.confirmed': '已确认',
-      'exp.refuted': '已证伪',
-      'exp.open': '未验证',
       'exp.total': '总数',
-      'exp.empty': '还没有带实验记录的提交。',
-      'exp.emptyHint': '提交带实验 trailer 的 commit 后，实验会出现在这里。',
-      'exp.empty.store': '还没有实验记录。',
-      'exp.emptyHint.store': '运行 flow exp add … 或使用 flow_exp 工具添加第一条实验。',
+      'exp.empty': '还没有实验记录。',
+      'exp.emptyHint': '运行 flow exp add … 或使用 flow_exp 工具添加第一条实验。',
       'exp.more': '还有 {n} 条未显示',
-      'exp.openBanner': '○ {n} 条假设还没验证',
       'exp.detail.hypothesis': '假设',
       'exp.detail.expected': '预期',
       'exp.detail.measured': '实测',
@@ -145,7 +124,6 @@ window.__ModuleLoader__.load({
       'exp.parent': '父实验',
       'exp.commits': '提交',
       'exp.source.store': 'store',
-      'exp.source.trailers': 'git trailer',
       'exp.status.open': '未验证',
       'exp.status.confirmed': '已确认',
       'exp.status.refuted': '已证伪',
@@ -186,10 +164,6 @@ window.__ModuleLoader__.load({
       'gate.noId': '缺少 id，无法切换',
       'gate.error': '切换失败：{message}',
       'signals.title': '实时信号',
-      'signals.gate': '门禁日志',
-      'signals.gate.updated': '更新于 {time}',
-      'signals.gate.empty': '还没有门禁日志。',
-      'signals.gate.disabled': '该项目未启用门禁日志。',
       'signals.heartbeat': '心跳',
       'signals.heartbeat.empty': '没有心跳文件。',
       'signals.heartbeat.stale': '可能已停',
@@ -203,41 +177,12 @@ window.__ModuleLoader__.load({
       'hb.goal': '目标',
       'hb.claims': '文件域',
       'hb.claimsHint': '独占文件域，其他会话不应修改',
-      'team.title': '团队',
-      'team.role.lead': '负责人',
-      'team.role.teammate': '成员',
-      'team.members': '成员',
-      'team.tasks': '任务',
-      'team.counts': '成员 {members} · 任务 {tasks} · 就绪 {ready}',
-      'team.member.status.running': '运行中',
-      'team.member.status.inactive': '未活动',
-      'team.member.status.provisioning': '启动中',
-      'team.member.status.failed': '失败',
-      'team.task.status.pending': '待处理',
-      'team.task.status.in_progress': '进行中',
-      'team.task.status.completed': '已完成',
-      'team.task.status.deleted': '已删除',
-      'team.blocked': '被阻塞',
-      'team.blockedBy': '阻塞于',
-      'team.claims': '写域',
-      'team.conflicts': '写域冲突',
-      'team.diagnostics': '诊断',
-      'team.members.empty': '没有团队成员。',
-      'team.tasks.empty': '没有团队任务。',
-      'team.more': '+{n} 条未显示',
-      'team.expand': '展开任务详情',
-      'signals.runs': '运行输出',
-      'signals.runs.empty': '近 15 分钟没有运行中的输出。',
-      'signals.runs.lines': '尾部 {n} 行',
-      'section.collapse': '收起',
-      'section.expand': '展开',
       'footer.source': '项目',
       'footer.generated': '生成于',
       'footer.contract': '契约：{source}',
       'contract.defaults': '默认布局',
       'footer.warnings': '{n} 条警告',
       'footer.warningsNone': '无警告',
-      'footer.warningsTitle': '警告',
       'workspace.pending': '正在读取当前工作区…',
       'empty.title': '未初始化',
       'empty.init': '初始化',
@@ -255,7 +200,6 @@ window.__ModuleLoader__.load({
       'action.open': 'Open the project flow panel',
       'page.title': 'Project Flow',
       'page.readonly': 'Read-only',
-      'page.root': 'Project',
       'top.head': 'HEAD',
       'top.branch': 'Branch',
       'top.dirty': '{n} uncommitted',
@@ -278,16 +222,10 @@ window.__ModuleLoader__.load({
       'error.badRoot': 'The project path is invalid.',
       'error.generic': 'Unexpected error.',
       'exp.title': 'Experiment tree',
-      'exp.confirmed': 'confirmed',
-      'exp.refuted': 'refuted',
-      'exp.open': 'open',
       'exp.total': 'total',
-      'exp.empty': 'No commit carries an experiment record yet.',
-      'exp.emptyHint': 'Commit with an experiment trailer and it shows up here.',
-      'exp.empty.store': 'No experiments recorded yet.',
-      'exp.emptyHint.store': 'Run flow exp add … or add the first one with the flow_exp tool.',
+      'exp.empty': 'No experiments recorded yet.',
+      'exp.emptyHint': 'Run flow exp add … or add the first one with the flow_exp tool.',
       'exp.more': '{n} more not shown',
-      'exp.openBanner': '○ {n} hypotheses not yet tested',
       'exp.detail.hypothesis': 'Hypothesis',
       'exp.detail.expected': 'Expected',
       'exp.detail.measured': 'Measured',
@@ -297,7 +235,6 @@ window.__ModuleLoader__.load({
       'exp.parent': 'Parent',
       'exp.commits': 'Commits',
       'exp.source.store': 'store',
-      'exp.source.trailers': 'git trailers',
       'exp.status.open': 'open',
       'exp.status.confirmed': 'confirmed',
       'exp.status.refuted': 'refuted',
@@ -338,10 +275,6 @@ window.__ModuleLoader__.load({
       'gate.noId': 'No id; cannot toggle',
       'gate.error': 'Toggle failed: {message}',
       'signals.title': 'Live signals',
-      'signals.gate': 'Gate log',
-      'signals.gate.updated': 'updated {time}',
-      'signals.gate.empty': 'No gate log yet.',
-      'signals.gate.disabled': 'This project has no gate log.',
       'signals.heartbeat': 'Heartbeats',
       'signals.heartbeat.empty': 'No heartbeat files.',
       'signals.heartbeat.stale': 'possibly stopped',
@@ -355,41 +288,12 @@ window.__ModuleLoader__.load({
       'hb.goal': 'Goal',
       'hb.claims': 'Claims',
       'hb.claimsHint': 'Exclusive file scope; other sessions should not modify these',
-      'team.title': 'Team',
-      'team.role.lead': 'lead',
-      'team.role.teammate': 'teammate',
-      'team.members': 'Members',
-      'team.tasks': 'Tasks',
-      'team.counts': 'members {members} · tasks {tasks} · ready {ready}',
-      'team.member.status.running': 'running',
-      'team.member.status.inactive': 'inactive',
-      'team.member.status.provisioning': 'provisioning',
-      'team.member.status.failed': 'failed',
-      'team.task.status.pending': 'pending',
-      'team.task.status.in_progress': 'in progress',
-      'team.task.status.completed': 'completed',
-      'team.task.status.deleted': 'deleted',
-      'team.blocked': 'blocked',
-      'team.blockedBy': 'Blocked by',
-      'team.claims': 'Write scopes',
-      'team.conflicts': 'Write-scope conflicts',
-      'team.diagnostics': 'Diagnostics',
-      'team.members.empty': 'No team members.',
-      'team.tasks.empty': 'No team tasks.',
-      'team.more': '+{n} more not shown',
-      'team.expand': 'Expand task details',
-      'signals.runs': 'Run output',
-      'signals.runs.empty': 'No run output in the last 15 minutes.',
-      'signals.runs.lines': 'last {n} lines',
-      'section.collapse': 'Collapse',
-      'section.expand': 'Expand',
       'footer.source': 'project',
       'footer.generated': 'generated',
       'footer.contract': 'contract: {source}',
       'contract.defaults': 'default layout',
       'footer.warnings': '{n} warnings',
       'footer.warningsNone': 'no warnings',
-      'footer.warningsTitle': 'Warnings',
       'workspace.pending': 'Reading the current workspace…',
       'empty.title': 'Not initialized',
       'empty.init': 'Initialize',
@@ -476,13 +380,6 @@ window.__ModuleLoader__.load({
       return absoluteDate(now - seconds * 1000);
     }
 
-    function formatBytes(size) {
-      if (!Number.isFinite(size) || size < 0) return '';
-      if (size < 1024) return size + ' B';
-      if (size < 1024 * 1024) return (size / 1024).toFixed(size < 10240 ? 1 : 0) + ' KB';
-      return (size / (1024 * 1024)).toFixed(1) + ' MB';
-    }
-
     function basename(path) {
       const text = asText(path);
       if (!text) return '';
@@ -536,7 +433,7 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region state normalization
-    /** One flat store experiment; legacy group items are not passed through here. */
+    /** One flat store experiment record. */
     function normalizeItem(raw) {
       const item = asObject(raw);
       return {
@@ -545,8 +442,7 @@ window.__ModuleLoader__.load({
         hypothesis: asText(item.hypothesis),
         factor: asText(item.factor),
         parent: asText(item.parent) || null,
-        status: asText(item.status) || asText(item.verdict),
-        verdict: asText(item.verdict),
+        status: asText(item.status),
         expected: asText(item.expected),
         measured: asText(item.measured),
         scale: asText(item.scale),
@@ -555,9 +451,6 @@ window.__ModuleLoader__.load({
         created_at: asText(item.created_at),
         updated_at: asText(item.updated_at),
         notes: asText(item.notes),
-        at: asText(item.at),
-        date: asText(item.date),
-        sha: asText(item.sha),
       };
     }
 
@@ -622,7 +515,7 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** `undefined`/`null` hides the section (legacy payload); `[]` shows it empty. */
+    /** `undefined`/`null` hides the section; `[]` shows it empty. */
     function normalizeGates(rawGates) {
       if (rawGates === undefined || rawGates === null) return null;
       return asArray(rawGates)
@@ -631,9 +524,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One heartbeat. Rich store items and legacy md items are distinguished by
-     * field presence (`session`/`agent`/`status`/`goal`/`claims`/…) — never by
-     * the contract `source` — so a missing or extra field never throws.
+     * One heartbeat. Every row is the rich shape; a missing or extra field
+     * never throws (the panel simply shows less).
      */
     function normalizeHeartbeat(raw) {
       const entry = asObject(raw);
@@ -641,21 +533,10 @@ window.__ModuleLoader__.load({
       const updatedAt = asText(entry.updated_at);
       const ageSeconds = asNumber(entry.ageSeconds, null);
       const status = asText(entry.status).toLowerCase();
-      const rich =
-        entry.session !== undefined ||
-        entry.agent !== undefined ||
-        entry.goal !== undefined ||
-        entry.task !== undefined ||
-        entry.claims !== undefined ||
-        entry.status !== undefined ||
-        entry.stats !== undefined ||
-        entry.updated_at !== undefined ||
-        entry.last_action !== undefined;
       const stale =
         entry.stale === true ||
         (entry.stale !== false && Number.isFinite(ageSeconds) && ageSeconds > STALE_AFTER_SECONDS);
       return {
-        rich,
         file: asText(entry.file),
         title: asText(entry.title),
         statusLine: asText(entry.statusLine),
@@ -682,7 +563,7 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** `heartbeats` is `{ dir, items, counts }` in store mode or a plain array. */
+    /** `heartbeats` is `{ dir, items, counts }` or a plain item array. */
     function normalizeHeartbeats(raw) {
       const section = Array.isArray(raw) ? null : asObject(raw);
       const rawItems = Array.isArray(raw) ? raw : asArray(section.items);
@@ -703,152 +584,36 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** One team member; unknown fields fall back to empty text, never throw. */
-    function normalizeTeamMember(raw) {
-      const member = asObject(raw);
-      const role = asText(member.role).trim().toLowerCase();
-      const status = asText(member.status).trim().toLowerCase();
-      return {
-        id: asText(member.id),
-        name: asText(member.name),
-        role: role === 'lead' || role === 'teammate' ? role : '',
-        status,
-        description: asText(member.description),
-        model: asText(member.model),
-        diagnostics: asArray(member.diagnostics)
-          .map((entry) => asText(entry).trim())
-          .filter(Boolean),
-      };
-    }
-
-    /** One team task; `ready` keeps a tri-state so an absent flag is not "blocked". */
-    function normalizeTeamTask(raw) {
-      const task = asObject(raw);
-      return {
-        id: asText(task.id),
-        revision: asNumber(task.revision, null),
-        subject: asText(task.subject),
-        status: asText(task.status).trim().toLowerCase(),
-        ownerName: asText(task.ownerName),
-        ready: task.ready === true ? true : task.ready === false ? false : null,
-        blockedBy: asArray(task.blockedBy)
-          .map((entry) => asText(entry).trim())
-          .filter(Boolean),
-        writeScopes: asArray(task.writeScopes)
-          .map((entry) => asText(entry).trim())
-          .filter(Boolean),
-        writeScopeWarnings: asArray(task.writeScopeWarnings)
-          .map((entry) => asText(entry).trim())
-          .filter(Boolean),
-      };
-    }
-
-    /** A blocked row is explicitly `ready:false` and not yet completed. */
-    function teamTaskBlocked(task) {
-      return task && task.ready === false && task.status !== 'completed' && task.status !== 'deleted';
-    }
-
-    /**
-     * Read-only team projection of the current session. `undefined`/`null` and
-     * any payload without `ok:true` mean "no team card" (rendered as nothing).
-     */
-    function normalizeTeam(raw) {
-      if (raw === undefined || raw === null) return null;
-      const team = asObject(raw);
-      if (team.ok !== true) return null;
-
-      const members = asArray(team.members)
-        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
-        .map(normalizeTeamMember);
-      const tasks = asArray(team.tasks)
-        .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
-        .map(normalizeTeamTask);
-      const countsSrc = asObject(team.counts);
-      const derivedReady = tasks.filter((task) => task.ready === true && task.status !== 'completed').length;
-      const derivedBlocked = tasks.filter(teamTaskBlocked).length;
-      const role = asText(team.role).trim().toLowerCase();
-
-      return {
-        ok: true,
-        teamId: asText(team.teamId),
-        role: role === 'lead' || role === 'teammate' ? role : '',
-        name: asText(team.name),
-        members: members.slice(0, MAX_TEAM_MEMBERS),
-        memberOverflow: Math.max(0, members.length - MAX_TEAM_MEMBERS),
-        tasks: tasks.slice(0, MAX_TEAM_TASKS),
-        taskOverflow: Math.max(0, tasks.length - MAX_TEAM_TASKS),
-        counts: {
-          members: asNumber(countsSrc.members, members.length),
-          tasks: asNumber(countsSrc.tasks, tasks.length),
-          ready: asNumber(countsSrc.ready, derivedReady),
-          blocked: asNumber(countsSrc.blocked, derivedBlocked),
-          running: asNumber(
-            countsSrc.running,
-            members.filter((member) => member.status === 'running').length
-          ),
-        },
-      };
-    }
-
     /** Tolerant mapping of the host payload; never throws on missing fields. */
     function normalize(payload) {
       const src = asObject(payload);
       const headSrc = asObject(src.head);
-      /* Contract spelling is `experiments`; `exp` stays accepted for older hosts. */
-      const expSrc = asObject(src.experiments !== undefined ? src.experiments : src.exp);
+      const expSrc = asObject(src.experiments);
       const tasksSrc = asObject(src.tasks);
-      const gateSrc = asObject(src.gate);
-      /* `gate: null` means the project turned the gate section off (not "empty"). */
-      const gateDisabled = src.gate === null;
       /* `contract` is optional; when absent the footer line is hidden entirely. */
       const contractSrc =
         src.contract && typeof src.contract === 'object' && !Array.isArray(src.contract)
           ? src.contract
           : null;
 
-      const groups = asArray(expSrc.groups).map((rawGroup) => {
-        const group = asObject(rawGroup);
-        return {
-          factor: asText(group.factor),
-          items: asArray(group.items).filter((item) => item && typeof item === 'object'),
-        };
-      });
-
-      /* Store mode: flat `items` + a `tree` of `{id, children}` + status `counts`. */
       const items = asArray(expSrc.items)
         .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
         .map(normalizeItem);
       const tree = asArray(expSrc.tree)
         .filter((node) => node && typeof node === 'object' && !Array.isArray(node))
         .map((node) => normalizeTreeNode(node, 0));
-      const storeMode = asText(expSrc.source) === 'store' || items.length > 0 || tree.length > 0;
 
-      /* Legacy tally from `groups`; store tally from each item's `status`. */
-      let legacyConfirmed = 0;
-      let legacyRefuted = 0;
-      let legacyOpen = 0;
-      groups.forEach((group) => {
-        group.items.forEach((item) => {
-          const verdict = asText(item.verdict);
-          if (verdict === 'confirmed') legacyConfirmed += 1;
-          else if (verdict === 'refuted') legacyRefuted += 1;
-          else legacyOpen += 1;
-        });
-      });
+      /* Status tally from each item; explicit `counts` on the payload win. */
       const statusTally = { open: 0, confirmed: 0, refuted: 0, abandoned: 0 };
       items.forEach((item) => {
         if (Object.prototype.hasOwnProperty.call(statusTally, item.status)) statusTally[item.status] += 1;
       });
-      const tallies = storeMode
-        ? statusTally
-        : { open: legacyOpen, confirmed: legacyConfirmed, refuted: legacyRefuted, abandoned: 0 };
       const expCounts = asObject(expSrc.counts);
-      /* Explicit top-level counts (older hosts) stay ahead of the tally. */
       const counts = {
-        open: asNumber(expCounts.open, asNumber(expSrc.open, tallies.open)),
-        confirmed: asNumber(expCounts.confirmed, asNumber(expSrc.confirmed, tallies.confirmed)),
-        refuted: asNumber(expCounts.refuted, asNumber(expSrc.refuted, tallies.refuted)),
-        abandoned: asNumber(expCounts.abandoned, tallies.abandoned),
+        open: asNumber(expCounts.open, statusTally.open),
+        confirmed: asNumber(expCounts.confirmed, statusTally.confirmed),
+        refuted: asNumber(expCounts.refuted, statusTally.refuted),
+        abandoned: asNumber(expCounts.abandoned, statusTally.abandoned),
       };
       const expTotal = asNumber(
         expSrc.total,
@@ -883,8 +648,6 @@ window.__ModuleLoader__.load({
           dirty: asNumber(headSrc.dirty, 0),
         },
         exp: {
-          source: asText(expSrc.source) || 'git-trailers',
-          store: storeMode,
           total: expTotal,
           confirmed: counts.confirmed,
           refuted: counts.refuted,
@@ -893,7 +656,6 @@ window.__ModuleLoader__.load({
           counts,
           items,
           tree,
-          groups,
         },
         tasks: {
           total: asNumber(tasksSrc.total, 0),
@@ -902,34 +664,18 @@ window.__ModuleLoader__.load({
             active: asNumber(taskCountsSrc.active, 0),
             done: asNumber(taskCountsSrc.done, 0),
             archived: asNumber(taskCountsSrc.archived, 0),
-            /* Markdown / no-ledger projects often report only this bucket. */
+            /* Task records whose status is not one of the four canonical ones. */
             other: asNumber(taskCountsSrc.other, 0),
           },
           current: tasksSrc.current === undefined ? null : tasksSrc.current,
-          /* Older Host payloads omit `draft`; an absent array simply lists nothing. */
+          /* A host payload may omit `draft`; an absent array simply lists nothing. */
           draft: asArray(tasksSrc.draft).filter((task) => task && typeof task === 'object'),
           active: asArray(tasksSrc.active).filter((task) => task && typeof task === 'object'),
           recentDone: asArray(tasksSrc.recentDone).filter((task) => task && typeof task === 'object'),
         },
         gates,
-        gate: {
-          disabled: gateDisabled,
-          lines: asArray(gateSrc.lines).map(asText),
-          mtime: asNumber(gateSrc.mtime, null),
-          size: asNumber(gateSrc.size, null),
-        },
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
-        /* `null` hides the read-only team card entirely (no empty placeholder). */
-        team: normalizeTeam(src.team),
-        runs: asArray(src.runs)
-          .filter((entry) => entry && typeof entry === 'object')
-          .map((entry) => ({
-            path: asText(entry.path),
-            ageSeconds: asNumber(entry.ageSeconds, null),
-            size: asNumber(entry.size, null),
-            lines: asArray(entry.lines).map(asText),
-          })),
         warnings,
       };
     }
@@ -1171,17 +917,7 @@ window.__ModuleLoader__.load({
       const exp = props.exp || {};
       const t = props.t;
       const now = props.now;
-      const [collapsedGroups, setCollapsedGroups] = useState({});
       const [openItems, setOpenItems] = useState({});
-
-      const toggleGroup = (factor) => {
-        setCollapsedGroups((previous) => {
-          const next = Object.assign({}, previous);
-          if (next[factor]) delete next[factor];
-          else next[factor] = true;
-          return next;
-        });
-      };
 
       const toggleItem = (key) => {
         setOpenItems((previous) => {
@@ -1192,158 +928,62 @@ window.__ModuleLoader__.load({
         });
       };
 
-      const groups = asArray(exp.groups);
-      const items = asArray(exp.items);
-      const storeMode = exp.store === true || items.length > 0 || asArray(exp.tree).length > 0;
       const counts = asObject(exp.counts);
-      const confirmed = asNumber(counts.confirmed, asNumber(exp.confirmed, 0));
-      const refuted = asNumber(counts.refuted, asNumber(exp.refuted, 0));
-      const openCount = asNumber(counts.open, asNumber(exp.open, 0));
+      const confirmed = asNumber(counts.confirmed, 0);
+      const refuted = asNumber(counts.refuted, 0);
+      const openCount = asNumber(counts.open, 0);
       const abandoned = asNumber(counts.abandoned, 0);
       const total = asNumber(exp.total, confirmed + refuted + openCount + abandoned);
 
       const children = [];
-      const treeRows = storeMode ? flattenTree(composeTree(exp), [], []) : [];
+      const treeRows = flattenTree(composeTree(exp), [], []);
       let budget = MAX_TREE_ROWS;
       let hidden = 0;
 
-      if (treeRows.length > 0) {
-        treeRows.forEach((row, index) => {
-          if (budget <= 0) {
-            hidden += 1;
-            return;
-          }
-          budget -= 1;
-          const item = row.item || {};
-          const key = 'tree-' + index + '-' + (item.id || '');
-          const expanded = openItems[key] === true;
-          const verdict = verdictOf(asText(item.status) || asText(item.verdict));
-          const label = asText(item.title) || asText(item.hypothesis);
-          const meta = joinParts([
-            asText(item.scale),
-            relativeMoment(Date.parse(asText(item.updated_at)), now, t) || '',
-            shortSha(asArray(item.commits)[0]),
-          ]);
-
-          children.push(
-            React.createElement(
-              'div',
-              { className: 'project-flow-treeItem', key },
-              React.createElement(
-                'button',
-                {
-                  type: 'button',
-                  className: 'project-flow-row',
-                  'aria-expanded': expanded ? true : false,
-                  title: asText(item.hypothesis) || label || undefined,
-                  onClick: () => toggleItem(key),
-                },
-                React.createElement('span', { className: 'project-flow-branch', 'aria-hidden': 'true' }, row.prefix),
-                React.createElement(
-                  'span',
-                  { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' },
-                  verdict.glyph
-                ),
-                React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id) || t('misc.dash')),
-                React.createElement('span', { className: 'project-flow-rowHyp' }, label || t('misc.dash')),
-                React.createElement('span', { className: 'project-flow-rowMeta' }, meta)
-              ),
-              expanded ? React.createElement(DetailBlock, { item, t }) : null
-            )
-          );
-        });
-      } else {
-        // 未验证的假设永远置顶：这是「容易忘」的部分（legacy 分组模式）。
-        const openList = [];
-        groups.forEach((group) => {
-          asArray(group.items).forEach((item) => {
-            if (!item || item.verdict) return;
-            openList.push(item);
-          });
-        });
-        if (openList.length > 0) {
-          const openRows = openList.slice(0, 5).map((item) =>
-            React.createElement(
-              'div',
-              { className: 'project-flow-row', key: 'open-' + item.id },
-              React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--open', 'aria-hidden': 'true' }, '\u25cb'),
-              React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id)),
-              React.createElement('span', { className: 'project-flow-rowHyp' }, asText(item.hypothesis) || t('misc.dash'))
-            )
-          );
-          children.push(
-            React.createElement(
-              'div',
-              { className: 'project-flow-guide', key: 'open-box' },
-              React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.openBanner', { n: openList.length })),
-              openRows,
-              openList.length > openRows.length
-                ? React.createElement('p', { className: 'project-flow-muted' }, t('exp.more', { n: openList.length - openRows.length }))
-                : null
-            )
-          );
+      treeRows.forEach((row, index) => {
+        if (budget <= 0) {
+          hidden += 1;
+          return;
         }
+        budget -= 1;
+        const item = row.item || {};
+        const key = 'tree-' + index + '-' + (item.id || '');
+        const expanded = openItems[key] === true;
+        const verdict = verdictOf(item.status);
+        const label = asText(item.title) || asText(item.hypothesis);
+        const meta = joinParts([
+          asText(item.scale),
+          relativeMoment(Date.parse(asText(item.updated_at)), now, t) || '',
+          shortSha(asArray(item.commits)[0]),
+        ]);
 
-        groups.forEach((group, groupIndex) => {
-          const factor = group.factor || t('misc.dash');
-          const groupKey = 'group-' + groupIndex + '-' + factor;
-          const collapsed = collapsedGroups[groupKey] === true;
-          children.push(
+        children.push(
+          React.createElement(
+            'div',
+            { className: 'project-flow-treeItem', key },
             React.createElement(
               'button',
               {
                 type: 'button',
-                className: 'project-flow-groupHead',
-                key: groupKey,
-                'aria-expanded': collapsed ? false : true,
-                onClick: () => toggleGroup(groupKey),
+                className: 'project-flow-row',
+                'aria-expanded': expanded ? true : false,
+                title: asText(item.hypothesis) || label || undefined,
+                onClick: () => toggleItem(key),
               },
-              React.createElement(Caret, { open: !collapsed }),
-              React.createElement('span', { className: 'project-flow-groupName', title: factor }, factor),
-              React.createElement('span', { className: 'project-flow-count' }, ' (' + group.items.length + ')')
-            )
-          );
-          if (collapsed) return;
-
-          group.items.forEach((item, itemIndex) => {
-            if (budget <= 0) {
-              hidden += 1;
-              return;
-            }
-            budget -= 1;
-            const id = asText(item.id) || t('misc.dash');
-            const verdict = verdictOf(item.verdict);
-            const itemKey = 'item-' + groupIndex + '-' + itemIndex;
-            const expanded = openItems[itemKey] === true;
-            const hypothesis = asText(item.hypothesis);
-            const meta = joinParts([asText(item.scale), asText(item.at) || asText(item.date), shortSha(item.sha)]);
-            const isLast = itemIndex === group.items.length - 1;
-
-            children.push(
+              React.createElement('span', { className: 'project-flow-branch', 'aria-hidden': 'true' }, row.prefix),
               React.createElement(
-                'div',
-                { className: 'project-flow-treeItem', key: itemKey },
-                React.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'project-flow-row',
-                    'aria-expanded': expanded ? true : false,
-                    title: hypothesis || undefined,
-                    onClick: () => toggleItem(itemKey),
-                  },
-                  React.createElement('span', { className: 'project-flow-connector', 'aria-hidden': 'true' }, isLast ? '\u2514\u2500' : '\u251c\u2500'),
-                  React.createElement('span', { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' }, verdict.glyph),
-                  React.createElement('span', { className: 'project-flow-rowId' }, id),
-                  React.createElement('span', { className: 'project-flow-rowHyp' }, hypothesis || t('misc.dash')),
-                  React.createElement('span', { className: 'project-flow-rowMeta' }, meta)
-                ),
-                expanded ? React.createElement(DetailBlock, { item, t }) : null
-              )
-            );
-          });
-        });
-      }
+                'span',
+                { className: 'project-flow-verdict project-flow-verdict--' + verdict.cls, 'aria-hidden': 'true' },
+                verdict.glyph
+              ),
+              React.createElement('span', { className: 'project-flow-rowId' }, asText(item.id) || t('misc.dash')),
+              React.createElement('span', { className: 'project-flow-rowHyp' }, label || t('misc.dash')),
+              React.createElement('span', { className: 'project-flow-rowMeta' }, meta)
+            ),
+            expanded ? React.createElement(DetailBlock, { item, t }) : null
+          )
+        );
+      });
 
       if (hidden > 0) {
         children.push(
@@ -1352,7 +992,7 @@ window.__ModuleLoader__.load({
       }
 
       const chips = [
-        React.createElement(Chip, { key: 'source', tone: 'brand' }, t(storeMode ? 'exp.source.store' : 'exp.source.trailers')),
+        React.createElement(Chip, { key: 'source', tone: 'brand' }, t('exp.source.store')),
         React.createElement(Chip, { key: 'confirmed', tone: 'ok' }, '\u2714 ' + confirmed + ' ' + t('exp.status.confirmed')),
         React.createElement(Chip, { key: 'refuted', tone: 'error' }, '\u2718 ' + refuted + ' ' + t('exp.status.refuted')),
         React.createElement(Chip, { key: 'open', tone: 'warn' }, '\u25cb ' + openCount + ' ' + t('exp.status.open')),
@@ -1377,8 +1017,8 @@ window.__ModuleLoader__.load({
           ? React.createElement(
               'div',
               { className: 'project-flow-guide' },
-              React.createElement('p', { className: 'project-flow-guideTitle' }, t(storeMode ? 'exp.empty.store' : 'exp.empty')),
-              React.createElement('p', { className: 'project-flow-muted' }, t(storeMode ? 'exp.emptyHint.store' : 'exp.emptyHint'))
+              React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.empty')),
+              React.createElement('p', { className: 'project-flow-muted' }, t('exp.emptyHint'))
             )
           : children.length === 0
             ? React.createElement(EmptyLine, null, t('misc.dash'))
@@ -1789,32 +1429,15 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** Live signals: the agent heartbeats of this workspace. */
     function SignalsCard(props) {
-      /* Every list is tolerated when absent or not an array. */
-      const gate = props.gate;
-      /* Accept either the flattened array or a raw `{ items, counts }` section. */
-      const heartbeatSection = Array.isArray(props.heartbeats) ? null : asObject(props.heartbeats);
-      const heartbeatItems = Array.isArray(props.heartbeats)
-        ? props.heartbeats
-        : asArray(heartbeatSection.items);
-      /* Items straight from `state` may be raw; already-normalized ones are kept. */
-      const heartbeats = heartbeatItems
-        .map((beat) =>
-          beat && typeof beat === 'object' && beat.rich === undefined ? normalizeHeartbeat(beat) : beat
-        )
-        .filter((beat) => beat && typeof beat === 'object');
-      const heartbeatCounts = asObject(
-        props.heartbeatCounts !== undefined
-          ? props.heartbeatCounts
-          : asObject(heartbeatSection).counts
-      );
-      const runs = asArray(props.runs);
+      const heartbeats = asArray(props.heartbeats);
+      const heartbeatCounts = asObject(props.heartbeatCounts);
       const t = props.t;
       const now = props.now;
       const sessionId = props.sessionId;
 
       const [closed, setClosed] = useState({});
-      const [openRuns, setOpenRuns] = useState({});
 
       const toggleSection = (key) => {
         setClosed((previous) => {
@@ -1825,26 +1448,9 @@ window.__ModuleLoader__.load({
         });
       };
 
-      const toggleRun = (key) => {
-        setOpenRuns((previous) => {
-          const next = Object.assign({}, previous);
-          if (next[key]) delete next[key];
-          else next[key] = true;
-          return next;
-        });
-      };
-
-      /* `gate` may arrive as null (section switched off) or be missing. */
-      const gateInfo = gate && typeof gate === 'object' ? gate : {};
-      const gateDisabled = gateInfo.disabled === true;
-      const gateAll = gateDisabled ? [] : asArray(gateInfo.lines);
-      const gateLines = gateAll.slice(-MAX_GATE_LINES);
-      const gateAge = gateDisabled ? null : relativeMoment(gateInfo.mtime, now, t);
       const hbActive = asNumber(
         heartbeatCounts.active,
-        heartbeats.filter((beat) =>
-          beat.status ? beat.status === 'working' || beat.status === 'idle' : beat.stale !== true
-        ).length
+        heartbeats.filter((beat) => beat.status === 'working' || beat.status === 'idle').length
       );
       const hbTotal = asNumber(heartbeatCounts.total, heartbeats.length);
 
@@ -1852,21 +1458,6 @@ window.__ModuleLoader__.load({
         'section',
         { className: 'project-flow-card' },
         React.createElement('h2', { className: 'project-flow-cardTitle project-flow-cardTitle--spaced' }, t('signals.title')),
-        React.createElement(
-          Section,
-          {
-            title: t('signals.gate'),
-            open: !closed.gate,
-            onToggle: () => toggleSection('gate'),
-            count: gateAll.length,
-          },
-          gateAge
-            ? React.createElement('p', { className: 'project-flow-muted project-flow-sectionNote' }, t('signals.gate.updated', { time: gateAge }))
-            : null,
-          gateLines.length === 0
-            ? React.createElement(EmptyLine, null, t(gateDisabled ? 'signals.gate.disabled' : 'signals.gate.empty'))
-            : React.createElement('pre', { className: 'project-flow-pre' }, gateLines.join('\n'))
-        ),
         React.createElement(
           Section,
           {
@@ -1904,30 +1495,6 @@ window.__ModuleLoader__.load({
                         t('signals.heartbeat.stale')
                       )
                     : null;
-
-                  /* Legacy md/json heartbeat: keep the title + statusLine layout. */
-                  if (beat.rich !== true) {
-                    return React.createElement(
-                      'li',
-                      { className: 'project-flow-beat' + (current ? ' project-flow-beat--current' : ''), key },
-                      React.createElement(
-                        'div',
-                        { className: 'project-flow-beatHead' },
-                        React.createElement(
-                          'span',
-                          { className: 'project-flow-beatName', title: beat.file || undefined },
-                          beat.title || basename(beat.file) || t('misc.dash')
-                        ),
-                        currentChip,
-                        timeText ? React.createElement('span', { className: 'project-flow-beatTime' }, timeText) : null,
-                        staleChip
-                      ),
-                      beat.statusLine
-                        ? React.createElement('p', { className: 'project-flow-beatStatus', title: beat.statusLine }, beat.statusLine)
-                        : null
-                    );
-                  }
-
                   const status = heartbeatStatusOf(beat.status, t);
                   const displayName =
                     beat.agent || shortSession(beat.session) || beat.title || basename(beat.file) || t('misc.dash');
@@ -1935,7 +1502,7 @@ window.__ModuleLoader__.load({
                   return React.createElement(
                     'li',
                     {
-                      className: 'project-flow-beat project-flow-beat--rich' + (current ? ' project-flow-beat--current' : ''),
+                      className: 'project-flow-beat' + (current ? ' project-flow-beat--current' : ''),
                       key,
                     },
                     React.createElement(
@@ -2003,304 +1570,12 @@ window.__ModuleLoader__.load({
                   );
                 })
               )
-        ),
-        React.createElement(
-          Section,
-          {
-            title: t('signals.runs'),
-            open: !closed.runs,
-            onToggle: () => toggleSection('runs'),
-            count: runs.length,
-          },
-          runs.length === 0
-            ? React.createElement(EmptyLine, null, t('signals.runs.empty'))
-            : React.createElement(
-                'div',
-                { className: 'project-flow-runList' },
-                runs.map((run, index) => {
-                  const key = 'run-' + index;
-                  const expanded = openRuns[key] === true;
-                  const timeText = ageText(run.ageSeconds, null, now, t);
-                  return React.createElement(
-                    'div',
-                    { className: 'project-flow-run', key },
-                    React.createElement(
-                      'button',
-                      {
-                        type: 'button',
-                        className: 'project-flow-runHead',
-                        'aria-expanded': expanded ? true : false,
-                        onClick: () => toggleRun(key),
-                        title: run.path || undefined,
-                      },
-                      React.createElement(Caret, { open: expanded }),
-                      React.createElement('span', { className: 'project-flow-runPath' }, run.path || t('misc.dash')),
-                      React.createElement(
-                        'span',
-                        { className: 'project-flow-runMeta' },
-                        joinParts([timeText, formatBytes(run.size)])
-                      )
-                    ),
-                    expanded
-                      ? run.lines.length === 0
-                        ? React.createElement(EmptyLine, null, t('misc.dash'))
-                        : React.createElement(
-                            'pre',
-                            { className: 'project-flow-pre project-flow-pre--run' },
-                            run.lines.slice(-MAX_RUN_LINES).join('\n')
-                          )
-                      : null
-                  );
-                })
-              )
         )
       );
     }
-    /** Member status chip; unknown values stay visible in the neutral chip. */
-    function teamMemberStatusOf(status, t) {
-      const value = asText(status);
-      if (value === 'running') return { tone: 'ok', text: t('team.member.status.running') };
-      if (value === 'inactive') return { tone: 'muted', text: t('team.member.status.inactive') };
-      if (value === 'provisioning') return { tone: 'warn', text: t('team.member.status.provisioning') };
-      if (value === 'failed') return { tone: 'error', text: t('team.member.status.failed') };
-      return value ? { tone: null, text: value } : null;
-    }
-
-    /** Task status chip; unknown values stay visible in the neutral chip. */
-    function teamTaskStatusOf(status, t) {
-      const value = asText(status);
-      if (value === 'pending') return { tone: 'muted', text: t('team.task.status.pending') };
-      if (value === 'in_progress') return { tone: 'brand', text: t('team.task.status.in_progress') };
-      if (value === 'completed') return { tone: 'ok', text: t('team.task.status.completed') };
-      if (value === 'deleted') return { tone: 'muted', text: t('team.task.status.deleted') };
-      return value ? { tone: null, text: value } : null;
-    }
-
-    /** Expanded team task: blockers, write scopes and (in error color) conflicts. */
-    function TeamTaskDetail(props) {
-      const task = asObject(props.task);
-      const t = props.t;
-      const listText = (items) => (items.length > 0 ? items.join('\n') : t('misc.dash'));
-      const blockedBy = asArray(task.blockedBy);
-      const writeScopes = asArray(task.writeScopes);
-      const warnings = asArray(task.writeScopeWarnings);
-      return React.createElement(
-        'div',
-        { className: 'project-flow-detail' },
-        React.createElement(
-          'div',
-          { className: 'project-flow-detailItem' },
-          React.createElement('span', { className: 'project-flow-detailLabel' }, t('team.blockedBy')),
-          React.createElement('pre', { className: 'project-flow-detailValue' }, listText(blockedBy))
-        ),
-        React.createElement(
-          'div',
-          { className: 'project-flow-detailItem' },
-          React.createElement('span', { className: 'project-flow-detailLabel' }, t('team.claims')),
-          React.createElement('pre', { className: 'project-flow-detailValue' }, listText(writeScopes))
-        ),
-        warnings.length > 0
-          ? React.createElement(
-              'div',
-              { className: 'project-flow-detailItem' },
-              React.createElement(
-                'span',
-                { className: 'project-flow-detailLabel project-flow-teamConflictLabel' },
-                t('team.conflicts')
-              ),
-              React.createElement(
-                'pre',
-                { className: 'project-flow-detailValue project-flow-teamConflict' },
-                warnings.join('\n')
-              )
-            )
-          : null
-      );
-    }
-
-    /**
-     * Read-only team projection of the current session: roster status, task
-     * readiness and write-scope conflicts. No control here writes anything; the
-     * only interaction is expanding a task's details. `null` or `ok:false`
-     * means no team scope, so the whole card is omitted rather than left empty.
-     */
-    function TeamCard(props) {
-      const t = typeof props.t === 'function' ? props.t : (key) => key;
-      const team = props.team;
-      const [openTasks, setOpenTasks] = useState({});
-      if (!team || team.ok !== true) return null;
-
-      const toggleTask = (key) => {
-        setOpenTasks((previous) => {
-          const next = Object.assign({}, previous);
-          if (next[key]) delete next[key];
-          else next[key] = true;
-          return next;
-        });
-      };
-
-      const counts = asObject(team.counts);
-      const members = asArray(team.members);
-      const tasks = asArray(team.tasks);
-      const roleChip = team.role
-        ? React.createElement(
-            Chip,
-            { tone: team.role === 'lead' ? 'brand' : null },
-            t('team.role.' + team.role)
-          )
-        : null;
-
-      const memberRows = members.map((member, index) => {
-        const status = teamMemberStatusOf(member.status, t);
-        const sub = member.model || member.description;
-        const diagnostics = asArray(member.diagnostics);
-        const diagMore = diagnostics.length - MAX_TEAM_DIAGNOSTICS;
-        return React.createElement(
-          'li',
-          { className: 'project-flow-teamMember', key: 'team-member-' + index + '-' + (member.id || '') },
-          React.createElement(
-            'div',
-            { className: 'project-flow-teamMemberHead' },
-            React.createElement(
-              'span',
-              {
-                className:
-                  'project-flow-teamName' + (member.role === 'lead' ? ' project-flow-teamName--lead' : ''),
-                title: member.id || undefined,
-              },
-              member.name || member.id || t('misc.dash')
-            ),
-            status ? React.createElement(Chip, { tone: status.tone }, status.text) : null
-          ),
-          sub
-            ? React.createElement(
-                'p',
-                {
-                  className:
-                    'project-flow-teamSub' + (member.model ? ' project-flow-teamSub--mono' : ''),
-                  title: sub,
-                },
-                sub
-              )
-            : null,
-          diagnostics.length > 0
-            ? React.createElement(
-                'details',
-                { className: 'project-flow-teamDiag' },
-                React.createElement(
-                  'summary',
-                  { className: 'project-flow-teamDiagSummary' },
-                  t('team.diagnostics') + ' (' + diagnostics.length + ')'
-                ),
-                React.createElement(
-                  'ul',
-                  { className: 'project-flow-teamDiagList' },
-                  diagnostics.slice(0, MAX_TEAM_DIAGNOSTICS).map((entry, diagIndex) =>
-                    React.createElement(
-                      'li',
-                      { className: 'project-flow-teamDiagItem', key: 'diag-' + diagIndex, title: entry },
-                      entry
-                    )
-                  ),
-                  diagMore > 0
-                    ? React.createElement('li', { className: 'project-flow-teamDiagMore' }, '+' + diagMore)
-                    : null
-                )
-              )
-            : null
-        );
-      });
-
-      const taskRows = tasks.map((task, index) => {
-        const key = 'team-task-' + index + '-' + (task.id || '');
-        const expanded = openTasks[key] === true;
-        const status = teamTaskStatusOf(task.status, t);
-        const blocked = teamTaskBlocked(task);
-        return React.createElement(
-          'div',
-          {
-            className:
-              'project-flow-teamTask' + (task.status === 'deleted' ? ' project-flow-teamTask--deleted' : ''),
-            key,
-          },
-          React.createElement(
-            'button',
-            {
-              type: 'button',
-              className: 'project-flow-teamTaskHead',
-              'aria-expanded': expanded ? true : false,
-              title: expanded ? t('section.collapse') : t('team.expand'),
-              onClick: () => toggleTask(key),
-            },
-            React.createElement(Caret, { open: expanded }),
-            React.createElement(
-              'span',
-              { className: 'project-flow-teamTaskSubject', title: task.subject || undefined },
-              task.subject || t('misc.dash')
-            ),
-            status ? React.createElement(Chip, { tone: status.tone }, status.text) : null,
-            task.ownerName
-              ? React.createElement('span', { className: 'project-flow-teamOwner' }, task.ownerName)
-              : null,
-            blocked
-              ? React.createElement(
-                  'span',
-                  { className: 'project-flow-teamBlocked', title: t('team.blocked') },
-                  t('team.blocked')
-                )
-              : null
-          ),
-          expanded ? React.createElement(TeamTaskDetail, { task, t }) : null
-        );
-      });
-
-      return React.createElement(
-        'section',
-        { className: 'project-flow-card' },
-        React.createElement(
-          'div',
-          { className: 'project-flow-teamHead' },
-          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('team.title')),
-          roleChip,
-          React.createElement(
-            'span',
-            { className: 'project-flow-count project-flow-teamCounts' },
-            t('team.counts', {
-              members: asNumber(counts.members, members.length),
-              tasks: asNumber(counts.tasks, tasks.length),
-              ready: asNumber(counts.ready, 0),
-            })
-          )
-        ),
-        React.createElement(
-          'h3',
-          { className: 'project-flow-subTitle project-flow-teamSubTitle' },
-          t('team.members')
-        ),
-        members.length === 0
-          ? React.createElement(EmptyLine, null, t('team.members.empty'))
-          : React.createElement('ul', { className: 'project-flow-teamList' }, memberRows),
-        team.memberOverflow > 0
-          ? React.createElement(
-              'p',
-              { className: 'project-flow-muted project-flow-more' },
-              t('team.more', { n: team.memberOverflow })
-            )
-          : null,
-        React.createElement('h3', { className: 'project-flow-subTitle' }, t('team.tasks')),
-        tasks.length === 0
-          ? React.createElement(EmptyLine, null, t('team.tasks.empty'))
-          : React.createElement('div', { className: 'project-flow-teamTasks' }, taskRows),
-        team.taskOverflow > 0
-          ? React.createElement(
-              'p',
-              { className: 'project-flow-muted project-flow-more' },
-              t('team.more', { n: team.taskOverflow })
-            )
-          : null
-      );
-    }
     // #endregion
+
+    // #region top bar / footer / states    // #endregion
 
     // #region top bar / footer / states
     function TopBar(props) {
@@ -2559,7 +1834,7 @@ window.__ModuleLoader__.load({
       const t = typeof props.t === 'function' ? props.t : (key) => key;
       /* The one workspace this panel may show; undefined until the tab resolves it. */
       const workspaceRoot = props.workspaceRoot;
-      /* Scopes the state request to this session and highlights its heartbeat. */
+      /* The tab's session id highlights its own heartbeat (never a query param). */
       const sessionId = props.sessionId;
       const [data, setData] = useState(null);
       const [errorInfo, setErrorInfo] = useState(null);
@@ -2585,12 +1860,7 @@ window.__ModuleLoader__.load({
 
         setRefreshing(false);
 
-        /* `&session=` is optional: an empty id keeps the workspace-scoped URL. */
-        const sessionParam = asText(sessionId).trim();
-        const url =
-          STATE_ENDPOINT +
-          '?root=' + encodeURIComponent(workspaceRoot) +
-          (sessionParam ? '&session=' + encodeURIComponent(sessionParam) : '');
+        const url = STATE_ENDPOINT + '?root=' + encodeURIComponent(workspaceRoot);
 
         const load = async (manual) => {
           if (cancelled) return;
@@ -2669,7 +1939,7 @@ window.__ModuleLoader__.load({
             }
           }
         };
-      }, [workspaceRoot, reloadKey, sessionId]);
+      }, [workspaceRoot, reloadKey]);
 
       const view = useMemo(() => (data ? normalize(data) : null), [data]);
 
@@ -2707,21 +1977,17 @@ window.__ModuleLoader__.load({
                     'div',
                     { className: 'project-flow-col' },
                     React.createElement(TasksCard, { tasks: view.tasks, t, now }),
-                    /* Gate definitions sit between tasks and live signals (store mode only). */
+                    /* Gate definitions sit between tasks and live signals. */
                     view.gates
                       ? React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot })
                       : null,
                     React.createElement(SignalsCard, {
-                      gate: view.gate,
                       heartbeats: view.heartbeats,
                       heartbeatCounts: view.heartbeatCounts,
-                      runs: view.runs,
                       t,
                       now,
                       sessionId,
-                    }),
-                    /* Read-only team projection sits beside the live signals. */
-                    React.createElement(TeamCard, { team: view.team, t })
+                    })
                   )
                 ),
                 React.createElement(Footer, { view, t })
@@ -2978,32 +2244,6 @@ window.__ModuleLoader__.load({
 .project-flow-chip--hb-idle{color:var(--dsw-alias-state-warn-primary);}
 .project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);opacity:.8;}
 .project-flow-chip--hb-missed{color:var(--dsw-alias-state-error-primary);}
-.project-flow-teamHead{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
-.project-flow-teamCounts{margin-left:auto;font-size:10.5px;}
-.project-flow-teamSubTitle{margin-top:8px;}
-.project-flow-teamList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
-.project-flow-teamMember{display:flex;flex-direction:column;gap:1px;padding:3px;border-radius:5px;min-width:0;}
-.project-flow-teamMember:hover{background:var(--dsw-alias-bg-layer-2);}
-.project-flow-teamMemberHead{display:flex;align-items:center;flex-wrap:wrap;gap:5px;min-width:0;}
-.project-flow-teamName{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;}
-.project-flow-teamName--lead{font-weight:700;}
-.project-flow-teamSub{margin:0;padding-left:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
-.project-flow-teamSub--mono{font-family:${MONO};}
-.project-flow-teamDiag{margin:1px 0 0 2px;font-size:10.5px;color:var(--dsw-alias-label-secondary);}
-.project-flow-teamDiagSummary{cursor:pointer;font-size:10px;color:var(--dsw-alias-label-secondary);}
-.project-flow-teamDiagList{margin:2px 0 0;padding:0 0 0 14px;color:var(--dsw-alias-label-secondary);}
-.project-flow-teamDiagItem{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.project-flow-teamDiagMore{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;}
-.project-flow-teamTasks{display:flex;flex-direction:column;gap:1px;}
-.project-flow-teamTask{display:block;min-width:0;}
-.project-flow-teamTaskHead{display:flex;align-items:center;gap:5px;width:100%;padding:3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
-.project-flow-teamTaskHead:hover{background:var(--dsw-alias-bg-layer-2);}
-.project-flow-teamTaskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
-.project-flow-teamTaskSubject{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.project-flow-teamTask--deleted .project-flow-teamTaskSubject{text-decoration:line-through;color:var(--dsw-alias-label-secondary);}
-.project-flow-teamOwner{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
-.project-flow-teamBlocked{flex:none;color:var(--dsw-alias-state-error-primary);font-size:10px;font-weight:600;}
-.project-flow-teamConflictLabel,.project-flow-teamConflict{color:var(--dsw-alias-state-error-primary);}
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}
@@ -3050,10 +2290,6 @@ window.__ModuleLoader__.load({
 .project-flow-guideTitle{margin:0 0 3px;font-size:12.5px;}
 .project-flow-guide p{margin:0;}
 .project-flow-tree{display:flex;flex-direction:column;}
-.project-flow-groupHead{display:flex;align-items:center;gap:5px;width:100%;margin-top:4px;padding:4px 3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;font-weight:600;text-align:left;cursor:pointer;}
-.project-flow-groupHead:hover{background:var(--dsw-alias-bg-layer-2);}
-.project-flow-groupHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
-.project-flow-groupName{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .project-flow-count{color:var(--dsw-alias-label-secondary);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-caret{display:inline-block;flex:none;width:10px;color:var(--dsw-alias-label-secondary);font-size:10px;line-height:1;transition:transform .12s ease;}
 .project-flow-caret--collapsed{transform:rotate(-90deg);}
@@ -3061,7 +2297,6 @@ window.__ModuleLoader__.load({
 .project-flow-row{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:6px;row-gap:1px;width:100%;padding:3px 3px 3px 0;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
 .project-flow-row:hover{background:var(--dsw-alias-bg-layer-2);}
 .project-flow-row:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
-.project-flow-connector{flex:none;color:var(--dsw-alias-label-secondary);font-family:${MONO};letter-spacing:-1px;}
 .project-flow-verdict{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
 .project-flow-verdict--confirmed{color:var(--dsw-alias-state-success-primary);}
 .project-flow-verdict--refuted{color:var(--dsw-alias-state-error-primary);}
@@ -3085,7 +2320,6 @@ window.__ModuleLoader__.load({
 .project-flow-sectionBody{padding:4px 0 2px;}
 .project-flow-sectionNote{margin:0 0 5px;padding-left:15px;}
 .project-flow-pre{box-sizing:border-box;margin:0;padding:6px 8px;max-height:160px;overflow:auto;border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-family:${MONO};font-size:10.5px;line-height:1.45;white-space:pre;tab-size:2;}
-.project-flow-pre--run{max-height:150px;margin-top:3px;}
 .project-flow-beat{display:flex;flex-direction:column;gap:1px;padding:4px 3px;border-radius:5px;min-width:0;}
 .project-flow-beat:hover{background:var(--dsw-alias-bg-layer-2);}
 .project-flow-beatHead{display:flex;align-items:center;flex-wrap:wrap;gap:5px;min-width:0;}
@@ -3100,13 +2334,6 @@ window.__ModuleLoader__.load({
 .project-flow-beatClaims{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:1px;padding-left:2px;min-width:0;}
 .project-flow-beatClaimsLabel{flex:none;color:var(--dsw-alias-label-secondary);font-size:10px;}
 .project-flow-beatClaim{display:inline-flex;align-items:center;max-width:100%;height:16px;padding:0 5px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-family:${MONO};font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.project-flow-runList{display:flex;flex-direction:column;gap:1px;}
-.project-flow-run{display:block;min-width:0;}
-.project-flow-runHead{display:flex;align-items:center;gap:5px;width:100%;padding:3px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;text-align:left;cursor:pointer;}
-.project-flow-runHead:hover{background:var(--dsw-alias-bg-layer-2);}
-.project-flow-runHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
-.project-flow-runPath{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:10.5px;color:var(--dsw-alias-label-secondary);}
-.project-flow-runMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-empty{margin:3px 0 0;padding:8px 10px;border:1px dashed var(--dsw-alias-border-l1);border-radius:9px;color:var(--dsw-alias-label-secondary);font-size:11px;}
 .project-flow-loadingCard{margin-top:10px;}
 .project-flow-loading{display:flex;align-items:center;gap:8px;padding:20px 4px;color:var(--dsw-alias-label-secondary);font-size:12.5px;}
@@ -3156,7 +2383,6 @@ window.__ModuleLoader__.load({
 .project-flow-listMeta{font-size:11px;}
 .project-flow-guide{margin-top:6px;padding:14px;border-radius:10px;}
 .project-flow-guideTitle{font-size:13px;margin-bottom:4px;}
-.project-flow-groupHead{margin-top:6px;padding:5px 4px;border-radius:6px;font-size:12px;}
 .project-flow-row{flex-wrap:nowrap;column-gap:8px;row-gap:0;padding:4px 4px 4px 0;border-radius:6px;font-size:12px;}
 .project-flow-verdict{font-size:11px;}
 .project-flow-rowId{order:0;flex:none;overflow:visible;text-overflow:clip;font-size:11.5px;}
@@ -3170,18 +2396,10 @@ window.__ModuleLoader__.load({
 .project-flow-sectionHead{padding:4px;border-radius:6px;font-size:12px;}
 .project-flow-sectionNote{padding-left:16px;margin-bottom:6px;}
 .project-flow-pre{padding:8px 10px;max-height:200px;border-radius:8px;font-size:11px;line-height:1.5;}
-.project-flow-pre--run{max-height:180px;margin-top:4px;}
 .project-flow-beat{gap:2px;padding:5px 4px;border-radius:6px;}
 .project-flow-beatName{font-size:12px;}
 .project-flow-beatTime{font-size:10.5px;}
 .project-flow-beatStatus{font-size:11px;}
-.project-flow-teamName{font-size:12px;}
-.project-flow-teamSub{font-size:11px;}
-.project-flow-teamTaskHead{font-size:12px;}
-.project-flow-teamCounts{font-size:11px;}
-.project-flow-runHead{gap:6px;padding:4px;font-size:11.5px;}
-.project-flow-runPath{font-size:11px;}
-.project-flow-runMeta{font-size:10.5px;}
 .project-flow-empty{margin-top:4px;padding:10px 12px;border-radius:10px;font-size:11.5px;}
 .project-flow-loadingCard{margin-top:16px;}
 .project-flow-loading{padding:26px 4px;font-size:13px;}

@@ -1,16 +1,16 @@
 /**
- * T-20261028-56 · project-flow data-path render check.
+ * T-20261030-26 · project-flow data-path render check.
  *
  * The deliverable's factory only exposes { inject, apply }, so this script
  * derives a probe copy in .selftest/.client-probe/ by inserting a `__probe`
  * field into the returned object (one literal string replacement, asserted),
- * then renders every panel component against a full fixture, an empty payload,
- * `gate: null`, a missing `contract` and hostile values. It also replays the
- * Host-side state-*.json fixtures when they exist (including a
- * `not-initialized` workspace response), which proves the client and the real
- * Host payload agree on the contract shape. The panel is workspace-scoped, so
- * `PanelBody` resolves `sessionId` + `useSessions` into the `workspaceRoot` the
- * `Panel` polls and keys on.
+ * then renders every panel component against a store fixture, an empty payload,
+ * a missing `contract` and hostile values. It also replays the Host-side
+ * state-*.json fixtures when they exist (including a `not-initialized`
+ * workspace response), which proves the client and the real Host payload agree
+ * on the contract shape. The panel is workspace-scoped, so `PanelBody` resolves
+ * `sessionId` + `useSessions` into the `workspaceRoot` the `Panel` polls and
+ * keys on.
  *
  * No network, no host access.
  *
@@ -130,36 +130,56 @@ const NOW = Date.UTC(2026, 9, 28, 3, 30, 0);
 const fixture = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
-  contract: { source: 'flow.json', schema: 1, name: 'demo-alpha' },
+  contract: { source: '.dsh/flow/flow.json', schema: 2, name: 'demo-alpha' },
   roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
   root: '/tmp/pf-demo/alpha',
   head: { sha: 'f5f176bc1234', subject: 'feat: demo', branch: 'dev', dirty: 2 },
   experiments: {
+    source: 'store',
     total: 3,
-    confirmed: 1,
-    refuted: 1,
-    open: 1,
-    groups: [
+    counts: { total: 3, open: 1, confirmed: 1, refuted: 1, abandoned: 0 },
+    items: [
       {
-        factor: '未分组',
-        items: [
-          {
-            id: 'H1-baseline',
-            verdict: 'confirmed',
-            date: '2026-10-28',
-            sha: 'f5f176bc',
-            hypothesis: '第一批\n换行保留',
-            expected: 'exp',
-            measured: 'meas',
-            scale: 'small',
-          },
-          { id: 'H2-long', verdict: 'refuted', date: '2026-10-27', sha: 'aaaaaaa', hypothesis: 'x'.repeat(400) },
-        ],
-      },
-      {
+        id: 'E-20261028-01',
+        title: 'baseline',
+        hypothesis: '第一批\n换行保留',
         factor: 'focus',
-        items: [{ id: 'H3-open', verdict: 'open', date: '2026-10-26', sha: 'bbbbbbb' }],
+        parent: null,
+        expected: 'exp',
+        measured: 'meas',
+        scale: 'small',
+        status: 'confirmed',
+        metrics: { acc: 0.9 },
+        commits: ['f5f176bc'],
+        notes: 'n1',
+        created_at: '2026-10-28T09:00:00+08:00',
+        updated_at: '2026-10-28T10:00:00+08:00',
       },
+      {
+        id: 'E-20261028-02',
+        title: 'child',
+        hypothesis: 'x'.repeat(400),
+        parent: 'E-20261028-01',
+        status: 'refuted',
+        expected: '',
+        measured: '',
+        scale: '',
+        metrics: {},
+        commits: [],
+        notes: '',
+        updated_at: '2026-10-28T09:00:00+08:00',
+      },
+      {
+        id: 'E-20261028-03',
+        hypothesis: 'open one',
+        parent: null,
+        status: 'open',
+        updated_at: '2026-10-28T08:00:00+08:00',
+      },
+    ],
+    tree: [
+      { id: 'E-20261028-01', children: [{ id: 'E-20261028-02', children: [] }] },
+      { id: 'E-20261028-03', children: [] },
     ],
   },
   tasks: {
@@ -175,14 +195,60 @@ const fixture = {
       { id: 'T-5', title: 'gate null task', commits: [], gate: null },
     ],
   },
-  gate: { lines: ['a', 'b', 'c'], mtime: NOW - 3600 * 1000, size: 28954 },
-  heartbeats: [
-    { file: '.agents/heartbeat/a.md', title: 'alpha', statusLine: 'working', ageSeconds: 10800, mtime: NOW - 10800 * 1000 },
-    { file: 'b.md', title: '', statusLine: '', ageSeconds: 178000, mtime: 1761447480000 },
+  gates: [
+    {
+      id: 'smoke',
+      title: '冒烟',
+      phase: 'commit',
+      enabled: true,
+      steps: [{ id: 'ok', run: 'true', expect: 'exit 0', timeoutSeconds: 600 }],
+      lastRun: {
+        started_at: '2026-10-28T10:00:00+08:00',
+        ok: true,
+        durationMs: 850,
+        steps: [{ id: 'ok', ok: true, exit: 0, tail: 'pass\n' }],
+      },
+    },
+    { id: 'broken', title: 'broken gate', phase: 'manual', enabled: false, steps: [], lastRun: null },
   ],
-  runs: [{ path: '.agents/tmp/t47/FINAL_sum.txt', ageSeconds: 60, size: 1200, lines: ['l1', 'l2'] }],
+  heartbeats: {
+    dir: '.agents/heartbeat',
+    items: [
+      {
+        file: 'session-aaaa.json',
+        session: 'session-aaaa',
+        agent: 'alpha',
+        status: 'working',
+        goal: 'ship the panel',
+        task: 'T-20261028-56',
+        claims: ['client.js'],
+        last_action: 'editing client.js',
+        ageSeconds: 60,
+        stale: false,
+        mtime: NOW - 60 * 1000,
+        updated_at: '2026-10-28T11:29:00+08:00',
+        stats: { turns: 3, missed: 0 },
+      },
+      {
+        file: 'session-bbbb.json',
+        session: 'session-bbbb',
+        agent: 'beta',
+        status: 'missed',
+        goal: '',
+        task: '',
+        claims: [],
+        last_action: '',
+        ageSeconds: 178000,
+        stale: true,
+        mtime: 1761447480000,
+        stats: { turns: 1, missed: 2 },
+      },
+    ],
+    counts: { total: 2, active: 1, stale: 1 },
+  },
   warnings: ['w1', 'w2'],
 };
+
 
 // -------------------------------------------------------------- tree walking
 function isClass(type) {
@@ -258,17 +324,20 @@ check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.root, '/tmp/pf-demo/alpha');
   assert.equal(view.roots.length, 1);
   assert.equal(view.roots[0].name, 'demo-alpha');
-  assert.equal(view.contract.source, 'flow.json');
-  assert.equal(view.contract.schema, 1);
+  assert.equal(view.contract.source, '.dsh/flow/flow.json');
+  assert.equal(view.contract.schema, 2);
   assert.equal(view.exp.total, 3);
-  assert.equal(view.exp.groups[0].factor, '未分组');
-  assert.equal(view.exp.groups[0].items.length, 2);
+  assert.equal(view.exp.items.length, 3);
+  assert.equal(view.exp.tree.length, 2);
+  assert.equal(view.exp.open, 1);
+  assert.equal(view.exp.confirmed, 1);
+  assert.equal(view.exp.refuted, 1);
   assert.equal(view.tasks.counts.done, 28);
   assert.equal(view.tasks.counts.other, 0);
-  assert.equal(view.gate.lines.length, 3);
-  assert.equal(view.gate.disabled, false);
+  assert.equal(view.gates.length, 2);
+  assert.equal(view.gates[0].lastRun.ok, true);
   assert.equal(view.heartbeats.length, 2);
-  assert.equal(view.runs.length, 1);
+  assert.equal(view.heartbeatCounts.active, 1);
   assert.equal(view.warnings.length, 2);
 });
 
@@ -277,23 +346,19 @@ check('normalize: empty payload yields zeroed, renderable data', () => {
   assert.equal(empty.root, '');
   assert.equal(empty.contract, null);
   assert.equal(empty.exp.total, 0);
-  assert.deepEqual(empty.exp.groups, []);
+  assert.deepEqual(empty.exp.items, []);
+  assert.deepEqual(empty.exp.tree, []);
   assert.equal(empty.tasks.total, 0);
   assert.equal(empty.tasks.counts.draft, 0);
   assert.deepEqual(empty.tasks.draft, []);
   assert.equal(empty.tasks.counts.other, 0);
   assert.equal(empty.tasks.current, null);
-  assert.equal(empty.gate.mtime, null);
-  assert.equal(empty.gate.disabled, false);
+  assert.equal(empty.gates, null);
+  assert.deepEqual(empty.heartbeats, []);
+  assert.equal(empty.heartbeatCounts.total, 0);
   assert.deepEqual(empty.warnings, []);
 });
 
-check('normalize: gate === null becomes the disabled flag, not an error', () => {
-  const noGate = probe.normalize({ gate: null, experiments: { total: 0, groups: [] } });
-  assert.equal(noGate.gate.disabled, true);
-  assert.deepEqual(noGate.gate.lines, []);
-  assert.equal(noGate.gate.mtime, null);
-});
 
 check('normalize: contract defaults and schema are kept', () => {
   const defaults = probe.normalize({ contract: { source: 'defaults', schema: 1, name: 'demo-alpha' } });
@@ -302,61 +367,81 @@ check('normalize: contract defaults and schema are kept', () => {
   assert.equal(probe.normalize({ contract: 'nope' }).contract, null);
 });
 
-check('normalize: legacy `exp` key is still accepted', () => {
-  const legacy = probe.normalize({ exp: { total: 2, confirmed: 1, groups: [] } });
-  assert.equal(legacy.exp.total, 2);
-  assert.equal(legacy.exp.confirmed, 1);
+check('normalize: a payload without an experiments section stays empty', () => {
+  const bare = probe.normalize({ ok: true });
+  assert.equal(bare.exp.total, 0);
+  assert.equal(bare.exp.confirmed, 0);
+  assert.deepEqual(bare.exp.items, []);
+  assert.deepEqual(bare.exp.tree, []);
 });
 
 check('normalize: hostile values do not throw', () => {
   const hostile = probe.normalize({
-    experiments: { groups: [null, { items: [null, 3, { id: 7, verdict: 'weird' }] }, 5] },
+    experiments: { items: [null, 3, { id: 7, status: 'weird' }], tree: [null, { id: 'x', children: 'nope' }] },
     tasks: { counts: null, active: 'nope', recentDone: [{}] },
-    gate: { lines: 'not-an-array', mtime: 'NaN' },
-    heartbeats: [null, {}],
-    runs: [null, { lines: null }],
+    heartbeats: [null, {}, { claims: 'nope' }],
     warnings: 'x',
     contract: [],
   });
-  assert.equal(hostile.exp.groups.length, 3);
-  assert.equal(hostile.exp.groups[1].items.length, 1);
+  assert.equal(hostile.exp.items.length, 1, 'only the object experiment survives');
+  assert.equal(hostile.exp.tree.length, 1, 'only the object tree node survives');
+  assert.equal(hostile.exp.total, 0);
   assert.equal(hostile.tasks.counts.active, 0);
   assert.equal(hostile.tasks.counts.other, 0);
-  assert.equal(hostile.gate.mtime, null);
-  assert.equal(hostile.gate.lines.length, 0);
+  assert.equal(hostile.heartbeats.length, 2, 'non-object heartbeats are dropped');
+  assert.deepEqual(hostile.heartbeats[1].claims, [], 'non-array claims degrade to empty');
   assert.equal(hostile.contract, null);
+  assert.deepEqual(hostile.warnings, []);
 });
 
-check('ExperimentTree: renders groups, rows, chips and connectors', () => {
+check('ExperimentTree: renders the store tree rows, verdicts and chips', () => {
   const tree = probe.ExperimentTree({ exp: view.exp, t });
   const rows = collect(tree, 'project-flow-row');
   assert.equal(rows.length, 3, 'expected three experiment rows');
-  assert.equal(collect(tree, 'project-flow-groupHead').length, 2);
-  assert.equal(collect(tree, 'project-flow-connector').length, 3);
-  const connectors = collect(tree, 'project-flow-connector').map((element) => element.children.join(''));
-  assert.ok(connectors.includes('└─'), 'missing last-child connector');
-  assert.ok(connectors.includes('├─'), 'missing middle connector');
+  assert.equal(collect(tree, 'project-flow-branch').length, 3);
+  const branches = collect(tree, 'project-flow-branch').map((element) => element.children.join(''));
+  assert.ok(branches.includes('└─'), 'missing last-child connector');
+  assert.ok(branches.includes('├─'), 'missing middle connector');
   assert.equal(collect(tree, 'project-flow-verdict--confirmed').length, 1);
   assert.equal(collect(tree, 'project-flow-verdict--refuted').length, 1);
   assert.equal(collect(tree, 'project-flow-verdict--open').length, 1);
-  assert.ok(collect(tree, 'project-flow-chip').length >= 4, 'statistics chips missing');
+  assert.ok(collect(tree, 'project-flow-chip').length >= 5, 'statistics chips missing');
+  const body = JSON.stringify(tree);
+  assert.ok(body.includes('E-20261028-02'), 'child experiment id missing');
+  assert.ok(body.includes('store'), 'store source chip missing');
 });
 
 check('ExperimentTree: click handlers are safe', () => {
   const tree = probe.ExperimentTree({ exp: view.exp, t });
-  assert.ok(clickEverything(tree) >= 5, 'expected group + row handlers');
+  assert.ok(clickEverything(tree) >= 3, 'expected one handler per tree row');
 });
 
-check('ExperimentTree: empty experiment shows the generic trailer guidance', () => {
+check('ExperimentTree: empty experiment shows the store guidance', () => {
   const tree = probe.ExperimentTree({ exp: probe.normalize({}).exp, t });
   const text = JSON.stringify(tree);
-  assert.ok(text.includes('实验 trailer'), 'generic guidance copy missing');
-  assert.ok(!text.includes('exp.py'), 'guidance still names exp.py');
+  assert.ok(text.includes('还没有实验记录。'), 'store guidance copy missing');
+  assert.ok(!text.includes('trailer'), 'guidance still mentions git trailers');
   assert.equal(collect(tree, 'project-flow-row').length, 0);
 });
 
+check('ExperimentTree: a missing tree rebuilds the forest from parent', () => {
+  const payload = probe.normalize({
+    experiments: {
+      items: [
+        { id: 'E-1', title: 'root', status: 'open' },
+        { id: 'E-2', title: 'child', parent: 'E-1', status: 'confirmed' },
+      ],
+    },
+  });
+  const tree = probe.ExperimentTree({ exp: payload.exp, t });
+  assert.equal(collect(tree, 'project-flow-row').length, 2);
+  assert.equal(collect(tree, 'project-flow-branch').length, 2);
+  assert.ok(JSON.stringify(collect(tree, 'project-flow-row')[0]).includes('E-1'));
+});
+
 check('DetailBlock: keeps original newlines in a <pre>', () => {
-  const detail = probe.DetailBlock({ item: fixture.experiments.groups[0].items[0], t });
+  const item = { id: 'E-x', hypothesis: '第一批\n换行保留', expected: 'exp', measured: 'meas' };
+  const detail = probe.DetailBlock({ item, t });
   const values = collect(detail, 'project-flow-detailValue');
   assert.equal(values.length, 3);
   assert.equal(values[0].type, 'pre');
@@ -376,7 +461,7 @@ check('TasksCard: chips, current task, active and recent rows', () => {
   assert.equal(collect(card, 'project-flow-gateMark--error').length, 1);
 });
 
-check('TasksCard: a markdown/no-ledger project (only `other`) renders', () => {
+check('TasksCard: an unknown task status bucket still renders', () => {
   const otherOnly = probe.normalize({
     tasks: { total: 2, counts: { other: 2 }, current: null, active: [], recentDone: [] },
   });
@@ -479,64 +564,48 @@ check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en overflow copy still contains Chinese');
 });
 
-check('SignalsCard: gate tail, stale heartbeat warning and collapsed runs', () => {
+check('SignalsCard: rich heartbeats render status, goal, claims and the current highlight', () => {
   const card = probe.SignalsCard({
-    gate: view.gate,
     heartbeats: view.heartbeats,
-    runs: view.runs,
+    heartbeatCounts: view.heartbeatCounts,
     t,
     now: NOW,
+    sessionId: 'session-aaaa',
   });
-  const pre = collect(card, 'project-flow-pre');
-  assert.equal(pre.length, 1, 'gate log <pre> missing (runs are collapsed by default)');
-  assert.equal(pre[0].children[0], 'a\nb\nc');
+  const body = JSON.stringify(card);
+  assert.ok(body.includes('工作中'), 'status chip missing');
+  assert.ok(body.includes('ship the panel'), 'goal missing');
+  assert.ok(body.includes('client.js'), 'claim missing');
+  assert.ok(body.includes('可能已停'), 'stale copy missing');
+  assert.equal(collect(card, 'project-flow-beat').length, 2, 'expected two heartbeat rows');
+  assert.equal(collect(card, 'project-flow-beat--current').length, 1, 'current heartbeat not highlighted');
   assert.equal(collect(card, 'project-flow-chip--warn').length, 1, 'stale heartbeat not flagged');
-  assert.equal(collect(card, 'project-flow-runHead').length, 1, 'run row missing');
-  assert.ok(clickEverything(card) >= 4, 'section + run toggles missing');
+  assert.equal(collect(card, 'project-flow-pre').length, 0, 'no log block should render');
 });
 
-check('SignalsCard: empty signals render the empty copy', () => {
-  const empty = probe.normalize({});
-  const card = probe.SignalsCard({
-    gate: empty.gate,
-    heartbeats: empty.heartbeats,
-    runs: empty.runs,
-    t,
-    now: NOW,
-  });
+check('SignalsCard: empty heartbeats render the empty copy', () => {
+  const card = probe.SignalsCard({ heartbeats: [], heartbeatCounts: { total: 0 }, t, now: NOW });
   const body = JSON.stringify(card);
-  assert.ok(body.includes('还没有门禁日志。'), 'gate empty copy missing');
   assert.ok(body.includes('没有心跳文件。'), 'heartbeat empty copy missing');
-  assert.ok(body.includes('近 15 分钟没有运行中的输出。'), 'runs empty copy missing');
+  assert.equal(collect(card, 'project-flow-beat').length, 0);
   assert.equal(collect(card, 'project-flow-pre').length, 0);
 });
 
-check('SignalsCard: gate null shows the disabled copy instead of an empty log', () => {
-  const noGate = probe.normalize({ gate: null });
-  const card = probe.SignalsCard({
-    gate: noGate.gate,
-    heartbeats: [],
-    runs: [],
-    t,
-    now: NOW,
-  });
+check('GatesCard: definitions, enabled summary and last run', () => {
+  const card = probe.GatesCard({ gates: view.gates, t, now: NOW, workspaceRoot: view.root });
   const body = JSON.stringify(card);
-  assert.ok(body.includes('该项目未启用门禁日志。'), 'gate-disabled copy missing');
-  assert.ok(!body.includes('还没有门禁日志。'), 'generic empty copy leaked');
-  assert.equal(collect(card, 'project-flow-pre').length, 0);
-  const english = probe.SignalsCard({
-    gate: noGate.gate,
-    heartbeats: [],
-    runs: [],
-    t: tEn,
-    now: NOW,
-  });
-  assert.ok(JSON.stringify(english).includes('This project has no gate log.'), 'en copy missing');
+  assert.ok(body.includes('启用 1 / 共 2'), 'enabled summary missing');
+  assert.ok(body.includes('冒烟'), 'gate title missing');
+  assert.ok(body.includes('从未运行'), 'never-run copy missing');
+  assert.ok(body.includes('smoke'), 'gate id key missing');
+  assert.equal(collect(card, 'project-flow-gate').length, 2, 'expected two gate rows');
+  assert.equal(collect(card, 'project-flow-switch').length, 2, 'enable switches missing');
 });
 
-check('SignalsCard: a literal null gate prop does not throw', () => {
-  const card = probe.SignalsCard({ gate: null, heartbeats: null, runs: null, t, now: NOW });
+check('SignalsCard: hostile heartbeat props do not throw', () => {
+  const card = probe.SignalsCard({ heartbeats: null, heartbeatCounts: null, t, now: NOW });
   assert.ok(card, 'card did not render');
+  assert.ok(JSON.stringify(card).includes('没有心跳文件。'));
 });
 
 check('TopBar: head, dirty marker, live dot, refresh and read-only chip', () => {
@@ -786,8 +855,8 @@ function renderParts(payload) {
     probe.TopBar({ view: v, t, now: NOW, lastOkAt: NOW, failed: false, refreshing: false, onRefresh: () => {} }),
     probe.ExperimentTree({ exp: v.exp, t }),
     probe.TasksCard({ tasks: v.tasks, t, now: NOW }),
-    probe.GatesCard({ gates: v.gates, t, now: NOW }),
-    probe.SignalsCard({ gate: v.gate, heartbeats: v.heartbeats, runs: v.runs, t, now: NOW }),
+    probe.GatesCard({ gates: v.gates || [], t, now: NOW, workspaceRoot: v.root }),
+    probe.SignalsCard({ heartbeats: v.heartbeats, heartbeatCounts: v.heartbeatCounts, t, now: NOW }),
     probe.Footer({ view: v, t }),
   ];
 }
@@ -804,7 +873,7 @@ function renderedClassNames(parts) {
   return names;
 }
 
-const hostFixtures = ['state-auto.json', 'state-store.json', 'state-not-initialized.json'];
+const hostFixtures = ['state-store.json', 'state-not-initialized.json'];
 let replayed = 0;
 for (const name of hostFixtures) {
   const path = fileURLToPath(new URL('./' + name, import.meta.url));
