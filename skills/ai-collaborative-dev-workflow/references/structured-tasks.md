@@ -1,4 +1,4 @@
-# 结构化任务模型（可选精度层）
+# 结构化任务模型（精度层）
 
 > 通用规范；项目通过命令契约提供具体值。实现语言由项目决定（bash/Node/Python 均可），本层只定义行为。
 > 参考实现：通用技能 `scripts/task` + `precision_common.py`；项目可复制到 `.agents/scripts/`。

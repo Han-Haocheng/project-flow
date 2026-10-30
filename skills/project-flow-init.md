@@ -22,6 +22,9 @@ flow init --name MyProject
   `already-initialized` 警告，不覆盖。
 - `--force` 才会用当前参数重写 `flow.json`（记录文件不受影响）。
 - `--name X` 设置契约里的项目名，缺省为目录名。
+- **台账真源在主工作区，中心是唯一写者**：工作树（worktree）继承**已提交**的 `.dsh/flow/`，
+  不要在每棵 worktree 里重复 `flow init`。**贡献者不 init、不建卡**；需要更新状态时经中心，
+  或显式 `flow --root <主工作区> ...`（见 `project-flow-usage` 的「分支/工作树与台账」）。
 
 产物：
 
@@ -75,10 +78,10 @@ flow gate run smoke                  # 结果为「通过」
 
 ## 协作注意
 
-- **单一写者**：同一时刻只让一个代理/脚本写 store；并发写会被 `.dsh/flow/.lock` 拒绝
-  （报 `conflict`，稍后重试即可），30 秒未释放的锁会被下一个写者接管并记 warning。
+- **单一写者（中心）**：同一时刻只让中心写 store；贡献者不直接写，并发写会被 `.dsh/flow/.lock`
+  拒绝（报 `conflict`，稍后重试即可），30 秒未释放的锁会被下一个写者接管并记 warning。
 - **不要手改 id**：id 是文件名与引用（`parent`、`commits`）的一部分，改 id 等于制造坏引用。
   需要改内容就用 `flow exp update` / `flow task update`。
 - **不要直接编辑 JSON**：绕过 core 会跳过校验、原子写与锁；坏 JSON 只会在读取时变成 warning。
 - 需要机器可读结果时统一加 `--json`，按退出码判断：0 成功、1 用法、2 校验、3 未找到、4 IO。
-- 门禁定义是项目资产，建议提交；运行记录 `logs/` 可选提交（量大，通常只留最近若干条）。
+- 门禁定义是项目资产，建议提交；运行记录 `logs/` 按项目约定决定是否提交（量大，通常只留最近若干条）。

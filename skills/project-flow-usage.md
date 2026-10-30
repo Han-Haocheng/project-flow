@@ -94,6 +94,29 @@ flow --json status     # 同上 + data.store 绝对路径
 - 写锁 `.dsh/flow/.lock` 不要提交；并发写会得到 `conflict`（退出码 2），重试即可；
 - 需要给面板/他人看时不用导出：面板直接读同一份 store。
 
+## 分支/工作树与台账
+
+中心-贡献者模型下（贡献者在自己分支提交、中心唯一合并与写台账；协议见
+`ai-collaborative-dev-workflow/references/contribution-flow.md`）：
+
+- **台账真源在主工作区**：`.dsh/flow/` 只在主工作区初始化与提交；工作树继承已提交的
+  台账，**不要**在工作树里 `flow init` 或另建 store，否则会出现两份互不相认的卡片。
+- **中心唯一写台账**：贡献者不 init、不建卡；需要更新状态时经中心，或用 `--root` 显式
+  指向主工作区（且需中心同意）。
+- **子会话写卡必须 `--root` 主工作区**：面板只按**当前工作区**查找 `.dsh/flow/`，而且
+  **看不到某会话在哪条分支**。在子 worktree 里直接 `flow task add` 会把卡写进工作树，
+  主面板看不到，合并时才变成"多出来的文件"。正确写法：
+
+  ```bash
+  flow --root /path/to/main-workspace task update T-20261030-02 --status active --notes "..."
+  ```
+
+- **分支信息写进文字**：心跳 `last_action`、任务 `notes`、提交评审申请三处都写
+  `branch` + `worktree path` + `commit`；这些不会自动出现在面板上。
+- 心跳可留在各自工作树（运行态、不入台账），但不要靠心跳在工作区自动建卡，也不登记
+  文件锁。
+- 提交评审申请模板：`ai-collaborative-dev-workflow/assets/merge-request-template.md`。
+
 ## 排错
 
 | 现象 | 原因与处理 |

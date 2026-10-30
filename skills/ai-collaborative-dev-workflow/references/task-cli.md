@@ -1,4 +1,4 @@
-# 任务书 CLI 契约（可选精度层）
+# 任务书 CLI 契约（精度层）
 
 > 通用契约；参考实现 `scripts/task`（复制到 `.agents/scripts/`）。先做 `new/show/check`，不接 hooks/CI。
 > 配套：字段与校验规则见 `structured-tasks.md`；接线见 `enforcement.md`。

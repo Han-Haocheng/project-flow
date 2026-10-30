@@ -1,6 +1,6 @@
 # DSH 0.2.0 工具面速查：自动化任务 / 智能体团队 / 目标 / 会话定时
 
-> 实测环境：`dsh 0.2.0-rc.2`（2026-10-10，profile `web`）。**本文件是"派单前/恢复前按需读"的细节层**；纪律在 `SKILL.md` §九（卡片与自动化任务）与 §十（智能体团队）。
+> 实测环境：`dsh 0.2.0-rc.2`（2026-10-10，profile `web`）。**本文件是派单前 / 恢复前读的细节层**；纪律在 `SKILL.md` §九（卡片与自动化任务）与 §十（智能体团队）。
 > **第一原则**：**可用性以当前会话的工具列表为准**——Host 暴露什么就是什么，别照文档猜工具名或字段；下面的"纪律"才是文档该记的东西（参数细节看工具 schema 本身）。
 
 ## 0 怎么核实"这些工具到底在不在"
@@ -41,7 +41,7 @@
 | `interrupt_agent` | Lead 专用中断某队友当前轮，**保留 pending inbox** | 中断 ≠ 取消任务；唤醒不保证恢复原状 |
 | `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒 |
 
-**派工检查单**：任务书路径 / 允许写域（与其他在跑成员两两不相交）/ 交付格式（只给结论 + 指针，≤6–8KB）/ **零 git 写** / 停止条件 / 验证命令。
+**派工检查单**：任务书路径 / base（branch + commit）/ 允许写域（与其他在跑成员尽量不相交）/ 交付格式（只给结论 + 指针，≤6–8KB）/ **仅在自己分支提交 + 按模板提评审申请，不合并、不 push**（见 `contribution-flow.md`）/ 停止条件 / 验证命令。
 
 ## 4 目标 `create_goal` / `get_goal` / `update_goal`
 
@@ -63,4 +63,4 @@
 | 到点提醒"这个会话" | `schedule_*`（§2） |
 | 到一个持续推进的目标 | `goal`（§4） |
 
-三者**共用同一条铁律**：**唯一 git 写者是协调者/Lead**；队友与卡片一律零 git 写，产出留工作树按路径提交。
+三者**共用同一条铁律**：**贡献者只在自己分支提交并发评审申请；中心（Lead/协调者）唯一合并主分支、唯一写主分支台账、唯一决定合并顺序**。分支隔离只是让提交可评审的手段，不是分布式协调；队友与卡片都不合并、不 push、不写主分支台账。中心按五条清单判定后给 accept / reject / request-rebase，合并与台账归中心；协议见 [contribution-flow.md](contribution-flow.md)。
