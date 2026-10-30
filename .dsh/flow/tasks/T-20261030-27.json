@@ -1,7 +1,7 @@
 {
   "title": "面板任务区：显示目标/内容与详情，弱化 ID，草稿可见",
-  "status": "draft",
-  "owner": "",
+  "status": "done",
+  "owner": "panel-display",
   "goal": "用户反馈：需要看见任务的目标与内容而不是编号；当前看不见任务详情；草稿不显示。改造 payload 与面板：行默认不显示 id，标题+goal 为主信息，点击/回车展开详情（notes/scope/acceptance/commits/时间），草稿区块在真实 payload 下可见。",
   "scope": {
     "allow": [
@@ -22,11 +22,11 @@
     "行 key 用业务 id（不按下标），避免轮询后展开错行",
     "client-render 用例：无 id 渲染、goal 展示、详情展开/收起、无 draft 不渲染、>25 截断"
   ],
-  "notes": "来源：用户 2026-10-30 反馈“要目标内容不要编号、看不见详情、草稿不显示”。顺序：T-20 验收 → T-26 删除 → T-27 显示改造 → 合并（T-25）。",
+  "notes": "来源：用户 2026-10-30 反馈“要目标内容不要编号、看不见详情、草稿不显示”。顺序：T-20 验收 → T-26 删除 → T-27 显示改造 → 合并（T-25）。\n\n2026-10-30 完成并提交 a6bce5d，已 ff 合并到 main。验证：node --test 79/79、host2-tools ALL PASS、client-render 41/41、registration 31/31、poll 16/16。\n残余：极端 store 下 tasks 行 payload 未纳入 capPayload 裁剪；tasks.current 行仍显示契约指针；展开态由组件 state 驱动，SSR 测试只覆盖 open/closed 两态。",
   "schema": 1,
   "id": "T-20261030-27",
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:17:26+08:00",
-  "updated_at": "2026-10-30T21:17:26+08:00"
+  "updated_at": "2026-10-31T00:29:00+08:00"
 }
