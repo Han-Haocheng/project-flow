@@ -60,12 +60,40 @@ const registeredSkills = new Map()
 const routes = []
 const disposers = []
 
+const guards = []
 const toolsService = {
   register(definition) {
     registeredTools.set(definition.name, definition)
     return () => registeredTools.delete(definition.name)
   },
+  guard(check) {
+    guards.push(check)
+    return () => {
+      const at = guards.indexOf(check)
+      if (at >= 0) guards.splice(at, 1)
+    }
+  },
 }
+
+// The host `agents` registry double: `roots()` reports live top-level agents and
+// `get(id)` any live agent, which is exactly what the plugin's root-session
+// verdict consumes.
+const liveAgents = new Map()
+const rootAgentIds = new Set()
+const agentsService = {
+  list() {
+    return [...liveAgents.values()]
+  },
+  roots() {
+    return [...liveAgents.entries()].filter(([id]) => rootAgentIds.has(id)).map(([, agent]) => agent)
+  },
+  get(id) {
+    return liveAgents.get(id)
+  },
+}
+
+// `agent/pre-step` listener double; the plugin registers one reminder hook.
+const preStepHandlers = []
 
 const skillsService = {
   register(skill) {
@@ -92,6 +120,7 @@ function makeCtx({ workingDirectory, registryPaths }) {
     webServer,
     tools: toolsService,
     skills: skillsService,
+    agents: agentsService,
     workingDirectory,
     workspaceRegistry: {
       list() {
@@ -107,6 +136,14 @@ function makeCtx({ workingDirectory, registryPaths }) {
       const dispose = fn()
       if (typeof dispose === 'function') disposers.push(dispose)
       return () => {}
+    },
+    on(name, handler) {
+      if (name !== 'agent/pre-step') return () => {}
+      preStepHandlers.push(handler)
+      return () => {
+        const at = preStepHandlers.indexOf(handler)
+        if (at >= 0) preStepHandlers.splice(at, 1)
+      }
     },
   }
 }
@@ -398,6 +435,159 @@ eq('flow_gate show: title', gateShown.gate?.title, '冒烟')
 const gateUpdated = await gateTool.execute({ action: 'update', id: 'smoke', enabled: false }, exec)
 eq('flow_gate update: enabled', gateUpdated.gate?.enabled, false)
 
+
+// ---------------------------------------------- heartbeat scope (main only)
+
+const heartbeatTool = registeredTools.get('flow_heartbeat')
+
+/** A mock live agent: `id` plus the durable session header the verdict falls back to. */
+function mockAgent(id, cwd, header = {}) {
+  return { id, session: { cwd, header: { version: 4, id, createdAt: 0, isSeeded: false, ...header } } }
+}
+function registerRootAgent(agent) {
+  liveAgents.set(agent.id, agent)
+  rootAgentIds.add(agent.id)
+}
+function registerChildAgent(agent) {
+  liveAgents.set(agent.id, agent)
+}
+
+/** Drive the registered pre-step reminder hook with a synthetic decision. */
+async function runPreStep(agent) {
+  if (preStepHandlers.length === 0) return null
+  return preStepHandlers[0]({ agent, step: 1, turn: 1 }, async () => ({ kind: 'enter', messages: [] }))
+}
+
+const hbRootAgent = mockAgent('session-hb-root', storeRoot)
+registerRootAgent(hbRootAgent)
+const hbRootExec = { agent: hbRootAgent }
+
+const reminded = await runPreStep(hbRootAgent)
+check(
+  'pre-step: root session without heartbeat is reminded',
+  reminded !== null && Array.isArray(reminded.messages) && reminded.messages.length === 1 && reminded.messages[0].role === 'user',
+  JSON.stringify(reminded),
+)
+eq('guard: one heartbeat guard registered', guards.length, 1)
+const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
+check(
+  'guard: root without heartbeat denies edit',
+  typeof rootEditReason === 'string' && rootEditReason.includes('flow_heartbeat start'),
+  String(rootEditReason),
+)
+check('guard: bash is never denied', guards[0]?.({ name: 'bash', agent: hbRootAgent }) === undefined)
+
+// A delegated child: no reminder, no write gate, and the tool refuses to write.
+const hbSubAgent = mockAgent('session-hb-sub', storeRoot, {
+  origin: 'subagent',
+  delegationDepth: 1,
+  parentSession: hbRootAgent.id,
+})
+registerChildAgent(hbSubAgent)
+const subExec = { agent: hbSubAgent }
+const subReminder = await runPreStep(hbSubAgent)
+check(
+  'pre-step: subagent is not reminded',
+  subReminder !== null && (subReminder.messages === undefined || subReminder.messages.length === 0),
+  JSON.stringify(subReminder),
+)
+check('guard: subagent is never denied a write', guards[0]?.({ name: 'edit', agent: hbSubAgent }) === undefined)
+const subHeartbeatFile = join(storeRoot, '.agents/heartbeat', `${hbSubAgent.id}.json`)
+const refused = await throws(
+  'flow_heartbeat: subagent start refused',
+  () => heartbeatTool.execute({ action: 'start', goal: '子代理不应写心跳' }, subExec),
+  (message) => message.includes('main sessions') && message.includes('subagent'),
+)
+check('flow_heartbeat: refusal writes no file', refused && existsSync(subHeartbeatFile) === false)
+
+// The main session starts its heartbeat: reminder and gate clear.
+const hbStarted = await heartbeatTool.execute({ action: 'start', goal: 'host heartbeat scope', task: taskId }, hbRootExec)
+eq('flow_heartbeat start: session', hbStarted.session, hbRootAgent.id)
+eq('flow_heartbeat start: ledger root', hbStarted.root, storeRoot)
+const hbFile = join(storeRoot, '.agents/heartbeat', `${hbRootAgent.id}.json`)
+check('flow_heartbeat start: file written', existsSync(hbFile))
+const afterStart = await runPreStep(hbRootAgent)
+check(
+  'pre-step: working heartbeat needs no reminder',
+  afterStart !== null && (afterStart.messages === undefined || afterStart.messages.length === 0),
+)
+check('guard: working heartbeat allows edit', guards[0]?.({ name: 'edit', agent: hbRootAgent }) === undefined)
+const hbList = await heartbeatTool.execute({ action: 'list' }, hbRootExec)
+eq('flow_heartbeat list: one visible heartbeat', hbList.items.length, 1)
+eq('flow_heartbeat list: no hidden legacy yet', hbList.counts.hidden, 0)
+const hbEnded = await heartbeatTool.execute({ action: 'end', note: '收尾' }, hbRootExec)
+eq('flow_heartbeat end: done', hbEnded.heartbeat.status, 'done')
+
+// A record left by the removed subagent automation is hidden from reads/panel.
+const legacyHeartbeatFile = join(storeRoot, '.agents/heartbeat', 'session-legacy-host2.json')
+writeFileSync(
+  legacyHeartbeatFile,
+  JSON.stringify({
+    schema: 1,
+    session: 'session-legacy-host2',
+    agent: 'subagent',
+    status: 'working',
+    last_action: '子代理运行 legacy',
+    updated_at: new Date().toISOString(),
+  }),
+)
+const hiddenList = await heartbeatTool.execute({ action: 'list' }, hbRootExec)
+eq('flow_heartbeat list: legacy subagent counted hidden', hiddenList.counts.hidden, 1)
+check(
+  'flow_heartbeat list: legacy subagent not in items',
+  hiddenList.items.every((item) => item.session !== 'session-legacy-host2'),
+)
+const storeWithLegacy = (await call(route, `${route.path}?root=${encodeURIComponent(storeRoot)}`)).json ?? {}
+check(
+  'state payload: legacy subagent heartbeat hidden',
+  Array.isArray(storeWithLegacy.heartbeats) && storeWithLegacy.heartbeats.every((item) => item.session !== 'session-legacy-host2'),
+  JSON.stringify(storeWithLegacy.heartbeats),
+)
+
+// A linked-worktree session writes the *main* worktree ledger.
+const wtMain = mkdtempSync(join(tmpdir(), 'project-flow-host2-wt-main-'))
+core.initProject(wtMain, { name: 'WorktreeMain', noGates: true })
+function gitRun(cwd, args) {
+  const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`)
+  return result.stdout
+}
+gitRun(wtMain, ['init', '-q'])
+gitRun(wtMain, ['add', '-A'])
+gitRun(wtMain, [
+  '-c', 'user.name=Host2',
+  '-c', 'user.email=host2@example.invalid',
+  '-c', 'commit.gpgsign=false',
+  'commit', '-q', '--no-verify', '-m', 'init',
+])
+const wtDir = mkdtempSync(join(tmpdir(), 'project-flow-host2-wt-dir-'))
+const wtCheckout = join(wtDir, 'checkout')
+gitRun(wtMain, ['worktree', 'add', '-q', wtCheckout, '-b', 'hb-host2-wt'])
+const wtAgent = mockAgent('session-hb-wt', wtCheckout)
+registerRootAgent(wtAgent)
+const wtStarted = await heartbeatTool.execute({ action: 'start', root: wtCheckout, goal: 'worktree 心跳' }, { agent: wtAgent })
+eq('flow_heartbeat worktree: ledger root is the main worktree', wtStarted.root, wtMain)
+eq('flow_heartbeat worktree: workspace reported', wtStarted.workspace, wtCheckout)
+check(
+  'flow_heartbeat worktree: file lands in the main ledger',
+  existsSync(join(wtMain, '.agents/heartbeat', `${wtAgent.id}.json`)),
+)
+check(
+  'flow_heartbeat worktree: nothing written under the worktree',
+  existsSync(join(wtCheckout, '.agents/heartbeat', `${wtAgent.id}.json`)) === false,
+)
+const wtState = (await call(route, `${route.path}?root=${encodeURIComponent(wtCheckout)}`)).json ?? {}
+check(
+  'state payload: worktree heartbeat visible from the worktree workspace',
+  Array.isArray(wtState.heartbeats) && wtState.heartbeats.some((item) => item.session === wtAgent.id),
+  JSON.stringify(wtState.heartbeats),
+)
+check(
+  'state payload: worktree section does not leak another project ledger',
+  Array.isArray(wtState.heartbeats) && wtState.heartbeats.every((item) => item.session !== hbRootAgent.id),
+  JSON.stringify(wtState.heartbeats),
+)
+
 // --------------------------------------------------------------- skills
 
 const SKILL_NAMES = ['project-flow-init', 'project-flow-usage', 'ai-collaborative-dev-workflow']
@@ -442,7 +632,9 @@ if (check('dir skill: registered', workflowSkill !== undefined) === true) {
   )
   check(
     'dir skill: description comes from SKILL.md frontmatter',
-    typeof workflowSkill.description === 'string' && workflowSkill.description.startsWith('通用 AI 多代理'),
+    typeof workflowSkill.description === 'string' &&
+      workflowSkill.description.startsWith('通用 AI 协作开发工作流') &&
+      workflowSkill.description.includes('中心-贡献者'),
     JSON.stringify(workflowSkill.description),
   )
   check(

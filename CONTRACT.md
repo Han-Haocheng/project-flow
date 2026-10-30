@@ -229,8 +229,14 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 
 ### 3.5 心跳 `<heartbeats.dir>/<session>.json`（schema 1）
 
-心跳写在 `contract.heartbeats.dir`（默认 `.agents/heartbeat`），目录不存在会自动创建
-（`.agents/` 已在 `.gitignore` 里）。文件名就是 session id，一个 session 一个文件。
+心跳只面向**主会话**：同一项目可能同时开多个主会话（不同窗口、不同工作树），心跳是它们
+互相避让的登记簿；**子会话（subagent / teammate 子代理）不登记心跳**。心跳根固定为
+**项目主工作区**：即使会话 cwd 在某个 `git worktree` 里，读写仍落到主工作区的
+`contract.heartbeats.dir`。解析方式：`git -C <cwd> worktree list --porcelain` 的第一条
+worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导主 checkout；仍失败或
+主工作区没有 store 时降级到当前 cwd，并记 `heartbeat-root-degraded` warning。
+目录不存在会自动创建（`.agents/` 已在 `.gitignore` 里）。文件名就是 session id，
+一个主会话一个文件。
 
 ```jsonc
 {
@@ -250,8 +256,15 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 }
 ```
 
-- **`claims` 语义**：本会话**独占写入的文件域**，对外广播「这些文件别碰」；默认取
+- **`claims` 语义**：本主会话**独占写入的文件域**，对外广播「这些文件别碰」；默认取
   所属任务的 `scope.allow`。它不改变 core 的写入权限，只是协作约定。
+- **主会话判定**：Host 用 `agents` 服务——`roots()` 返回的活根代理即主会话，`list()` /
+  `get(id)` 用来识别「活着但不是 root」的子会话；宿主不提供该服务时回退会话日志 header
+  （`origin === "subagent"` 或 `delegationDepth > 0` 判为子会话；fork 出的新主会话仍算主
+  会话）。`flow_heartbeat` 的 start/update/end 与 CLI `flow heartbeat start/update/end`
+  在子会话里**明确拒绝**（工具报错、CLI 退出 1），list/status 只读放行。
+  **注意**：`lib/core.mjs` 不感知会话类型，拒绝发生在 Host 工具与 CLI 层；直接调 core
+  API 的脚本自行负责只从主会话写入。
 - `session` 缺省取 `DSH_SESSION_ID`；仍为空 → `FlowError('usage')`。session 会当文件名用：
   禁止 `/`、`\`、`..`、控制字符，长度上限 80，否则 `FlowError('invalid')`。
 - `status` 只有 `working` / `idle` 算 active；`done` / `missed` 是结束态。
@@ -260,11 +273,17 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - 写操作（start/update/end）与 store 共用同一把锁与原子写（`withLock` +
   `writeJsonAtomic`），要求项目已 `flow init`（否则 `usage`）。
 - `endHeartbeat` 只写 `ended_at` 并保留文件（面板仍要列出），不删除。
-- 读取统一：`readHeartbeats` 保留旧形状 `{file,title,statusLine,ageSeconds,mtime}`；
-  `readHeartbeatSection` 返回富形状
-  `{file,session,agent,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime}`
-  与计数 `{total, active, stale}`。`.md` 心跳按尽力而为填充（`session` 取文件名词干，
-  `goal` 取标题，`last_action` 取状态行，其余为 `null`/空）。
+- **旧子会话心跳**：已移除的「子代理自动开合心跳」留下的 `agent: "subagent"` 记录是历史
+  数据。读侧把它投影为 `legacy: true` / `hidden: true`，**不进入面板与 CLI list**，只计入
+  `counts.hidden`；`flow heartbeat gc [--dry-run]` 清理这些文件（其余心跳保留）。
+- 读取统一：`readHeartbeats` 保留旧形状 `{file,title,statusLine,ageSeconds,mtime}`（隐藏
+  旧子会话记录）；`readHeartbeatSection` 返回富形状
+  `{root,dir,items,counts}`，item 含
+  `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime}`，
+  计数 `{total, active, stale, hidden}`（total/active/stale 只统计可见项；`root` 是解析后的
+  主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。`.md` 心跳按尽力而为填充
+  （`session` 取文件名词干，`goal` 取标题，`last_action` 取状态行，其余为 `null`/空，
+  `agent` 为空、`legacy/hidden` 为 false）。
 
 ## 4 写入语义
 
@@ -335,6 +354,7 @@ flow heartbeat update [--status working|idle] [--note T] [--goal G]
 flow heartbeat end    [--note T] [--status done|missed] [--session S]
 flow heartbeat list
 flow heartbeat status [--require-active] [--session S]
+flow heartbeat gc [--dry-run]
 
 flow check list
 flow check staged --allow <path> [--allow <path> ...]
@@ -353,7 +373,7 @@ flow check doc --file <path> --type task|design|incident|release
   `--claim` 可重复，是「本会话独占写入的文件域」，缺省取所属任务的 `scope.allow`。
   `start` 省略 `--task` 时按优先级认领任务：① `owner === session`；② `owner === --agent`
   （或上次心跳的 agent）；③ 最新的**无主**（`owner` 为空）`active`；④ 最新的**无主** `draft`
-  （③④ 多条取 `updated_at` 最新）。**他人名下的任务不会被抢**——并行会话/子代理各建各的卡，
+  （③④ 多条取 `updated_at` 最新）。**他人名下的任务不会被抢**——并行主会话各建各的卡，
   `claims` 才不会串味。都不命中才新建一条 `draft` 任务（标题取 `--goal`，缺省
   「未命名任务」，owner 为 session）并回填 `task`。显式 `--task` 始终优先，不存在则 `not-found`。
   重复 `start` 保留首次 `started_at`，`turn` +1（core 的 `startHeartbeat` 也接受显式 `turn`），
@@ -401,11 +421,13 @@ flow check doc --file <path> --type task|design|incident|release
 再往后是最近 3 条实验、最近 3 条任务、最近 3 次门禁运行。未初始化时提示 `flow init`，退出
 码仍为 0。
 
-心跳读自 `contract.heartbeats.dir`（默认 `.agents/heartbeat`）下的 `*.md` 与 `*.json`
-（只有 `source: 'none'` 关闭，`md`/`json` 只是遗留兼容值）：
+心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
+会话也读主工作区；解析/降级规则见 §3.5）下的 `*.md` 与 `*.json`（只有 `source: 'none'`
+关闭，`md`/`json` 只是遗留兼容值）：
 md 取首条含「状态」的行（去列表前缀），否则取首条非空非标题行；json 拼 `status · last_action`；
 按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；`ageSeconds > 6h` 记为可能已停
 （`HEARTBEAT_STALE_SECONDS`，与面板一致）。目录不存在按空集处理，不报错。
+`agent: "subagent"` 的旧记录不展示（只提示隐藏条数，`flow heartbeat gc` 可清理）。
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
 其中 `heartbeats` 为
@@ -543,8 +565,10 @@ updateHeartbeat(root, contract, session, patch)
                                      // 只允许 status/last_action/goal/task/claims/turn
 endHeartbeat(root, contract, {session?, status?='done', note?})
 heartbeatStatus(root, contract, session)   // {active, record|null}
-readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]
-readHeartbeatSection(root, contract)       // 富形状 {dir, items[], counts{total,active,stale}}
+readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]，隐藏旧子会话
+readHeartbeatSection(root, contract)       // 富形状 {root, dir, items[], counts{total,active,stale,hidden}}
+resolveHeartbeatWorkspace(root)            // {root, degraded, reason}：心跳根=项目主工作区
+gcLegacyHeartbeats(root, contract, {dryRun?})  // {root, dir, removed[], kept, dryRun}
 
 experimentTree(records)              // [{...record, children:[...]}]，环安全
 readStoreState(root, contract)       // 面板聚合：experiments{items,counts,source}
@@ -560,6 +584,8 @@ migrateLegacyTasks(root, contract, sourceDir = '.agents/tasks')
 `add*`/`update*`/`remove*` 与三个心跳写入口在未初始化时抛 `usage`
 （`initProject`/`migrate*`/心跳读操作除外；`migrate*` 要求已初始化）。
 
+心跳写入口与读入口都先把 root 解析到**项目主工作区**（`resolveHeartbeatWorkspace`），因此
+linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbeat-root-degraded` warning。
 心跳写入口的 session 缺省取 `DSH_SESSION_ID`；`startHeartbeat` 在无任务且
 `createTask !== false` 时新建 draft 任务（`title` 取 goal，缺省「未命名任务」，
 `scope.allow` 取 claims），并把新 id 写回心跳的 `task`。返回值比落盘记录多一个
@@ -645,26 +671,33 @@ payload 里**始终有** `team`：不可用时为 `null`。命中时来自 Agent
   需要关联时用 `writeScopes` ↔ 心跳 `claims` 做人工对账，不要写第二份状态。
 - 团队域与 `?root=` 的工作区可能不一致（团队跨项目），这是有意为之：面板展示"这个团队在干什么"。
 
-### 10.3 子代理心跳自动化
+### 10.3 心跳作用域：只面向主会话
 
-Host 订阅 `subagent/start` / `subagent/end`（仅 `info.local === true`）：
+心跳是**主会话之间**的协作面：同一项目的多个主会话（不同窗口、不同工作树）靠它登记
+goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）**没有心跳**。
 
-- start → 用 `agents.get(info.id)` + `workingDirectory` 反推该子代理的工作区，若该工作区有
-  store，则 `startHeartbeat({ session: info.id, agent: 'subagent', claims: [],
-  createTask: false, last_action: 'subagent/start 自动登记' })`，并把 `session → root`
-  记进一张**有界内存表**（≤256 条，按插入序淘汰最旧）。
-- end → `endHeartbeat({ session: info.id, status: 'done', note: 'subagent/end: <stopReason>' })`。
-- **为什么 end 必须查表**：宿主 settle 子代理的顺序是 `activation.handle.dispose()` →
-  `resident.delete(childId)` → 然后才 emit `subagent/end`（见 `@deepseek-ai/dsh-subagent`），
-  所以 end 到达时 `agents.get(childId)` 已经拿不到 agent、反推不出 root。start 是唯一还能拿到
-  child 的时机，故在那里缓存；end 先查表（取出即删），未命中才回退反推（兼容插件晚挂载）。
-- 表项只在正常 end 时删除。进程崩溃导致 end 不来时，该 run 的心跳会停在 `working`，需要人工
-  `flow heartbeat end --session <id>` 收尾——容量上界只防内存泄漏，不提供持久化。
-- **`createTask: false`**：自动心跳绝不建任务卡，避免子代理把台账灌满草稿。
-- 取不到 root / 没有 store / 老 core 无该 API → **静默跳过**，不报错、不写 warning。
+- **不再订阅 `subagent/start` / `subagent/end`**：已移除 registerSubagentHooks、
+  `subagentRoots` 内存表、start/end 自动开合心跳等全部逻辑，子代理运行不再产生心跳文件。
+- **提醒与门禁只对根会话生效**：`agent/pre-step` 的首步提醒与 `edit`/`write` 硬门禁先用
+  宿主 `agents` 服务判定——`roots()` 里包含该活代理（或 id 一致）才是主会话；活代理
+  `get(id)` 存在但不在 `roots()` 里即子会话。宿主不可用时回退会话 header
+  （`origin === "subagent"` / `delegationDepth > 0` 判为子会话）。判定为子会话时
+  **不提醒、不拒绝写入**；判定不出来时也不阻断（宿主旧版本降级）。
+- **工具/CLI 明确拒绝**：`flow_heartbeat` 的 start/update/end 在子会话里抛错并给可行动
+  提示（不要静默写一个面板会隐藏的文件）；CLI `flow heartbeat start/update/end` 由
+  `DSH_SESSION_ID` 对应会话日志 header 判定，子会话里退出码 1 并提示向主会话汇报。
+  `list`/`status` 是只读，任何会话可调用。
+- **心跳根 = 项目主工作区**：worktree 会话也写主工作区的 `.agents/heartbeat`，
+  见 §3.5 的解析与降级规则。这样「面板默认看主工作区」与「worktree 会话的心跳」不再分裂。
+- **旧数据**：`agent: "subagent"` 的历史心跳读侧隐藏（`counts.hidden`），
+  `flow heartbeat gc [--dry-run]` 清理。
+- 子代理的进度通过**最终报告**回到主会话，由主会话统一登记/收尾心跳；这与 Agent Teams
+  的任务板 + 最终报告模型一致。
 
 ### 10.4 与工具的关系
 
 模型侧另有 5 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`。
 `flow_heartbeat` 的 `action` 为 `start|update|end|list|status`，session 取当前会话 id，
-语义与 CLI `flow heartbeat ...` 完全一致（同一 `lib/core.mjs`）。
+语义与 CLI `flow heartbeat ...` 完全一致（同一 `lib/core.mjs`）。start/update/end 只在
+主会话可用；心跳根解析到项目主工作区；`root` 参数仍可覆盖工作区，但不会绕开主工作区
+解析与会话判定。

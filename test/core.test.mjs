@@ -25,6 +25,7 @@ import {
   getExperiment,
   getGate,
   getTask,
+  gcLegacyHeartbeats,
   heartbeatStatus,
   initProject,
   listExperiments,
@@ -37,6 +38,7 @@ import {
   readHeartbeatSection,
   readHeartbeats,
   readStoreState,
+  resolveHeartbeatWorkspace,
   removeExperiment,
   removeGate,
   removeTask,
@@ -752,7 +754,7 @@ test('readStoreState 心跳：目录缺失为空集且不产生 warning', () => 
   const state = readStoreState(root, contract)
   assert.equal(state.heartbeats.dir, '.agents/heartbeat')
   assert.deepEqual(state.heartbeats.items, [])
-  assert.deepEqual(state.heartbeats.counts, { total: 0, active: 0, stale: 0 })
+  assert.deepEqual(state.heartbeats.counts, { total: 0, active: 0, stale: 0, hidden: 0 })
   assert.deepEqual(drainWarnings(), [])
 })
 
@@ -1125,8 +1127,9 @@ test('CLI 未初始化项目上 status 提示 init，写命令退出 1', () => {
 
 const SESSION = 'session-79c1c4e6-ecf5-40a9-98c2-fd7a373a2a85'
 const HEARTBEAT_KEYS = [
-  'file', 'session', 'agent', 'goal', 'task', 'claims', 'status', 'last_action',
-  'started_at', 'updated_at', 'ended_at', 'ageSeconds', 'stale', 'turn', 'stats', 'mtime',
+  'file', 'session', 'agent', 'legacy', 'hidden', 'goal', 'task', 'claims', 'status',
+  'last_action', 'started_at', 'updated_at', 'ended_at', 'ageSeconds', 'stale', 'turn',
+  'stats', 'mtime',
 ]
 
 function heartbeatPath(root, session = SESSION) {
@@ -1326,8 +1329,96 @@ test('readHeartbeatSection：md 与 json 同时可读，source 的 md/json 只�
   // source:none 关闭整个小节
   const none = readHeartbeatSection(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } })
   assert.deepEqual(none.items, [])
-  assert.deepEqual(none.counts, { total: 0, active: 0, stale: 0 })
+  assert.deepEqual(none.counts, { total: 0, active: 0, stale: 0, hidden: 0 })
   assert.deepEqual(readHeartbeats(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } }), [])
+})
+
+// ------------------------------------------- 心跳作用域（主会话 / 主工作区）
+
+/** 建一个含 store、已提交的临时 git 仓库，返回主工作区路径。 */
+function gitProject(label) {
+  const root = tempRoot(label)
+  initProject(root, { name: label, noGates: true })
+  fs.writeFileSync(path.join(root, '.gitignore'), '.agents/\n', 'utf8')
+  git(root, ['init', '-q'])
+  git(root, ['add', '-A'])
+  git(root, [
+    '-c', 'user.name=Flow Test',
+    '-c', 'user.email=flow-test@example.invalid',
+    '-c', 'commit.gpgsign=false',
+    'commit', '-q', '--no-verify', '-m', 'init',
+  ])
+  return root
+}
+
+test('心跳根：worktree 会话读写主工作区心跳，读侧同源', () => {
+  const main = gitProject('hb-worktree-main')
+  const checkout = path.join(tempRoot('hb-worktree-dir'), 'checkout')
+  git(main, ['worktree', 'add', '-q', checkout, '-b', 'hb-wt'])
+  const { contract } = loadContract(checkout)
+  const session = 'session-worktree'
+
+  assert.deepEqual(resolveHeartbeatWorkspace(checkout), { root: main, degraded: false, reason: '' })
+  const record = startHeartbeat(checkout, contract, { session, goal: 'worktree 心跳', createTask: false })
+  assert.equal(record.session, session)
+  assert.ok(fs.existsSync(path.join(main, '.agents/heartbeat', `${session}.json`)), '写主工作区')
+  assert.ok(!fs.existsSync(path.join(checkout, '.agents/heartbeat', `${session}.json`)), '不写 worktree')
+
+  assert.equal(heartbeatStatus(checkout, contract, session).active, true, 'status 也读主工作区')
+  const section = readHeartbeatSection(checkout, contract)
+  assert.equal(section.root, main)
+  assert.equal(section.items.length, 1)
+  assert.equal(readHeartbeats(checkout, contract).length, 1)
+  assert.equal(updateHeartbeat(checkout, contract, session, { status: 'idle' }).status, 'idle')
+  endHeartbeat(checkout, contract, { session })
+  drainWarnings()
+})
+
+test('心跳根：git 解析失败降级到当前目录并记 warning', () => {
+  const root = tempRoot('hb-root-degraded')
+  initProject(root, { name: 'degraded', noGates: true })
+  fs.mkdirSync(path.join(root, '.git')) // 坏仓库：git 命令会失败
+  const { contract } = loadContract(root)
+  const resolved = resolveHeartbeatWorkspace(root)
+  assert.equal(resolved.root, root)
+  assert.equal(resolved.degraded, true)
+  assert.match(resolved.reason, /git worktree lookup failed/)
+
+  drainWarnings()
+  startHeartbeat(root, contract, { session: 'session-degraded', createTask: false })
+  assert.ok(fs.existsSync(path.join(root, '.agents/heartbeat/session-degraded.json')))
+  assert.ok(
+    drainWarnings().some((item) => item.startsWith('heartbeat-root-degraded:')),
+    '降级必须留 warning',
+  )
+})
+
+test('旧子会话心跳：hidden/legacy、不进面板与 readHeartbeats，gc 只清这些文件', () => {
+  const { root, contract } = freshProject('hb-legacy-sub')
+  startHeartbeat(root, contract, { session: 'session-legacy-sub', agent: 'subagent', createTask: false })
+  startHeartbeat(root, contract, { session: 'session-main', goal: '主会话', createTask: false })
+
+  const section = readHeartbeatSection(root, contract)
+  assert.equal(section.counts.total, 1)
+  assert.equal(section.counts.hidden, 1)
+  assert.deepEqual(section.items.map((item) => item.session), ['session-main'])
+  assert.deepEqual(readHeartbeats(root, contract).map((item) => item.file), ['session-main.json'])
+
+  const legacyFile = heartbeatPath(root, 'session-legacy-sub')
+  assert.ok(fs.existsSync(legacyFile), '旧文件存在')
+
+  const dry = gcLegacyHeartbeats(root, contract, { dryRun: true })
+  assert.equal(dry.dryRun, true)
+  assert.equal(dry.removed.length, 1)
+  assert.equal(dry.removed[0].file, 'session-legacy-sub.json')
+  assert.equal(dry.kept, 1)
+  assert.ok(fs.existsSync(legacyFile), 'dry-run 不删除')
+
+  const real = gcLegacyHeartbeats(root, contract)
+  assert.equal(real.removed.length, 1)
+  assert.ok(!fs.existsSync(legacyFile), 'gc 删除旧子会话心跳')
+  assert.ok(fs.existsSync(heartbeatPath(root, 'session-main')), '普通心跳保留')
+  assert.equal(readHeartbeatSection(root, contract).counts.hidden, 0)
 })
 
 test('心跳 session 安全校验：空、过长、路径穿越、控制字符都拒绝；缺省回落 DSH_SESSION_ID', () => {
@@ -1362,7 +1453,7 @@ test('heartbeat 未 init：写入抛 usage，读取不抛', () => {
   expectFlowError(() => updateHeartbeat(root, contract, SESSION, { status: 'idle' }), 'usage')
   expectFlowError(() => endHeartbeat(root, contract, { session: SESSION }), 'usage')
   assert.equal(heartbeatStatus(root, contract, SESSION).active, false)
-  assert.deepEqual(readHeartbeatSection(root, contract).counts, { total: 0, active: 0, stale: 0 })
+  assert.deepEqual(readHeartbeatSection(root, contract).counts, { total: 0, active: 0, stale: 0, hidden: 0 })
 })
 
 // ------------------------------------------------------------ 门禁开关生效
@@ -1622,6 +1713,72 @@ test('CLI heartbeat：start 自动建任务、status --require-active 退出码�
     if (saved === undefined) delete process.env.DSH_SESSION_ID
     else process.env.DSH_SESSION_ID = saved
   }
+})
+
+// ---------------------------------------------- CLI 心跳作用域（子会话拒绝）
+
+/** 在临时 DSH_HOME 里写一条会话日志 header（CLI 据此判定主会话/子会话）。 */
+function writeSessionHeader(home, session, header) {
+  const dir = path.join(home, 'sessions', '--tmp-project--', session)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'session.v4.jsonl'),
+    `${JSON.stringify({ type: 'session', version: 4, createdAt: 0, isSeeded: false, ...header, id: session })}\n`,
+    'utf8',
+  )
+}
+
+test('CLI heartbeat：子会话拒绝写心跳，主会话放行；旧子会话心跳隐藏并被 gc 清理', () => {
+  const { root } = freshProject('cli-hb-scope')
+  const home = tempRoot('cli-dsh-home')
+  const subSession = 'session-sub-cli'
+  const mainSession = 'session-main-cli'
+  writeSessionHeader(home, subSession, { origin: 'subagent', delegationDepth: 1, parentSession: mainSession })
+  writeSessionHeader(home, mainSession, {})
+
+  const subEnv = { DSH_HOME: home, DSH_SESSION_ID: subSession }
+  for (const args of [
+    ['heartbeat', 'start', '--session', subSession, '--goal', 'x', '--json'],
+    ['heartbeat', 'update', '--session', subSession, '--status', 'idle', '--json'],
+    ['heartbeat', 'end', '--session', subSession, '--json'],
+  ]) {
+    const denied = runCli(root, args, subEnv)
+    assert.equal(denied.code, 1, `${args.join(' ')} 必须拒绝`)
+    assert.equal(denied.json.error.code, 'usage')
+    assert.match(denied.json.error.message, /只面向主会话/)
+  }
+  assert.ok(!fs.existsSync(path.join(root, '.agents/heartbeat', `${subSession}.json`)), '拒绝时不写文件')
+  assert.equal(runCli(root, ['heartbeat', 'list', '--json'], subEnv).code, 0, 'list 只读放行')
+
+  const mainEnv = { DSH_HOME: home, DSH_SESSION_ID: mainSession }
+  const mainStarted = runCli(root, ['heartbeat', 'start', '--session', mainSession, '--goal', '主会话', '--json'], mainEnv)
+  assert.equal(mainStarted.code, 0, mainStarted.stderr)
+  assert.equal(mainStarted.json.data.session, mainSession)
+
+  const contract = loadContract(root).contract
+  startHeartbeat(root, contract, { session: 'session-old-sub', agent: 'subagent', createTask: false })
+  const cleanEnv = { DSH_HOME: home, DSH_SESSION_ID: '' }
+  const hiddenList = runCli(root, ['heartbeat', 'list', '--json'], cleanEnv)
+  assert.equal(hiddenList.code, 0)
+  assert.equal(hiddenList.json.data.counts.hidden, 1)
+  assert.deepEqual(hiddenList.json.data.items.map((item) => item.session), [mainSession])
+  const listText = runCli(root, ['heartbeat', 'list'], cleanEnv)
+  assert.ok(listText.stdout.includes('旧子会话隐藏 1'), listText.stdout)
+  assert.ok(listText.stdout.includes('flow heartbeat gc'), listText.stdout)
+
+  const dryRun = runCli(root, ['heartbeat', 'gc', '--dry-run', '--json'], cleanEnv)
+  assert.equal(dryRun.code, 0)
+  assert.equal(dryRun.json.data.dryRun, true)
+  assert.equal(dryRun.json.data.removed.length, 1)
+  assert.ok(fs.existsSync(path.join(root, '.agents/heartbeat', 'session-old-sub.json')), 'dry-run 不删除')
+
+  const cleaned = runCli(root, ['heartbeat', 'gc', '--json'], cleanEnv)
+  assert.equal(cleaned.code, 0)
+  assert.equal(cleaned.json.data.removed[0].file, 'session-old-sub.json')
+  assert.ok(!fs.existsSync(path.join(root, '.agents/heartbeat', 'session-old-sub.json')))
+  const humanGc = runCli(root, ['heartbeat', 'gc'], cleanEnv)
+  assert.equal(humanGc.code, 0)
+  assert.ok(humanGc.stdout.includes('已清理旧子会话心跳 0 条'), humanGc.stdout)
 })
 
 test('CLI gate：disabled 拒绝、--force 可跑、enable/disable 糖、run --phase 汇总', () => {

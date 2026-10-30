@@ -11,6 +11,9 @@
 
 import path from 'node:path'
 import process from 'node:process'
+import os from 'node:os'
+import { readFileSync, readdirSync } from 'node:fs'
+import * as zlib from 'node:zlib'
 
 // A closed downstream pipe (`flow status | head`) must end quietly, not throw.
 process.stdout.on('error', (error) => {
@@ -59,12 +62,17 @@ const USAGE = `project-flow CLI（schema 2）
   heartbeat end [--note T] [--session S]
   heartbeat list
   heartbeat status [--require-active] [--session S]
+  heartbeat gc [--dry-run]      清理旧子会话心跳（agent=subagent 的历史文件）
 
   check list
   check staged --allow <path> [--allow <path> ...]
   check release-baseline --marker <text> [--threshold <N>]
   check state [--file <path>]
   check doc --file <path> --type task|design|incident|release
+
+  心跳只面向主会话（同一项目的多个主会话互相避让）：子会话不登记心跳，
+  在子会话里运行 heartbeat start/update/end 会被明确拒绝；list/status 只读，
+  可随时调用。心跳根固定为项目主工作区（linked worktree 也写主工作区）。
 
   机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
   scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
@@ -96,7 +104,7 @@ const CHECK_EXIT_BY_CODE = {
 // status 只逐条展示最近的心跳，其余用总数提示。
 const STATUS_HEARTBEAT_ROWS = 5
 
-const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active'])
+const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run'])
 const VALUE_FLAGS = new Set([
   'root', 'name', 'migrate',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
@@ -271,6 +279,101 @@ function fmtDuration(ms) {
   if (value < 1000) return `${Math.round(value)}ms`
   if (value < 10000) return `${(value / 1000).toFixed(1)}s`
   return `${Math.round(value / 1000)}s`
+}
+
+
+// --------------------------------------------- 心跳：主会话判定与心跳根
+
+/**
+ * One decompressed session log header, or `undefined`. Session logs live under
+ * `<DSH_HOME>/sessions/<encoded-cwd>/<session-id>/session.v4.jsonl[.zstd]`;
+ * the header's `origin`/`delegationDepth` are the durable record of whether a
+ * session is a delegated child. Best effort only: an unreadable status is
+ * "unknown" and is treated like a main session (never a silent refusal).
+ */
+function readSessionHeader(session) {
+  const configured = typeof process.env.DSH_HOME === 'string' ? process.env.DSH_HOME.trim() : ''
+  const home = configured !== '' ? path.resolve(configured) : path.join(os.homedir(), '.dsh')
+  const sessionsDir = path.join(home, 'sessions')
+  let projects
+  try {
+    projects = readdirSync(sessionsDir, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const project of projects) {
+    if (project.isDirectory() !== true) continue
+    const dir = path.join(sessionsDir, project.name, session)
+    for (const name of ['session.v4.jsonl.zstd', 'session.v4.jsonl']) {
+      const file = path.join(dir, name)
+      let buffer
+      try {
+        buffer = readFileSync(file)
+      } catch {
+        continue
+      }
+      let text
+      try {
+        text = name.endsWith('.zstd') ? zstdText(buffer) : buffer.toString('utf8')
+      } catch {
+        return undefined
+      }
+      const first = text.split('\n', 1)[0]
+      let header
+      try {
+        header = JSON.parse(first)
+      } catch {
+        return undefined
+      }
+      if (header === null || typeof header !== 'object') return undefined
+      if (header.id !== undefined && header.id !== session) continue
+      return header
+    }
+  }
+  return undefined
+}
+
+/** Decompress one session log when Node's zlib supports zstd. */
+function zstdText(buffer) {
+  if (typeof zlib.zstdDecompressSync !== 'function') throw new Error('zlib.zstdDecompressSync is unavailable')
+  return zlib.zstdDecompressSync(buffer).toString('utf8')
+}
+
+/** `subagent` / `main` for a known session header; `undefined` when unknown. */
+function sessionOriginOf(session) {
+  const header = readSessionHeader(session)
+  if (header === undefined) return undefined
+  if (header.origin === 'subagent') return 'subagent'
+  if (Number.isInteger(header.delegationDepth) && header.delegationDepth > 0) return 'subagent'
+  return 'main'
+}
+
+/**
+ * Refuse a heartbeat write from inside a subagent. The main-session ledger is
+ * the only heartbeat surface, so a delegated child must report back instead of
+ * writing a file the panel would hide. The calling session is `DSH_SESSION_ID`;
+ * no ambient session means an interactive CLI run, which is allowed.
+ */
+function assertMainSessionHeartbeat(command) {
+  const session = typeof process.env.DSH_SESSION_ID === 'string' ? process.env.DSH_SESSION_ID.trim() : ''
+  if (session === '') return
+  if (sessionOriginOf(session) !== 'subagent') return
+  throw new CliError(
+    'usage',
+    `heartbeat ${command} 只面向主会话：当前 CLI 运行在子会话 ${shortSession(session)} 内，` +
+      '子会话不登记心跳（不会写入心跳文件）。请在最终报告里向主会话汇报进度，由主会话登记/收尾心跳。',
+  )
+}
+
+/** The heartbeat ledger root of the current workspace: the project main worktree, else the workspace. */
+function heartbeatWorkspaceOf(core, root) {
+  if (typeof core.resolveHeartbeatWorkspace === 'function') {
+    const resolved = core.resolveHeartbeatWorkspace(root)
+    if (resolved !== null && typeof resolved === 'object' && typeof resolved.root === 'string' && resolved.root !== '') {
+      return { root: resolved.root, degraded: resolved.degraded === true, reason: resolved.reason || '' }
+    }
+  }
+  return { root, degraded: false, reason: '' }
 }
 
 /** Relative age for heartbeat rows ("刚刚", "3 小时前", …). */
@@ -517,7 +620,11 @@ async function cmdStatus(ctx) {
         `${tasks.length}（draft ${taskCounts.draft} · active ${taskCounts.active} · done ${taskCounts.done} · archived ${taskCounts.archived}）`,
       ])
       lines.push(['门禁', `${gates.length}（启用 ${gateEnabled}）`])
-      lines.push(['心跳', `${heartbeats.counts.total}（可能已停 ${heartbeats.counts.stale}）`])
+      const hiddenBeats = Number(heartbeats.counts.hidden) || 0
+      lines.push([
+        '心跳',
+        `${heartbeats.counts.total}（可能已停 ${heartbeats.counts.stale}${hiddenBeats > 0 ? ` · 旧子会话隐藏 ${hiddenBeats}` : ''}）`,
+      ])
     }
     const labelWidth = Math.max(...lines.map(([label]) => textWidth(label)))
     for (const [label, value] of lines) out(`${pad(label, labelWidth)}  ${value}`)
@@ -912,7 +1019,11 @@ function printHeartbeat(record) {
 function printHeartbeatList(section) {
   const items = Array.isArray(section?.items) ? section.items : []
   const counts = section?.counts ?? { total: 0, active: 0, stale: 0 }
-  out(`心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale}）  目录 ${section?.dir ?? '-'}`)
+  const hidden = Number(counts.hidden) || 0
+  out(
+    `心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale}${hidden > 0 ? ` · 旧子会话隐藏 ${hidden}` : ''}）  目录 ${section?.dir ?? '-'}`,
+  )
+  if (hidden > 0) out('提示：agent=subagent 的旧心跳已隐藏；flow heartbeat gc 可清理。')
   if (items.length === 0) {
     out('（没有心跳记录）')
     return
@@ -938,12 +1049,20 @@ function printHeartbeatList(section) {
 
 async function cmdHeartbeat(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow heartbeat <start|update|end|list|status>')
-  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  if (!sub) throw new CliError('usage', '用法: flow heartbeat <start|update|end|list|status|gc>')
+  // The ledger root is the project main worktree, so a session in a linked
+  // worktree still reads/writes the same heartbeat files.
+  const workspace = heartbeatWorkspaceOf(core, ctx.root)
+  const root = workspace.root
+  if (workspace.degraded === true) {
+    errOut(`warning: 心跳根无法解析到主工作区，降级到 ${root}（${workspace.reason || '未知原因'}）`)
+  }
+  const contract = core.loadContract(root).contract
   const sessionFlag = readString(flags, 'session')
   const note = readString(flags, 'note')
 
   if (sub === 'start') {
+    assertMainSessionHeartbeat('start')
     const options = {}
     if (sessionFlag !== undefined) options.session = sessionFlag
     for (const [key, option] of [['agent', 'agent'], ['goal', 'goal'], ['task', 'task']]) {
@@ -952,7 +1071,7 @@ async function cmdHeartbeat(ctx, sub) {
     }
     if (ctx.claims.length > 0) options.claims = ctx.claims
     if (note !== undefined) options.last_action = note
-    const record = await core.startHeartbeat(ctx.root, contract, options)
+    const record = await core.startHeartbeat(root, contract, options)
     if (!ctx.json) {
       out(`已开始心跳${record.createdTask ? `（新建任务 ${record.createdTask}）` : ''}`)
       printHeartbeat(record)
@@ -961,6 +1080,7 @@ async function cmdHeartbeat(ctx, sub) {
   }
 
   if (sub === 'update') {
+    assertMainSessionHeartbeat('update')
     const patch = {}
     const status = readString(flags, 'status')
     if (status !== undefined) {
@@ -976,7 +1096,7 @@ async function cmdHeartbeat(ctx, sub) {
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'heartbeat update 至少需要一个字段参数（如 --status idle / --note T）')
     }
-    const record = await core.updateHeartbeat(ctx.root, contract, sessionFlag, patch)
+    const record = await core.updateHeartbeat(root, contract, sessionFlag, patch)
     if (!ctx.json) {
       out('已更新心跳')
       printHeartbeat(record)
@@ -985,6 +1105,7 @@ async function cmdHeartbeat(ctx, sub) {
   }
 
   if (sub === 'end') {
+    assertMainSessionHeartbeat('end')
     const options = {}
     if (sessionFlag !== undefined) options.session = sessionFlag
     const status = readString(flags, 'status')
@@ -993,7 +1114,7 @@ async function cmdHeartbeat(ctx, sub) {
       options.status = status
     }
     if (note !== undefined) options.note = note
-    const record = await core.endHeartbeat(ctx.root, contract, options)
+    const record = await core.endHeartbeat(root, contract, options)
     if (!ctx.json) {
       out(`已结束心跳 ${shortSession(record.session)}  ${record.status}`)
       printHeartbeat(record)
@@ -1002,13 +1123,13 @@ async function cmdHeartbeat(ctx, sub) {
   }
 
   if (sub === 'list') {
-    const section = core.readHeartbeatSection(ctx.root, contract)
+    const section = core.readHeartbeatSection(root, contract)
     if (!ctx.json) printHeartbeatList(section)
     return section
   }
 
   if (sub === 'status') {
-    const result = core.heartbeatStatus(ctx.root, contract, sessionFlag)
+    const result = core.heartbeatStatus(root, contract, sessionFlag)
     const requireActive = flags['require-active'] === true
     if (!ctx.json) {
       if (result.record === null) {
@@ -1024,7 +1145,24 @@ async function cmdHeartbeat(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 heartbeat ${sub}（可用 start|update|end|list|status）`)
+  if (sub === 'gc') {
+    if (typeof core.gcLegacyHeartbeats !== 'function') {
+      throw new CliError('io', 'heartbeat gc 需要更新的 lib/core.mjs（缺少 gcLegacyHeartbeats）')
+    }
+    const dryRun = flags['dry-run'] === true
+    const result = core.gcLegacyHeartbeats(root, contract, { dryRun })
+    if (!ctx.json) {
+      const removed = Array.isArray(result.removed) ? result.removed : []
+      out(
+        `${dryRun ? '将清理' : '已清理'}旧子会话心跳 ${removed.length} 条（保留 ${result.kept} 条）  目录 ${result.dir}`,
+      )
+      for (const item of removed) out(`  - ${item.file}  ${item.status || '-'}`)
+      if (removed.length === 0) out('（没有 agent=subagent 的旧心跳）')
+    }
+    return result
+  }
+
+  throw new CliError('usage', `未知子命令 heartbeat ${sub}（可用 start|update|end|list|status|gc）`)
 }
 
 // ---------------------------------------------------------------- flow check

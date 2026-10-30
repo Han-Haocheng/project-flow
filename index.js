@@ -18,13 +18,15 @@
 // `?session=<id>`: when the Agent Teams service knows that session, the payload
 // carries a read-only `team` projection (roster, task board, counts) of that
 // session's team — a Team lives in the Lead's session log, so nothing is written
-// back to it. Two host-level listeners register and close one heartbeat per
-// local subagent run, without creating a task. Root resolution happens per
-// request; there are no watchers and no dependencies beyond node built-ins.
+// back to it. The heartbeat discipline serves *main* sessions only: subagent
+// sessions neither create heartbeats nor face the reminder or the write guard,
+// and the ledger lives in the project's main worktree so linked-worktree
+// sessions share one ledger. Root resolution happens per request; there are no
+// watchers and no dependencies beyond node built-ins.
 
 import { execFile } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const inject = ['webServer']
@@ -114,11 +116,7 @@ const SAFE_TRAILER_KEY = /^[A-Za-z0-9_.-]+$/
 const TEAM_MEMBER_ROLES = new Set(['lead', 'teammate'])
 const TEAM_MEMBER_STATUSES = new Set(['running', 'inactive', 'provisioning', 'failed'])
 const TEAM_TASK_STATUSES = new Set(['pending', 'in_progress', 'completed', 'deleted'])
-const SUBAGENT_AGENT = 'subagent'
-const SUBAGENT_HEARTBEAT_PREFIX = '子代理运行 '
-const SUBAGENT_START_ACTION = 'subagent/start 自动登记'
-/** Bound on remembered subagent roots: a crashed run must not leak entries. */
-const SUBAGENT_ROOT_LIMIT = 256
+const SUBAGENT_ORIGIN = 'subagent'
 
 // ---------------------------------------------------------------- primitives
 
@@ -1617,10 +1615,15 @@ async function buildStoreState(root, entry, now, warnings) {
   // and the CLI must agree on. The legacy mode below keeps its local reader.
   let heartbeats
   try {
-    heartbeats =
-      typeof c.readHeartbeatSection === 'function'
-        ? panelHeartbeats(c.readHeartbeatSection(root, contract))
-        : undefined
+    if (typeof c.readHeartbeatSection === 'function') {
+      const section = c.readHeartbeatSection(root, contract)
+      // The section reads the project main worktree; a degraded resolution names
+      // the reason once so the panel shows why the ledger is local to the cwd.
+      if (isPlainObject(section) && section.degraded === true) {
+        warnings.push(`heartbeat-root-degraded: ${typeof section.reason === 'string' && section.reason !== '' ? section.reason : root}`)
+      }
+      heartbeats = panelHeartbeats(section)
+    }
   } catch (error) {
     warnings.push(`heartbeats unreadable: ${brief(error)}`)
     heartbeats = undefined
@@ -2285,6 +2288,84 @@ function heartbeatWorking(root, session) {
   }
 }
 
+
+/**
+ * Whether one live agent is a *root* (main) session: `true`, `false`, or `null`
+ * when it cannot be decided.
+ *
+ * The host registry is authoritative (see `@deepseek-ai/dsh-agent`): `roots()`
+ * returns the live top-level agents — those entered without an owner — and
+ * `get(id)` returns any live agent, so a live agent missing from `roots()` is a
+ * subagent. Identity is checked first; the id fallback tolerates a tool call
+ * receiving a detached agent record. Sessions whose runtime relation is not
+ * visible fall back to the durable session header: `origin === 'subagent'` (or
+ * `delegationDepth > 0`) marks a delegated child, while a fork stays a root.
+ */
+function rootSessionVerdict(ctx, agent) {
+  if (agent === null || agent === undefined || typeof agent !== 'object') return null
+  let id = ''
+  try {
+    if (typeof agent.id === 'string') id = agent.id.trim()
+  } catch {
+    id = ''
+  }
+  try {
+    const agents = service(ctx, 'agents')
+    if (agents !== undefined) {
+      if (typeof agents.roots === 'function') {
+        const roots = agents.roots()
+        if (Array.isArray(roots)) {
+          if (roots.includes(agent)) return true
+          if (id !== '' && roots.some((root) => root !== null && typeof root === 'object' && root.id === id)) return true
+        }
+      }
+      if (id !== '' && typeof agents.get === 'function') {
+        const live = agents.get(id)
+        // A live agent that is not a root is a subagent; an unknown id proves
+        // nothing (test doubles, detached exec records) and falls through.
+        if (live !== undefined && live !== null) return false
+      }
+    }
+  } catch {
+    // Fall through to the durable header.
+  }
+  let header
+  try {
+    header = agent.session !== null && agent.session !== undefined ? agent.session.header : undefined
+  } catch {
+    header = undefined
+  }
+  if (isPlainObject(header)) {
+    if (header.origin === SUBAGENT_ORIGIN) return false
+    if (Number.isInteger(header.delegationDepth) && header.delegationDepth > 0) return false
+    return true
+  }
+  return null
+}
+
+/** Human-readable refusal for a heartbeat write attempted from a subagent. */
+const ROOT_SESSION_HEARTBEAT_ONLY =
+  'flow_heartbeat start/update/end only serve main sessions: this call runs in a subagent session, which does not keep a heartbeat. Report progress in the child final message; only the parent (main) session registers and closes a heartbeat.'
+
+/** Resolve the heartbeat ledger root (the project main worktree); degrade to the workspace root. */
+function heartbeatRootOf(root) {
+  try {
+    if (coreAvailable() && typeof core.resolveHeartbeatWorkspace === 'function') {
+      const resolved = core.resolveHeartbeatWorkspace(root)
+      if (isPlainObject(resolved) && typeof resolved.root === 'string' && resolved.root.length > 0) {
+        return {
+          root: resolved.root,
+          degraded: resolved.degraded === true,
+          reason: typeof resolved.reason === 'string' ? resolved.reason : '',
+        }
+      }
+    }
+  } catch {
+    // Fall through to the workspace root.
+  }
+  return { root, degraded: false, reason: '' }
+}
+
 /** The task a session currently works on: its newest active, else newest draft. */
 function currentTaskOf(records, session) {
   const open = records.filter(
@@ -2307,6 +2388,8 @@ function disciplineText(ctx, context) {
   try {
     const agent = context !== null && context !== undefined ? context.agent : undefined
     if (agent === undefined || agent === null || coreAvailable() === false) return ''
+    // Delegated child sessions are not asked to keep a heartbeat.
+    if (rootSessionVerdict(ctx, agent) === false) return ''
     const root = agentRoot(ctx, agent)
     if (root === undefined || hasStore(root) === false) return ''
     const c = requireCore()
@@ -2388,6 +2471,8 @@ function registerHeartbeatReminder(ctx) {
           if (step !== 0 && step !== 1) return decision
           const agent = payload.agent
           if (agent === undefined || agent === null) return decision
+          // Only main sessions are reminded; a subagent never registers one.
+          if (rootSessionVerdict(ctx, agent) !== true) return decision
           const session = usableSessionId(agent.id)
           if (session === '') return decision
           const root = agentRoot(ctx, agent)
@@ -2413,169 +2498,6 @@ function registerHeartbeatReminder(ctx) {
   }
 }
 
-// ------------------------------------------------------- subagent heartbeats
-//
-// One delegation is one bounded unit of work inside the parent's workspace, so
-// each local subagent run gets a heartbeat of its own — registered on
-// `subagent/start` and closed on `subagent/end`. Two rules keep the ledger
-// clean: `createTask: false`, because delegation bookkeeping must never mint a
-// task, and a per-run root resolved from the child's own agent, because the
-// child may run in another project. Only local children are handled: a remote
-// one owns no local cwd. Everything here is optional — a host without the
-// events, the `agents` service or a newer core is simply not served.
-//
-// Root resolution cannot depend on the child being live at `subagent/end`: the
-// host disposes the child's activation handle *before* it emits the terminal
-// edge, so `agents.get(childId)` is already gone there and the end hook would
-// silently skip, leaving the heartbeat `working` forever. `subagent/start` runs
-// while the child is still resident, so it records the resolved root in
-// `subagentRoots` and the end hook reads (and deletes) that entry, falling back
-// to live resolution only when this plugin was mounted after the run began. The
-// map is bounded by `SUBAGENT_ROOT_LIMIT` in insertion order, so a run whose
-// end never arrives (crash, kill) cannot grow it without limit.
-
-/** Roots resolved at `subagent/start`, so `subagent/end` survives child disposal. */
-const subagentRoots = new Map()
-
-/** Remember one run's root, evicting the oldest entry beyond `SUBAGENT_ROOT_LIMIT`. */
-function rememberSubagentRoot(session, root) {
-  // Re-inserting refreshes the position, so the bound drops the stalest run.
-  subagentRoots.delete(session)
-  subagentRoots.set(session, { root })
-  while (subagentRoots.size > SUBAGENT_ROOT_LIMIT) {
-    const oldest = subagentRoots.keys().next()
-    if (oldest.done === true) break
-    subagentRoots.delete(oldest.value)
-  }
-}
-
-/** Take and forget one run's remembered root; `undefined` when never recorded. */
-function takeSubagentRoot(session) {
-  const entry = subagentRoots.get(session)
-  subagentRoots.delete(session)
-  if (entry === null || typeof entry !== 'object') return undefined
-  return typeof entry.root === 'string' && entry.root.length > 0 ? entry.root : undefined
-}
-
-/**
- * The project root of one subagent run, or undefined. `undefined` covers every
- * silent skip: a remote child, an unknown agent, no derivable root, or a
- * workspace without a store.
- */
-function subagentRootOf(ctx, info) {
-  try {
-    if (info === null || typeof info !== 'object') return undefined
-    if (info.local !== true) return undefined
-    const session = usableSessionId(info.id)
-    if (session === '') return undefined
-    const agents = service(ctx, 'agents')
-    if (agents === undefined || typeof agents.get !== 'function') return undefined
-    const agent = agents.get(session)
-    if (agent === undefined || agent === null) return undefined
-    const root = agentRoot(ctx, agent)
-    if (typeof root !== 'string' || root.length === 0) return undefined
-    if (hasStore(root) === false) return undefined
-    return root
-  } catch {
-    return undefined
-  }
-}
-
-/** Core + contract for one subagent root, or undefined when the core cannot serve it. */
-function subagentCore(root) {
-  if (coreAvailable() === false) return undefined
-  const c = core
-  if (typeof c.loadContract !== 'function') return undefined
-  if (typeof c.startHeartbeat !== 'function' || typeof c.endHeartbeat !== 'function') return undefined
-  const loaded = c.loadContract(root)
-  const contract = isPlainObject(loaded) ? loaded.contract : undefined
-  return contract === undefined ? undefined : { c, contract }
-}
-
-/** `subagent/start`: register this run's heartbeat. Never creates a task. */
-function startSubagentHeartbeat(ctx, info) {
-  try {
-    const root = subagentRootOf(ctx, info)
-    if (root === undefined) return
-    const session = usableSessionId(info.id)
-    if (session === '') return
-    // The child is still resident here, so this is the only moment its root can
-    // be resolved: `subagent/end` runs after the activation handle is disposed.
-    rememberSubagentRoot(session, root)
-    const resolved = subagentCore(root)
-    if (resolved === undefined) return
-    resolved.c.startHeartbeat(root, resolved.contract, {
-      session,
-      agent: SUBAGENT_AGENT,
-      goal: clip(`${SUBAGENT_HEARTBEAT_PREFIX}${session.slice(-8)}`, 120),
-      claims: [],
-      createTask: false,
-      last_action: SUBAGENT_START_ACTION,
-    })
-  } catch (error) {
-    warnMount(`subagent start: heartbeat not registered: ${brief(error)}`, ctx)
-  }
-}
-
-/** `subagent/end`: close that heartbeat with the stop reason in `last_action`. */
-function endSubagentHeartbeat(ctx, info) {
-  try {
-    if (info === null || typeof info !== 'object') return
-    if (info.local !== true) return
-    const session = usableSessionId(info.id)
-    if (session === '') return
-    // Prefer the root recorded at `subagent/start`: by now the child is out of
-    // the `agents` registry, so live resolution cannot find it. The fallback
-    // covers only a run that started before this plugin was mounted.
-    let root = takeSubagentRoot(session)
-    if (root !== undefined && hasStore(root) === false) root = undefined
-    if (root === undefined) root = subagentRootOf(ctx, info)
-    if (root === undefined) return
-    const resolved = subagentCore(root)
-    if (resolved === undefined) return
-    // A run that began before this plugin was mounted has no heartbeat to
-    // close; `endHeartbeat` would throw `not-found`, and a mount warning would
-    // then stick to every later payload. Skip that case silently.
-    if (typeof resolved.c.heartbeatStatus === 'function') {
-      const status = resolved.c.heartbeatStatus(root, resolved.contract, session)
-      if (isPlainObject(status) === false || status.record === null || status.record === undefined) return
-    }
-    const reason =
-      typeof info.stopReason === 'string' && info.stopReason.length > 0 ? clip(info.stopReason, 80) : 'completed'
-    resolved.c.endHeartbeat(root, resolved.contract, { session, status: 'done', note: `subagent/end: ${reason}` })
-  } catch (error) {
-    warnMount(`subagent end: heartbeat not closed: ${brief(error)}`, ctx)
-  }
-}
-
-/**
- * Register the two subagent lifecycle listeners. Each is its own effect, so
- * unload unregisters them; a failure in either only warns.
- */
-function registerSubagentHooks(ctx) {
-  const hooks = [
-    ['subagent/start', startSubagentHeartbeat, 'subagent start heartbeat'],
-    ['subagent/end', endSubagentHeartbeat, 'subagent end heartbeat'],
-  ]
-  for (const [event, handler, label] of hooks) {
-    try {
-      if (typeof ctx.on !== 'function') return
-      ctx.effect(() => {
-        const dispose = ctx.on(event, (info) => handler(ctx, info))
-        return () => {
-          try {
-            if (typeof dispose === 'function') dispose()
-          } catch {
-            // A listener disposer must never break plugin unload.
-          }
-        }
-      }, `project-flow: ${label}`)
-    } catch (error) {
-      warnMount(`${label} unavailable: ${brief(error)}`, ctx)
-    }
-  }
-}
-
 /** Default-on hard gate; disable with `config.heartbeatGate: false` or `PROJECT_FLOW_HEARTBEAT_GATE=off`. */
 function heartbeatGateEnabled(config) {
   if (config !== null && typeof config === 'object') {
@@ -2597,6 +2519,8 @@ function heartbeatGuardReason(ctx, execution) {
     if (HEARTBEAT_GATE_TOOLS.has(execution.name) === false) return undefined
     const agent = execution.agent
     if (agent === undefined || agent === null) return undefined
+    // The hard gate exists for the main-session discipline only.
+    if (rootSessionVerdict(ctx, agent) !== true) return undefined
     const session = usableSessionId(agent.id)
     if (session === '') return undefined
     const root = agentRoot(ctx, agent)
@@ -2972,7 +2896,7 @@ function buildToolDefinitions(ctx) {
     {
       name: 'flow_heartbeat',
       description:
-        'Per-session work heartbeat (start/update/end/list/status). Every turn: call start BEFORE replying — goal defaults to the current task title, claims lists the files this session exclusively writes so other sessions avoid them — and call end before finishing. update refreshes status/last_action; list and status read the section. Writes require a .dsh/flow store.',
+        'Main-session work heartbeat (start/update/end/list/status) for the project ledger; a subagent session must not call the write actions. Every turn: call start BEFORE replying — goal defaults to the current task title, claims lists the files this session exclusively writes so other main sessions avoid them — and call end before finishing. update refreshes status/last_action; list and status read the section. The ledger lives in the project main worktree, even when the current session runs in a linked worktree. Writes require a .dsh/flow store.',
       parameters: {
         type: 'object',
         properties: {
@@ -3003,11 +2927,18 @@ function buildToolDefinitions(ctx) {
       isConcurrencySafe: false,
       timeoutMs: WRITE_TIMEOUT_MS,
       async execute(args, exec) {
-        const root = toolRoot(ctx, args, exec)
+        const workspace = toolRoot(ctx, args, exec)
         const action = args.action
+        // The heartbeat ledger belongs to the project's main worktree, so a
+        // session running in a linked worktree reads and writes the same files.
+        const heartbeat = heartbeatRootOf(workspace)
+        const root = heartbeat.root
 
         if (action === 'list') {
           const warnings = []
+          if (heartbeat.degraded === true) {
+            warnings.push(`heartbeat-root-degraded: ${heartbeat.reason || root}`)
+          }
           const store = hasStore(root)
           let contract
           if (store && coreAvailable() && typeof core.loadContract === 'function') {
@@ -3023,6 +2954,7 @@ function buildToolDefinitions(ctx) {
               : { total: items.length, active: 0, stale: 0 }
             return {
               root,
+              workspace,
               store,
               dir: isPlainObject(section) && typeof section.dir === 'string'
                 ? section.dir
@@ -3038,6 +2970,7 @@ function buildToolDefinitions(ctx) {
             coreAvailable() && Number.isFinite(core.HEARTBEAT_STALE_SECONDS) ? core.HEARTBEAT_STALE_SECONDS : 6 * 60 * 60
           return {
             root,
+            workspace,
             store,
             dir: toPosix(contract.heartbeats.dir),
             items: items.slice(0, MAX_TOOL_ITEMS),
@@ -3065,6 +2998,7 @@ function buildToolDefinitions(ctx) {
           const result = c.heartbeatStatus(root, contract, session)
           return {
             root,
+            workspace,
             store: hasStore(root),
             session,
             active: isPlainObject(result) && result.active === true,
@@ -3074,6 +3008,11 @@ function buildToolDefinitions(ctx) {
         }
 
         const session = requireSession(exec)
+        // Delegated child sessions never keep a heartbeat: refuse loudly with an
+        // actionable hint instead of silently writing a hidden ledger file.
+        if (rootSessionVerdict(ctx, exec.agent) === false) {
+          throw new Error(ROOT_SESSION_HEARTBEAT_ONLY)
+        }
         requireStore(root)
         const c = requireCore()
         const { contract } = c.loadContract(root)
@@ -3086,7 +3025,13 @@ function buildToolDefinitions(ctx) {
           if (input.last_action === undefined && typeof args.note === 'string' && args.note.trim().length > 0) {
             input.last_action = args.note.trim()
           }
-          return { root, store: true, session, heartbeat: c.startHeartbeat(root, contract, { session, ...input }) }
+          return {
+            root,
+            workspace,
+            store: true,
+            session,
+            heartbeat: c.startHeartbeat(root, contract, { session, ...input }),
+          }
         }
         if (action === 'update') {
           if (typeof c.updateHeartbeat !== 'function') {
@@ -3094,7 +3039,7 @@ function buildToolDefinitions(ctx) {
           }
           const patch = pickFields(args, ['status', 'last_action', 'goal', 'task', 'claims'])
           if (Object.keys(patch).length === 0) throw new Error('flow_heartbeat update requires at least one field to change')
-          return { root, store: true, session, heartbeat: c.updateHeartbeat(root, contract, session, patch) }
+          return { root, workspace, store: true, session, heartbeat: c.updateHeartbeat(root, contract, session, patch) }
         }
         if (action === 'end') {
           if (typeof c.endHeartbeat !== 'function') {
@@ -3102,7 +3047,7 @@ function buildToolDefinitions(ctx) {
           }
           const options = { session }
           if (typeof args.note === 'string' && args.note.trim().length > 0) options.note = args.note.trim()
-          return { root, store: true, session, heartbeat: c.endHeartbeat(root, contract, options) }
+          return { root, workspace, store: true, session, heartbeat: c.endHeartbeat(root, contract, options) }
         }
         throw new Error(`unknown flow_heartbeat action: ${String(action)}`)
       },
@@ -3159,7 +3104,7 @@ function registerTools(ctx, settings) {
     const tools = service(scoped, 'tools')
     if (tools === undefined || typeof tools.register !== 'function') return () => {}
     const disposers = []
-    for (const definition of buildToolDefinitions(ctx)) {
+    for (const definition of buildToolDefinitions(scoped)) {
       try {
         const dispose = tools.register(definition)
         if (typeof dispose === 'function') disposers.push(dispose)
@@ -3173,7 +3118,7 @@ function registerTools(ctx, settings) {
     if (settings !== null && typeof settings === 'object' && settings.heartbeatGate === true) {
       try {
         if (typeof tools.guard === 'function') {
-          const dispose = tools.guard((execution) => heartbeatGuardReason(ctx, execution))
+          const dispose = tools.guard((execution) => heartbeatGuardReason(scoped, execution))
           if (typeof dispose === 'function') disposers.push(dispose)
         }
       } catch (error) {
@@ -3380,10 +3325,5 @@ export function apply(ctx, config) {
     registerHeartbeatReminder(ctx)
   } catch (error) {
     warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
-  }
-  try {
-    registerSubagentHooks(ctx)
-  } catch (error) {
-    warnMount(`subagent heartbeats: registration failed: ${brief(error)}`, ctx)
   }
 }
