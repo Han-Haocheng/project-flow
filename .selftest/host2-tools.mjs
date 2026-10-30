@@ -53,17 +53,40 @@ async function throws(label, fn, include) {
   }
 }
 
-/** `tasks.draft` row shape: exactly {id,title,owner,updated_at}, all strings. */
-function draftRowOk(row) {
-  return (
-    row !== null &&
-    typeof row === 'object' &&
-    JSON.stringify(Object.keys(row)) === JSON.stringify(['id', 'title', 'owner', 'updated_at']) &&
-    typeof row.id === 'string' &&
-    typeof row.title === 'string' &&
-    typeof row.owner === 'string' &&
-    typeof row.updated_at === 'string'
-  )
+/**
+ * `tasks.active` / `tasks.draft` / `tasks.recentDone` row shape: every display
+ * and detail field is present, the string fields are strings and the list
+ * fields are arrays (recentDone additionally carries `gate`).
+ */
+function taskRowOk(row, { gate = false } = {}) {
+  if (row === null || typeof row !== 'object') return false
+  const keys = [
+    'id',
+    'title',
+    'status',
+    'owner',
+    'goal',
+    'notes',
+    'scope',
+    'acceptance',
+    'commits',
+    'created_at',
+    'updated_at',
+  ]
+  if (gate) keys.push('gate')
+  if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false
+  for (const key of ['id', 'title', 'status', 'owner', 'goal', 'notes', 'created_at', 'updated_at']) {
+    if (typeof row[key] !== 'string') return false
+  }
+  const scope = row.scope
+  if (scope === null || typeof scope !== 'object' || Array.isArray(scope)) return false
+  if (!Array.isArray(scope.allow) || !Array.isArray(scope.deny)) return false
+  if (!scope.allow.every((entry) => typeof entry === 'string')) return false
+  if (!scope.deny.every((entry) => typeof entry === 'string')) return false
+  for (const key of ['acceptance', 'commits']) {
+    if (!Array.isArray(row[key]) || !row[key].every((entry) => typeof entry === 'string')) return false
+  }
+  return gate ? row.gate === null || typeof row.gate === 'string' : true
 }
 
 /** Newest-first order; an unparseable stamp sorts last (as the Host does). */
@@ -398,6 +421,25 @@ const updatedTask = await taskTool.execute({ action: 'update', id: taskId, statu
 eq('flow_task update: status', updatedTask.task?.status, 'done')
 check('flow_task update: commits', Array.isArray(updatedTask.task?.commits) && updatedTask.task.commits[0] === 'abc1234')
 
+// An active task carrying the full detail set: the panel payload must project
+// goal/notes/scope/acceptance/commits/timestamps for the active group too.
+const activeDetail = await taskTool.execute(
+  {
+    action: 'add',
+    title: '进行中任务',
+    status: 'active',
+    owner: 'panel',
+    goal: '看见目标而不是编号',
+    notes: '展开详情可读',
+    scope: { allow: ['client.js'], deny: ['lib/'] },
+    acceptance: ['node --check client.js'],
+    commits: ['7c64255'],
+  },
+  exec,
+)
+const activeDetailId = activeDetail.task?.id
+check('flow_task add active detail: id generated', typeof activeDetailId === 'string' && activeDetailId !== taskId)
+
 // -------------------------------------------------------- flow_gate chain
 
 const createdGate = await gateTool.execute(
@@ -671,12 +713,28 @@ if (skillFiles.length < SKILL_NAMES.length) {
 // -------------------------------------------------------- HTTP store payload
 
 // Two drafts with fixed on-disk timestamps: the payload must surface them
-// newest-first and fill a missing owner with an empty string.
+// newest-first, fill a missing owner with an empty string and carry the whole
+// (bounded) detail set of the newer one.
 const olderDraft = await taskTool.execute({ action: 'add', title: '草稿旧', status: 'draft', owner: 'alice' }, exec)
 const newerDraft = await taskTool.execute({ action: 'add', title: '草稿新', status: 'draft' }, exec)
+const newerDraftDetail = await taskTool.execute(
+  {
+    action: 'update',
+    id: newerDraft.task?.id,
+    goal: '草稿目标'.repeat(200),
+    notes: '备注'.repeat(300),
+    scope: {
+      allow: Array.from({ length: 12 }, (_, index) => `src/allow-${index}.js`),
+      deny: ['lib/', 'bin/'],
+    },
+    acceptance: Array.from({ length: 12 }, (_, index) => `acceptance step ${index}`),
+    commits: Array.from({ length: 12 }, (_, index) => `abc${String(index).padStart(4, '0')}`),
+  },
+  exec,
+)
 for (const [task, stamp] of [
   [olderDraft.task, '2026-10-28T09:00:00+08:00'],
-  [newerDraft.task, '2026-10-28T11:00:00+08:00'],
+  [newerDraftDetail.task, '2026-10-28T11:00:00+08:00'],
 ]) {
   writeFileSync(join(storeRoot, '.dsh', 'flow', 'tasks', `${task.id}.json`), JSON.stringify({ ...task, updated_at: stamp }))
 }
@@ -694,11 +752,12 @@ eq('store payload: counts confirmed', store.experiments?.counts?.confirmed, 1)
 eq('store payload: items length', store.experiments?.items?.length, 1)
 check('store payload: tree array with children', Array.isArray(store.experiments?.tree) && store.experiments.tree[0]?.id === expId && Array.isArray(store.experiments.tree[0].children))
 check('store payload: groups empty', Array.isArray(store.experiments?.groups) && store.experiments.groups.length === 0)
-eq('store payload: tasks total', store.tasks?.total, 3)
+eq('store payload: tasks total', store.tasks?.total, 4)
+eq('store payload: tasks counts active', store.tasks?.counts?.active, 1)
 eq('store payload: tasks counts done', store.tasks?.counts?.done, 1)
 eq('store payload: tasks counts draft', store.tasks?.counts?.draft, 2)
 check('store payload: tasks current null', store.tasks?.current === null)
-check('store payload: tasks active array', Array.isArray(store.tasks?.active))
+check('store payload: tasks active array', Array.isArray(store.tasks?.active) && store.tasks.active.length === 1)
 check('store payload: tasks recentDone array', Array.isArray(store.tasks?.recentDone) && store.tasks.recentDone[0]?.id === taskId)
 check(
   'store payload: tasks draft array length',
@@ -708,10 +767,80 @@ check(
 check('store payload: tasks draft newest first', draftRowsDesc(store.tasks?.draft), JSON.stringify(store.tasks?.draft))
 eq('store payload: tasks draft[0] is newest', store.tasks?.draft?.[0]?.id, newerDraft.task?.id)
 eq('store payload: tasks draft[1] is older', store.tasks?.draft?.[1]?.id, olderDraft.task?.id)
-check('store payload: tasks draft row shape', store.tasks?.draft?.every(draftRowOk), JSON.stringify(store.tasks?.draft))
 eq('store payload: tasks draft missing owner empty', store.tasks?.draft?.[0]?.owner, '')
 eq('store payload: tasks draft owner kept', store.tasks?.draft?.[1]?.owner, 'alice')
 eq('store payload: tasks draft updated_at kept', store.tasks?.draft?.[1]?.updated_at, '2026-10-28T09:00:00+08:00')
+
+// ---- three row groups carry goal + bounded detail fields -------------------
+check(
+  'store payload: active/draft/recentDone row shapes',
+  store.tasks?.active?.every((row) => taskRowOk(row)) &&
+    store.tasks?.draft?.every((row) => taskRowOk(row)) &&
+    store.tasks?.recentDone?.every((row) => taskRowOk(row, { gate: true })),
+  JSON.stringify({ active: store.tasks?.active, draft: store.tasks?.draft, recentDone: store.tasks?.recentDone }),
+)
+
+const activeRow = store.tasks?.active?.[0] ?? {}
+eq('store payload: active goal projected', activeRow.goal, '看见目标而不是编号')
+eq('store payload: active notes projected', activeRow.notes, '展开详情可读')
+check(
+  'store payload: active scope projected',
+  JSON.stringify(activeRow.scope) === JSON.stringify({ allow: ['client.js'], deny: ['lib/'] }),
+  JSON.stringify(activeRow.scope),
+)
+check(
+  'store payload: active acceptance projected',
+  JSON.stringify(activeRow.acceptance) === JSON.stringify(['node --check client.js']),
+  JSON.stringify(activeRow.acceptance),
+)
+check('store payload: active commits projected', JSON.stringify(activeRow.commits) === JSON.stringify(['7c64255']))
+check('store payload: active created_at projected', typeof activeRow.created_at === 'string' && activeRow.created_at.length > 0)
+eq('store payload: active status projected', activeRow.status, 'active')
+
+const doneRow = store.tasks?.recentDone?.[0] ?? {}
+eq('store payload: done goal projected', doneRow.goal, '4 tools + 2 skills')
+eq('store payload: done notes empty', doneRow.notes, '')
+check(
+  'store payload: done scope empty',
+  JSON.stringify(doneRow.scope) === JSON.stringify({ allow: [], deny: [] }),
+  JSON.stringify(doneRow.scope),
+)
+check(
+  'store payload: done acceptance projected',
+  JSON.stringify(doneRow.acceptance) === JSON.stringify(['selftest green']),
+  JSON.stringify(doneRow.acceptance),
+)
+check('store payload: done commits projected', JSON.stringify(doneRow.commits) === JSON.stringify(['abc1234']))
+check('store payload: done created_at projected', typeof doneRow.created_at === 'string' && doneRow.created_at.length > 0)
+check('store payload: done gate null without checkpoints', doneRow.gate === null)
+
+// The newer draft is long on purpose: the row must stay bounded.
+const detailedDraft = store.tasks?.draft?.[0] ?? {}
+eq('store payload: draft goal clipped', detailedDraft.goal?.length, 400)
+check('store payload: draft goal is the clipped prefix', detailedDraft.goal === '草稿目标'.repeat(100))
+eq('store payload: draft notes clipped', detailedDraft.notes?.length, 400)
+eq('store payload: draft scope.allow capped', detailedDraft.scope?.allow?.length, 10)
+check(
+  'store payload: draft scope.deny projected',
+  JSON.stringify(detailedDraft.scope?.deny) === JSON.stringify(['lib/', 'bin/']),
+  JSON.stringify(detailedDraft.scope?.deny),
+)
+eq('store payload: draft acceptance capped', detailedDraft.acceptance?.length, 10)
+eq('store payload: draft commits capped', detailedDraft.commits?.length, 10)
+check('store payload: draft created_at projected', typeof detailedDraft.created_at === 'string' && detailedDraft.created_at.length > 0)
+
+// Empty detail fields degrade to '' / [] instead of disappearing.
+const emptyDraft = store.tasks?.draft?.[1] ?? {}
+eq('store payload: bare draft goal empty', emptyDraft.goal, '')
+eq('store payload: bare draft notes empty', emptyDraft.notes, '')
+check(
+  'store payload: bare draft scope empty',
+  JSON.stringify(emptyDraft.scope) === JSON.stringify({ allow: [], deny: [] }),
+  JSON.stringify(emptyDraft.scope),
+)
+check('store payload: bare draft acceptance empty', Array.isArray(emptyDraft.acceptance) && emptyDraft.acceptance.length === 0)
+check('store payload: bare draft commits empty', Array.isArray(emptyDraft.commits) && emptyDraft.commits.length === 0)
+check('store payload: bare draft created_at present', typeof emptyDraft.created_at === 'string' && emptyDraft.created_at.length > 0)
 check('store payload: gates array', Array.isArray(store.gates) && store.gates.length === 1)
 eq('store payload: gate lastRun ok false', store.gates?.[0]?.lastRun?.ok, false)
 check('store payload: gate lastRun steps present', Array.isArray(store.gates?.[0]?.lastRun?.steps))
@@ -859,6 +988,9 @@ await throws('flow_exp show after remove: not found', () => expTool.execute({ ac
 
 const removedTask = await taskTool.execute({ action: 'remove', id: taskId }, exec)
 eq('flow_task remove: removed true', removedTask.removed, true)
+
+const removedActiveDetail = await taskTool.execute({ action: 'remove', id: activeDetailId }, exec)
+eq('flow_task remove: active detail true', removedActiveDetail.removed, true)
 
 const removedDraftOlder = await taskTool.execute({ action: 'remove', id: olderDraft.task?.id }, exec)
 eq('flow_task remove: older draft true', removedDraftOlder.removed, true)

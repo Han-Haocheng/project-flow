@@ -40,7 +40,12 @@
  *   - `POST api/project-flow/gate { root, id, enabled }` flips one gate and
  *     answers `{ ok:true, root, gate:{ id, enabled } }` (or `{ ok:false,
  *     error:{ code, message } }`);
- *   - `tasks.counts.other` covers task records whose status is unknown.
+ *   - `tasks.counts.other` covers task records whose status is unknown;
+ *   - every row in `tasks.active` / `tasks.draft` / `tasks.recentDone` carries
+ *     `goal` plus bounded detail fields (`notes`, `scope`, `acceptance`,
+ *     `commits`, `created_at`, `updated_at`). A row renders its title and a
+ *     two-line clamped goal, hides the business id until the detail opens, and
+ *     toggles that detail on click or Enter/Space (`aria-expanded`).
  *
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
@@ -146,6 +151,15 @@ window.__ModuleLoader__.load({
       'tasks.owner': '负责人',
       'tasks.gate.pass': '门禁通过',
       'tasks.gate.fail': '门禁失败',
+      'tasks.detail.id': '编号',
+      'tasks.detail.goal': '目标',
+      'tasks.detail.notes': '备注',
+      'tasks.detail.allow': '文件域（允许）',
+      'tasks.detail.deny': '文件域（禁止）',
+      'tasks.detail.acceptance': '验收',
+      'tasks.detail.commits': '提交',
+      'tasks.detail.created': '创建于',
+      'tasks.detail.updated': '更新于',
       'gates.title': '门禁',
       'gates.empty': '还没有门禁定义；用 flow gate add 创建',
       'gates.phase.commit': '提交',
@@ -257,6 +271,15 @@ window.__ModuleLoader__.load({
       'tasks.owner': 'owner',
       'tasks.gate.pass': 'gate pass',
       'tasks.gate.fail': 'gate fail',
+      'tasks.detail.id': 'Id',
+      'tasks.detail.goal': 'Goal',
+      'tasks.detail.notes': 'Notes',
+      'tasks.detail.allow': 'Scope (allow)',
+      'tasks.detail.deny': 'Scope (deny)',
+      'tasks.detail.acceptance': 'Acceptance',
+      'tasks.detail.commits': 'Commits',
+      'tasks.detail.created': 'Created',
+      'tasks.detail.updated': 'Updated',
       'gates.title': 'Gates',
       'gates.empty': 'No gate definitions yet; create one with flow gate add',
       'gates.phase.commit': 'commit',
@@ -584,6 +607,41 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * One task row. Title and goal are the two visible lines; notes, scope,
+     * acceptance, commits and the timestamps feed the expanded detail block.
+     * Every field degrades to '' / [] on hostile input, never throws.
+     */
+    function normalizeTask(raw) {
+      const task = asObject(raw);
+      const scope = asObject(task.scope);
+      const list = (value) =>
+        asArray(value)
+          .map((entry) => asText(entry).trim())
+          .filter(Boolean);
+      return {
+        id: asText(task.id),
+        title: asText(task.title),
+        status: asText(task.status),
+        owner: asText(task.owner),
+        goal: asText(task.goal),
+        notes: asText(task.notes),
+        scope: { allow: list(scope.allow), deny: list(scope.deny) },
+        acceptance: list(task.acceptance),
+        commits: list(task.commits),
+        created_at: asText(task.created_at),
+        updated_at: asText(task.updated_at),
+        gate: asText(task.gate),
+      };
+    }
+
+    /** A task group (`active` / `draft` / `recentDone`); non-objects are dropped. */
+    function normalizeTasks(value) {
+      return asArray(value)
+        .filter((task) => task && typeof task === 'object' && !Array.isArray(task))
+        .map(normalizeTask);
+    }
+
     /** Tolerant mapping of the host payload; never throws on missing fields. */
     function normalize(payload) {
       const src = asObject(payload);
@@ -669,9 +727,9 @@ window.__ModuleLoader__.load({
           },
           current: tasksSrc.current === undefined ? null : tasksSrc.current,
           /* A host payload may omit `draft`; an absent array simply lists nothing. */
-          draft: asArray(tasksSrc.draft).filter((task) => task && typeof task === 'object'),
-          active: asArray(tasksSrc.active).filter((task) => task && typeof task === 'object'),
-          recentDone: asArray(tasksSrc.recentDone).filter((task) => task && typeof task === 'object'),
+          draft: normalizeTasks(tasksSrc.draft),
+          active: normalizeTasks(tasksSrc.active),
+          recentDone: normalizeTasks(tasksSrc.recentDone),
         },
         gates,
         heartbeats: heartbeatSection.items,
@@ -761,18 +819,107 @@ window.__ModuleLoader__.load({
       return React.createElement('p', { className: 'project-flow-empty' }, props.children);
     }
 
-    function ListRow(props) {
+    /** Owner + relative update time shown as the row's small meta line. */
+    function taskMetaText(task, now, t) {
+      const owner = asText(task.owner);
+      const updatedMs = Date.parse(asText(task.updated_at));
+      const updated = relativeMoment(updatedMs, now, t);
+      return joinParts([owner ? t('tasks.owner') + ' ' + owner : '', updated || '']);
+    }
+
+    /**
+     * Expanded detail of one task: every field the ledger carries (bounded by
+     * the Host) plus the business id, which the collapsed row hides on purpose.
+     */
+    function TaskDetail(props) {
+      const task = asObject(props.task);
+      const t = props.t;
+      const scope = asObject(task.scope);
+      const lines = (value) =>
+        asArray(value)
+          .map((entry) => asText(entry))
+          .filter(Boolean)
+          .join('\n');
+      const rows = [
+        { label: t('tasks.detail.id'), value: asText(task.id) },
+        { label: t('tasks.detail.goal'), value: asText(task.goal) },
+        { label: t('tasks.detail.notes'), value: asText(task.notes) },
+        { label: t('tasks.detail.allow'), value: lines(scope.allow) },
+        { label: t('tasks.detail.deny'), value: lines(scope.deny) },
+        { label: t('tasks.detail.acceptance'), value: lines(task.acceptance) },
+        { label: t('tasks.detail.commits'), value: asArray(task.commits).map(shortSha).filter(Boolean).join(', ') },
+        { label: t('tasks.detail.created'), value: asText(task.created_at) },
+        { label: t('tasks.detail.updated'), value: asText(task.updated_at) },
+      ];
+      return React.createElement(
+        'div',
+        { className: 'project-flow-detail project-flow-taskDetail' },
+        rows.map((row, index) =>
+          React.createElement(
+            'div',
+            { className: 'project-flow-detailItem', key: 'task-detail-' + index },
+            React.createElement('span', { className: 'project-flow-detailLabel' }, row.label),
+            React.createElement('pre', { className: 'project-flow-detailValue' }, row.value || t('misc.dash'))
+          )
+        )
+      );
+    }
+
+    /**
+     * One task row: title first, goal second (two clamped lines, omitted when the
+     * ledger has no goal), owner/time as small meta. The id is deliberately not
+     * rendered until the detail opens. The head is a focusable `role="button"`
+     * with `aria-expanded`, toggled by click or Enter/Space.
+     */
+    function TaskRow(props) {
+      const task = asObject(props.task);
+      const t = props.t;
+      const open = props.open === true;
+      const title = asText(task.title);
+      const goal = asText(task.goal);
+      const meta = taskMetaText(task, props.now, t);
+      const gate = asText(task.gate);
+      const mark = gate === 'pass' ? '\u2714' : gate === 'fail' ? '\u2718' : '';
+      const tone = gate === 'pass' ? 'ok' : gate === 'fail' ? 'error' : '';
+      const toggle = () => {
+        if (typeof props.onToggle === 'function') props.onToggle(asText(task.id));
+      };
       return React.createElement(
         'li',
-        { className: 'project-flow-listRow' },
-        props.leading ? React.createElement('span', { className: 'project-flow-listLeading' }, props.leading) : null,
-        React.createElement('span', { className: 'project-flow-listId' }, props.id || ''),
+        { className: 'project-flow-taskRow' },
         React.createElement(
-          'span',
-          { className: 'project-flow-listTitle', title: props.title || undefined },
-          props.title || '—'
+          'div',
+          {
+            className: 'project-flow-taskHead',
+            role: 'button',
+            tabIndex: 0,
+            'aria-expanded': open ? true : false,
+            title: goal || title || undefined,
+            onClick: toggle,
+            onKeyDown: (event) => {
+              if (!event) return;
+              const key = event.key || event.keyCode;
+              if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+              if (typeof event.preventDefault === 'function') event.preventDefault();
+              toggle();
+            },
+          },
+          mark
+            ? React.createElement(
+                'span',
+                {
+                  className: 'project-flow-taskMark project-flow-gateMark project-flow-gateMark--' + tone,
+                  title: t(gate === 'pass' ? 'tasks.gate.pass' : 'tasks.gate.fail'),
+                  'aria-hidden': 'true',
+                },
+                mark
+              )
+            : null,
+          React.createElement('span', { className: 'project-flow-taskTitle', title: title || undefined }, title || t('misc.dash')),
+          meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
+          goal ? React.createElement('span', { className: 'project-flow-taskGoal', title: goal }, goal) : null
         ),
-        props.meta ? React.createElement('span', { className: 'project-flow-listMeta' }, props.meta) : null
+        open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null
       );
     }
     // #endregion
@@ -1036,6 +1183,15 @@ window.__ModuleLoader__.load({
       const t = props.t;
       const now = props.now;
 
+      /* One expanded row at a time, keyed by the business id so a data refresh
+         keeps the same row open instead of collapsing on index shifts. */
+      const [openId, setOpenId] = useState(null);
+      const toggleTask = (id) => {
+        const value = asText(id);
+        if (!value) return;
+        setOpenId((current) => (current === value ? null : value));
+      };
+
       const current = tasks.current;
       let currentId = t('tasks.currentNone');
       let currentTitle = '';
@@ -1056,6 +1212,24 @@ window.__ModuleLoader__.load({
       /* Projects whose ledger is markdown/absent may only report `other`. */
       const otherCount = asNumber(counts.other, 0);
       const statusRows = otherCount > 0 ? statusOrder.concat(['other']) : statusOrder;
+
+      /** Rows of one group; business ids are the React keys, never row indexes. */
+      const renderRows = (kind, rows) =>
+        React.createElement(
+          'ul',
+          { className: 'project-flow-list project-flow-taskList' },
+          rows.map((task, index) => {
+            const id = asText(task.id);
+            return React.createElement(TaskRow, {
+              key: id || kind + '-' + index,
+              task,
+              t,
+              now,
+              open: id !== '' && id === openId,
+              onToggle: toggleTask,
+            });
+          })
+        );
 
       return React.createElement(
         'section',
@@ -1087,24 +1261,7 @@ window.__ModuleLoader__.load({
         draftTasks.length === 0
           ? null
           : React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.draft')),
-        draftTasks.length === 0
-          ? null
-          : React.createElement(
-              'ul',
-              { className: 'project-flow-list' },
-              draftRows.map((task, index) => {
-                const meta = joinParts([
-                  asText(task.owner) ? t('tasks.owner') + ' ' + asText(task.owner) : '',
-                  relativeMoment(Date.parse(asText(task.updated_at)), now, t) || '',
-                ]);
-                return React.createElement(ListRow, {
-                  key: 'draft-' + index,
-                  id: asText(task.id),
-                  title: asText(task.title),
-                  meta,
-                });
-              })
-            ),
+        draftTasks.length === 0 ? null : renderRows('draft', draftRows),
         hiddenDrafts > 0
           ? React.createElement(
               'p',
@@ -1115,45 +1272,11 @@ window.__ModuleLoader__.load({
         React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.active')),
         activeTasks.length === 0
           ? React.createElement(EmptyLine, null, t('tasks.activeEmpty'))
-          : React.createElement(
-              'ul',
-              { className: 'project-flow-list' },
-              activeTasks.slice(0, MAX_LIST_ROWS).map((task, index) => {
-                const meta = joinParts([
-                  asText(task.owner) ? t('tasks.owner') + ' ' + asText(task.owner) : '',
-                  relativeMoment(Date.parse(asText(task.updated_at)), now, t) || '',
-                ]);
-                return React.createElement(ListRow, {
-                  key: 'active-' + index,
-                  id: asText(task.id),
-                  title: asText(task.title),
-                  meta,
-                });
-              })
-            ),
+          : renderRows('active', activeTasks.slice(0, MAX_LIST_ROWS)),
         React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.recent')),
         recentTasks.length === 0
           ? React.createElement(EmptyLine, null, t('tasks.recentEmpty'))
-          : React.createElement(
-              'ul',
-              { className: 'project-flow-list' },
-              recentTasks.slice(0, MAX_LIST_ROWS).map((task, index) => {
-                const gate = asText(task.gate);
-                const commits = asArray(task.commits).map(shortSha).filter(Boolean).join(', ');
-                const mark = gate === 'pass' ? '\u2714' : gate === 'fail' ? '\u2718' : '';
-                const tone = gate === 'pass' ? 'ok' : gate === 'fail' ? 'error' : '';
-                return React.createElement(ListRow, {
-                  key: 'done-' + index,
-                  id: asText(task.id),
-                  title: asText(task.title),
-                  meta: joinParts([
-                    commits,
-                    mark ? mark + ' ' + t(gate === 'pass' ? 'tasks.gate.pass' : 'tasks.gate.fail') : '',
-                  ]),
-                  leading: mark ? React.createElement('span', { className: 'project-flow-gateMark project-flow-gateMark--' + tone }, mark) : null,
-                });
-              })
-            )
+          : renderRows('done', recentTasks.slice(0, MAX_LIST_ROWS))
       );
     }
 
@@ -2258,12 +2381,16 @@ window.__ModuleLoader__.load({
 .project-flow-currentId{font-family:${MONO};font-weight:600;}
 .project-flow-currentTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);}
 .project-flow-list{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
-.project-flow-listRow{display:flex;align-items:baseline;gap:6px;padding:2px 3px;border-radius:5px;font-size:11.5px;min-width:0;}
-.project-flow-listRow:hover{background:var(--dsw-alias-bg-layer-2);}
-.project-flow-listLeading{flex:none;display:inline-flex;align-items:center;}
-.project-flow-listId{flex:none;font-family:${MONO};font-weight:600;font-size:11px;}
-.project-flow-listTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);}
-.project-flow-listMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.project-flow-taskList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
+.project-flow-taskRow{display:flex;flex-direction:column;min-width:0;border-radius:6px;}
+.project-flow-taskHead{box-sizing:border-box;display:flex;align-items:baseline;flex-wrap:wrap;column-gap:8px;row-gap:1px;width:100%;padding:3px 4px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;line-height:1.45;text-align:left;cursor:pointer;}
+.project-flow-taskHead:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-taskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
+.project-flow-taskMark{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
+.project-flow-taskTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.project-flow-taskMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.project-flow-taskGoal{flex:1 1 100%;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
+.project-flow-taskDetail{margin-left:12px;}
 .project-flow-gateMark{font-size:11px;line-height:1;}
 .project-flow-gateMark--ok{color:var(--dsw-alias-state-success-primary);}
 .project-flow-gateMark--error{color:var(--dsw-alias-state-error-primary);}
@@ -2378,9 +2505,12 @@ window.__ModuleLoader__.load({
 .project-flow-subTitle{margin:14px 0 6px;font-size:11px;}
 .project-flow-current{margin-top:10px;padding:6px 8px;font-size:12px;}
 .project-flow-list{gap:2px;}
-.project-flow-listRow{gap:8px;padding:3px 4px;border-radius:6px;font-size:12px;}
-.project-flow-listId{font-size:11.5px;}
-.project-flow-listMeta{font-size:11px;}
+.project-flow-taskList{gap:2px;}
+.project-flow-taskHead{column-gap:10px;padding:4px 5px;font-size:12px;}
+.project-flow-taskMark{font-size:11px;}
+.project-flow-taskMeta{font-size:11px;}
+.project-flow-taskGoal{font-size:11.5px;}
+.project-flow-taskDetail{margin-left:42px;}
 .project-flow-guide{margin-top:6px;padding:14px;border-radius:10px;}
 .project-flow-guideTitle{font-size:13px;margin-bottom:4px;}
 .project-flow-row{flex-wrap:nowrap;column-gap:8px;row-gap:0;padding:4px 4px 4px 0;border-radius:6px;font-size:12px;}

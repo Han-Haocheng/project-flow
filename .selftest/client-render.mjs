@@ -40,7 +40,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -187,12 +187,80 @@ const fixture = {
     counts: { draft: 20, active: 1, done: 28, archived: 0, other: 0 },
     current: { id: 'T-20261028-56', title: 'client half' },
     active: [
-      { id: 'T-2', title: 'active task', status: 'active', owner: 'coord', updated_at: '2026-10-28T10:00:00+08:00', goal: 'g' },
+      {
+        id: 'T-2',
+        title: 'active task',
+        status: 'active',
+        owner: 'coord',
+        goal: '看见任务目标与内容，而不是编号',
+        notes: '展开详情里的备注',
+        scope: { allow: ['client.js', 'index.js'], deny: ['lib/'] },
+        acceptance: ['node --check client.js', 'node .selftest/client-render.mjs'],
+        commits: ['f5f176bc'],
+        created_at: '2026-10-28T08:00:00+08:00',
+        updated_at: '2026-10-28T10:00:00+08:00',
+        gate: '',
+      },
+    ],
+    draft: [
+      {
+        id: 'T-D1',
+        title: 'draft one',
+        status: 'draft',
+        owner: 'alice',
+        goal: '草稿也有目标',
+        notes: '',
+        scope: { allow: ['README.md'], deny: [] },
+        acceptance: ['草稿验收'],
+        commits: [],
+        created_at: '2026-10-28T07:00:00+08:00',
+        updated_at: '2026-10-28T10:00:00+08:00',
+        gate: '',
+      },
     ],
     recentDone: [
-      { id: 'T-3', title: 'done task', updated_at: '2026-10-28T09:00:00+08:00', commits: ['12556a8'], gate: 'pass' },
-      { id: 'T-4', title: 'gate failed task', commits: [], gate: 'fail' },
-      { id: 'T-5', title: 'gate null task', commits: [], gate: null },
+      {
+        id: 'T-3',
+        title: 'done task',
+        status: 'done',
+        owner: '',
+        goal: '完成的目标',
+        notes: '',
+        scope: { allow: [], deny: [] },
+        acceptance: ['完成验收'],
+        commits: ['12556a8'],
+        created_at: '2026-10-28T06:00:00+08:00',
+        updated_at: '2026-10-28T09:00:00+08:00',
+        gate: 'pass',
+      },
+      {
+        id: 'T-4',
+        title: 'gate failed task',
+        status: 'done',
+        owner: '',
+        goal: '',
+        notes: '',
+        scope: { allow: [], deny: [] },
+        acceptance: [],
+        commits: [],
+        created_at: '2026-10-28T05:00:00+08:00',
+        updated_at: '2026-10-28T08:00:00+08:00',
+        gate: 'fail',
+      },
+      {
+        id: 'T-5',
+        title: 'gate null task',
+        status: 'done',
+        owner: '',
+        goal: '',
+        notes: '',
+        scope: { allow: [], deny: [] },
+        acceptance: [],
+        commits: [],
+        created_at: '2026-10-28T04:00:00+08:00',
+        updated_at: '2026-10-28T07:00:00+08:00',
+        gate: null,
+      },
     ],
   },
   gates: [
@@ -334,6 +402,18 @@ check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.exp.refuted, 1);
   assert.equal(view.tasks.counts.done, 28);
   assert.equal(view.tasks.counts.other, 0);
+  // Task rows carry their goal plus every detail field in all three groups.
+  const active = view.tasks.active[0];
+  assert.equal(active.goal, '看见任务目标与内容，而不是编号');
+  assert.equal(active.notes, '展开详情里的备注');
+  assert.deepEqual(active.scope, { allow: ['client.js', 'index.js'], deny: ['lib/'] });
+  assert.deepEqual(active.acceptance, ['node --check client.js', 'node .selftest/client-render.mjs']);
+  assert.deepEqual(active.commits, ['f5f176bc']);
+  assert.equal(active.created_at, '2026-10-28T08:00:00+08:00');
+  assert.equal(view.tasks.draft[0].goal, '草稿也有目标');
+  assert.deepEqual(view.tasks.draft[0].scope, { allow: ['README.md'], deny: [] });
+  assert.equal(view.tasks.recentDone[0].goal, '完成的目标');
+  assert.equal(view.tasks.recentDone[0].gate, 'pass');
   assert.equal(view.gates.length, 2);
   assert.equal(view.gates[0].lastRun.ok, true);
   assert.equal(view.heartbeats.length, 2);
@@ -388,6 +468,12 @@ check('normalize: hostile values do not throw', () => {
   assert.equal(hostile.exp.total, 0);
   assert.equal(hostile.tasks.counts.active, 0);
   assert.equal(hostile.tasks.counts.other, 0);
+  assert.equal(hostile.tasks.recentDone.length, 1, 'the object task row survives');
+  assert.deepEqual(hostile.tasks.recentDone[0].scope, { allow: [], deny: [] });
+  assert.deepEqual(hostile.tasks.recentDone[0].acceptance, []);
+  assert.deepEqual(hostile.tasks.recentDone[0].commits, []);
+  assert.equal(hostile.tasks.recentDone[0].goal, '');
+  assert.equal(hostile.tasks.recentDone[0].created_at, '');
   assert.equal(hostile.heartbeats.length, 2, 'non-object heartbeats are dropped');
   assert.deepEqual(hostile.heartbeats[1].claims, [], 'non-array claims degrade to empty');
   assert.equal(hostile.contract, null);
@@ -449,16 +535,135 @@ check('DetailBlock: keeps original newlines in a <pre>', () => {
   assert.equal(collect(detail, 'project-flow-detailLabel').length, 3);
 });
 
-check('TasksCard: chips, current task, active and recent rows', () => {
+check('TasksCard: chips, current task and one row per task', () => {
   const card = probe.TasksCard({ tasks: view.tasks, t, now: NOW });
   assert.equal(collect(card, 'project-flow-chip').length, 4, 'other chip should stay hidden at 0');
   const body = JSON.stringify(card);
   assert.ok(body.includes('T-20261028-56'), 'current task id missing');
   assert.ok(body.includes('client half'), 'current task title missing');
-  assert.ok(body.includes('12556a8'), 'commit short hash missing');
-  assert.equal(collect(card, 'project-flow-listRow').length, 4);
+  // Rows: one draft, one active, three recent-done.
+  assert.equal(collect(card, 'project-flow-taskRow').length, 5);
   assert.equal(collect(card, 'project-flow-gateMark--ok').length, 1);
   assert.equal(collect(card, 'project-flow-gateMark--error').length, 1);
+  // The list itself never leaks an id or a commit before the detail opens.
+  const text = textOf(card);
+  for (const hidden of ['T-D1', 'T-3', 'T-4', 'T-5', '12556a8']) {
+    assert.ok(!text.includes(hidden), `collapsed rows must not show '${hidden}'`);
+  }
+});
+
+check('TasksCard: rows show title then goal and use the business id as key', () => {
+  const payload = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { active: 1, draft: 1 },
+      current: null,
+      draft: [{ id: 'T-D9', title: '标题乙', owner: '', goal: '', updated_at: '2026-10-28T09:00:00+08:00' }],
+      active: [
+        {
+          id: 'T-A9',
+          title: '标题甲',
+          status: 'active',
+          owner: 'alice',
+          goal: '目标甲',
+          updated_at: '2026-10-28T10:00:00+08:00',
+        },
+      ],
+      recentDone: [],
+    },
+  });
+  const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
+  const body = JSON.stringify(card);
+  const text = textOf(card);
+  assert.ok(!text.includes('T-A9'), 'active row leaked its id');
+  assert.ok(!text.includes('T-D9'), 'draft row leaked its id');
+  // Drafts render first, so the title order is draft → active.
+  assert.deepEqual(
+    collect(card, 'project-flow-taskTitle').map((element) => element.children[0]),
+    ['标题乙', '标题甲']
+  );
+  const goals = collect(card, 'project-flow-taskGoal');
+  assert.equal(goals.length, 1, 'a row without a goal must not reserve the second line');
+  assert.equal(goals[0].children[0], '目标甲', 'goal missing from the second line');
+  assert.equal(goals[0].props.title, '目标甲', 'goal needs a full-text tooltip');
+  assert.ok(body.includes('"key":"T-D9"'), 'draft row key is not its business id');
+  assert.ok(body.includes('"key":"T-A9"'), 'active row key is not its business id');
+  assert.ok(textOf(card).includes('负责人 alice'), 'owner meta missing');
+});
+
+check('TasksCard: the goal line is clamped to two lines by the stylesheet', () => {
+  const rule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskGoal{'));
+  assert.ok(rule, 'goal CSS rule missing');
+  assert.ok(rule.includes('-webkit-line-clamp:2'), 'goal is not clamped to two lines');
+  assert.ok(rule.includes('-webkit-box-orient:vertical'), 'goal clamp box missing');
+  assert.ok(rule.includes('overflow:hidden'), 'goal clamp does not hide the overflow');
+  const titleRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskTitle{'));
+  assert.ok(titleRule && titleRule.includes('text-overflow:ellipsis'), 'title has no ellipsis');
+});
+
+check('TaskRow: expanded detail carries every ledger field including the id', () => {
+  const task = view.tasks.active[0];
+  const row = probe.TaskRow({ task, t, now: NOW, open: true, onToggle: () => {} });
+  assert.equal(collect(row, 'project-flow-taskDetail').length, 1, 'detail block missing');
+  assert.deepEqual(collect(row, 'project-flow-detailLabel').map((element) => element.children[0]), [
+    '编号',
+    '目标',
+    '备注',
+    '文件域（允许）',
+    '文件域（禁止）',
+    '验收',
+    '提交',
+    '创建于',
+    '更新于',
+  ]);
+  const values = collect(row, 'project-flow-detailValue').map((element) => element.children[0]);
+  assert.equal(values[0], 'T-2', 'detail must show the business id');
+  assert.equal(values[1], '看见任务目标与内容，而不是编号');
+  assert.equal(values[2], '展开详情里的备注');
+  assert.equal(values[3], 'client.js\nindex.js', 'scope.allow must keep one entry per line');
+  assert.equal(values[4], 'lib/');
+  assert.equal(values[5], 'node --check client.js\nnode .selftest/client-render.mjs');
+  assert.equal(values[6], 'f5f176b', 'commits are short shas');
+  assert.equal(values[7], '2026-10-28T08:00:00+08:00');
+  assert.equal(values[8], '2026-10-28T10:00:00+08:00');
+});
+
+check('TaskRow: aria-expanded, click and keyboard Enter/Space toggle the detail', () => {
+  const calls = [];
+  const onToggle = (id) => calls.push(id);
+  const task = view.tasks.draft[0];
+  const collapsed = probe.TaskRow({ task, t, now: NOW, open: false, onToggle });
+  const head = collect(collapsed, 'project-flow-taskHead')[0];
+  assert.equal(head.type, 'div', 'row head should be a focusable div (role=button)');
+  assert.equal(head.props.role, 'button');
+  assert.equal(head.props.tabIndex, 0, 'row head is not keyboard reachable');
+  assert.equal(head.props['aria-expanded'], false);
+  assert.equal(collect(collapsed, 'project-flow-taskDetail').length, 0, 'collapsed row rendered a detail');
+  head.props.onClick({});
+  assert.deepEqual(calls, ['T-D1'], 'click did not toggle the draft id');
+
+  let prevented = 0;
+  head.props.onKeyDown({ key: 'Enter', preventDefault: () => (prevented += 1) });
+  assert.deepEqual(calls, ['T-D1', 'T-D1'], 'Enter did not toggle the row');
+  assert.equal(prevented, 1, 'Enter was not claimed by the row');
+  head.props.onKeyDown({ key: 'a', preventDefault: () => (prevented += 1) });
+  assert.equal(calls.length, 2, 'a non-toggle key must not expand the row');
+  head.props.onKeyDown({ key: ' ' });
+  assert.equal(calls.length, 3, 'Space did not toggle the row');
+
+  const expanded = probe.TaskRow({ task, t, now: NOW, open: true, onToggle });
+  const openHead = collect(expanded, 'project-flow-taskHead')[0];
+  assert.equal(openHead.props['aria-expanded'], true);
+  assert.equal(collect(expanded, 'project-flow-taskDetail').length, 1, 'expanded row has no detail');
+});
+
+check('TaskDetail: empty fields degrade to the dash placeholder', () => {
+  const detail = probe.TaskDetail({ task: { id: 'T-empty' }, t });
+  const values = collect(detail, 'project-flow-detailValue').map((element) => element.children[0]);
+  assert.equal(values.length, 9);
+  assert.equal(values[0], 'T-empty');
+  assert.equal(values[1], '—', 'empty goal must show the dash');
+  assert.equal(values[8], '—', 'empty timestamp must show the dash');
 });
 
 check('TasksCard: an unknown task status bucket still renders', () => {
@@ -470,7 +675,7 @@ check('TasksCard: an unknown task status bucket still renders', () => {
   const body = JSON.stringify(card);
   assert.ok(body.includes('2 其它'), 'other count not rendered');
   assert.ok(body.includes('任务台账里没有进行中的任务。'), 'active list empty state missing');
-  assert.equal(collect(card, 'project-flow-listRow').length, 0);
+  assert.equal(collect(card, 'project-flow-taskRow').length, 0);
 });
 
 check('TasksCard: empty tasks render the generic ledger copy', () => {
@@ -479,7 +684,7 @@ check('TasksCard: empty tasks render the generic ledger copy', () => {
   assert.ok(body.includes('任务台账里没有进行中的任务。'), 'active empty copy missing');
   assert.ok(body.includes('任务台账里还没有完成的任务。'), 'recent empty copy missing');
   assert.ok(!body.includes('JSON'), 'empty copy still names a JSON ledger');
-  assert.equal(collect(card, 'project-flow-listRow').length, 0);
+  assert.equal(collect(card, 'project-flow-taskRow').length, 0);
 });
 
 check('TasksCard: drafts render a todo section ahead of the active list', () => {
@@ -489,30 +694,52 @@ check('TasksCard: drafts render a todo section ahead of the active list', () => 
       counts: { draft: 2, active: 1 },
       current: null,
       draft: [
-        { id: 'T-D1', title: 'draft one', owner: 'alice', updated_at: '2026-10-28T10:00:00+08:00' },
-        { id: 'T-D2', title: 'draft two', owner: '', updated_at: '2026-10-20T10:00:00+08:00' },
+        {
+          id: 'T-D1',
+          title: 'draft one',
+          owner: 'alice',
+          goal: '草稿一的目标',
+          scope: { allow: ['README.md'] },
+          updated_at: '2026-10-28T10:00:00+08:00',
+        },
+        {
+          id: 'T-D2',
+          title: 'draft two',
+          owner: '',
+          goal: '',
+          updated_at: '2026-10-20T10:00:00+08:00',
+        },
       ],
       active: [
-        { id: 'T-A1', title: 'active one', status: 'active', owner: '', updated_at: '2026-10-28T09:00:00+08:00' },
+        { id: 'T-A1', title: 'active one', status: 'active', owner: '', goal: '活动目标', updated_at: '2026-10-28T09:00:00+08:00' },
       ],
       recentDone: [],
     },
   });
   assert.equal(payload.tasks.draft.length, 2, 'normalize dropped the draft array');
+  assert.equal(payload.tasks.draft[0].goal, '草稿一的目标');
   const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
   const body = JSON.stringify(card);
   assert.ok(body.includes('待办（草稿）'), 'draft section title missing');
-  assert.equal(collect(card, 'project-flow-listRow').length, 3, 'expected two drafts + one active row');
-  const ids = collect(card, 'project-flow-listId').map((element) => element.children[0]);
-  assert.deepEqual(ids, ['T-D1', 'T-D2', 'T-A1'], 'drafts must render before the active list');
-  assert.ok(body.includes('draft one'), 'draft title missing');
-  assert.ok(body.includes('draft two'), 'second draft title missing');
-  assert.ok(body.includes('负责人 alice'), 'draft owner missing');
-  assert.ok(collect(card, 'project-flow-listMeta').length >= 2, 'draft meta line missing');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 3, 'expected two drafts + one active row');
+  assert.deepEqual(
+    collect(card, 'project-flow-taskTitle').map((element) => element.children[0]),
+    ['draft one', 'draft two', 'active one'],
+    'drafts must render before the active list'
+  );
+  assert.deepEqual(
+    collect(card, 'project-flow-taskGoal').map((element) => element.children[0]),
+    ['草稿一的目标', '活动目标'],
+    'draft goals must render on the second line'
+  );
+  assert.ok(body.includes('负责人 alice') || textOf(card).includes('负责人 alice'), 'draft owner missing');
+  assert.ok(!textOf(card).includes('T-D1'), 'draft row must not show its id by default');
 
   const english = probe.TasksCard({ tasks: payload.tasks, t: tEn, now: NOW });
-  const englishText = JSON.stringify(english);
+  // Data (the user's Chinese goals) may be Chinese; the chrome must not be.
+  const englishText = textOf(english).split('草稿一的目标').join('').split('活动目标').join('');
   assert.ok(englishText.includes('Todo (drafts)'), 'en draft section title missing');
+  assert.ok(englishText.includes('owner alice'), 'en owner meta missing');
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en draft section still contains Chinese');
 });
 
@@ -530,7 +757,7 @@ check('TasksCard: no draft rows means no todo section', () => {
   const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
   const body = JSON.stringify(card);
   assert.ok(!body.includes('待办（草稿）'), 'empty draft section must not render');
-  assert.equal(collect(card, 'project-flow-listRow').length, 2, 'active/recent rows must be unchanged');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 2, 'active/recent rows must be unchanged');
 
   // Older / hostile payloads must not crash or invent a section.
   const hostile = probe.TasksCard({
@@ -551,10 +778,10 @@ check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
     tasks: { total: 30, counts: { draft: 30 }, current: null, draft: drafts, active: [], recentDone: [] },
   });
   const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
-  assert.equal(collect(card, 'project-flow-listRow').length, 25, 'draft rows must cap at 25');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 25, 'draft rows must cap at 25');
   const body = JSON.stringify(card);
-  assert.ok(body.includes('T-D25'), 'last visible draft row missing');
-  assert.ok(!body.includes('T-D26'), 'a 26th draft row leaked through');
+  assert.ok(body.includes('draft 25'), 'last visible draft row missing');
+  assert.ok(!body.includes('draft 26'), 'a 26th draft row leaked through');
   assert.ok(body.includes('还有 5 条未显示'), 'draft overflow copy missing');
   assert.equal(collect(card, 'project-flow-more').length, 1, 'overflow line missing');
 

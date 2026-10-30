@@ -43,6 +43,12 @@ const MAX_STRING = 400
 const MAX_PAYLOAD_BYTES = 900 * 1000
 const MAX_STORE_ITEMS = 400
 const MAX_DRAFT_TASKS = 50
+/** Task rows per panel group; the panel itself renders at most 25 per list. */
+const MAX_TASK_ROWS = 50
+/** One bounded detail entry (file claim, acceptance command, commit sha). */
+const MAX_TASK_ITEM = 200
+/** Detail list length per task (`scope.allow`/`scope.deny`/`acceptance`/`commits`). */
+const MAX_TASK_LIST = 10
 const MAX_TOOL_ITEMS = 200
 const WRITE_TIMEOUT_MS = 30_000
 const STORE_CONTRACT = join('.dsh', 'flow', 'flow.json')
@@ -444,6 +450,67 @@ function lastCheckpointGate(task) {
   return typeof last.gate === 'string' ? last.gate : null
 }
 
+/** Bounded string list for one task row: entries are clipped, non-strings dropped. */
+function clipTaskList(value, limit = MAX_TASK_LIST) {
+  if (Array.isArray(value) === false) return []
+  const out = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue
+    const text = clip(entry, MAX_TASK_ITEM)
+    if (text !== '') out.push(text)
+    if (out.length >= limit) break
+  }
+  return out
+}
+
+/**
+ * Acceptance entries are strings or legacy `{cmd, expect}` objects. The panel
+ * renders one bounded line per entry, so both shapes flatten to text here.
+ */
+function clipTaskAcceptance(value) {
+  if (Array.isArray(value) === false) return []
+  const out = []
+  for (const entry of value) {
+    let text = ''
+    if (typeof entry === 'string') text = clip(entry, MAX_TASK_ITEM)
+    else if (isPlainObject(entry)) {
+      const cmd = typeof entry.cmd === 'string' ? entry.cmd.trim() : ''
+      const expect = typeof entry.expect === 'string' ? entry.expect.trim() : ''
+      text = clip(cmd !== '' && expect !== '' ? `${cmd} => ${expect}` : cmd || expect, MAX_TASK_ITEM)
+    }
+    if (text !== '') out.push(text)
+    if (out.length >= MAX_TASK_LIST) break
+  }
+  return out
+}
+
+/** `scope` is `{allow, deny}`; both lists are bounded and never carried raw. */
+function clipTaskScope(value) {
+  const scope = isPlainObject(value) ? value : {}
+  return { allow: clipTaskList(scope.allow), deny: clipTaskList(scope.deny) }
+}
+
+/**
+ * One task row for the panel. Title and goal drive the two visible lines; the
+ * remaining fields feed the expanded detail block, so every value stays bounded
+ * (single strings clipped, arrays limited) regardless of what the store holds.
+ */
+function panelTaskRow(record, status) {
+  return {
+    id: clip(record.id),
+    title: clip(record.title),
+    status,
+    owner: clip(record.owner),
+    goal: clip(record.goal),
+    notes: clip(record.notes),
+    scope: clipTaskScope(record.scope),
+    acceptance: clipTaskAcceptance(record.acceptance),
+    commits: clipTaskList(record.commits),
+    created_at: clip(record.created_at),
+    updated_at: clip(record.updated_at),
+  }
+}
+
 
 
 // ----------------------------------------------------------------- heartbeats
@@ -537,26 +604,20 @@ function taskCountsOf(records) {
   return counts
 }
 
-function activeTasksOf(records) {
+function activeTasksOf(records, limit = MAX_TASK_ROWS) {
   return records
     .filter((record) => isPlainObject(record) && record.status === 'active')
     .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-    .map((record) => ({
-      id: clip(record.id),
-      title: clip(record.title),
-      status: 'active',
-      owner: clip(record.owner),
-      updated_at: clip(record.updated_at),
-      goal: clip(record.goal),
-    }))
+    .slice(0, limit)
+    .map((record) => panelTaskRow(record, 'active'))
 }
 
 /**
  * Newest draft tasks, projected for the panel's 待办 block.
  *
  * A non-array `records` or a non-object record degrades to "no row" rather than
- * throwing, and every projected field goes through `clip`, so an odd
- * `owner`/`updated_at` type becomes an empty string.
+ * throwing, and every projected field is bounded, so an odd `owner`/`updated_at`
+ * type becomes an empty string.
  */
 function draftTasksOf(records, limit = MAX_DRAFT_TASKS) {
   if (Array.isArray(records) === false) return []
@@ -564,15 +625,10 @@ function draftTasksOf(records, limit = MAX_DRAFT_TASKS) {
   for (const record of records) {
     if (isPlainObject(record) === false) continue
     if (record.status !== 'draft') continue
-    drafts.push({
-      id: clip(record.id),
-      title: clip(record.title),
-      owner: clip(record.owner),
-      updated_at: clip(record.updated_at),
-    })
+    drafts.push(record)
   }
   drafts.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-  return drafts.slice(0, limit)
+  return drafts.slice(0, limit).map((record) => panelTaskRow(record, 'draft'))
 }
 
 function recentDoneOf(records, limit) {
@@ -580,15 +636,7 @@ function recentDoneOf(records, limit) {
     .filter((record) => isPlainObject(record) && record.status === 'done')
     .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
     .slice(0, limit)
-    .map((record) => ({
-      id: clip(record.id),
-      title: clip(record.title),
-      updated_at: clip(record.updated_at),
-      commits: Array.isArray(record.commits)
-        ? record.commits.filter((sha) => typeof sha === 'string').map((sha) => clip(sha))
-        : [],
-      gate: lastCheckpointGate(record),
-    }))
+    .map((record) => ({ ...panelTaskRow(record, 'done'), gate: lastCheckpointGate(record) }))
 }
 
 /** Panel payload with no readable store: every section empty. */
@@ -683,6 +731,10 @@ async function buildStoreState(root, entry, now, warnings) {
     active: activeTasksOf(taskRecords),
     recentDone: recentDoneOf(taskRecords, recentLimit),
     draft: draftTasksOf(taskRecords),
+  }
+  const activeTotal = taskRecords.filter((record) => isPlainObject(record) && record.status === 'active').length
+  if (activeTotal > MAX_TASK_ROWS) {
+    warnings.push(`active-tasks-truncated: ${activeTotal - MAX_TASK_ROWS} active tasks beyond ${MAX_TASK_ROWS}`)
   }
 
   const gates = (Array.isArray(state.gates.items) ? state.gates.items : []).map((gate) => ({
