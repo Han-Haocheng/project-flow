@@ -23,7 +23,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   .lock                     写锁（临时文件，30 秒过期，不要提交、不要展示）
 ```
 
-子目录可由契约覆盖（见 §2）；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
+子目录可由契约覆盖（见 §2），但覆盖值必须留在项目根内；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
 
 ## 2 `flow.json`（schema 2）
 
@@ -62,8 +62,27 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 默认值保留 `"md"` 以免改写既有契约。
 
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
-`gates` / `logs`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根；
-写绝对路径则原样使用。
+`gates` / `logs`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
+解析结果永远落在项目根内；不安全的值按下述规则降级并产生 warning。
+
+### 2.1 manifest 路径 containment
+
+manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`、`gates.dir`、
+`gates.logs`、`gate.log`、`tasks.current`、`heartbeats.dir`、`runs.dirs`）都必须是
+**项目根内的相对路径**。core 的 `containedPath` 与 Host 侧的本地镜像按同一规则校验：
+
+- 绝对路径输入（`store.root` 例外，见下）、`..` 解析后逃出根、以及符号链接逃逸
+  （目标已存在时看 `realpath`；目标不存在时逐级向上检查最近已存在的祖先，例如
+  `link -> /etc`）一律**拒绝**；
+- 拒绝后不抛异常，也不读取根外内容，而是按该 section 的默认值降级：
+  `store.root` → `.dsh/flow`，各节目录 → 该节的默认目录，`gate.log` /
+  `tasks.current` → `null`，`runs.dirs` 的非法项 → 跳过（合法项继续生效）；
+- 每个被拒绝的原值记一条概括性 warning：
+  `manifest-path-rejected: <key>: <原值>: <原因>`（只回显原值，不回显文件内容）。
+- 唯一例外：`store.root` 写成绝对路径时，若 `realpath` 后仍在项目根内则照常使用
+  （兼容旧 manifest）；否则回退 `.dsh/flow` 并 warning。
+
+合法相对路径的解析结果与旧行为完全一致。
 
 ## 3 记录格式
 
@@ -500,7 +519,10 @@ saveContract(root, contract)         // 原子写，schema 强制 2
 initProject(root, {name?, force?, noGates?, migrate?:['trailers'|'tasks'], taskSourceDir?})
                                      // {root, created[], imported:{trailers,tasks},
                                      //  warnings[], seededGates[]}
-storePaths(root, contract)           // {store, experiments, tasks, gates, logs}（绝对路径）
+storePaths(root, contract)           // {store, experiments, tasks, gates, logs}（绝对路径，恒在根内）
+containedPath(root, value, label, {allowAbsolute?})
+                                     // manifest 路径 containment：根内绝对路径，
+                                     // 不安全时记 warning 并返回 undefined（仅 store.root 可 allowAbsolute）
 drainWarnings()                      // 取走并清空全局诊断 warning（非契约 API）
 
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment

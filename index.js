@@ -169,6 +169,90 @@ function toPosix(path) {
   return sep === '/' ? path : path.split(sep).join('/')
 }
 
+// --------------------------------------------------------- path containment
+//
+// Local mirror of `containedPath` in lib/core.mjs, because the legacy readers
+// below must also work when lib/core.mjs is unavailable. Every root-relative
+// path declared by the manifest (`tasks.dir`, `tasks.current`, `gate.log`,
+// `heartbeats.dir`, `runs.dirs`, ...) is resolved through it: absolute input is
+// rejected, `..` escapes are rejected, and existing/ancestor targets are
+// re-checked through realpath so a symlink cannot lead outside the project
+// root. Unsafe values never throw: the caller degrades to its default and one
+// warning names the key and raw value (never file content).
+
+function rejectManifestPath(warnings, label, value, reason) {
+  const preview = clip(String(value ?? '').replace(/\s+/g, ' ').trim(), 200)
+  warnings.push(`manifest-path-rejected: ${label}: ${preview}: ${reason}`)
+}
+
+function pathWithin(parent, child) {
+  const fold = (value) => (process.platform === 'win32' ? value.toLowerCase() : value)
+  const base = fold(parent)
+  const target = fold(child)
+  if (target === base) return true
+  return target.startsWith(base.endsWith(sep) ? base : base + sep)
+}
+
+function realPathStaysInside(absRoot, target) {
+  let realRoot
+  try {
+    realRoot = realpathSync(absRoot)
+  } catch {
+    // The project root does not exist yet: only the lexical check is meaningful.
+    return pathWithin(absRoot, target)
+  }
+  let current = target
+  for (;;) {
+    try {
+      return pathWithin(realRoot, realpathSync(current))
+    } catch (error) {
+      const code = error !== null && error !== undefined ? error.code : undefined
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') return false
+      try {
+        if (lstatSync(current).isSymbolicLink()) return false
+      } catch {
+        // The component is absent: keep walking up toward the root.
+      }
+      const parent = dirname(current)
+      if (parent === current) return false
+      current = parent
+    }
+  }
+}
+
+/**
+ * Absolute in-root path for one manifest value, or `undefined` after pushing a
+ * warning when the value is absolute (unless `options.allowAbsolute`), escapes
+ * the root lexically, or resolves outside it through a symlink.
+ */
+function containedPath(root, value, label, warnings, options = {}) {
+  const absRoot = resolve(root)
+  const allowAbsolute = options !== null && typeof options === 'object' && options.allowAbsolute === true
+  if (typeof value !== 'string' || value.trim() === '') return undefined
+  const raw = value.trim()
+  const target = isAbsolute(raw) ? resolve(raw) : resolve(absRoot, raw)
+  if (isAbsolute(raw) && allowAbsolute !== true) {
+    rejectManifestPath(warnings, label, raw, 'absolute paths are not allowed')
+    return undefined
+  }
+  if (pathWithin(absRoot, target) !== true && realPathStaysInside(absRoot, target) !== true) {
+    rejectManifestPath(warnings, label, raw, 'escapes the project root')
+    return undefined
+  }
+  if (realPathStaysInside(absRoot, target) !== true) {
+    rejectManifestPath(warnings, label, raw, 'a symlink resolves outside the project root')
+    return undefined
+  }
+  return target
+}
+
+/** Contained directory or the given root-relative fallback when absent/unsafe. */
+function containedDir(root, value, label, warnings, fallbackRelative) {
+  const absRoot = resolve(root)
+  const contained = containedPath(absRoot, value, label, warnings)
+  return contained === undefined ? join(absRoot, fallbackRelative) : contained
+}
+
 /** Run git with a hard timeout. Never rejects: failures are reported in the result. */
 function git(cwd, args, timeout = GIT_TIMEOUT_MS) {
   return new Promise((settle) => {
@@ -712,8 +796,10 @@ function emptyTasks() {
 function readCurrent(root, contract, warnings) {
   const relativePath = contract.tasks.current
   if (typeof relativePath !== 'string' || relativePath.length === 0) return null
+  const currentPath = containedPath(root, relativePath, 'tasks.current', warnings)
+  if (currentPath === undefined) return null
   try {
-    const text = readFileSync(resolve(root, relativePath), 'utf8')
+    const text = readFileSync(currentPath, 'utf8')
     const trimmed = text.trim()
     return trimmed.length > 0 ? trimmed : null
   } catch (error) {
@@ -758,7 +844,7 @@ function readTasksJson(root, contract, warnings) {
   const tasks = emptyTasks()
   tasks.current = readCurrent(root, contract, warnings)
 
-  const dir = resolve(root, contract.tasks.dir)
+  const dir = containedDir(root, contract.tasks.dir, 'tasks.dir', warnings, '.agents/tasks')
   const files = listDirFiles(dir, '.json')
   if (files === undefined) {
     warnings.push(`tasks dir unreadable: ${toPosix(contract.tasks.dir)}`)
@@ -852,7 +938,7 @@ function readTasksMarkdown(root, contract, warnings) {
   const tasks = emptyTasks()
   tasks.current = readCurrent(root, contract, warnings)
 
-  const dir = resolve(root, contract.tasks.dir)
+  const dir = containedDir(root, contract.tasks.dir, 'tasks.dir', warnings, '.agents/tasks')
   const files = listDirFiles(dir, '.md')
   if (files === undefined) {
     warnings.push(`tasks dir unreadable: ${toPosix(contract.tasks.dir)}`)
@@ -915,7 +1001,9 @@ function readTasks(root, contract, warnings) {
 
 function readGate(root, contract, warnings) {
   if (contract.gate.log === null) return null
-  const path = resolve(root, contract.gate.log)
+  const path = containedPath(root, contract.gate.log, 'gate.log', warnings)
+  // An unsafe log path is not a missing log: null keeps the content unread.
+  if (path === undefined) return null
   let stats
   try {
     stats = statSync(path)
@@ -954,7 +1042,7 @@ function stripMarker(line) {
 }
 
 function readHeartbeatsMd(root, contract, now, warnings) {
-  const dir = resolve(root, contract.heartbeats.dir)
+  const dir = containedDir(root, contract.heartbeats.dir, 'heartbeats.dir', warnings, '.agents/heartbeat')
   const files = listDirFiles(dir, '.md')
   if (files === undefined) {
     // A missing heartbeat directory is a normal, silent empty section.
@@ -1022,7 +1110,7 @@ function parseStamp(value) {
 }
 
 function readHeartbeatsJson(root, contract, now, warnings) {
-  const dir = resolve(root, contract.heartbeats.dir)
+  const dir = containedDir(root, contract.heartbeats.dir, 'heartbeats.dir', warnings, '.agents/heartbeat')
   const files = listDirFiles(dir, '.json')
   if (files === undefined) {
     if (existsSync(dir)) warnings.push(`heartbeat dir unreadable: ${toPosix(contract.heartbeats.dir)}`)
@@ -1118,15 +1206,12 @@ function panelHeartbeats(section) {
 
 // ----------------------------------------------------------------------- runs
 
-function expandRunDirs(root, patterns) {
+function expandRunDirs(root, patterns, warnings) {
   const dirs = []
   for (const pattern of patterns) {
-    let full
-    try {
-      full = resolve(root, pattern)
-    } catch {
-      continue
-    }
+    const full = containedPath(root, pattern, 'runs.dirs', warnings)
+    // One unsafe pattern is skipped; safe siblings keep working.
+    if (full === undefined) continue
     const name = basename(full)
     if (!name.includes('*')) {
       dirs.push(full)
@@ -1186,9 +1271,10 @@ function collectRunFiles(dir, depth, now, runs, out) {
 
 function readRuns(root, contract, now, warnings) {
   const runs = contract.runs
-  if (runs.max === 0 || runs.dirs.length === 0) return []
+  const patterns = Array.isArray(runs.dirs) ? runs.dirs : []
+  if (runs.max === 0 || patterns.length === 0) return []
   const found = []
-  for (const dir of expandRunDirs(root, runs.dirs)) collectRunFiles(dir, 0, now, runs, found)
+  for (const dir of expandRunDirs(root, patterns, warnings)) collectRunFiles(dir, 0, now, runs, found)
 
   const seen = new Set()
   const unique = []
@@ -1498,10 +1584,16 @@ async function buildStoreState(root, entry, now, warnings) {
   const taskRecords = Array.isArray(state.tasks.items) ? state.tasks.items : []
   const taskCounts = taskCountsOf(taskRecords)
   const recentLimit = pickInteger(contract.tasks && contract.tasks.recentLimit, 6, 0, 500)
+  // `tasks.current` is a manifest-declared path even though the store reader
+  // only echoes it; an unsafe value is hidden and warned about like everywhere else.
+  // Validate the raw contract value: core already nulls an unsafe `current`.
+  const currentValue = typeof contract.tasks.current === 'string' ? contract.tasks.current : null
+  const currentSafe =
+    currentValue !== null && containedPath(root, currentValue, 'tasks.current', warnings) !== undefined
   const tasks = {
     total: taskRecords.length,
     counts: taskCounts,
-    current: typeof state.tasks.current === 'string' ? state.tasks.current : null,
+    current: currentSafe ? currentValue : null,
     active: activeTasksOf(taskRecords),
     recentDone: recentDoneOf(taskRecords, recentLimit),
   }

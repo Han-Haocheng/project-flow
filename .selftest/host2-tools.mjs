@@ -5,6 +5,7 @@
 // drives the four tools plus the HTTP endpoint in both store and legacy modes.
 // Run: node .selftest/host2-tools.mjs
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -524,6 +525,120 @@ eq('legacy payload: tasks current null', legacy.tasks?.current, null)
 check('legacy payload: active task title', legacy.tasks?.active?.[0]?.title === 'Legacy task')
 check('legacy payload: gate log present', Array.isArray(legacy.gate?.lines) && legacy.gate.lines[0] === 'legacy gate line')
 
+// -------------------------------------------------- draft cap (MAX_DRAFT_TASKS)
+
+// 55 drafts must project to the newest 50, never the whole ledger.
+const capRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-cap-'))
+core.initProject(capRoot, { name: 'CapTest', noGates: true })
+const capContract = core.loadContract(capRoot).contract
+const capIds = []
+for (let index = 0; index < 55; index += 1) {
+  const record = core.addTask(capRoot, capContract, {
+    title: `草稿 ${index}`,
+    status: 'draft',
+    owner: 'cap',
+    updated_at: `2026-10-30T00:00:${String(index).padStart(2, '0')}+08:00`,
+  })
+  capIds.push(record.id)
+}
+const capState = (await call(route, `${route.path}?root=${encodeURIComponent(capRoot)}`)).json ?? {}
+check(
+  'draft cap: 55 drafts capped to 50',
+  Array.isArray(capState.tasks?.draft) && capState.tasks.draft.length === 50,
+  JSON.stringify(capState.tasks?.draft?.length),
+)
+eq('draft cap: newest kept first', capState.tasks?.draft?.[0]?.id, capIds[54])
+eq('draft cap: oldest kept last', capState.tasks?.draft?.[49]?.id, capIds[5])
+eq('draft cap: total still counts every task', capState.tasks?.total, 55)
+
+// ----------------------------------------- malicious manifest: containment
+//
+// A manifest must not point the panel at a file or directory outside its own
+// project root. Every sentinel below lives in its own /tmp directory and uses
+// text that never appears in a path, so a hit proves the content was leaked.
+
+const secretRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-secret-'))
+const GATE_SECRET = 'TOP-SECRET-HOST2-GATE'
+const RUN_SECRET = 'TOP-SECRET-HOST2-RUN'
+const CURRENT_SECRET = 'TOP-SECRET-HOST2-CURRENT'
+const HEARTBEAT_SECRET = 'TOP-SECRET-HOST2-HEARTBEAT'
+
+const secretGateFile = join(secretRoot, 'gate.log')
+writeFileSync(secretGateFile, `${GATE_SECRET}\n`)
+const secretCurrentFile = join(secretRoot, 'current')
+writeFileSync(secretCurrentFile, `${CURRENT_SECRET}\n`)
+const secretRunDir = join(secretRoot, 'runs')
+mkdirSync(secretRunDir, { recursive: true })
+writeFileSync(join(secretRunDir, 'run.log'), `${RUN_SECRET}\n`)
+const secretHeartbeatDir = join(secretRoot, 'heartbeats')
+mkdirSync(secretHeartbeatDir, { recursive: true })
+writeFileSync(
+  join(secretHeartbeatDir, 'evil.json'),
+  JSON.stringify({ schema: 1, status: 'working', last_action: HEARTBEAT_SECRET }),
+)
+
+const evilLegacyRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-evil-legacy-'))
+writeFileSync(
+  join(evilLegacyRoot, 'flow.json'),
+  JSON.stringify({
+    schema: 1,
+    name: 'EvilLegacy',
+    experiments: { source: 'none' },
+    tasks: { source: 'json', dir: join(secretRoot, 'tasks'), current: secretCurrentFile },
+    gate: { log: secretGateFile },
+    heartbeats: { source: 'json', dir: secretHeartbeatDir },
+    runs: { dirs: [secretRunDir] },
+  }),
+)
+
+const evilStoreRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-evil-store-'))
+mkdirSync(join(evilStoreRoot, '.dsh', 'flow'), { recursive: true })
+writeFileSync(
+  join(evilStoreRoot, '.dsh', 'flow', 'flow.json'),
+  JSON.stringify({
+    schema: 2,
+    name: 'EvilStore',
+    tasks: { source: 'json', current: secretCurrentFile },
+    gate: { log: secretGateFile },
+    runs: { dirs: [secretRunDir] },
+  }),
+)
+
+function hasWarning(payload, needle) {
+  const warnings = Array.isArray(payload?.warnings) ? payload.warnings : []
+  return warnings.some((line) => typeof line === 'string' && line.includes(needle))
+}
+
+const evilLegacy = (await call(route, `${route.path}?root=${encodeURIComponent(evilLegacyRoot)}`)).json ?? {}
+eq('evil legacy: payload ok', evilLegacy.ok, true)
+eq('evil legacy: absolute gate.log rejected', evilLegacy.gate, null)
+check('evil legacy: gate.log warning', hasWarning(evilLegacy, 'manifest-path-rejected: gate.log:'), JSON.stringify(evilLegacy.warnings))
+check('evil legacy: runs empty', Array.isArray(evilLegacy.runs) && evilLegacy.runs.length === 0, JSON.stringify(evilLegacy.runs))
+check('evil legacy: runs.dirs warning', hasWarning(evilLegacy, 'manifest-path-rejected: runs.dirs:'), JSON.stringify(evilLegacy.warnings))
+eq('evil legacy: tasks.current null', evilLegacy.tasks?.current, null)
+check('evil legacy: tasks.current warning', hasWarning(evilLegacy, 'manifest-path-rejected: tasks.current:'), JSON.stringify(evilLegacy.warnings))
+eq('evil legacy: tasks dir fallback empty', evilLegacy.tasks?.total, 0)
+check('evil legacy: heartbeats fallback empty', Array.isArray(evilLegacy.heartbeats) && evilLegacy.heartbeats.length === 0)
+check('evil legacy: heartbeats.dir warning', hasWarning(evilLegacy, 'manifest-path-rejected: heartbeats.dir:'), JSON.stringify(evilLegacy.warnings))
+check(
+  'evil legacy: no sentinel content in payload',
+  [GATE_SECRET, RUN_SECRET, CURRENT_SECRET, HEARTBEAT_SECRET].every((secret) => JSON.stringify(evilLegacy).includes(secret) === false),
+)
+
+const evilStore = (await call(route, `${route.path}?root=${encodeURIComponent(evilStoreRoot)}`)).json ?? {}
+eq('evil store: payload ok', evilStore.ok, true)
+eq('evil store: absolute gate.log rejected', evilStore.gate, null)
+check('evil store: gate.log warning', hasWarning(evilStore, 'manifest-path-rejected: gate.log:'), JSON.stringify(evilStore.warnings))
+check('evil store: runs empty', Array.isArray(evilStore.runs) && evilStore.runs.length === 0, JSON.stringify(evilStore.runs))
+check('evil store: runs.dirs warning', hasWarning(evilStore, 'manifest-path-rejected: runs.dirs:'), JSON.stringify(evilStore.warnings))
+eq('evil store: tasks.current null', evilStore.tasks?.current, null)
+check('evil store: tasks.current warning', hasWarning(evilStore, 'manifest-path-rejected: tasks.current:'), JSON.stringify(evilStore.warnings))
+check(
+  'evil store: no sentinel content in payload',
+  [GATE_SECRET, RUN_SECRET, CURRENT_SECRET].every((secret) => JSON.stringify(evilStore).includes(secret) === false),
+)
+
+
 // ------------------------------------------------------ no-store behavior
 
 const noStoreWrite = await throws(
@@ -542,7 +657,7 @@ eq('legacy: flow_exp list falls back to git trailers', noStoreLegacyExp.store, f
 eq('legacy: flow_exp list source', noStoreLegacyExp.source, 'git-trailers')
 
 const legacyTaskList = await taskTool.execute({ action: 'list', root: legacyRoot }, exec)
-eq('legacy: flow_task list total', legacyTaskList.total, 1)
+eq('legacy: flow_task list total', legacyTaskList.total, 4)
 eq('legacy: flow_task list store false', legacyTaskList.store, false)
 
 const legacyGateList = await gateTool.execute({ action: 'list', root: legacyRoot }, exec)
@@ -661,7 +776,7 @@ eq('inject path: disposal unregisters skills', injectedSkills.size, 0)
 
 // ------------------------------------------------------------- cleanup
 
-for (const root of [storeRoot, legacyRoot, noStoreRoot]) {
+for (const root of [storeRoot, legacyRoot, noStoreRoot, secretRoot, evilLegacyRoot, evilStoreRoot, capRoot, wtMain, wtDir]) {
   try {
     rmSync(root, { recursive: true, force: true })
   } catch {

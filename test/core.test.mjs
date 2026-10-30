@@ -18,6 +18,7 @@ import {
   addExperiment,
   addGate,
   addTask,
+  containedPath,
   drainWarnings,
   endHeartbeat,
   experimentTree,
@@ -123,8 +124,12 @@ function commitWithMessage(root, file, message) {
   ])
 }
 
-function runCli(cwd, args) {
-  const result = spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8' })
+function runCli(cwd, args, env) {
+  const result = spawnSync(process.execPath, [BIN, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: env === undefined ? process.env : { ...process.env, ...env },
+  })
   let json = null
   const text = result.stdout.trim()
   if (text.startsWith('{')) {
@@ -218,6 +223,156 @@ test('storePaths 支持自定义 store 根并重定向默认子目录', () => {
   assert.equal(custom.store, path.join(path.resolve(root), '.flowstore'))
   assert.equal(custom.experiments, path.join(path.resolve(root), '.flowstore/experiments'))
   assert.equal(custom.tasks, path.join(path.resolve(root), '.flowstore/tasks'))
+})
+
+// --------------------------------------------------- manifest 路径 containment
+//
+// 契约里的每个路径都必须是项目根内的相对路径。以下用例全部在 os.tmpdir()
+// 的临时项目里构造“根外哨兵文件”，只断言任何读取结果里都不出现哨兵内容。
+
+test('manifest containment：绝对 gate.log 被拒绝、warning 带原值且不回显内容', () => {
+  const root = tempRoot('contain-gate-abs')
+  const secretDir = tempRoot('contain-gate-secret')
+  const secret = path.join(secretDir, 'gate.log')
+  fs.writeFileSync(secret, 'TOP-SECRET-GATE\n')
+
+  drainWarnings()
+  assert.equal(containedPath(root, secret, 'gate.log'), undefined)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('manifest-path-rejected: gate.log:')),
+    warnings.join('\n'),
+  )
+  assert.ok(warnings.some((item) => item.includes(secret)), 'warning 应保留原值，便于定位')
+  assert.equal(warnings.join('\n').includes('TOP-SECRET-GATE'), false, 'warning 不应回显文件内容')
+})
+
+test('manifest containment：根外绝对 store.root 回退 .dsh/flow 并 warning', () => {
+  const root = tempRoot('contain-store-abs')
+  initProject(root, { name: 'contain-store-abs', noGates: true })
+  const outside = tempRoot('contain-store-outside')
+  const { contract } = loadContract(root)
+
+  drainWarnings()
+  const paths = storePaths(root, { ...contract, store: { root: outside } })
+  const defaults = storePaths(root, contract)
+  assert.equal(paths.store, defaults.store)
+  assert.equal(paths.experiments, defaults.experiments)
+  assert.equal(paths.tasks, defaults.tasks)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('manifest-path-rejected: store.root:')),
+    warnings.join('\n'),
+  )
+  assert.ok(warnings.some((item) => item.includes(outside)))
+
+  // 根还不存在时只有词法判定可信：根外绝对 store.root 仍必须被拒绝。
+  const ghostRoot = path.join(tempRoot('contain-store-ghost'), 'missing-project')
+  drainWarnings()
+  const ghost = storePaths(ghostRoot, { ...contract, store: { root: outside } })
+  assert.equal(ghost.store, path.join(path.resolve(ghostRoot), '.dsh/flow'))
+  assert.ok(
+    drainWarnings().some((item) => item.startsWith('manifest-path-rejected: store.root:')),
+    '不存在的根也要拒绝根外绝对路径',
+  )
+})
+
+test('manifest containment：experiments.dir 的 .. 逃逸回退默认目录并 warning', () => {
+  const root = tempRoot('contain-exp-dotdot')
+  initProject(root, { name: 'contain-exp-dotdot', noGates: true })
+  const { contract } = loadContract(root)
+
+  drainWarnings()
+  const paths = storePaths(root, { ...contract, experiments: { ...contract.experiments, dir: '../x' } })
+  assert.equal(paths.experiments, path.join(path.resolve(root), '.dsh/flow/experiments'))
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('manifest-path-rejected: experiments.dir: ../x:')),
+    warnings.join('\n'),
+  )
+})
+
+test('manifest containment：根内符号链接指向根外时 tasks.dir 回退默认目录', (t) => {
+  const root = tempRoot('contain-symlink')
+  initProject(root, { name: 'contain-symlink', noGates: true })
+  const outside = tempRoot('contain-symlink-outside')
+  fs.writeFileSync(
+    path.join(outside, 'T-20261030-99.json'),
+    JSON.stringify({
+      schema: 1,
+      id: 'T-20261030-99',
+      title: 'TOP-SECRET-TASK',
+      status: 'active',
+      updated_at: '2026-10-30T10:00:00+08:00',
+    }),
+  )
+  try {
+    fs.symlinkSync(outside, path.join(root, 'task-link'), 'dir')
+  } catch (error) {
+    t.skip(`symlink unavailable on this platform: ${error.code}`)
+    return
+  }
+  const { contract } = loadContract(root)
+  const malicious = { ...contract, tasks: { ...contract.tasks, dir: 'task-link' } }
+
+  drainWarnings()
+  const paths = storePaths(root, malicious)
+  assert.equal(paths.tasks, path.join(path.resolve(root), '.dsh/flow/tasks'))
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('manifest-path-rejected: tasks.dir: task-link:')),
+    warnings.join('\n'),
+  )
+  assert.equal(JSON.stringify(listTasks(root, malicious)).includes('TOP-SECRET-TASK'), false)
+})
+
+test('manifest containment：绝对 heartbeats.dir 回退 .agents/heartbeat 且内容不泄漏', () => {
+  const root = tempRoot('contain-heartbeat')
+  initProject(root, { name: 'contain-heartbeat', noGates: true })
+  const outside = tempRoot('contain-heartbeat-outside')
+  fs.writeFileSync(
+    path.join(outside, 'evil.json'),
+    JSON.stringify({ schema: 1, status: 'working', last_action: 'TOP-SECRET-HEARTBEAT' }),
+  )
+  const { contract } = loadContract(root)
+
+  drainWarnings()
+  const section = readHeartbeatSection(root, {
+    ...contract,
+    heartbeats: { ...contract.heartbeats, dir: outside },
+  })
+  assert.deepEqual(section.items, [])
+  assert.equal(section.dir, '.agents/heartbeat', '报告实际读取的默认目录，而不是被拒绝的路径')
+  assert.equal(JSON.stringify(section).includes('TOP-SECRET-HEARTBEAT'), false)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('manifest-path-rejected: heartbeats.dir:')),
+    warnings.join('\n'),
+  )
+})
+
+test('manifest containment：合法相对路径与根内绝对 store.root 行为不变', () => {
+  const root = tempRoot('contain-legal')
+  initProject(root, { name: 'contain-legal', noGates: true })
+  const { contract } = loadContract(root)
+  const custom = {
+    ...contract,
+    store: { root: path.join(path.resolve(root), '.dsh/flow') },
+    experiments: { ...contract.experiments, dir: 'data/experiments' },
+  }
+
+  drainWarnings()
+  const paths = storePaths(root, custom)
+  assert.equal(paths.store, path.join(path.resolve(root), '.dsh/flow'))
+  assert.equal(paths.experiments, path.join(path.resolve(root), 'data/experiments'))
+  assert.equal(paths.tasks, path.join(path.resolve(root), '.dsh/flow/tasks'))
+
+  const created = addExperiment(root, custom, { title: 'still works' })
+  assert.equal(created.title, 'still works')
+  const listed = listExperiments(root, custom)
+  assert.equal(listed.length, 1)
+  assert.equal(listed[0].id, created.id)
+  assert.deepEqual(drainWarnings(), [], '合法路径不产生 containment warning')
 })
 
 // ---------------------------------------------------------------- experiments
