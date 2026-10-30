@@ -1,0 +1,29 @@
+{
+  "title": "开源清理：去个人数据 + 自包含夹具 + 历史重写",
+  "status": "done",
+  "owner": "history-sanitize",
+  "goal": "为 MIT 公开仓库清理历史中的个人数据：移除真实项目 payload 夹具与 dev 任务卡、把本机绝对路径/项目名换成通用占位、让 selftest 用 /tmp 合成夹具自包含；随后在 mirror 副本上用 git-filter-repo 重写历史并 force push（含备份与本地分支对齐）。",
+  "scope": {
+    "allow": [
+      ".selftest/",
+      "test/",
+      ".dsh/flow/",
+      "scripts/"
+    ],
+    "deny": []
+  },
+  "acceptance": [
+    "移除 .selftest/state-alpha.json、state-qbank.json、.dsh/flow/tasks/T-20261029-*.json；更新 client-render 的夹具列表",
+    "selftest 不再依赖本机真实项目：用 /tmp 合成目录/夹具；harness 在夹具缺失时 skip 而不是 FAIL",
+    "全仓历史与 HEAD 不再出现 /tmp/pf-demo、user、demo-alpha、demo-qbank（替换为通用占位）",
+    "selftest 的路径常量与断言一致更新；node --test / host2-tools / harness / client-* 全绿",
+    "mirror 副本上 git-filter-repo 重写 + 前后 SHA 对比 + 备份 bundle 保留；force push main 与功能分支并验证 GitHub"
+  ],
+  "notes": "用户 2026-10-30 要求“重写历史”。依赖 T-20261030-20（正在改 .selftest/ 与代码）收尾后执行。\n\n2026-10-30 开工：T-20 已完成并已按功能提交（fab201b/9ad7908/e9fe66d）；现进入去个人数据阶段，之后再 mirror 重写历史并强推。\n\n已验收（2026-10-30）：清理提交 a7854b0→重写后 446e428；node --test 83/83、host2-tools/harness ALL PASS、client-render 37/37。\n\n历史重写已完成：mirror 上 git-filter-repo（replace-text + 删除 state-alpha/qbank 与 dev 任务卡），全历史 personal identifier 归零；force push main=7086a40、branch=446e428；本地已对齐。备份 ~/backup/project-flow-prerewrite-*.bundle。",
+  "schema": 1,
+  "id": "T-20261030-28",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:32:30+08:00",
+  "updated_at": "2026-10-30T21:55:22+08:00"
+}

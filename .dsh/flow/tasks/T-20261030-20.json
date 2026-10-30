@@ -1,0 +1,34 @@
+{
+  "title": "心跳只面向主会话：移除子会话心跳自动化，提醒/门禁只对根会话生效",
+  "status": "done",
+  "owner": "heartbeat-scope",
+  "goal": "按用户 2026-10-30 要求：心跳机制只描述“同一项目的不同主会话之间的关系”，忽视子会话。删除 subagent/start|end 自动开合心跳；pre-step 提醒与 edit/write 硬门禁只对 agents.roots() 中的根会话生效；遗留子会话心跳在读侧归类为过期/隐藏并提供清理；CONTRACT §3.5/§10.3 同步。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "lib/core.mjs",
+      "CONTRACT.md",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "删除 subagent/start|end 的心跳开合逻辑（含 subagentRoots 缓存），子代理不再产生心跳文件；现有残留按 agent=subagent 识别",
+    "pre-step 提醒与 edit/write guard 只对根会话（agents.roots()）生效；子会话不再被要求 start，也不会被拒写",
+    "flow_heartbeat 的 start/update/end 在子会话（非 root）被调用时明确拒绝并给提示，而不是静默写文件",
+    "读取侧：agent=subagent 的旧心跳标记为 legacy/hidden 或提供 flow heartbeat gc 清理；面板不再展示子会话心跳",
+    "CONTRACT §3.5 与 §10.3 更新；测试覆盖“子会话不建心跳 / 根会话仍提醒与门禁 / 旧子会话心跳被隐藏”",
+    "依赖 T-20261030-18（同改 index.js），完成后再开工",
+    "心跳根固定为项目主工作区（git common dir 对应的主 checkout），不按会话 cwd/worktree 分裂——否则同一项目的不同主会话仍互相看不见"
+  ],
+  "notes": "来源：用户 2026-10-30。T-05 的“不做子代理心跳”方向由此替代；worktree 撞号自建卡事故也归这条的回归用例。\n\n补充（重要）：主会话若在各自 worktree，按会话 cwd 写心跳会继续分裂；需解析 git --git-common-dir 找主 checkout，或要求主会话统一在主工作区运行。\n\n2026-10-30 改由 Agent Teams 队友 heartbeat-scope 执行；团队任务板 id=task-1（description 首行 flow: T-20261030-20）。这是该插件第一次真实走 Team 派工。\n\n2026-10-30 验收：node --test 83/83、host2-tools ALL PASS、harness ALL PASS；已按 feat(heartbeat) 提交 23131be（重写后）。",
+  "schema": 1,
+  "id": "T-20261030-20",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:00:15+08:00",
+  "updated_at": "2026-10-30T21:54:51+08:00"
+}

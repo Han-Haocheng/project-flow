@@ -1,0 +1,31 @@
+{
+  "id": "T-20261030-12",
+  "title": "设计：语义台账 + 漂移检测（S- 记录 + sema check/impact 门禁）",
+  "status": "draft",
+  "owner": "",
+  "goal": "把“语义”变成项目资产：术语/不变量/边界/状态机可查询、可执行、变更必须显式；提供结构/文本/接口三渠道漂移检测，接入门禁。",
+  "scope": {
+    "allow": [
+      "CONTRACT.md",
+      "lib/",
+      "bin/",
+      "skills/",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "设计文档：S- 记录格式（term/definition/not/owner.paths/invariants/consumers/status/version/history/decisions）",
+    "命令面：flow sema list|show|for <path>|check|impact；与既有 flow check 的关系",
+    "门禁接线：precommit 跑 sema check；影响面检查（改 stable 条目而未升 version 即失败）",
+    "最小实现：2 条示例语义条目 + 1 条可执行不变量 + 1 个漂移失败样例"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：用户 2026-10-30 提出的语义漂移问题。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:30:40+08:00",
+  "schema": 1
+}

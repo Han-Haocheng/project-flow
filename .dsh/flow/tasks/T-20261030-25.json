@@ -1,0 +1,26 @@
+{
+  "title": "中心合并与生效：worktree→main + 台账入库 + 重启验证",
+  "status": "done",
+  "owner": "",
+  "goal": "用户已授权：T-20 验收后把中心分支（dsh-7d92a615-9107）一次提交并合并回 main，台账 27 张 task JSON 随代码一起提交；合并后重启/刷新桌面版验证面板、心跳、技能实际生效。",
+  "scope": {
+    "allow": [
+      ".dsh/flow/",
+      ".git/"
+    ],
+    "deny": []
+  },
+  "acceptance": [
+    "worktree 分支提交（代码+技能+测试）并合并到 main，无冲突或冲突已解决",
+    "main 提交 task 台账（随代码一次或紧邻一次）",
+    "合并后重启桌面版：面板显示 22+ 任务、草稿区可见、心跳只面向主会话、技能描述为中文",
+    "记录合并 commit 与验证结果；失败可回滚到合并前 SHA"
+  ],
+  "notes": "用户 2026-10-30 授权：等 T-20 验收后一次性合并。涉及 git 写与宿主重启。\n\n2026-10-30 顺序更新：用户确认删除（T-26）放在合并之前；合并内容包含 T-26 的删除结果。\n\n2026-10-30 追加：合并前还有 T-27（任务区显示改造）；顺序 T-20→T-26→T-27→合并。\n\n2026-10-30 远端已建立：github.com/Han-Haocheng/project-flow（private，默认分支 main，remote=origin git@github.com）。已推 main(b78f439) 与功能分支 dsh-7d92a615-9107(7a90246, 2 个 docs 提交)。后续功能提交后合并并 push main。\n\n2026-10-30 已发布：https://github.com/Han-Haocheng/project-flow 公开（MIT，默认分支 main），main 已推 918be1c，功能分支同步；GitHub 已识别 MIT。\n\n2026-10-30 历史重写后 SHAs：main=7086a40（docs+license+清理前的旧基线重写），功能分支=446e428（3afa97e containment、23131be heartbeat、f2fd64f draft、446e428 sanitize）。远端已验证全历史无本机路径与个人标识。下一步：merge 分支到 main 并 push（push 需用户确认）。\n\n2026-10-30 完成：ff merge 到 main（446e428），台账随代码提交并 push。",
+  "schema": 1,
+  "id": "T-20261030-25",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:09:20+08:00",
+  "updated_at": "2026-10-30T21:55:09+08:00"
+}

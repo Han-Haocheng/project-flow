@@ -1,0 +1,32 @@
+{
+  "title": "面板任务区：显示目标/内容与详情，弱化 ID，草稿可见",
+  "status": "draft",
+  "owner": "",
+  "goal": "用户反馈：需要看见任务的目标与内容而不是编号；当前看不见任务详情；草稿不显示。改造 payload 与面板：行默认不显示 id，标题+goal 为主信息，点击/回车展开详情（notes/scope/acceptance/commits/时间），草稿区块在真实 payload 下可见。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "client.js",
+      ".selftest/",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "payload：active/draft/recentDone 三组行都带 goal（有界裁剪）；新增详情字段 notes/scope/acceptance/commits/created_at（有界）",
+    "client 行：标题为首行、goal 为次行（2 行截断）；默认不渲染任务 id，仅在展开详情或复制动作中出现",
+    "点击行/键盘 Enter 展开详情：goal、notes、scope.allow/deny、acceptance、commits、created/updated；aria-expanded 与键盘可达",
+    "草稿区块在含 tasks.draft 的真实 payload 下可见（依赖 T-17/T-18）",
+    "行 key 用业务 id（不按下标），避免轮询后展开错行",
+    "client-render 用例：无 id 渲染、goal 展示、详情展开/收起、无 draft 不渲染、>25 截断"
+  ],
+  "notes": "来源：用户 2026-10-30 反馈“要目标内容不要编号、看不见详情、草稿不显示”。顺序：T-20 验收 → T-26 删除 → T-27 显示改造 → 合并（T-25）。",
+  "schema": 1,
+  "id": "T-20261030-27",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:17:26+08:00",
+  "updated_at": "2026-10-30T21:17:26+08:00"
+}

@@ -1,0 +1,31 @@
+{
+  "title": "技能约束：统一为中心-贡献者模型（删除分布式协作与可选模式）",
+  "status": "done",
+  "owner": "70727149-17f1-42af-8ad8-6f3ca508979a",
+  "goal": "按用户 2026-10-30 最新判断：不需要“多 AI 同进同退/分布式同步”，项目里只需要一个中心负责合并与同步，中心只判断提交是否合理。把协作技能收敛为单一“中心-贡献者（maintainer）模型”，不再拆第二个技能、不再保留可选模式/画像/波次令牌/claims 锁。",
+  "scope": {
+    "allow": [
+      "skills/",
+      "README.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "SKILL.md 重写为唯一“中心-贡献者”流程：中心=唯一集成权威（合并主分支、判定合理性、写台账）；贡献者=只在自己分支产出可评审提交+证据，不参与彼此协调、不同步、不合并",
+    "删除项目画像 A/B/C、dev 直提、可选精度层、串行令牌/波次、claims 锁、以及“可选工作树模式”表述；单人=中心与贡献者合一的退化情形，写清但不算模式开关",
+    "中心判定清单写死：diff 审查、门禁/测试复跑、影响面、提交信息与证据是否充分；结论只有 accept（merge --no-ff / cherry-pick / fast-forward）/ reject（给理由）/ request-rebase 三种",
+    "合并/冲突/顺序全部由中心决定；贡献者只基于某个 base commit 提交，不需要与其他贡献者对齐",
+    "references：把 worktree-isolation.md 替换为 references/contribution-flow.md（贡献者分支与提交、申请、中心验收、清理）；保留并修订 merge-request-template.md 为“评审申请”；修订 agent-teams-and-tasks.md 与 task-brief-template.md 的口径",
+    "project-flow-init/usage 补：台账真源在主工作区、中心唯一写台账、贡献者不建卡、面板看不到分支必须显式写 branch/path/commit",
+    "技能内不出现“可选模式/按需启用/画像选档”等开关；smoke_test.sh 通过；引用路径全部存在"
+  ],
+  "notes": "来源：用户 2026-10-30 要求，兼容 @deepseek-ai/dsh-experimental-tool-worktree。\n\n2026-10-30 方向变更：旧实现（可选工作树模式 §1.2 + 保留直提默认）不符合“减少可选项”要求，将被重写为严格双技能；旧版 §1.2 中 R1-R10 文本可复用。\n\n2026-10-30 再次收敛：用户认为分布式同进同退没必要，中心判断提交合理性即可。故不做双技能、不做 R1-R10 分布式协议；保留分支隔离只是让贡献者产出可评审提交的手段。\n\n2026-10-30 补充：执行面改为 Agent Teams 的落点见 T-20261030-21；本卡只做中心-贡献者主流程重写，两卡输出合并后交付。\n\n已验收（2026-10-30）：skills/ 全量重写为中心-贡献者单一流程；新增 references/contribution-flow.md 与 assets/merge-request-template.md，删除 worktree-isolation.md；smoke_test ALL PASS；旧框架词 grep 已清零。\n\n集成时我修了 .selftest/host2-tools.mjs 的旧描述断言（前缀「通用 AI 多代理」→「通用 AI 协作开发工作流」+ 含「中心-贡献者」），全量自测转绿。\n\n残留待办：版本仍写 2.11（同号重写）；精度层文档保留但已改为“工具不是模式”；术语“协调者”作为同义词保留；Agent Teams 执行面细化归 T-21。",
+  "schema": 1,
+  "id": "T-20261030-19",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T20:46:48+08:00",
+  "updated_at": "2026-10-30T21:07:01+08:00"
+}

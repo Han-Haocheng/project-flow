@@ -1,0 +1,31 @@
+{
+  "id": "T-20261030-13",
+  "title": "设计：实验与任务合并为进度树（schema 3）",
+  "status": "draft",
+  "owner": "",
+  "goal": "统一节点模型与状态机（含 failed），实验/任务共用一棵 parent 树与 rollup；保留 kind 专有字段语义，提供迁移与兼容层。",
+  "scope": {
+    "allow": [
+      "CONTRACT.md",
+      "lib/",
+      "bin/",
+      "client.js",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "schema 3 提案：统一字段 + kind 专有字段（task: scope/acceptance/checkpoints；experiment: hypothesis/expected/measured/metrics/verdict）",
+    "状态机：open|active|blocked|done|failed|abandoned（+archived）；实验 verdict 与进度状态分离；失败节点带 failure 记录",
+    "失败与重试：failed 为终态但不计成功；retry 生成子节点并 supersedes 原节点",
+    "rollup 口径明确（叶子计数/权重/失败计入方式）；迁移与回滚方案；exp/task 兼容层保留一个版本"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：用户 2026-10-30 提出实验树与任务合并。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:30:40+08:00",
+  "schema": 1
+}

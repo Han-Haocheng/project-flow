@@ -1,0 +1,28 @@
+{
+  "id": "T-20261030-03",
+  "title": "存储写入健壮性：锁 CAS + 原子写持久化",
+  "status": "draft",
+  "owner": "",
+  "goal": "锁加所有权 token：释放只在 token 匹配时删除；过期接管用 rename CAS 复核并 kill(pid,0) 判活；原子写补 fsync、win32 rename 退避重试、陈旧 tmp 清理。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "锁记录 token；releaseLock 不匹配即拒绝；接管先 CAS 再判活，杜绝删掉别人新锁",
+    "两个真实进程并发写同一 store：无同 id、无记录丢失、无双方都成功",
+    "writeJsonAtomic 写后 fsync；EPERM/EBUSY/EACCES 退避重试；withLock 清理陈旧 .tmp-*；.gitignore 覆盖 tmp",
+    "锁测试改为 spawn 多进程用例（替换现有单进程手写锁文件）"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P0-2。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:30:40+08:00",
+  "schema": 1
+}

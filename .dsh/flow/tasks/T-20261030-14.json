@@ -1,0 +1,30 @@
+{
+  "id": "T-20261030-14",
+  "title": "legacy 读取器与 core 合流（心跳 md/json 双读、删重复实现）",
+  "status": "draft",
+  "owner": "",
+  "goal": "index.js 里 legacy 的 readHeartbeats/readTasks/readExperiments 与 core 重复且已分叉：legacy root（heartbeats.source=md）加 JSON 心跳后面板 heartbeats=[]。收敛到 core 单一实现。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "lib/core.mjs",
+      ".selftest/",
+      "CONTRACT.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "legacy 模式同时读 *.md 与 *.json 心跳（除 source=none），与 CONTRACT §3.5 一致",
+    "删除 index.js 的重复 legacy 读取器，统一调 core.readHeartbeatSection / readHeartbeats",
+    "补 legacy root 夹具（md+json 混存）并断言面板读数",
+    "grep 确认心跳读取只有一处实现"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：第四路 A3（实测 legacy + JSON 心跳 → 空）。",
+  "created_at": "2026-10-30T20:34:07+08:00",
+  "updated_at": "2026-10-30T20:34:07+08:00",
+  "schema": 1
+}

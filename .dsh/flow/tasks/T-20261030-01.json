@@ -1,0 +1,18 @@
+{
+  "id": "T-20261030-01",
+  "title": "审查 project-flow 插件不足（core/CLI/host/client/文档 并行盘点，输出优先级与修法）",
+  "status": "draft",
+  "owner": "session-7d92a615-9c31-4032-a9b8-524fd538a8d5",
+  "goal": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-10-30T20:23:58+08:00",
+  "updated_at": "2026-10-30T20:23:58+08:00",
+  "schema": 1
+}

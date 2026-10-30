@@ -1,0 +1,30 @@
+{
+  "id": "T-20261030-02",
+  "title": "安全：manifest 路径 containment（任意文件/目录读取）",
+  "status": "done",
+  "owner": "859c1305-b5fb-41a4-ac0f-27b249cf4852",
+  "goal": "修掉已复现的本地任意文件读取：flow.json 的 gate.log / runs.dirs / tasks.dir / heartbeats.dir / tasks.current 绝对路径与 ../ 逃逸，让面板与 CLI 都拒绝根外路径。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "lib/core.mjs",
+      "test/",
+      "CONTRACT.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "恶意 manifest（gate.log=/etc/hostname、runs.dirs 指外层、tasks.dir 指外层、../、符号链接）在 state 端点与 CLI 全部拒绝并给 warning",
+    "contained(root, candidate) 统一实现：拒绝绝对输入、前缀比较、realpathSync 防符号链接逃逸",
+    "合法相对路径与既有行为不变；core 的 resolveDir/heartbeatDirPath 同步收紧",
+    "把审查时的 /etc/hostname 复现固化为回归用例（≥6 条）"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P0-1（已实测复现）。\n\n已验收（2026-10-30）：我在 worktree 复跑 node --check index.js / lib/core.mjs 均 OK；node --test test/ 79/79；.selftest/host2-tools.mjs ALL PASS。\n\n实现要点：core 新增并导出 containedPath（拒绝绝对/.. /符号链接逃逸，realpath 逐级祖先复核，dangling symlink 判不安全；不安全→noteWarning+undefined，不抛）；storePaths/heartbeatDirPath/tasks.current 全部接入；index.js 有语义一致的本地镜像（legacy 无 core 时也生效），gate.log/tasks.current/runs.dirs 非法→null/[]，目录→默认回退。CONTRACT §2.1 已补规则。\n\n残余风险（记为后续）：TOCTOU（校验与读之间换链）；若 .dsh/.agents 自身是根外符号链接，回退目录仍会跟随；Windows junction/长路径保守拒绝。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:53:54+08:00",
+  "schema": 1
+}

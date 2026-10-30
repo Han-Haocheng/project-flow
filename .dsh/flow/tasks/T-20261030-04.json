@@ -1,0 +1,30 @@
+{
+  "id": "T-20261030-04",
+  "title": "flow.json 容错 + warning 全链路可见",
+  "status": "draft",
+  "owner": "",
+  "goal": "section 类型错误回退默认值而不是抛 TypeError；CLI 与插件在成功/失败路径都 drainWarnings；坏记录不再从计数消失，nextId 不覆盖坏文件。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "bin/flow.mjs",
+      "index.js",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "任意 section 类型错误（store/experiments/tasks/gates/heartbeats/runs 写成字符串/数字）→ 回退默认值 + manifest-invalid warning，读命令仍可跑",
+    "CLI 人类输出与 --json 都带 warnings（含 check/gate 子命令）；插件 payload 不再永久累积历史错误",
+    "坏记录读取失败进入 warnings 且不从列表静默消失；nextId 发现目标文件存在时抛 conflict 而非覆盖",
+    "形状错误 flow.json、坏记录、expect 拼错三组用例"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P0-3 + P1-13。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:30:40+08:00",
+  "schema": 1
+}

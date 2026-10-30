@@ -1,0 +1,32 @@
+{
+  "title": "流程：Agent Teams 与项目任务对接（中心拆分→团队执行→合并回收）",
+  "status": "draft",
+  "owner": "",
+  "goal": "用户指出智能体团队与项目任务天然兼容、但目前仍用一次性子代理。把技能/流程改为：项目台账是唯一 durable 真源，Lead 从任务进度分析拆解成 Team 任务（subject/description/blocked_by/write_scopes），用 spawn_teammate 派持久队友执行，队友产出分支+提交+证据，Lead 验收合并并回收更新项目任务；心跳只覆盖主会话。",
+  "scope": {
+    "allow": [
+      "skills/",
+      "README.md",
+      "CONTRACT.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "技能（中心-贡献者模型）明确执行面：优先 spawn_teammate + 团队任务板；一次性 subagent 仅在 Team 工具不可用时降级使用（唯一降级条件）",
+    "拆分规则：Lead 读项目任务/进度 → 按文件域与依赖拆成 Team 任务；Team 任务 description 写项目 task id；项目 task notes 回记 team task id",
+    "真源规则：项目 ledger 持久、Team 板是执行视图（随会话消失）；Lead 在会话结束前把状态回收进项目任务，禁止双写同一字段",
+    "合并回收：队友分支/提交/证据 → Lead 验收 → 合并 → 更新项目 task status/commits/notes；队友不写台账、不写心跳（靠 Team 投影观察）",
+    "Team 板统一使用原生 Agent Teams UI；项目流面板不再做 team 投影（T-26 删除）",
+    "契约同步：CONTRACT §10 明确“Team 板是执行视图、项目台账是持久真源”的边界与映射字段",
+    "映射约定已确认：Team 任务 description 首行 flow: <T-id>；项目 task notes 记 team: <taskId>；Team 板只做执行视图，不双写同一字段"
+  ],
+  "notes": "来源：用户 2026-10-30。与 T-19（中心-贡献者重写）合并落地；T-20 负责心跳侧。\n\n2026-10-30 用户确认映射约定与顺序（T-21 在 T-20 之后）。\n\n2026-10-30：团队执行面用原生 UI 观察，项目流面板不投影 team；映射只走 Team 描述/项目 notes。",
+  "schema": 1,
+  "id": "T-20261030-21",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:00:15+08:00",
+  "updated_at": "2026-10-30T21:14:33+08:00"
+}

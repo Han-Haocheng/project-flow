@@ -1,0 +1,30 @@
+{
+  "id": "T-20261030-15",
+  "title": "CLI/工具参数面与契约对齐（拒绝未用参数）",
+  "status": "draft",
+  "owner": "",
+  "goal": "全局 VALUE_FLAGS 被所有命令接受，add 静默忽略 --id/--metrics/--commits/--allow 仍 exit 0；gate add 强制 --id 与契约的自动 slug 不符；heartbeat status 退出码与 flow_heartbeat end 语义分叉。",
+  "scope": {
+    "allow": [
+      "bin/flow.mjs",
+      "index.js",
+      "CONTRACT.md",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "每个命令独立参数白名单：未知或该命令未使用的参数一律 exit 1，不再静默忽略",
+    "exp add --id 明确拒绝或实现；task add --allow 与 gate add 自动 slug 二选一落实（实现或改契约）",
+    "heartbeat status 无 --require-active 的退出码与 CONTRACT §5.1 一致；flow_heartbeat end 与 CLI end 同语义",
+    "未传 --migrate 不再打印“迁移 0”；补参数边界测试"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：第四路 A8（逐条 CLI 实测）。",
+  "created_at": "2026-10-30T20:34:07+08:00",
+  "updated_at": "2026-10-30T20:34:07+08:00",
+  "schema": 1
+}

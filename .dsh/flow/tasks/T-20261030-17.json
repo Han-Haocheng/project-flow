@@ -1,0 +1,28 @@
+{
+  "title": "客户端：任务区显示草稿/待办（当前只列 active + recentDone）",
+  "status": "done",
+  "owner": "b079ee7b-a3a7-475b-a7c3-f7863545c0cd",
+  "goal": "面板 TasksCard 只渲染 tasks.active 与 tasks.recentDone，draft 任务只在“共 N 个任务”里出现，用户会以为任务不存在。补一个“待办（草稿）”区块并显示条数。",
+  "scope": {
+    "allow": [
+      "client.js",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "TasksCard 增加草稿区块：列出 draft 任务（id/标题/owner），带“还有 N 条”截断提示",
+    "zh/en 双语字典键成对新增；无草稿时不留空区块",
+    "大列表（>25）有截断与计数；不改变既有 active/recentDone 行为",
+    "client-render 的 SSR 用例覆盖“有 draft / 无 draft”两种 payload"
+  ],
+  "notes": "来源：用户 2026-10-30 反馈“我看不见任务”。task 卡已迁到主仓库台账。\n\n已交付（worktree 分支）：client.js 新增草稿区块 + 25 行截断 + zh/en 字典；.selftest/client-render 39/39、registration 30/30、poll 15/15。\n注意：服务端 payload 目前不产出 tasks.draft 数组，客户端在缺字段时整块不渲染；真实面板可见性依赖 T-20261030-18。",
+  "schema": 1,
+  "id": "T-20261030-17",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T20:38:21+08:00",
+  "updated_at": "2026-10-30T20:44:59+08:00"
+}

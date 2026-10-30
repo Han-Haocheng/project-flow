@@ -1,0 +1,41 @@
+{
+  "title": "移除 legacy 模式、运行输出与团队投影（只留 store）",
+  "status": "draft",
+  "owner": "",
+  "goal": "按用户确认删除不需要的模块：legacy 读取/迁移、运行输出 runs、旧 gate.log、md 心跳，以及重复的 Agent Teams 只读投影（原生团队 UI 已有）。保留实验、门禁、心跳（只主会话）与技能脚本。删除放在 T-20 之后、合并之前。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "lib/core.mjs",
+      "bin/flow.mjs",
+      "CONTRACT.md",
+      "README.md",
+      "client.js",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "index.js 删除：git trailer 实验读取、markdown 任务读取、legacy 任务 JSON 读取、旧 gate.log、md 心跳、runs 扫描、buildLegacyState 与 legacy 选择分支；未初始化项目只显示空态",
+    "core 删除：migrateTrailers/migrateLegacyTasks、md 心跳读取、legacy 契约加载与 source=md/json 兼容值；心跳固定 json",
+    "bin 删除 init --migrate 与 legacy 参数",
+    "client 删除 runs 卡片、gate.log 卡片、legacy 模式文案/分支；保留实验树、门禁、团队卡、心跳",
+    "CONTRACT 删除 §8 迁移、legacy 模式、md 心跳、runs/gate.log 配置；README 同步",
+    "test/.selftest 删除 legacy 夹具与用例；node --test、host2-tools、harness、client-render/registration/poll 全绿",
+    "预计 index.js 约 -650 行、CONTRACT 约 -80 行；qbank 旧 .agents 文件保留不再读取（已确认无数据丢失）",
+    "index.js 删除 team 投影：buildTeamState/teamMemberRow/teamTaskRow/requestAgent、TEAM_*/MAX_TEAM_* 常量、payload.team 字段、?session= 参数处理",
+    "client.js 删除 TeamCard/normalizeTeam 与相关 zh/en 字典键；轮询 URL 不再携带 session 参数",
+    "CONTRACT 删除 §10.2 team 字段与 §10.1 session 参数；README 同步",
+    "test/.selftest 删除 team 夹具与断言（含 state-store.json 的 team 相关期望）"
+  ],
+  "notes": "依赖 T-20261030-20（同改 index.js）。顺序：T-20 验收 → 本卡 → 合并（T-25）→ T-21。\n\n2026-10-30 追加：用户要求移除面板里的团队投影（原生 Agent Teams UI 已可见）。T-10 的 team 修复项作废，只保留工具校验/相对 root 部分。",
+  "schema": 1,
+  "id": "T-20261030-26",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:13:03+08:00",
+  "updated_at": "2026-10-30T21:55:09+08:00"
+}

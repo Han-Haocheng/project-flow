@@ -1,0 +1,35 @@
+{
+  "id": "T-20261030-11",
+  "title": "文档与测试补盲 + CI",
+  "status": "draft",
+  "owner": "",
+  "goal": "README/CONTRACT 与实现对齐；补事件钩子夹具与所有审查点名的测试盲区；加最小 CI。",
+  "scope": {
+    "allow": [
+      "README.md",
+      "CONTRACT.md",
+      "test/",
+      ".selftest/",
+      ".github/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "README 的用例数/工具数/写操作边界与实现一致；CONTRACT 与实现差异清零",
+    "假 ctx 提供 on/emit/inject/agents/agentTeams/logger，覆盖 start→end、end 无 start、并发子代理、root 反推失效、guard、pre-step、team、Origin 分支",
+    "多进程锁、non-FlowError、win32 条件、形状错误 flow.json、空格分隔 Exp-Id 用例齐备",
+    "CI 跑 node --check + node --test + selftest 四套",
+    "文档写清 heartbeatGate 默认值、关闭方式（config/env）、被拒后的正确动作，并补「无心跳拒写 / 有心跳放行」测试",
+    ".selftest 改为 /tmp 合成 fixture（去掉 demo-alpha/qbank 依赖与写回 tracked），或明确标注 repo-only 并从 README 移除；两种做法都修 files 字段",
+    "统一限额口径：实验 400 vs 树 300、CONTRACT 64 vs 实现 16/3，文档与实现二选一",
+    "README 的“面板不跑 git”改为“每次轮询会读 HEAD/status”"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P3-25/26/27 + B/C 的测试盲点。\n\n第四路新增：heartbeatGate 默认开启但 README/CONTRACT/技能完全未写；.selftest 硬编码本机 demo-alpha/qbank 路径且写回 tracked 快照，不是自包含资产；README 说 400 条而树最多 300 行，CONTRACT 说 64 项而实际 16/3。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T21:55:09+08:00",
+  "schema": 1
+}

@@ -1,0 +1,29 @@
+{
+  "id": "T-20261030-16",
+  "title": "内嵌技能与脚本对齐实现",
+  "status": "draft",
+  "owner": "",
+  "goal": "enforcement.md 写的 gate task / --force --reason 在 gate.py 里不存在；SKILL.md 指向包外 ~/.codex 的 quick_validate.py；usage 技能说 scope 用 --json（实际是输出，CLI --allow 又被忽略）。",
+  "scope": {
+    "allow": [
+      "skills/",
+      "bin/",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "技能里出现的每条命令在仓库内可执行（或明确标注“需项目自行提供”）",
+    "不引用包外路径；结构校验改为包内可运行入口",
+    "scope/--json 等参数说明与实现一致",
+    "smoke_test.sh 扩到覆盖技能示例命令（至少 gate/task/exp 三条主线）"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：第四路 A9。",
+  "created_at": "2026-10-30T20:34:07+08:00",
+  "updated_at": "2026-10-30T20:34:07+08:00",
+  "schema": 1
+}

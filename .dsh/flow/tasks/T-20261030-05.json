@@ -1,0 +1,32 @@
+{
+  "id": "T-20261030-05",
+  "title": "心跳新鲜度与死心跳对账",
+  "status": "draft",
+  "owner": "",
+  "goal": "working 判定加 TTL 与读侧归一化 missed；插件挂载/轮询用 agents.get 对账，把崩溃残留的心跳收敛；面板不再把死会话显示为 working。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "lib/core.mjs",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "heartbeatWorking 校验 updated_at TTL（子代理用更短阈值），过期按 missed 处理，提醒与硬门禁同一口径",
+    "宿主重启/子代理 kill/会话 id 复用时，残留 working 被标 stale 或自动 close，不依赖人工",
+    "面板 heartbeat 卡片对 working/stale/missed 有区分；CONTRACT §10.3 同步",
+    "三场景夹具：崩溃遗留、end 缺失、并发子代理",
+    "自动心跳不得把无关 draft 卡当成当前任务：只有 owner 匹配或显式 task 才挂载（第四路报告疑似挂到了 T-13 设计卡）",
+    "自动心跳不得在 worktree/非主工作区建卡：实测旧技能子代理在 worktree 自动建了与主库撞号的 T-20261030-02（已清理），修复需保证贡献者会话不写台账"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P0-4 + P1-15。\n\n2026-10-30 实测：worktree 台账被自动心跳写入撞号卡，已手工清理；这应作为 T-05 的回归用例。\n\n2026-10-30 范围调整：子会话心跳由 T-20261030-20 接管（心跳只面向主会话）；本卡保留“主会话心跳新鲜度/死心跳对账”。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T21:00:30+08:00",
+  "schema": 1
+}

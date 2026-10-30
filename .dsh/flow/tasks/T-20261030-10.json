@@ -1,0 +1,29 @@
+{
+  "id": "T-20261030-10",
+  "title": "工具契约：defineTool/参数校验与相对 root（team 投影部分已由 T-26 删除）",
+  "status": "draft",
+  "owner": "",
+  "goal": "五个工具接入参数校验；isConcurrencySafe 写成谓词；相对 root 按会话工作目录解析；team 空团队返回 null、blocked 按宿主 ready 语义；?session= 校验归属。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "CONTRACT.md",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "漏 action/非法 enum/非法 steps 返回参数错误（INVALID_ARGS 路径），不再穿到 core 深处",
+    "isConcurrencySafe 为谓词；多个 flow_status 可并行",
+    "相对 root 以会话工作目录为基准；错误信息引导使用绝对路径",
+    "client 与服务端统一 blocked 谓词：ready !== true && blockedBy.length > 0"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P1-6/7/8。\n\n第四路：client.js 的 blocked 只按 ready===false，与服务端（要求 blockedBy 非空）分叉，且所有 selftest fixture 的 team 都是 null，团队路径零测试；state-store.json 连 team 字段都没有。\n\n2026-10-30 范围收敛：team 投影将整体删除（T-26），本卡不再修 team null/blocked 与 ?session= 归属，只保留 defineTool/schema 校验、isConcurrencySafe、相对 root。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T21:14:33+08:00",
+  "schema": 1
+}

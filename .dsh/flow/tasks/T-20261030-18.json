@@ -1,0 +1,29 @@
+{
+  "title": "服务端 payload 补 tasks.draft（面板草稿区才能显示）",
+  "status": "done",
+  "owner": "2b4e8852-2f6f-456a-a24f-7a4b25048b2b",
+  "goal": "index.js 的 buildStoreState / buildLegacyState 只产出 active 与 recentDone，draft 任务只进 counts。补 draft 数组（含 id/title/owner/updated_at，按 updated_at 倒序、有上限），让 T-17 的客户端草稿区在真实 payload 下生效。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "state payload 的 tasks 增加 draft: [{id,title,owner,updated_at}]，按 updated_at 倒序，上限 50",
+    "store 与 legacy 两条构建路径都补；缺字段的旧快照/夹具不会让客户端报错",
+    "host2-tools 增加“有 2 个 draft → payload.tasks.draft 长度 2”断言；client-render 用真实 payload 回放草稿区",
+    "不影响 active/recentDone/total 的既有语义"
+  ],
+  "notes": "来源：T-17 子代理发现（2026-10-30）。与 T-02 同在 index.js，必须等 T-02 完成后开工。\n\n已验收（2026-10-30）：node --check OK；node --test 79/79；host2-tools ALL PASS（修掉一条与技能重写相撞的陈旧断言后）；client-render 39/39。\n\npayload.tasks.draft 形状 {id,title,owner,updated_at}，倒序、上限 50；store/legacy 两条路径都有；total/counts/active/recentDone 未变。",
+  "schema": 1,
+  "id": "T-20261030-18",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T20:44:59+08:00",
+  "updated_at": "2026-10-30T21:07:01+08:00"
+}

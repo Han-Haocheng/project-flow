@@ -1,0 +1,28 @@
+{
+  "id": "T-20261030-06",
+  "title": "客户端：轮询链式自调度 + 写操作回执",
+  "status": "draft",
+  "owner": "",
+  "goal": "修掉“固定 2.5s + 每次先 abort”的自噬轮询；门禁开关乐观值不被旧快照清空；初始化流程用完整响应并给出可见回执。",
+  "scope": {
+    "allow": [
+      "client.js",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "响应慢于 2.5s 时不再自我取消：上一次完成后再排下一次（或 in-flight 守卫），首帧必达；abort 只用于卸载",
+    "gate override 带 seq/时间戳，旧快照不清新值；成功/失败都有可见回执（role=status）",
+    "初始化使用 alreadyInitialized/created/warnings；stale 且 not-initialized 时提供初始化入口；按钮等待首个 ok 快照后才恢复",
+    "手动刷新的 busy 态不再被已 abort 请求提前清除"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P1-9/10。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:30:40+08:00",
+  "schema": 1
+}

@@ -1,0 +1,32 @@
+{
+  "id": "T-20261030-08",
+  "title": "迁移与 init 原子性 + ID 去重",
+  "status": "draft",
+  "owner": "",
+  "goal": "init/种子/迁移的“读+写”进同一把锁；修 Exp-Id 分隔与 legacy id 迁移；updated_at 回退 mtime；解决同日 ID 跨分支撞名。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "bin/flow.mjs",
+      "test/",
+      "CONTRACT.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "init/seed/migrate 全程持锁，锁内重算 existing；面板初始化与 task add 并发不覆盖记录",
+    "Exp-Id 支持逗号与空白分隔；legacy id（H1-baseline 形态）迁移走专用路径；缺 updated_at 用 mtime",
+    "同日 ID 跨分支/多 worktree 撞名有明确方案（分支后缀或 ULID），CONTRACT 与 skills 同步",
+    "迁移计数/跳过数与实际文件一致",
+    "trailer 迁移用 EXP_ID_RE 严格校验；按 /[,\\s]+/ 拆分；非法 id 只 warning 不导入",
+    "FOO 与 “E-…-01 E-…-02” 两种用例进测试（现有只测 bad id!）"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：审查 P1-11 + 我列的 ID 撞名。\n\n第四路实测：Exp-Id: FOO 会导入成 experiments/FOO.json；空格分隔多个 id 全丢；CONTRACT §8.1 要求 ^[A-Z]+-\\d{8}-\\d{2}$ 且逗号/空白分隔。",
+  "created_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-30T20:34:07+08:00",
+  "schema": 1
+}

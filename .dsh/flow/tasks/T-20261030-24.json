@@ -1,0 +1,30 @@
+{
+  "title": "技能元数据中文化（frontmatter + SKILL_META 兜底）",
+  "status": "draft",
+  "owner": "",
+  "goal": "用户确认三个技能的 description / when-to-use 统一中文：给 project-flow-init / project-flow-usage 补中文 frontmatter，协作技能保持中文；同步 index.js SKILL_META 的中文兜底，避免 frontmatter 写坏时回落英文。",
+  "scope": {
+    "allow": [
+      "skills/",
+      "index.js",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "三个技能 frontmatter 的 description/when-to-use 为单行中文（解析器只认单行标量）",
+    "index.js SKILL_META 兜底同步中文，name 保持英文",
+    "host2-tools 断言改为校验 frontmatter 来源与中文存在性，不写死完整句式",
+    "node --test 与 host2-tools 全绿"
+  ],
+  "notes": "用户 2026-10-30 确认统一中文；依赖 T-20261030-20（同改 index.js）。",
+  "schema": 1,
+  "id": "T-20261030-24",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-10-30T21:09:20+08:00",
+  "updated_at": "2026-10-30T21:09:20+08:00"
+}
