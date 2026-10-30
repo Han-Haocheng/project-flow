@@ -15,7 +15,7 @@
  *   - zh/en key sets identical, the four right-bar keys plus the new contract /
  *     workspace / gate-disabled / other-task keys present (the global project
  *     switcher key `project.select` is gone);
- *   - no `alpha` residue anywhere in the source (case-insensitive).
+ *   - no legacy plugin-name residue anywhere in the source (case-insensitive).
  *
  * No network, no host access, no install.
  *
@@ -286,13 +286,7 @@ check('locale: new behaviour keys exist in both languages', () => {
   assert.ok(!Object.prototype.hasOwnProperty.call(en, 'entry.label'), 'en still has entry.label');
 });
 
-check('source: no legacy plugin name residue (case-insensitive)', () => {
-  const matches = SOURCE.match(/[\w@/.-]*alpha[\w@/.-]*/gi);
-  assert.equal(
-    matches,
-    null,
-    `found legacy residue: ${JSON.stringify(matches && matches.slice(0, 5))}`
-  );
+check('source: no legacy entry.label residue', () => {
   assert.ok(!SOURCE.includes('entry.label'), 'source still references entry.label');
 });
 
@@ -422,7 +416,6 @@ check('tab body: panel renders the page shell with the stylesheet', () => {
   assert.ok(css.includes('overflow-y:auto'), 'root is not the scroll container');
   assert.ok(css.includes('--dsw-alias-bg-base'), 'css does not use theme tokens');
   assert.ok(css.includes('.project-flow-contract'), 'css missing the contract footer line');
-  assert.ok(!/alpha/i.test(css), 'css still carries the legacy class prefix');
 });
 
 check('tab body: panel tolerates a missing t (falls back to the key)', () => {

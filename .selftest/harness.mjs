@@ -1,22 +1,30 @@
-// project-flow Host self-test harness — local, no deps.
+// project-flow Host self-test harness — local, no deps, self-contained.
 //
 // Loads index.js with a mock Cordis context (webServer + workspaceRegistry),
-// then drives the two registered routes — explicit `?root=<dir>`, process-cwd,
-// the init write and error paths — with plain request/response doubles. Every
-// response body is written to .selftest/state-*.json for inspection.
+// then drives the registered routes — explicit `?root=<dir>`, process-cwd, the
+// init write and error paths — with plain request/response doubles.
+//
+// Every fixture is synthesized under os.tmpdir(): two initialized store
+// projects (a full one and a minimal one), a legacy manifest, a broken
+// manifest, an uninitialized workspace and a stranger directory. Response
+// bodies are written to a throwaway directory for inspection, never back into
+// the tracked .selftest/ tree.
 
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const pkgRoot = dirname(here)
-const alpha = '/tmp/pf-demo/alpha'
-const IQB = '/tmp/pf-demo/qbank'
-const PLAIN = '/tmp/project-flow-selftest/plain'
+const TMP = mkdtempSync(join(tmpdir(), 'project-flow-harness-'))
+const STATE = join(TMP, 'state')
+const ALPHA = join(TMP, 'alpha')
+const QBANK = join(TMP, 'qbank')
+const PLAIN = join(TMP, 'plain')
 const PLAIN_SUB = PLAIN + '/sub'
-const INIT = '/tmp/project-flow-selftest/init'
-const STRANGER = '/tmp/project-flow-selftest/stranger'
+const INIT = join(TMP, 'init')
+const STRANGER = join(TMP, 'stranger')
 const ORIGIN = 'http://127.0.0.1:44453'
 const TITLES = { [PLAIN]: 'PlainWorkspace', [INIT]: 'InitWorkspace' }
 
@@ -130,7 +138,7 @@ async function call(route, { method = 'GET', url, origin, body } = {}) {
 }
 
 function save(name, payload) {
-  writeFileSync(join(here, `state-${name}.json`), JSON.stringify(payload, null, 2))
+  writeFileSync(join(STATE, `state-${name}.json`), JSON.stringify(payload, null, 2))
 }
 
 // --------------------------------------------------------------- assertions
@@ -156,9 +164,9 @@ function summary(label, res) {
   )
 }
 
-// ------------------------------------------------------------ fixture: fake
+// ------------------------------------------------- fixture: fake (legacy)
 
-const fakeRoot = '/tmp/project-flow-selftest/fake'
+const fakeRoot = join(TMP, 'fake')
 mkdirSync(join(fakeRoot, 'ledger/tasks'), { recursive: true })
 mkdirSync(join(fakeRoot, 'out'), { recursive: true })
 writeFileSync(
@@ -178,9 +186,154 @@ writeFileSync(
   ),
 )
 
-const brokenRoot = '/tmp/project-flow-selftest/broken'
+const brokenRoot = join(TMP, 'broken')
 mkdirSync(brokenRoot, { recursive: true })
 writeFileSync(join(brokenRoot, 'flow.json'), '{ this is not json }')
+
+// ------------------------------------------------- fixtures: store projects
+//
+// Store mode is a directory with `.dsh/flow/flow.json` plus the collections the
+// manifest declares. Both projects below are synthesized from scratch, so the
+// harness never depends on a developer machine's real project paths.
+
+function writeStoreManifest(root, { name, gateLog = null }) {
+  mkdirSync(join(root, '.dsh/flow/experiments'), { recursive: true })
+  mkdirSync(join(root, '.dsh/flow/tasks'), { recursive: true })
+  mkdirSync(join(root, '.dsh/flow/gates'), { recursive: true })
+  mkdirSync(join(root, '.dsh/flow/logs'), { recursive: true })
+  mkdirSync(join(root, '.agents/heartbeat'), { recursive: true })
+  mkdirSync(join(root, 'out'), { recursive: true })
+  writeFileSync(
+    join(root, '.dsh/flow/flow.json'),
+    JSON.stringify(
+      {
+        schema: 2,
+        name,
+        store: { root: '.dsh/flow' },
+        experiments: { source: 'store', dir: '.dsh/flow/experiments', fallbackTrailers: true },
+        tasks: { source: 'json', dir: '.dsh/flow/tasks', current: null, recentLimit: 6 },
+        gates: { dir: '.dsh/flow/gates', logs: '.dsh/flow/logs' },
+        gate: { log: gateLog },
+        heartbeats: { source: 'md', dir: '.agents/heartbeat', max: 20 },
+        runs: { dirs: ['out'], maxDepth: 3, maxAgeMinutes: 15, max: 4, tailLines: 15 },
+      },
+      null,
+      2,
+    ),
+  )
+}
+
+function writeStoreRecord(root, collection, record) {
+  writeFileSync(join(root, '.dsh/flow', collection, `${record.id}.json`), JSON.stringify(record, null, 2))
+}
+
+function storeExperiment(id, overrides = {}) {
+  return {
+    schema: 1,
+    id,
+    title: `实验 ${id}`,
+    hypothesis: 'A 改善 B',
+    factor: 'focus',
+    expected: 'a<=1',
+    scale: 'small',
+    status: 'open',
+    measured: '',
+    metrics: {},
+    commits: [],
+    notes: '',
+    parent: null,
+    created_at: '2026-10-28T10:00:00+08:00',
+    updated_at: '2026-10-28T10:00:00+08:00',
+    ...overrides,
+  }
+}
+
+function storeTask(id, overrides = {}) {
+  return {
+    schema: 1,
+    id,
+    title: `任务 ${id}`,
+    status: 'draft',
+    owner: '',
+    goal: '',
+    scope: { allow: [], deny: [] },
+    acceptance: [],
+    checkpoints: [],
+    commits: [],
+    notes: '',
+    created_at: '2026-10-28T10:00:00+08:00',
+    updated_at: '2026-10-28T10:00:00+08:00',
+    ...overrides,
+  }
+}
+
+function storeHeartbeat(session, overrides = {}) {
+  return {
+    schema: 1,
+    session,
+    agent: 'lead',
+    status: 'working',
+    goal: 'demo 目标',
+    task: null,
+    claims: [],
+    last_action: '推进 demo',
+    updated_at: new Date().toISOString(),
+    ...overrides,
+  }
+}
+
+// alpha: a full store project — parent/child experiments, tasks in all three
+// open states, one gate definition, an enabled gate log and one heartbeat.
+writeStoreManifest(ALPHA, { name: 'demo-alpha', gateLog: '.dsh/flow/gate.log' })
+writeStoreRecord(
+  ALPHA,
+  'experiments',
+  storeExperiment('E-20261028-01', {
+    title: '基线实验',
+    status: 'confirmed',
+    measured: '+3%',
+    commits: ['abc1234'],
+  }),
+)
+writeStoreRecord(ALPHA, 'experiments', storeExperiment('E-20261028-02', { title: '子实验', parent: 'E-20261028-01' }))
+writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-01', { title: '已完成任务', status: 'done' }))
+writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-02', { title: '进行中任务', status: 'active' }))
+writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-03', { title: '草稿任务' }))
+writeStoreRecord(ALPHA, 'gates', {
+  schema: 1,
+  id: 'smoke',
+  title: '冒烟门禁',
+  phase: 'commit',
+  enabled: true,
+  steps: [{ id: 'unit', run: 'true', expect: 'exit 0', timeoutSeconds: 60 }],
+  created_at: '2026-10-28T10:00:00+08:00',
+  updated_at: '2026-10-28T10:00:00+08:00',
+})
+writeFileSync(join(ALPHA, '.dsh/flow/gate.log'), 'gate: smoke ok\nrun: 1 passed in 0.1s\n')
+writeFileSync(
+  join(ALPHA, '.agents/heartbeat', 'session-alpha.json'),
+  JSON.stringify(storeHeartbeat('session-alpha', { goal: 'alpha 目标', task: 'T-20261028-02' })),
+)
+
+// qbank: a second store project with no experiments, no gate log, two tasks
+// and a JSON heartbeat that the panel renders through the json adapter.
+writeStoreManifest(QBANK, { name: 'demo-qbank' })
+writeStoreRecord(QBANK, 'tasks', storeTask('T-20261028-11', { title: '已完成评审', status: 'done' }))
+writeStoreRecord(QBANK, 'tasks', storeTask('T-20261028-12', { title: '进行中实现', status: 'active' }))
+writeFileSync(
+  join(QBANK, '.agents/heartbeat', 'session-qbank.json'),
+  JSON.stringify(
+    storeHeartbeat('session-qbank', {
+      status: 'aligned',
+      task: null,
+      last_action: '等待复核',
+      updated_at: new Date(Date.now() - 3600 * 1000).toISOString(),
+    }),
+  ),
+)
+
+// Response bodies go to a throwaway directory so a run never dirties the tree.
+mkdirSync(STATE, { recursive: true })
 
 // A registered workspace with no ledger at all, plus one of its subdirectories.
 mkdirSync(PLAIN_SUB, { recursive: true })
@@ -188,11 +341,10 @@ mkdirSync(PLAIN_SUB, { recursive: true })
 mkdirSync(STRANGER, { recursive: true })
 // A registered workspace that starts empty and is initialized through POST below.
 mkdirSync(INIT, { recursive: true })
-rmSync(join(INIT, '.dsh'), { recursive: true, force: true })
 
 // --------------------------------------------------------------------- run
 
-apply(makeCtx([alpha, IQB, fakeRoot, brokenRoot, PLAIN, INIT]))
+apply(makeCtx([ALPHA, QBANK, fakeRoot, brokenRoot, PLAIN, INIT]))
 check('routes registered', routes.length === 3, `routes=${routes.length}`)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
 const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
@@ -229,49 +381,127 @@ check('cwd plain: root null', cwdPlain.json?.root === null)
 
 process.chdir(originalCwd)
 
-const alpha = await call(route, { url: `${route.path}?root=${encodeURIComponent(alpha)}` })
+// ---------------------------------------- initialized store project (alpha)
+
+const alpha = await call(route, { url: `${route.path}?root=${encodeURIComponent(ALPHA)}` })
 save('alpha', alpha.json)
 summary('alpha', alpha)
 check('alpha: 200 + ok', alpha.status === 200 && alpha.json?.ok === true)
-const alphaSource = alpha.json?.contract?.source
 check(
-  'alpha: contract.source is defaults or a store contract',
-  alphaSource === 'defaults' || alphaSource === '.dsh/flow/flow.json',
-  alphaSource,
+  'alpha: contract.source is the store contract',
+  alpha.json?.contract?.source === '.dsh/flow/flow.json',
+  alpha.json?.contract?.source,
 )
-check('alpha: contract name alpha', alpha.json?.contract?.name === 'alpha', alpha.json?.contract?.name)
-check('alpha: experiments.total >= 1', alpha.json?.experiments?.total >= 1, alpha.json?.experiments?.total)
-check('alpha: tasks.total >= 49', alpha.json?.tasks?.total >= 49, alpha.json?.tasks?.total)
-check('alpha: gate is a log object or disabled (null)', alpha.json?.gate === null || (Array.isArray(alpha.json.gate?.lines) && alpha.json.gate.lines.length > 0), alpha.json?.gate === null ? 'null' : 'lines')
-check('alpha: gate has mtime/size when enabled', alpha.json?.gate === null || (typeof alpha.json.gate.mtime === 'number' && alpha.json.gate.size > 0))
-check('alpha: heartbeats non-empty', Array.isArray(alpha.json?.heartbeats) && alpha.json.heartbeats.length > 0)
-check('alpha: head.sha present', typeof alpha.json?.head?.sha === 'string' && alpha.json.head.sha.length >= 7, JSON.stringify(alpha.json?.head))
-check('alpha: tasks.current is a string or absent', alpha.json?.tasks?.current === null || typeof alpha.json?.tasks?.current === 'string', alpha.json?.tasks?.current)
-check('alpha: run shape bounded', alpha.json?.runs.length <= 4)
-check('alpha: root is the requested workspace', alpha.json?.root === alpha, alpha.json?.root)
+check('alpha: contract name demo-alpha', alpha.json?.contract?.name === 'demo-alpha', alpha.json?.contract?.name)
+check('alpha: contract schema 2', alpha.json?.contract?.schema === 2, alpha.json?.contract?.schema)
+check('alpha: experiments.total == 2', alpha.json?.experiments?.total === 2, alpha.json?.experiments?.total)
+check(
+  'alpha: experiment status counts',
+  alpha.json?.experiments?.counts?.confirmed === 1 && alpha.json?.experiments?.counts?.open === 1,
+  JSON.stringify(alpha.json?.experiments?.counts),
+)
+check(
+  'alpha: parent link exposed in the tree',
+  JSON.stringify(alpha.json?.experiments?.tree ?? []).includes('E-20261028-02'),
+  JSON.stringify(alpha.json?.experiments?.tree),
+)
+check('alpha: tasks.total == 3', alpha.json?.tasks?.total === 3, alpha.json?.tasks?.total)
+check(
+  'alpha: task status counts',
+  alpha.json?.tasks?.counts?.active === 1 &&
+    alpha.json?.tasks?.counts?.done === 1 &&
+    alpha.json?.tasks?.counts?.draft === 1,
+  JSON.stringify(alpha.json?.tasks?.counts),
+)
+check(
+  'alpha: recentDone lists the done task',
+  alpha.json?.tasks?.recentDone?.length === 1 && alpha.json.tasks.recentDone[0].id === 'T-20261028-01',
+  JSON.stringify(alpha.json?.tasks?.recentDone),
+)
+check('alpha: tasks.current is null', alpha.json?.tasks?.current === null, alpha.json?.tasks?.current)
+check(
+  'alpha: gates list one definition',
+  alpha.json?.gates?.length === 1 && alpha.json.gates[0].id === 'smoke',
+  JSON.stringify(alpha.json?.gates),
+)
+check(
+  'alpha: gate log object with lines',
+  Array.isArray(alpha.json?.gate?.lines) && alpha.json.gate.lines.length === 2,
+  alpha.json?.gate === null ? 'null' : JSON.stringify(alpha.json?.gate?.lines),
+)
+check(
+  'alpha: gate has mtime/size when enabled',
+  typeof alpha.json?.gate?.mtime === 'number' && alpha.json.gate.size > 0,
+  JSON.stringify(alpha.json?.gate),
+)
+check(
+  'alpha: one heartbeat with statusLine',
+  Array.isArray(alpha.json?.heartbeats) &&
+    alpha.json.heartbeats.length === 1 &&
+    typeof alpha.json.heartbeats[0].statusLine === 'string' &&
+    alpha.json.heartbeats[0].statusLine.startsWith('working · '),
+  JSON.stringify(alpha.json?.heartbeats),
+)
+check(
+  'alpha: head nulls (non-git)',
+  JSON.stringify(alpha.json?.head) === JSON.stringify({ sha: null, subject: null, branch: null, dirty: null }),
+  JSON.stringify(alpha.json?.head),
+)
+check('alpha: runs empty', Array.isArray(alpha.json?.runs) && alpha.json.runs.length === 0)
+check('alpha: root is the requested workspace', alpha.json?.root === ALPHA, alpha.json?.root)
 check('alpha: exactly one root listed', alpha.json?.roots?.length === 1, JSON.stringify(alpha.json?.roots))
-
-const iqb = await call(route, { url: `${route.path}?root=${encodeURIComponent(IQB)}` })
-save('iqb', iqb.json)
-summary('iqb', iqb)
-check('iqb: 200 + ok', iqb.status === 200 && iqb.json?.ok === true)
-check('iqb: contract.source flow.json', iqb.json?.contract?.source === 'flow.json', iqb.json?.contract?.source)
-check('iqb: contract name qbank', iqb.json?.contract?.name === 'qbank', iqb.json?.contract?.name)
-check('iqb: tasks.total == 2', iqb.json?.tasks?.total === 2, iqb.json?.tasks?.total)
-check('iqb: tasks source markdown (other count 2)', iqb.json?.tasks?.counts?.other === 2, JSON.stringify(iqb.json?.tasks?.counts))
-check('iqb: task titles from markdown', iqb.json?.tasks?.recentDone.length === 0 && Array.isArray(iqb.json?.tasks?.active))
-check('iqb: gate == null', iqb.json?.gate === null)
-check('iqb: experiments.total == 0', iqb.json?.experiments?.total === 0, iqb.json?.experiments?.total)
-check('iqb: heartbeats from json adapter', Array.isArray(iqb.json?.heartbeats) && iqb.json.heartbeats.length === 1, iqb.json?.heartbeats?.length)
 check(
-  'iqb: heartbeat statusLine joins status + last_action',
-  typeof iqb.json?.heartbeats?.[0]?.statusLine === 'string' &&
-    iqb.json.heartbeats[0].statusLine.startsWith('aligned · '),
-  iqb.json?.heartbeats?.[0]?.statusLine?.slice(0, 60),
+  'alpha: root name comes from the store contract',
+  alpha.json?.roots?.[0]?.name === 'demo-alpha',
+  JSON.stringify(alpha.json?.roots),
 )
-check('iqb: heartbeat age from updated_at', iqb.json?.heartbeats?.[0]?.ageSeconds > 1000, iqb.json?.heartbeats?.[0]?.ageSeconds)
-check('iqb: root is the requested workspace', iqb.json?.root === IQB, iqb.json?.root)
-check('iqb: exactly one root listed', iqb.json?.roots?.length === 1, JSON.stringify(iqb.json?.roots))
+
+// ---------------------------------- second store project, no gate (qbank)
+
+const qbank = await call(route, { url: `${route.path}?root=${encodeURIComponent(QBANK)}` })
+save('qbank', qbank.json)
+summary('qbank', qbank)
+check('qbank: 200 + ok', qbank.status === 200 && qbank.json?.ok === true)
+check(
+  'qbank: contract.source is the store contract',
+  qbank.json?.contract?.source === '.dsh/flow/flow.json',
+  qbank.json?.contract?.source,
+)
+check('qbank: contract name demo-qbank', qbank.json?.contract?.name === 'demo-qbank', qbank.json?.contract?.name)
+check('qbank: tasks.total == 2', qbank.json?.tasks?.total === 2, qbank.json?.tasks?.total)
+check(
+  'qbank: task status counts (active 1, done 1, other 0)',
+  qbank.json?.tasks?.counts?.active === 1 &&
+    qbank.json?.tasks?.counts?.done === 1 &&
+    qbank.json?.tasks?.counts?.other === 0,
+  JSON.stringify(qbank.json?.tasks?.counts),
+)
+check(
+  'qbank: recentDone lists the done task',
+  qbank.json?.tasks?.recentDone?.length === 1 && qbank.json.tasks.recentDone[0].id === 'T-20261028-11',
+  JSON.stringify(qbank.json?.tasks?.recentDone),
+)
+check('qbank: gate == null', qbank.json?.gate === null)
+check('qbank: experiments.total == 0', qbank.json?.experiments?.total === 0, qbank.json?.experiments?.total)
+check(
+  'qbank: heartbeats from json adapter',
+  Array.isArray(qbank.json?.heartbeats) && qbank.json.heartbeats.length === 1,
+  qbank.json?.heartbeats?.length,
+)
+check(
+  'qbank: heartbeat statusLine joins status + last_action',
+  typeof qbank.json?.heartbeats?.[0]?.statusLine === 'string' &&
+    qbank.json.heartbeats[0].statusLine.startsWith('aligned · '),
+  qbank.json?.heartbeats?.[0]?.statusLine?.slice(0, 60),
+)
+check('qbank: heartbeat age from updated_at', qbank.json?.heartbeats?.[0]?.ageSeconds > 1000, qbank.json?.heartbeats?.[0]?.ageSeconds)
+check('qbank: root is the requested workspace', qbank.json?.root === QBANK, qbank.json?.root)
+check('qbank: exactly one root listed', qbank.json?.roots?.length === 1, JSON.stringify(qbank.json?.roots))
+check(
+  'qbank: root name comes from the store contract',
+  qbank.json?.roots?.[0]?.name === 'demo-qbank',
+  JSON.stringify(qbank.json?.roots),
+)
 
 const fake = await call(route, { url: `${route.path}?root=${encodeURIComponent(fakeRoot)}` })
 save('fake', fake.json)
@@ -333,11 +563,11 @@ check('POST: 405', post.status === 405)
 check('POST: allow header', post.headers.allow === 'GET')
 check('POST: code method-not-allowed', post.json?.error?.code === 'method-not-allowed')
 
-const evil = await call(route, { url: `${route.path}?root=${encodeURIComponent(alpha)}`, origin: 'https://evil.example' })
+const evil = await call(route, { url: `${route.path}?root=${encodeURIComponent(ALPHA)}`, origin: 'https://evil.example' })
 check('foreign origin: 403', evil.status === 403)
 check('foreign origin: code forbidden', evil.json?.error?.code === 'forbidden')
 
-const sameOrigin = await call(route, { url: `${route.path}?root=${encodeURIComponent(alpha)}`, origin: ORIGIN })
+const sameOrigin = await call(route, { url: `${route.path}?root=${encodeURIComponent(ALPHA)}`, origin: ORIGIN })
 check('same origin: 200', sameOrigin.status === 200 && sameOrigin.json?.ok === true)
 
 const unknown = await call(route, { url: `${route.path}?root=${encodeURIComponent(STRANGER)}` })
@@ -429,5 +659,6 @@ check('no-project: roots empty', Array.isArray(none.json?.roots) && none.json.ro
 check('no-project: root null', none.json?.root === null)
 process.chdir(originalCwd)
 
+console.log(`responses written to ${STATE}`)
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exitCode = failed === 0 ? 0 : 1

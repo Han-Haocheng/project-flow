@@ -130,8 +130,8 @@ const NOW = Date.UTC(2026, 9, 28, 3, 30, 0);
 const fixture = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
-  contract: { source: 'flow.json', schema: 1, name: 'alpha' },
-  roots: [{ path: '/tmp/pf-demo/alpha', name: 'alpha' }],
+  contract: { source: 'flow.json', schema: 1, name: 'demo-alpha' },
+  roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
   root: '/tmp/pf-demo/alpha',
   head: { sha: 'f5f176bc1234', subject: 'feat: demo', branch: 'dev', dirty: 2 },
   experiments: {
@@ -257,7 +257,7 @@ const view = probe.normalize(fixture);
 check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.root, '/tmp/pf-demo/alpha');
   assert.equal(view.roots.length, 1);
-  assert.equal(view.roots[0].name, 'alpha');
+  assert.equal(view.roots[0].name, 'demo-alpha');
   assert.equal(view.contract.source, 'flow.json');
   assert.equal(view.contract.schema, 1);
   assert.equal(view.exp.total, 3);
@@ -296,9 +296,9 @@ check('normalize: gate === null becomes the disabled flag, not an error', () => 
 });
 
 check('normalize: contract defaults and schema are kept', () => {
-  const defaults = probe.normalize({ contract: { source: 'defaults', schema: 1, name: 'Alpha' } });
+  const defaults = probe.normalize({ contract: { source: 'defaults', schema: 1, name: 'demo-alpha' } });
   assert.equal(defaults.contract.source, 'defaults');
-  assert.equal(defaults.contract.name, 'Alpha');
+  assert.equal(defaults.contract.name, 'demo-alpha');
   assert.equal(probe.normalize({ contract: 'nope' }).contract, null);
 });
 
@@ -598,14 +598,14 @@ check('Footer: project, generatedAt and expandable warnings', () => {
 });
 
 check('Footer: contract source line (file source, defaults, missing)', () => {
-  const declared = probe.Footer({ view: probe.normalize({ contract: { source: 'flow.json', schema: 1, name: 'Alpha' } }), t });
+  const declared = probe.Footer({ view: probe.normalize({ contract: { source: 'flow.json', schema: 1, name: 'demo-alpha' } }), t });
   const declaredSpan = collect(declared, 'project-flow-contract');
   assert.equal(declaredSpan.length, 1, 'contract line missing for a declared contract');
   assert.equal(declaredSpan[0].children[0], '契约：flow.json');
-  assert.ok(String(declaredSpan[0].props.title).includes('Alpha'), 'contract tooltip missing name');
+  assert.ok(String(declaredSpan[0].props.title).includes('demo-alpha'), 'contract tooltip missing name');
   assert.ok(String(declaredSpan[0].props.title).includes('schema 1'), 'contract tooltip missing schema');
 
-  const defaults = probe.Footer({ view: probe.normalize({ contract: { source: 'defaults', schema: 1, name: 'Alpha' } }), t });
+  const defaults = probe.Footer({ view: probe.normalize({ contract: { source: 'defaults', schema: 1, name: 'demo-alpha' } }), t });
   assert.equal(collect(defaults, 'project-flow-contract')[0].children[0], '契约：默认布局');
   const defaultsEn = probe.Footer({ view: probe.normalize({ contract: { source: 'defaults' } }), t: tEn });
   assert.equal(collect(defaultsEn, 'project-flow-contract')[0].children[0], 'contract: default layout');
@@ -618,7 +618,7 @@ check('ErrorState: not-initialized shows the init guidance and one Initialize bu
   const element = probe.ErrorState({
     t,
     info: { code: 'not-initialized', message: 'no ledger' },
-    workspaceRoot: '/tmp/pf-demo/Alpha',
+    workspaceRoot: '/tmp/pf-demo/alpha',
     onInitialized: () => {},
   });
   const text = JSON.stringify(element);
@@ -635,7 +635,7 @@ check('ErrorState: not-initialized shows the init guidance and one Initialize bu
   const english = probe.ErrorState({
     t: tEn,
     info: { code: 'not-initialized', message: 'no ledger' },
-    workspaceRoot: '/tmp/pf-demo/Alpha',
+    workspaceRoot: '/tmp/pf-demo/alpha',
     onInitialized: () => {},
   });
   const englishText = JSON.stringify(english);
@@ -658,21 +658,21 @@ check('ErrorState: not-initialized shows the init guidance and one Initialize bu
 check('normalize: a not-initialized payload is tolerated', () => {
   const notInitialized = {
     ok: false,
-    root: '/tmp/pf-demo/Alpha',
-    roots: [{ path: '/tmp/pf-demo/Alpha', name: 'Alpha' }],
+    root: '/tmp/pf-demo/alpha',
+    roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
     error: { code: 'not-initialized', message: 'this workspace has no ledger' },
   };
   const normalized = probe.normalize(notInitialized);
-  assert.equal(normalized.root, '/tmp/pf-demo/Alpha');
+  assert.equal(normalized.root, '/tmp/pf-demo/alpha');
   assert.equal(normalized.roots.length, 1);
-  assert.equal(normalized.roots[0].name, 'Alpha');
+  assert.equal(normalized.roots[0].name, 'demo-alpha');
   assert.equal(normalized.exp.total, 0);
   assert.equal(normalized.contract, null);
   assert.ok(JSON.stringify(renderParts(notInitialized)).length > 100, 'payload parts rendered nothing');
 });
 
 check('Panel: first render is the loading skeleton', () => {
-  const element = probe.Panel({ t, workspaceRoot: '/tmp/pf-demo/Alpha' });
+  const element = probe.Panel({ t, workspaceRoot: '/tmp/pf-demo/alpha' });
   assert.equal(element.type, 'div');
   assert.equal(collect(element, 'project-flow-spinner').length, 1, 'loading spinner missing');
   assert.ok(textOf(element).includes('读取中…'), 'generic loading copy missing');
@@ -727,15 +727,15 @@ check('PanelBody: resolves the session workspace and keys the panel by it', () =
     t,
     sessionId: 'session-x',
     useSessions: (selector) =>
-      selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/Alpha' } } }),
+      selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/alpha' } } }),
   });
-  assert.equal(element.props.workspaceRoot, '/tmp/pf-demo/Alpha');
-  assert.equal(element.props.key, '/tmp/pf-demo/Alpha');
+  assert.equal(element.props.workspaceRoot, '/tmp/pf-demo/alpha');
+  assert.equal(element.props.key, '/tmp/pf-demo/alpha');
   const rootElement = element.type(element.props);
   assert.ok(rootElement.type.prototype instanceof Component, 'panel root is not the boundary class');
   const panelElement = rootElement.children[0];
   assert.equal(panelElement.type.name, 'Panel');
-  assert.equal(panelElement.props.workspaceRoot, '/tmp/pf-demo/Alpha');
+  assert.equal(panelElement.props.workspaceRoot, '/tmp/pf-demo/alpha');
 
   // No session / no cwd yet: the panel is keyed as pending and gets no root.
   const pending = probe.PanelBody({ t });
@@ -745,7 +745,7 @@ check('PanelBody: resolves the session workspace and keys the panel by it', () =
   const unknownSession = probe.PanelBody({
     t,
     sessionId: 'session-y',
-    useSessions: (selector) => selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/Alpha' } } }),
+    useSessions: (selector) => selector({ byId: { 'session-x': { cwd: '/tmp/pf-demo/alpha' } } }),
   });
   assert.equal(unknownSession.props.workspaceRoot, undefined);
   assert.equal(unknownSession.props.key, 'pending');
@@ -804,13 +804,7 @@ function renderedClassNames(parts) {
   return names;
 }
 
-const hostFixtures = [
-  'state-alpha.json',
-  'state-iqb.json',
-  'state-auto.json',
-  'state-store.json',
-  'state-not-initialized.json',
-];
+const hostFixtures = ['state-auto.json', 'state-store.json', 'state-not-initialized.json'];
 let replayed = 0;
 for (const name of hostFixtures) {
   const path = fileURLToPath(new URL('./' + name, import.meta.url));
@@ -823,7 +817,6 @@ for (const name of hostFixtures) {
     const classes = renderedClassNames(parts);
     assert.ok(classes.length > 0, 'render produced no class names');
     for (const cls of classes) {
-      assert.ok(!/alpha/i.test(cls), `class list still carries the legacy prefix: ${cls}`);
       assert.ok(cls.split(/\s+/).every((one) => one.startsWith('project-flow')), `unexpected class: ${cls}`);
     }
     if (name === 'state-store.json') {

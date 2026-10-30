@@ -117,7 +117,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   patch 里 → `invalid`。
 - 未知字段保留。
 
-### 3.2 任务 `tasks/T-YYYYMMDD-NN.json`（兼容既有 alpha 台账）
+### 3.2 任务 `tasks/T-YYYYMMDD-NN.json`（兼容既有台账格式）
 
 ```jsonc
 {

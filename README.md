@@ -22,7 +22,7 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个
 ## 初始化一个项目
 
 ```text
-node ./bin/flow.mjs --root <项目根> init [--name 名称] [--migrate all]
+node bin/flow.mjs --root <项目根> init [--name 名称] [--migrate all]
 ```
 
 会在 `<项目根>/.dsh/flow/` 下创建：
@@ -60,7 +60,7 @@ flow gate logs smoke            # 最近运行记录
 本地 bundle `@local/project-flow`，无 npm 依赖、无构建步骤：
 
 ```text
-plugin_manager install_bundle  target=.
+plugin_manager install_bundle  target=<仓库根目录>
 ```
 
 `cordis.patch.yml` 会 insert 条目 `project-flow`。安装后刷新页面；卸载用

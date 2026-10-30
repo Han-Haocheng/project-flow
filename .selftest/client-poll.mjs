@@ -64,14 +64,14 @@ const flush = async () => {
   for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve));
 };
 
-const DEFAULT_ROOT = '/tmp/pf-demo/Alpha';
+const DEFAULT_ROOT = '/tmp/pf-demo/alpha';
 
 const PAYLOAD = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
-  contract: { source: 'flow.json', schema: 1, name: 'Alpha' },
-  root: '/tmp/pf-demo/Alpha',
-  roots: [{ path: '/tmp/pf-demo/Alpha', name: 'Alpha' }],
+  contract: { source: 'flow.json', schema: 1, name: 'demo-alpha' },
+  root: '/tmp/pf-demo/alpha',
+  roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
   experiments: { total: 0, groups: [] },
   tasks: { total: 0, counts: { other: 0 } },
   gate: { lines: [], mtime: null },
@@ -221,7 +221,7 @@ await check('first poll: one immediate GET to the workspace-scoped endpoint', ()
   assert.equal(first.env.fetches.length, 1, 'expected exactly one initial request');
   assert.equal(
     first.env.fetches[0].url,
-    'api/project-flow/state?root=%2Fmnt%2Fd%2FProject%2FAlpha',
+    'api/project-flow/state?root=%2Ftmp%2Fpf-demo%2Falpha',
     'first fetch URL is not the encoded workspace root'
   );
   assert.equal(first.env.fetches[0].init.method, 'GET');
@@ -240,7 +240,7 @@ await check('poll interval is 2500 ms, relative-time clock is 1000 ms', () => {
 await check('successful poll stores the snapshot and clears the error', () => {
   const stored = first.env.stateCalls.find((call) => call.index === 0);
   assert.ok(stored, 'snapshot was not stored');
-  assert.equal(stored.next.root, '/tmp/pf-demo/Alpha');
+  assert.equal(stored.next.root, '/tmp/pf-demo/alpha');
   assert.equal(stored.next.contract.source, 'flow.json');
   assert.ok(
     first.env.stateCalls.some((call) => call.index === 1 && call.next === null),
@@ -373,7 +373,7 @@ await check('ErrorState init: one POST to api/project-flow/init with the workspa
   const booted = bootErrorState(
     {
       info: { code: 'not-initialized' },
-      workspaceRoot: '/tmp/pf-demo/Alpha',
+      workspaceRoot: '/tmp/pf-demo/alpha',
       onInitialized: () => {
         initialized += 1;
       },
@@ -385,8 +385,8 @@ await check('ErrorState init: one POST to api/project-flow/init with the workspa
             resolve(
               okResponseFor({
                 ok: true,
-                root: '/tmp/pf-demo/Alpha',
-                name: 'Alpha',
+                root: '/tmp/pf-demo/alpha',
+                name: 'demo-alpha',
                 alreadyInitialized: false,
                 created: ['.dsh/flow'],
                 imported: 0,
@@ -414,7 +414,7 @@ await check('ErrorState init: one POST to api/project-flow/init with the workspa
   assert.equal(request.init.credentials, 'same-origin');
   assert.equal(request.init.headers['content-type'], 'application/json');
   assert.equal(request.init.headers.accept, 'application/json');
-  assert.equal(request.init.body, '{"root":"/tmp/pf-demo/Alpha"}');
+  assert.equal(request.init.body, '{"root":"/tmp/pf-demo/alpha"}');
   assert.ok(
     booted.env.stateCalls.some((call) => call.index === 0 && call.next === true),
     'in-flight state (disabled button) not recorded'
