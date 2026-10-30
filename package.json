@@ -1,9 +1,14 @@
 {
   "name": "@local/project-flow",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Project flow panel (read-only, plus one-click init): experiment tree, tasks, gate log, subagent heartbeats and running output, driven by a per-project flow contract.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Han-Haocheng/project-flow.git"
+  },
   "bin": {
     "flow": "./bin/flow.mjs"
   },

@@ -97,3 +97,7 @@ node .selftest/client-poll.mjs           # Client 轮询 / 取消 / 可见性
 ```
 
 `.selftest/state-*.json` 是 Host 自测生成的快照，`client-render.mjs` 直接回放。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Han-Haocheng。可自由使用、修改、分发与再许可，保留版权与许可声明即可。
