@@ -46,6 +46,7 @@ const GIT_MAX_BUFFER = 16 * 1024 * 1024
 const MAX_STRING = 400
 const MAX_PAYLOAD_BYTES = 900 * 1000
 const MAX_STORE_ITEMS = 400
+const MAX_DRAFT_TASKS = 50
 const MAX_TOOL_ITEMS = 200
 const MAX_TEAM_MEMBERS = 64
 const MAX_TEAM_TASKS = 256
@@ -788,6 +789,7 @@ function emptyTasks() {
     current: null,
     active: [],
     recentDone: [],
+    draft: [],
   }
 }
 
@@ -851,6 +853,9 @@ function readTasksJson(root, contract, warnings) {
 
   const fields = contract.tasks.fields
   const read = (task, name) => task[fields[name]]
+  // `draftTasksOf` projects canonical row names; only the timestamp key differs
+  // between them (`updated_at`) and the contract's field table (`updatedAt`).
+  const readDraft = (task, name) => read(task, name === 'updated_at' ? 'updatedAt' : name)
   const parsed = []
   for (const file of files) {
     let raw
@@ -907,6 +912,8 @@ function readTasksJson(root, contract, warnings) {
   })
 
   tasks.active.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
+  // Same projection as the store path; `readDraft` maps this contract's field names.
+  tasks.draft = draftTasksOf(parsed, MAX_DRAFT_TASKS, readDraft)
   return tasks
 }
 
@@ -943,6 +950,7 @@ function readTasksMarkdown(root, contract, warnings) {
     return tasks
   }
 
+  const draftRecords = []
   for (const file of files) {
     let text
     try {
@@ -972,6 +980,15 @@ function readTasksMarkdown(root, contract, warnings) {
         goal: '',
       })
     }
+    if (status === 'draft') {
+      draftRecords.push({
+        id: clip(file.name.replace(/\.[^.]+$/, '')),
+        title: clip(markdownTitle(splitLines(text))),
+        status: 'draft',
+        owner: '',
+        updated_at: updatedAt,
+      })
+    }
     if (status === 'done') {
       tasks.recentDone.push({
         id: clip(file.name.replace(/\.[^.]+$/, '')),
@@ -986,6 +1003,7 @@ function readTasksMarkdown(root, contract, warnings) {
   tasks.recentDone.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
   tasks.recentDone = tasks.recentDone.slice(0, contract.tasks.recentLimit)
   tasks.active.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
+  tasks.draft = draftTasksOf(draftRecords)
   return tasks
 }
 
@@ -1389,6 +1407,32 @@ function activeTasksOf(records) {
     }))
 }
 
+/**
+ * Newest draft tasks, projected for the panel's 待办 block.
+ *
+ * `read` exists for the legacy readers, which see a task document through the
+ * contract's configurable field names instead of canonical store fields. A
+ * non-array `records` or a non-object record degrades to "no row" rather than
+ * throwing, and every projected field goes through `clip`, so an odd
+ * `owner`/`updated_at` type becomes an empty string.
+ */
+function draftTasksOf(records, limit = MAX_DRAFT_TASKS, read = (record, name) => record[name]) {
+  if (Array.isArray(records) === false) return []
+  const drafts = []
+  for (const record of records) {
+    if (isPlainObject(record) === false) continue
+    if (read(record, 'status') !== 'draft') continue
+    drafts.push({
+      id: clip(read(record, 'id')),
+      title: clip(read(record, 'title')),
+      owner: clip(read(record, 'owner')),
+      updated_at: clip(read(record, 'updated_at')),
+    })
+  }
+  drafts.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
+  return drafts.slice(0, limit)
+}
+
 function recentDoneOf(records, limit) {
   return records
     .filter((record) => isPlainObject(record) && record.status === 'done')
@@ -1594,6 +1638,7 @@ async function buildStoreState(root, entry, now, warnings) {
     current: currentSafe ? currentValue : null,
     active: activeTasksOf(taskRecords),
     recentDone: recentDoneOf(taskRecords, recentLimit),
+    draft: draftTasksOf(taskRecords),
   }
 
   const gates = (Array.isArray(state.gates.items) ? state.gates.items : []).map((gate) => ({
@@ -1657,6 +1702,10 @@ async function buildLegacyState(root, entry, now, warnings) {
   ])
 
   const tasks = readTasks(root, contract, warnings)
+  // The legacy readers project `draft` (newest first, capped) next to
+  // `active`/`recentDone`; this keeps the section shape stable for every
+  // fallback, including `tasks.source: 'none'` and an unreadable tasks dir.
+  if (Array.isArray(tasks.draft) === false) tasks.draft = []
   const gate = readGate(root, contract, warnings)
   const heartbeats = readHeartbeats(root, contract, now, warnings)
   const runs = readRuns(root, contract, now, warnings)

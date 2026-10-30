@@ -280,6 +280,7 @@ check('normalize: empty payload yields zeroed, renderable data', () => {
   assert.deepEqual(empty.exp.groups, []);
   assert.equal(empty.tasks.total, 0);
   assert.equal(empty.tasks.counts.draft, 0);
+  assert.deepEqual(empty.tasks.draft, []);
   assert.equal(empty.tasks.counts.other, 0);
   assert.equal(empty.tasks.current, null);
   assert.equal(empty.gate.mtime, null);
@@ -394,6 +395,88 @@ check('TasksCard: empty tasks render the generic ledger copy', () => {
   assert.ok(body.includes('任务台账里还没有完成的任务。'), 'recent empty copy missing');
   assert.ok(!body.includes('JSON'), 'empty copy still names a JSON ledger');
   assert.equal(collect(card, 'project-flow-listRow').length, 0);
+});
+
+check('TasksCard: drafts render a todo section ahead of the active list', () => {
+  const payload = probe.normalize({
+    tasks: {
+      total: 3,
+      counts: { draft: 2, active: 1 },
+      current: null,
+      draft: [
+        { id: 'T-D1', title: 'draft one', owner: 'alice', updated_at: '2026-10-28T10:00:00+08:00' },
+        { id: 'T-D2', title: 'draft two', owner: '', updated_at: '2026-10-20T10:00:00+08:00' },
+      ],
+      active: [
+        { id: 'T-A1', title: 'active one', status: 'active', owner: '', updated_at: '2026-10-28T09:00:00+08:00' },
+      ],
+      recentDone: [],
+    },
+  });
+  assert.equal(payload.tasks.draft.length, 2, 'normalize dropped the draft array');
+  const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
+  const body = JSON.stringify(card);
+  assert.ok(body.includes('待办（草稿）'), 'draft section title missing');
+  assert.equal(collect(card, 'project-flow-listRow').length, 3, 'expected two drafts + one active row');
+  const ids = collect(card, 'project-flow-listId').map((element) => element.children[0]);
+  assert.deepEqual(ids, ['T-D1', 'T-D2', 'T-A1'], 'drafts must render before the active list');
+  assert.ok(body.includes('draft one'), 'draft title missing');
+  assert.ok(body.includes('draft two'), 'second draft title missing');
+  assert.ok(body.includes('负责人 alice'), 'draft owner missing');
+  assert.ok(collect(card, 'project-flow-listMeta').length >= 2, 'draft meta line missing');
+
+  const english = probe.TasksCard({ tasks: payload.tasks, t: tEn, now: NOW });
+  const englishText = JSON.stringify(english);
+  assert.ok(englishText.includes('Todo (drafts)'), 'en draft section title missing');
+  assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en draft section still contains Chinese');
+});
+
+check('TasksCard: no draft rows means no todo section', () => {
+  const payload = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { draft: 0, active: 1, done: 1 },
+      current: null,
+      active: [{ id: 'T-A1', title: 'active one', owner: '' }],
+      recentDone: [{ id: 'T-DONE', title: 'done one', commits: [], gate: null }],
+    },
+  });
+  assert.deepEqual(payload.tasks.draft, [], 'an absent draft array normalizes to empty');
+  const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
+  const body = JSON.stringify(card);
+  assert.ok(!body.includes('待办（草稿）'), 'empty draft section must not render');
+  assert.equal(collect(card, 'project-flow-listRow').length, 2, 'active/recent rows must be unchanged');
+
+  // Older / hostile payloads must not crash or invent a section.
+  const hostile = probe.TasksCard({
+    tasks: { total: 1, counts: { draft: '2' }, draft: 'nope', active: [], recentDone: [] },
+    t,
+    now: NOW,
+  });
+  assert.ok(hostile, 'hostile draft field rendered nothing');
+  assert.ok(!JSON.stringify(hostile).includes('待办（草稿）'), 'non-array draft must not render a section');
+});
+
+check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
+  const drafts = Array.from({ length: 30 }, (_, index) => ({
+    id: 'T-D' + String(index + 1).padStart(2, '0'),
+    title: 'draft ' + (index + 1),
+  }));
+  const payload = probe.normalize({
+    tasks: { total: 30, counts: { draft: 30 }, current: null, draft: drafts, active: [], recentDone: [] },
+  });
+  const card = probe.TasksCard({ tasks: payload.tasks, t, now: NOW });
+  assert.equal(collect(card, 'project-flow-listRow').length, 25, 'draft rows must cap at 25');
+  const body = JSON.stringify(card);
+  assert.ok(body.includes('T-D25'), 'last visible draft row missing');
+  assert.ok(!body.includes('T-D26'), 'a 26th draft row leaked through');
+  assert.ok(body.includes('还有 5 条未显示'), 'draft overflow copy missing');
+  assert.equal(collect(card, 'project-flow-more').length, 1, 'overflow line missing');
+
+  const english = probe.TasksCard({ tasks: payload.tasks, t: tEn, now: NOW });
+  const englishText = JSON.stringify(english);
+  assert.ok(englishText.includes('5 more not shown'), 'en overflow copy missing');
+  assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en overflow copy still contains Chinese');
 });
 
 check('SignalsCard: gate tail, stale heartbeat warning and collapsed runs', () => {

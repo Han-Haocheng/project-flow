@@ -53,6 +53,32 @@ async function throws(label, fn, include) {
   }
 }
 
+/** `tasks.draft` row shape: exactly {id,title,owner,updated_at}, all strings. */
+function draftRowOk(row) {
+  return (
+    row !== null &&
+    typeof row === 'object' &&
+    JSON.stringify(Object.keys(row)) === JSON.stringify(['id', 'title', 'owner', 'updated_at']) &&
+    typeof row.id === 'string' &&
+    typeof row.title === 'string' &&
+    typeof row.owner === 'string' &&
+    typeof row.updated_at === 'string'
+  )
+}
+
+/** Newest-first order; an unparseable stamp sorts last (as the Host does). */
+function draftRowsDesc(rows) {
+  if (Array.isArray(rows) === false) return false
+  let previous = Number.POSITIVE_INFINITY
+  for (const row of rows) {
+    const stamp = Date.parse(row.updated_at)
+    const value = Number.isFinite(stamp) ? stamp : Number.NEGATIVE_INFINITY
+    if (value > previous) return false
+    previous = value
+  }
+  return true
+}
+
 // ------------------------------------------------------------- fake context
 
 const registeredTools = new Map()
@@ -218,6 +244,31 @@ writeFileSync(
     goal: 'stay green',
     updated_at: '2026-10-28T10:00:00+08:00',
   }),
+)
+// Two drafts with distinct, fixed timestamps plus one with broken field types:
+// the projection must keep newest-first order and degrade odd values to ''.
+writeFileSync(
+  join(legacyRoot, 'ledger', 'tasks', 'task-2.json'),
+  JSON.stringify({
+    id: 'T-LEGACY-02',
+    title: 'Legacy draft older',
+    status: 'draft',
+    owner: 'me',
+    updated_at: '2026-10-27T10:00:00+08:00',
+  }),
+)
+writeFileSync(
+  join(legacyRoot, 'ledger', 'tasks', 'task-3.json'),
+  JSON.stringify({
+    id: 'T-LEGACY-03',
+    title: 'Legacy draft newer',
+    status: 'draft',
+    updated_at: '2026-10-29T10:00:00+08:00',
+  }),
+)
+writeFileSync(
+  join(legacyRoot, 'ledger', 'tasks', 'task-4.json'),
+  JSON.stringify({ id: 'T-LEGACY-04', title: null, status: 'draft', owner: 42, updated_at: 1720000000000 }),
 )
 writeFileSync(join(legacyRoot, 'ledger', 'gate.log'), 'legacy gate line\n')
 
@@ -669,6 +720,17 @@ if (skillFiles.length < SKILL_NAMES.length) {
 
 // -------------------------------------------------------- HTTP store payload
 
+// Two drafts with fixed on-disk timestamps: the payload must surface them
+// newest-first and fill a missing owner with an empty string.
+const olderDraft = await taskTool.execute({ action: 'add', title: '草稿旧', status: 'draft', owner: 'alice' }, exec)
+const newerDraft = await taskTool.execute({ action: 'add', title: '草稿新', status: 'draft' }, exec)
+for (const [task, stamp] of [
+  [olderDraft.task, '2026-10-28T09:00:00+08:00'],
+  [newerDraft.task, '2026-10-28T11:00:00+08:00'],
+]) {
+  writeFileSync(join(storeRoot, '.dsh', 'flow', 'tasks', `${task.id}.json`), JSON.stringify({ ...task, updated_at: stamp }))
+}
+
 const storeRes = await call(route, `${route.path}?root=${encodeURIComponent(storeRoot)}`)
 const store = storeRes.json ?? {}
 eq('store payload: 200', storeRes.status, 200)
@@ -682,11 +744,24 @@ eq('store payload: counts confirmed', store.experiments?.counts?.confirmed, 1)
 eq('store payload: items length', store.experiments?.items?.length, 1)
 check('store payload: tree array with children', Array.isArray(store.experiments?.tree) && store.experiments.tree[0]?.id === expId && Array.isArray(store.experiments.tree[0].children))
 check('store payload: groups empty', Array.isArray(store.experiments?.groups) && store.experiments.groups.length === 0)
-eq('store payload: tasks total', store.tasks?.total, 1)
+eq('store payload: tasks total', store.tasks?.total, 3)
 eq('store payload: tasks counts done', store.tasks?.counts?.done, 1)
+eq('store payload: tasks counts draft', store.tasks?.counts?.draft, 2)
 check('store payload: tasks current null', store.tasks?.current === null)
 check('store payload: tasks active array', Array.isArray(store.tasks?.active))
 check('store payload: tasks recentDone array', Array.isArray(store.tasks?.recentDone) && store.tasks.recentDone[0]?.id === taskId)
+check(
+  'store payload: tasks draft array length',
+  Array.isArray(store.tasks?.draft) && store.tasks.draft.length === 2,
+  JSON.stringify(store.tasks?.draft),
+)
+check('store payload: tasks draft newest first', draftRowsDesc(store.tasks?.draft), JSON.stringify(store.tasks?.draft))
+eq('store payload: tasks draft[0] is newest', store.tasks?.draft?.[0]?.id, newerDraft.task?.id)
+eq('store payload: tasks draft[1] is older', store.tasks?.draft?.[1]?.id, olderDraft.task?.id)
+check('store payload: tasks draft row shape', store.tasks?.draft?.every(draftRowOk), JSON.stringify(store.tasks?.draft))
+eq('store payload: tasks draft missing owner empty', store.tasks?.draft?.[0]?.owner, '')
+eq('store payload: tasks draft owner kept', store.tasks?.draft?.[1]?.owner, 'alice')
+eq('store payload: tasks draft updated_at kept', store.tasks?.draft?.[1]?.updated_at, '2026-10-28T09:00:00+08:00')
 check('store payload: gates array', Array.isArray(store.gates) && store.gates.length === 1)
 eq('store payload: gate lastRun ok false', store.gates?.[0]?.lastRun?.ok, false)
 check('store payload: gate lastRun steps present', Array.isArray(store.gates?.[0]?.lastRun?.steps))
@@ -712,9 +787,24 @@ check('legacy payload: items empty array', Array.isArray(legacy.experiments?.ite
 check('legacy payload: tree empty array', Array.isArray(legacy.experiments?.tree) && legacy.experiments.tree.length === 0)
 check('legacy payload: groups array', Array.isArray(legacy.experiments?.groups))
 check('legacy payload: gates empty array', Array.isArray(legacy.gates) && legacy.gates.length === 0)
-eq('legacy payload: tasks total', legacy.tasks?.total, 1)
+eq('legacy payload: tasks total', legacy.tasks?.total, 4)
 eq('legacy payload: tasks current null', legacy.tasks?.current, null)
 check('legacy payload: active task title', legacy.tasks?.active?.[0]?.title === 'Legacy task')
+check(
+  'legacy payload: tasks draft array length',
+  Array.isArray(legacy.tasks?.draft) && legacy.tasks.draft.length === 3,
+  JSON.stringify(legacy.tasks?.draft),
+)
+check('legacy payload: tasks draft newest first', draftRowsDesc(legacy.tasks?.draft), JSON.stringify(legacy.tasks?.draft))
+eq('legacy payload: tasks draft[0] is newest', legacy.tasks?.draft?.[0]?.id, 'T-LEGACY-03')
+eq('legacy payload: tasks draft[1] is older', legacy.tasks?.draft?.[1]?.id, 'T-LEGACY-02')
+check('legacy payload: tasks draft row shape', legacy.tasks?.draft?.every(draftRowOk), JSON.stringify(legacy.tasks?.draft))
+eq('legacy payload: tasks draft missing owner empty', legacy.tasks?.draft?.[0]?.owner, '')
+check(
+  'legacy payload: tasks draft broken types degrade to empty strings',
+  legacy.tasks?.draft?.[2]?.title === '' && legacy.tasks?.draft?.[2]?.owner === '' && legacy.tasks?.draft?.[2]?.updated_at === '',
+  JSON.stringify(legacy.tasks?.draft?.[2]),
+)
 check('legacy payload: gate log present', Array.isArray(legacy.gate?.lines) && legacy.gate.lines[0] === 'legacy gate line')
 
 // -------------------------------------------------- draft cap (MAX_DRAFT_TASKS)
@@ -864,12 +954,22 @@ await throws('flow_exp show after remove: not found', () => expTool.execute({ ac
 const removedTask = await taskTool.execute({ action: 'remove', id: taskId }, exec)
 eq('flow_task remove: removed true', removedTask.removed, true)
 
+const removedDraftOlder = await taskTool.execute({ action: 'remove', id: olderDraft.task?.id }, exec)
+eq('flow_task remove: older draft true', removedDraftOlder.removed, true)
+const removedDraftNewer = await taskTool.execute({ action: 'remove', id: newerDraft.task?.id }, exec)
+eq('flow_task remove: newer draft true', removedDraftNewer.removed, true)
+
 const removedGate = await gateTool.execute({ action: 'remove', id: 'smoke' }, exec)
 eq('flow_gate remove: removed true', removedGate.removed, true)
 
 const emptyStore = await call(route, `${route.path}?root=${encodeURIComponent(storeRoot)}`)
 eq('store payload after removals: experiments 0', emptyStore.json?.experiments?.total, 0)
 eq('store payload after removals: tasks 0', emptyStore.json?.tasks?.total, 0)
+check(
+  'store payload after removals: tasks draft empty array',
+  Array.isArray(emptyStore.json?.tasks?.draft) && emptyStore.json.tasks.draft.length === 0,
+  JSON.stringify(emptyStore.json?.tasks?.draft),
+)
 eq('store payload after removals: gates 0', emptyStore.json?.gates?.length, 0)
 
 // ------------------------------------------------------------ dispose

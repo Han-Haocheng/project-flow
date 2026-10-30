@@ -159,6 +159,8 @@ window.__ModuleLoader__.load({
       'tasks.status.other': '其它',
       'tasks.current': '当前任务',
       'tasks.currentNone': '无',
+      'tasks.draft': '待办（草稿）',
+      'tasks.more': '还有 {n} 条未显示',
       'tasks.active': '进行中',
       'tasks.activeEmpty': '任务台账里没有进行中的任务。',
       'tasks.recent': '最近完成',
@@ -309,6 +311,8 @@ window.__ModuleLoader__.load({
       'tasks.status.other': 'other',
       'tasks.current': 'Current task',
       'tasks.currentNone': 'none',
+      'tasks.draft': 'Todo (drafts)',
+      'tasks.more': '{n} more not shown',
       'tasks.active': 'In progress',
       'tasks.activeEmpty': 'No task in the ledger is in progress.',
       'tasks.recent': 'Recently completed',
@@ -902,6 +906,8 @@ window.__ModuleLoader__.load({
             other: asNumber(taskCountsSrc.other, 0),
           },
           current: tasksSrc.current === undefined ? null : tasksSrc.current,
+          /* Older Host payloads omit `draft`; an absent array simply lists nothing. */
+          draft: asArray(tasksSrc.draft).filter((task) => task && typeof task === 'object'),
           active: asArray(tasksSrc.active).filter((task) => task && typeof task === 'object'),
           recentDone: asArray(tasksSrc.recentDone).filter((task) => task && typeof task === 'object'),
         },
@@ -1400,6 +1406,12 @@ window.__ModuleLoader__.load({
         currentTitle = asText(current.title);
       }
 
+      /* Drafts are optional: an older Host payload has no `draft` array, so the
+         block renders only when there are rows (counts still appear as chips). */
+      const draftTasks = asArray(tasks.draft);
+      const draftRows = draftTasks.slice(0, MAX_LIST_ROWS);
+      const hiddenDrafts = draftTasks.length - draftRows.length;
+
       const statusOrder = ['draft', 'active', 'done', 'archived'];
       /* Projects whose ledger is markdown/absent may only report `other`. */
       const otherCount = asNumber(counts.other, 0);
@@ -1432,6 +1444,34 @@ window.__ModuleLoader__.load({
           React.createElement('span', { className: 'project-flow-currentId' }, currentId),
           currentTitle ? React.createElement('span', { className: 'project-flow-currentTitle', title: currentTitle }, currentTitle) : null
         ),
+        draftTasks.length === 0
+          ? null
+          : React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.draft')),
+        draftTasks.length === 0
+          ? null
+          : React.createElement(
+              'ul',
+              { className: 'project-flow-list' },
+              draftRows.map((task, index) => {
+                const meta = joinParts([
+                  asText(task.owner) ? t('tasks.owner') + ' ' + asText(task.owner) : '',
+                  relativeMoment(Date.parse(asText(task.updated_at)), now, t) || '',
+                ]);
+                return React.createElement(ListRow, {
+                  key: 'draft-' + index,
+                  id: asText(task.id),
+                  title: asText(task.title),
+                  meta,
+                });
+              })
+            ),
+        hiddenDrafts > 0
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-more' },
+              t('tasks.more', { n: hiddenDrafts })
+            )
+          : null,
         React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.active')),
         activeTasks.length === 0
           ? React.createElement(EmptyLine, null, t('tasks.activeEmpty'))
