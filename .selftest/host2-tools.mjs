@@ -1137,6 +1137,111 @@ const subDecisionShow = await decisionTool.execute(
 )
 eq('flow_decision show: subagent allowed', subDecisionShow.decision?.id, askedApproval.decision?.id)
 
+// ------------------------ merged per-turn reminder: decisions + heartbeat
+//
+// H7-H12: ONE message, ONE text block, the decision section first and the
+// heartbeat section second. Fixtures go through lib/core.mjs so asked_turn and
+// asked_at are exact; ordering itself is core's job and must not be redone here.
+
+let reminderSeq = 0
+
+function reminderRoot(label) {
+  const root = mkdtempSync(join(tmpdir(), `project-flow-host2-${label}-`))
+  core.initProject(root, { name: label, noGates: true })
+  return root
+}
+
+function askFixture(root, agent, extra = {}) {
+  reminderSeq += 1
+  const contract = core.loadContract(root).contract
+  return core.addDecision(root, contract, {
+    kind: 'approval',
+    question: `待决问题 ${reminderSeq}`,
+    rationale: '提醒测试',
+    recommendation: 'approve',
+    asked_session: agent.id,
+    ...extra,
+  }).decision
+}
+
+// H7: no heartbeat + one open decision → both sections in one text block.
+const reminderRoot7 = reminderRoot('rem-merged')
+const reminderAgent7 = mockAgent('session-dec-rem7', reminderRoot7)
+registerRootAgent(reminderAgent7)
+const reminderItem7 = askFixture(reminderRoot7, reminderAgent7)
+const mergedReminder = await runPreStep(reminderAgent7)
+const mergedText = reminderText(mergedReminder)
+eq('H7 merged reminder: one message', Array.isArray(mergedReminder?.messages) ? mergedReminder.messages.length : -1, 1)
+eq('H7 merged reminder: one text block', Array.isArray(mergedReminder?.messages?.[0]?.content) ? mergedReminder.messages[0].content.length : -1, 1)
+for (const needle of ['【project-flow】', reminderItem7.id, '待用户拍板', 'working 心跳', '不要按推荐自行决定']) {
+  check(`H7 merged reminder: text carries ${needle}`, mergedText.includes(needle), mergedText)
+}
+check('H7 merged reminder: decision section comes first', mergedText.indexOf('待用户拍板') < mergedText.indexOf('working 心跳'), mergedText)
+check('H7 merged reminder: first turn lists the whole ledger', mergedText.includes('新会话第一步'), mergedText)
+
+// H8: working heartbeat + open decision → the decision section still appears,
+// the heartbeat section does not (the two gates are independent).
+const reminderExec7 = { agent: reminderAgent7 }
+await heartbeatTool.execute({ action: 'start', root: reminderRoot7, goal: '心跳工作中' }, reminderExec7)
+const workingReminder = await runPreStep(reminderAgent7, 2)
+const workingText = reminderText(workingReminder)
+eq('H8 working heartbeat: one message', Array.isArray(workingReminder?.messages) ? workingReminder.messages.length : -1, 1)
+check('H8 working heartbeat: decision section kept', workingText.includes(reminderItem7.id) && workingText.includes('待用户拍板'), workingText)
+check('H8 working heartbeat: heartbeat section absent', workingText.includes('working 心跳') === false, workingText)
+
+// H10: no heartbeat and no open decision → the heartbeat section alone.
+const reminderRoot10 = reminderRoot('rem-heartbeat-only')
+const reminderAgent10 = mockAgent('session-dec-rem10', reminderRoot10)
+registerRootAgent(reminderAgent10)
+const heartbeatOnly = reminderText(await runPreStep(reminderAgent10))
+check('H10 heartbeat only: one heartbeat section', heartbeatOnly.includes('本轮还没有 working 心跳'), JSON.stringify(heartbeatOnly))
+check('H10 heartbeat only: no decision section', heartbeatOnly.includes('待用户拍板') === false, JSON.stringify(heartbeatOnly))
+
+// H11: the first turn lists every open item, later turns cap at
+// DECISION_REMIND_MAX and say how many are hidden.
+const reminderRoot11 = reminderRoot('rem-four')
+const reminderAgent11 = mockAgent('session-dec-rem11', reminderRoot11)
+registerRootAgent(reminderAgent11)
+const fourIds = []
+for (let index = 0; index < 4; index += 1) fourIds.push(askFixture(reminderRoot11, reminderAgent11, { asked_turn: 1 }).id)
+const firstTurnText = reminderText(await runPreStep(reminderAgent11, 1))
+check(
+  'H11 first turn: all four decisions listed',
+  fourIds.every((id) => firstTurnText.includes(id)),
+  firstTurnText,
+)
+const limitedTurnText = reminderText(await runPreStep(reminderAgent11, 2))
+eq(
+  'H11 limited turn: three decisions listed',
+  fourIds.filter((id) => limitedTurnText.includes(id)).length,
+  3,
+)
+check('H11 limited turn: remaining hint', limitedTurnText.includes('还有 1 条'), limitedTurnText)
+
+// H12: an item asked by this session 3 turns ago is escalated, carries ⚠ and is
+// ordered first by core.
+const reminderRoot12 = reminderRoot('rem-escalated')
+const reminderAgent12 = mockAgent('session-dec-rem12', reminderRoot12)
+registerRootAgent(reminderAgent12)
+const escalatedItem = askFixture(reminderRoot12, reminderAgent12, { asked_turn: 1, question: '早已挂起的决策' })
+const calmItem = askFixture(reminderRoot12, reminderAgent12, { asked_turn: 3, question: '刚刚提出的决策' })
+const escalatedText = reminderText(await runPreStep(reminderAgent12, 4))
+const escalatedLines = escalatedText.split('\n')
+const escalatedLine = escalatedLines.findIndex((line) => line.includes(escalatedItem.id))
+const calmLine = escalatedLines.findIndex((line) => line.includes(calmItem.id))
+check(
+  'H12 escalated: the aged item carries the warning',
+  escalatedLine >= 0 && escalatedLines[escalatedLine].startsWith('- ⚠ '),
+  escalatedText,
+)
+check(
+  'H12 escalated: the aged item is ordered first',
+  escalatedLine >= 0 && calmLine >= 0 && escalatedLine < calmLine,
+  JSON.stringify({ escalatedLine, calmLine, text: escalatedText }),
+)
+
+// H13 is the existing "pre-step: subagent is not reminded" assertion above.
+
 // ------------------------------------------------------ no-store behavior
 
 const noStoreWrite = await throws(
@@ -1307,6 +1412,10 @@ for (const root of [
   secretRoot,
   evilStoreRoot,
   decRoot,
+  reminderRoot7,
+  reminderRoot10,
+  reminderRoot11,
+  reminderRoot12,
 ]) {
   try {
     rmSync(root, { recursive: true, force: true })

@@ -1513,20 +1513,108 @@ function registerDisciplineSection(ctx) {
 const HEARTBEAT_REMINDER_TEXT =
   '【project-flow】本轮还没有 working 心跳。先调用 flow_heartbeat start 登记 goal/task/claims（claims 写本会话独占写入的文件域），结束前调用 flow_heartbeat end。'
 
+/** Reminder budget: one bounded message, one text block. */
+const DECISION_QUESTION_CLIP = 60
+const DECISION_REMINDER_CLIP = 800
+
 /** One user-role reminder message; the fields match `MessageBase` + `role`. */
-function heartbeatReminderMessage(session, turn, step) {
+function reminderMessage(session, turn, step, text) {
   return {
     id: `project-flow:${session}:${turn}:${step}:${Date.now()}`,
     role: 'user',
-    content: [{ type: 'text', text: HEARTBEAT_REMINDER_TEXT }],
+    content: [{ type: 'text', text }],
     source: { kind: 'user' },
   }
 }
 
+/** Open-decision rows the reminder and the panel carry: core's DECISION_REMIND_MAX. */
+function decisionRemindMax() {
+  const value = coreAvailable() ? core.DECISION_REMIND_MAX : undefined
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 3
+}
+
+/** The store contract of one root, or null when it cannot be loaded. */
+function decisionContractOf(root) {
+  try {
+    const c = requireCore()
+    if (typeof c.loadContract !== 'function') return null
+    const loaded = c.loadContract(root)
+    return isPlainObject(loaded) ? loaded.contract : null
+  } catch {
+    return null
+  }
+}
+
 /**
- * Per-turn fallback: on the first step of a turn, append a user reminder when
- * the session has no `working` heartbeat. `step` is 1-based in the loop; `0` is
- * accepted too so the hook survives a loop that counts differently.
+ * 挂起 display of one open decision: the turns it has waited for the session that
+ * asked it, else the age since `asked_at`. Same rule as `decisionSuspended` in
+ * bin/flow.mjs — two copies, because the Host and the CLI share no code. Only the
+ * 3600 / 86400 thresholds are allowed; a change here must be mirrored there.
+ */
+function decisionSuspendedText(item) {
+  const turnAge = isPlainObject(item) && Number.isInteger(item.turnAge) ? item.turnAge : null
+  if (turnAge !== null) return `${turnAge} 轮`
+  const age = isPlainObject(item) ? item.ageSeconds : null
+  if (typeof age !== 'number' || Number.isFinite(age) === false) return '-'
+  if (age < 3600) return `${Math.max(1, Math.round(age / 60))} 分钟`
+  if (age < 86400) return `${Math.round(age / 3600)} 小时`
+  return `${Math.round(age / 86400)} 天`
+}
+
+/** One reminder row: `- ⚠ D-… [kind] question  阻塞 T-…；挂起 3 轮`. */
+function decisionReminderLine(item) {
+  const blocks = Array.isArray(item.blocks)
+    ? item.blocks.filter((id) => typeof id === 'string' && id !== '').map((id) => clip(id, 40))
+    : []
+  const blocked = blocks.length > 0 ? `阻塞 ${blocks.join('、')}；` : ''
+  const head =
+    `${item.escalated === true ? '⚠ ' : ''}${clip(item.id, 40)} [${clip(item.kind, 20)}] ` +
+    clip(item.question, DECISION_QUESTION_CLIP)
+  return `- ${head}  ${blocked}挂起 ${decisionSuspendedText(item)}`
+}
+
+/**
+ * The decision section of the per-turn reminder, or '' when nothing is open. The
+ * first turn of a session lists the whole ledger; later turns cap the detail at
+ * DECISION_REMIND_MAX rows and count the rest. Row order is core's and is never
+ * re-sorted here.
+ */
+function decisionReminderText(root, contract, session, turn) {
+  try {
+    if (hasStore(root) === false) return ''
+    if (isPlainObject(contract) === false) return ''
+    const c = requireCore()
+    if (typeof c.summarizeDecisions !== 'function') return ''
+    const firstTurn = Number.isInteger(turn) && turn === 1
+    const info = { session, turn: Number.isInteger(turn) ? turn : null }
+    if (firstTurn === false) info.limit = decisionRemindMax()
+    const summary = c.summarizeDecisions(root, contract, info)
+    const items = isPlainObject(summary) && Array.isArray(summary.items) ? summary.items : []
+    const counts = isPlainObject(summary) ? summary.counts : null
+    const open = isPlainObject(counts) && typeof counts.open === 'number' ? counts.open : 0
+    if (open === 0 || items.length === 0) return ''
+    const blocking = isPlainObject(counts) && typeof counts.blocking === 'number' ? counts.blocking : 0
+    const lines = [`【project-flow】有 ${open} 个待用户拍板的决策（阻塞 ${blocking}）：`]
+    for (const item of items) {
+      if (isPlainObject(item)) lines.push(decisionReminderLine(item))
+    }
+    const remaining = open - items.length
+    if (remaining > 0) lines.push(`还有 ${remaining} 条，运行 flow decision list --open 查看全部`)
+    lines.push('回答后当轮调用 flow_decision answer <id> --choice <选项 id>；不要按推荐自行决定。')
+    if (firstTurn) lines.push('新会话第一步：运行 flow decision list --open 查看完整清单')
+    return clip(lines.join('\n'), DECISION_REMINDER_CLIP)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Per-turn fallback: on the first step of a turn, append ONE user reminder that
+ * merges two independently gated sections — the open decisions (whatever the
+ * heartbeat state is) and the missing `working` heartbeat. Both empty means no
+ * message at all; otherwise a single message with a single text block carries
+ * both, decision section first. `step` is 1-based in the loop; `0` is accepted
+ * too so the hook survives a loop that counts differently.
  */
 function registerHeartbeatReminder(ctx) {
   try {
@@ -1540,15 +1628,19 @@ function registerHeartbeatReminder(ctx) {
           if (step !== 0 && step !== 1) return decision
           const agent = payload.agent
           if (agent === undefined || agent === null) return decision
-          // Only main sessions are reminded; a subagent never registers one.
+          // Only main sessions are reminded; a subagent gets neither section.
           if (rootSessionVerdict(ctx, agent) !== true) return decision
           const session = usableSessionId(agent.id)
           if (session === '') return decision
           const root = agentRoot(ctx, agent)
           if (root === undefined) return decision
-          if (heartbeatWorking(root, session) !== false) return decision
+          const turn = Number.isInteger(payload.turn) ? payload.turn : null
+          const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
+          const heartbeatText = heartbeatWorking(root, session) === false ? HEARTBEAT_REMINDER_TEXT : ''
+          const text = [decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
+          if (text === '') return decision
           const messages = Array.isArray(decision.messages) ? decision.messages.slice() : []
-          messages.push(heartbeatReminderMessage(session, payload.turn, step))
+          messages.push(reminderMessage(session, payload.turn, step, text))
           return { ...decision, messages }
         } catch {
           return decision
