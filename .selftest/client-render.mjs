@@ -40,7 +40,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -126,6 +126,27 @@ const tEn = (key, params) => {
 };
 
 // ------------------------------------------------------------------ fixtures
+/**
+ * Canonical decision item keys, copied verbatim from the cross-domain contract
+ * (Host payload / CLI / panel share the exact same 11 keys). The panel-domain
+ * check below diffs `normalizeDecision`'s output against this literal array.
+ */
+const DECISION_ITEM_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'question',
+  'blocks',
+  'options',
+  'recommendation',
+  'default',
+  'escalated',
+  'ageSeconds',
+  'asked_at',
+];
+const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total'];
+const ZERO_DECISION_COUNTS = { open: 0, blocking: 0, escalated: 0, answered: 0, withdrawn: 0, superseded: 0, total: 0 };
+
 const NOW = Date.UTC(2026, 9, 28, 3, 30, 0);
 const fixture = {
   ok: true,
@@ -314,6 +335,45 @@ const fixture = {
     ],
     counts: { total: 2, active: 1, stale: 1 },
   },
+  /* Two open decisions in payload order: the first is escalated and blocks a
+     task; the second has no recommendation and falls back to options[0]. */
+  decisions: {
+    counts: { open: 2, blocking: 1, escalated: 1, answered: 0, withdrawn: 0, superseded: 0, total: 2 },
+    items: [
+      {
+        id: 'D-20261028-01',
+        kind: 'approval',
+        status: 'open',
+        question: 'Merge the client branch?',
+        blocks: ['T-20261028-56'],
+        options: [
+          { id: 'approve', label: 'approve' },
+          { id: 'reject', label: 'reject' },
+        ],
+        recommendation: 'approve',
+        default: 'reject',
+        escalated: true,
+        ageSeconds: 7200,
+        asked_at: '2026-10-28T09:30:00+08:00',
+      },
+      {
+        id: 'D-20261028-02',
+        kind: 'choice',
+        status: 'open',
+        question: 'Panel first or CLI first?',
+        blocks: [],
+        options: [
+          { id: 'panel', label: 'panel' },
+          { id: 'cli', label: 'cli' },
+        ],
+        recommendation: '',
+        default: '',
+        escalated: false,
+        ageSeconds: 60,
+        asked_at: '2026-10-28T09:29:00+08:00',
+      },
+    ],
+  },
   warnings: ['w1', 'w2'],
 };
 
@@ -436,6 +496,8 @@ check('normalize: empty payload yields zeroed, renderable data', () => {
   assert.equal(empty.gates, null);
   assert.deepEqual(empty.heartbeats, []);
   assert.equal(empty.heartbeatCounts.total, 0);
+  assert.deepEqual(empty.decisions.items, []);
+  assert.deepEqual(empty.decisions.counts, ZERO_DECISION_COUNTS);
   assert.deepEqual(empty.warnings, []);
 });
 
@@ -791,6 +853,222 @@ check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en overflow copy still contains Chinese');
 });
 
+// ------------------------------------------------------------- decisions (T-23)
+check('normalize: decisions keep payload order, counts and the 11 shared keys', () => {
+  const decisions = view.decisions;
+  assert.equal(decisions.counts.open, 2);
+  assert.equal(decisions.counts.blocking, 1);
+  assert.equal(decisions.counts.total, 2);
+  assert.equal(decisions.items.length, 2);
+  assert.equal(decisions.items[0].id, 'D-20261028-01', 'the payload order was re-sorted');
+  assert.equal(decisions.items[1].id, 'D-20261028-02');
+  assert.equal(decisions.items[0].escalated, true);
+  assert.equal(decisions.items[1].escalated, false);
+  assert.deepEqual(decisions.items[0].blocks, ['T-20261028-56']);
+  assert.deepEqual(decisions.items[1].options, [
+    { id: 'panel', label: 'panel' },
+    { id: 'cli', label: 'cli' },
+  ]);
+  // The row key set/order is the cross-domain contract, verbatim.
+  assert.deepEqual(Object.keys(decisions.items[0]), DECISION_ITEM_KEYS);
+  assert.deepEqual(Object.keys(decisions.items[1]), DECISION_ITEM_KEYS);
+  assert.deepEqual(Object.keys(decisions.counts), DECISION_COUNT_KEYS);
+});
+
+check('normalize: a missing or hostile decisions section stays empty', () => {
+  const bare = Object.assign({}, fixture);
+  delete bare.decisions;
+  const normalized = probe.normalize(bare);
+  assert.deepEqual(normalized.decisions.items, []);
+  assert.deepEqual(normalized.decisions.counts, ZERO_DECISION_COUNTS);
+  assert.doesNotThrow(() => renderParts(bare), 'renderParts threw without a decisions section');
+  assert.ok(JSON.stringify(renderParts(bare)).length > 100, 'payload parts rendered nothing');
+
+  const hostile = probe.normalize({
+    decisions: {
+      items: [null, 3, 'nope', { id: 7, blocks: 'x', options: 'y', escalated: 'true', ageSeconds: 'soon' }],
+      counts: 'nope',
+    },
+  });
+  assert.equal(hostile.decisions.items.length, 1, 'only the object decision survives');
+  assert.equal(hostile.decisions.items[0].id, '7');
+  assert.deepEqual(hostile.decisions.items[0].blocks, []);
+  assert.deepEqual(hostile.decisions.items[0].options, []);
+  assert.equal(hostile.decisions.items[0].escalated, false, 'a truthy string is not an escalation');
+  assert.equal(hostile.decisions.items[0].ageSeconds, null);
+  assert.deepEqual(hostile.decisions.counts, ZERO_DECISION_COUNTS);
+  assert.deepEqual(probe.normalize({ decisions: 'nope' }).decisions, {
+    items: [],
+    counts: ZERO_DECISION_COUNTS,
+  });
+  assert.deepEqual(probe.normalize({}).decisions, { items: [], counts: ZERO_DECISION_COUNTS });
+});
+
+check('DecisionsCard: title counts, ids, kind chips, ⚠ and copy buttons', () => {
+  const card = probe.DecisionsCard({ decisions: view.decisions, t, now: NOW });
+  assert.ok(card, 'card did not render');
+  assert.equal(collect(card, 'project-flow-decisions').length, 1, 'the full-width card is missing');
+  const text = textOf(card);
+  assert.ok(text.includes('待决策 2'), 'title count missing');
+  assert.ok(text.includes('阻塞 1'), 'blocking count missing');
+  assert.ok(text.includes('D-20261028-01') && text.includes('D-20261028-02'), 'both decision ids must show');
+  const rows = collect(card, 'project-flow-decisionRow');
+  assert.equal(rows.length, 2, 'expected one row per pending decision');
+  assert.ok(textOf(rows[0]).includes('⚠'), 'the escalated row lost its warning mark');
+  assert.ok(!textOf(rows[1]).includes('⚠'), 'a non-escalated row must not carry the mark');
+  assert.equal(collect(card, 'project-flow-chip').length, 3, 'two kind chips + one blocking chip');
+  assert.equal(collect(card, 'project-flow-chip--warn').length, 1, 'the blocking chip is not flagged');
+  assert.equal(collect(card, 'project-flow-decisionCopy').length, 2, 'one copy button per row');
+  // The button tooltip is the exact line the user will paste.
+  assert.equal(
+    collect(card, 'project-flow-decisionCopy')[0].props.title,
+    'flow decision answer D-20261028-01 --choice approve'
+  );
+  assert.equal(
+    collect(card, 'project-flow-decisionCopy')[0].props['aria-label'],
+    '复制决策 D-20261028-01 的回答命令'
+  );
+  assert.deepEqual(
+    collect(card, 'project-flow-decisionId').map((element) => element.children[0]),
+    ['D-20261028-01', 'D-20261028-02'],
+    'rows must keep the payload order'
+  );
+  assert.ok(text.includes('T-20261028-56'), 'the blocked task id is missing');
+  assert.ok(text.includes('2 小时前'), 'the escalated row has no age text');
+  assert.ok(text.includes('1 分钟前'), 'the second row has no age text');
+});
+
+check('DecisionsCard: no open decision renders nothing at all', () => {
+  const idle = probe.normalize({ decisions: { counts: { open: 0, total: 3 }, items: [] } });
+  const card = probe.DecisionsCard({ decisions: idle.decisions, t, now: NOW });
+  assert.equal(card, null, 'an idle board must not reserve a decision card');
+  assert.equal(collect(card, 'project-flow-decisions').length, 0);
+  const missing = probe.DecisionsCard({ decisions: probe.normalize({}).decisions, t, now: NOW });
+  assert.equal(missing, null, 'a missing section must render nothing');
+});
+
+check('DecisionsCard: open rows without items show the defensive empty copy', () => {
+  const card = probe.DecisionsCard({
+    decisions: { counts: { open: 2, blocking: 0 }, items: [] },
+    t,
+    now: NOW,
+  });
+  assert.equal(collect(card, 'project-flow-decisions').length, 1, 'the card must still render');
+  assert.ok(textOf(card).includes('没有待决策'), 'empty copy missing');
+  assert.equal(collect(card, 'project-flow-decisionCopy').length, 0, 'no rows means no buttons');
+});
+
+check('DecisionsCard: rows missing from the payload are reported as more', () => {
+  const decisions = {
+    counts: { open: 5, blocking: 2 },
+    items: [
+      { id: 'D-a', kind: 'approval', question: 'a', recommendation: 'yes' },
+      { id: 'D-b', kind: 'choice', question: 'b', options: [{ id: 'x' }] },
+      { id: 'D-c', kind: 'input', question: 'c', recommendation: 'say hi' },
+    ],
+  };
+  const card = probe.DecisionsCard({ decisions, t, now: NOW });
+  assert.ok(textOf(card).includes('待决策 5'), 'the title must report the host count');
+  assert.ok(textOf(card).includes('阻塞 2'), 'blocking copy missing');
+  assert.ok(textOf(card).includes('还有 2 条'), 'overflow copy missing');
+  assert.equal(collect(card, 'project-flow-more').length, 1, 'the overflow line must render once');
+
+  const english = probe.DecisionsCard({
+    decisions: { counts: { open: 3, blocking: 1 }, items: [decisions.items[0]] },
+    t: tEn,
+    now: NOW,
+  });
+  assert.ok(textOf(english).includes('3 pending decisions'), 'en title missing');
+  assert.ok(textOf(english).includes('2 more'), 'en overflow copy missing');
+});
+
+check('decisionAnswerCommand: recommendation, default, options[0] and input quoting', () => {
+  assert.equal(
+    probe.decisionAnswerCommand({
+      id: 'D-1',
+      kind: 'approval',
+      recommendation: 'approve',
+      default: 'reject',
+      options: [{ id: 'opt' }],
+    }),
+    'flow decision answer D-1 --choice approve',
+    'the recommendation must win'
+  );
+  assert.equal(
+    probe.decisionAnswerCommand({
+      id: 'D-2',
+      kind: 'approval',
+      recommendation: '',
+      default: 'reject',
+      options: [{ id: 'opt' }],
+    }),
+    'flow decision answer D-2 --choice reject',
+    'the default is the second source'
+  );
+  assert.equal(
+    probe.decisionAnswerCommand({ id: 'D-3', kind: 'choice', options: [{ id: 'panel' }, { id: 'cli' }] }),
+    'flow decision answer D-3 --choice panel',
+    'options[0] is the last source'
+  );
+  assert.equal(
+    probe.decisionAnswerCommand({ id: 'D-4', kind: 'input', recommendation: 'use A then B' }),
+    'flow decision answer D-4 --choice "use A then B"',
+    'an input decision quotes its free text'
+  );
+  // No choice source at all: no command, hence no button.
+  assert.equal(probe.decisionAnswerCommand({ id: 'D-5', kind: 'approval' }), '');
+  assert.equal(probe.decisionAnswerCommand({ kind: 'approval', recommendation: 'x' }), '', 'an id is required');
+  assert.equal(probe.decisionAnswerCommand(null), '');
+  assert.equal(probe.decisionAnswerCommand('nope'), '');
+});
+
+check('DecisionsCard: a decision without a choice renders no copy button', () => {
+  const card = probe.DecisionsCard({
+    decisions: {
+      counts: { open: 1, blocking: 0 },
+      items: [{ id: 'D-9', kind: 'note', status: 'open', question: 'No options, no default' }],
+    },
+    t,
+    now: NOW,
+  });
+  assert.equal(collect(card, 'project-flow-decisionRow').length, 1, 'the row itself must still render');
+  assert.equal(collect(card, 'project-flow-decisionCopy').length, 0, 'a choiceless decision must not offer a button');
+});
+
+check('DecisionsCard: clicking every copy button is safe without a clipboard', () => {
+  const card = probe.DecisionsCard({ decisions: view.decisions, t, now: NOW });
+  assert.equal(clickEverything(card), 2, 'expected one clickable copy button per row');
+  assert.doesNotThrow(() => clickEverything(card), 'a clipboard-less environment threw');
+});
+
+check('DecisionsCard: the English dictionary renders no Chinese chrome', () => {
+  const card = probe.DecisionsCard({ decisions: view.decisions, t: tEn, now: NOW });
+  const english = textOf(card);
+  assert.ok(english.includes('2 pending decisions'), 'en title missing');
+  assert.ok(english.includes('1 blocking'), 'en blocking copy missing');
+  assert.ok(english.includes('Copy answer command'), 'en copy label missing');
+  assert.ok(!/[\u4e00-\u9fff]/.test(english), 'en decision card text still contains Chinese');
+  assert.ok(!/[\u4e00-\u9fff]/.test(JSON.stringify(card)), 'en decision card props still contain Chinese');
+});
+
+check('DecisionsCard: the new stylesheet rules use theme tokens', () => {
+  const rules = probe.CSS.split('\n').filter((line) => line.startsWith('.project-flow-decision'));
+  assert.ok(rules.length >= 6, `decision stylesheet rules missing (${rules.length})`);
+  for (const rule of rules) {
+    assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(rule), 'hardcoded hex color: ' + rule);
+    assert.ok(!/\brgba?\(/.test(rule) && !/\bhsla?\(/.test(rule), 'hardcoded color function: ' + rule);
+    if (rule.includes('color:')) assert.ok(rule.includes('var(--dsw-alias-'), 'color without a token: ' + rule);
+  }
+});
+
+check('Panel: the decision card mounts above the two-column grid', () => {
+  const text = readFileSync(SRC, 'utf8');
+  const card = text.indexOf('React.createElement(DecisionsCard, { decisions: view.decisions, t, now })');
+  const grid = text.indexOf("className: 'project-flow-grid'");
+  assert.ok(card > 0, 'the Panel does not mount DecisionsCard');
+  assert.ok(grid > card, 'the decision card must render before the grid');
+});
+
 check('SignalsCard: rich heartbeats render status, goal, claims and the current highlight', () => {
   const card = probe.SignalsCard({
     heartbeats: view.heartbeats,
@@ -1080,6 +1358,7 @@ function renderParts(payload) {
   const v = probe.normalize(payload);
   return [
     probe.TopBar({ view: v, t, now: NOW, lastOkAt: NOW, failed: false, refreshing: false, onRefresh: () => {} }),
+    probe.DecisionsCard({ decisions: v.decisions, t, now: NOW }),
     probe.ExperimentTree({ exp: v.exp, t }),
     probe.TasksCard({ tasks: v.tasks, t, now: NOW }),
     probe.GatesCard({ gates: v.gates || [], t, now: NOW, workspaceRoot: v.root }),
@@ -1120,6 +1399,30 @@ for (const name of hostFixtures) {
       assert.ok(text.includes('E-20261028-02'), 'store fixture: nested child node missing from render');
       assert.ok(text.includes('smoke'), 'store fixture: gate definition missing from render');
       assert.ok(text.includes('门禁'), 'store fixture: gates section title missing');
+      // P10: the decisions section of the real store payload reaches the card.
+      assert.ok(text.includes('待决策 3'), 'store fixture: decisions title missing');
+      assert.ok(text.includes('D-20261028-01'), 'store fixture: first decision id missing');
+      assert.ok(text.includes('D-20261028-03'), 'store fixture: input decision id missing');
+      const decisionCards = parts.filter((part) => collect(part, 'project-flow-decisions').length === 1);
+      assert.equal(decisionCards.length, 1, 'store fixture: decision card not rendered');
+      const decisionRows = collect(decisionCards[0], 'project-flow-decisionRow');
+      assert.equal(decisionRows.length, 3, 'store fixture: expected three decision rows');
+      const copyButtons = collect(decisionCards[0], 'project-flow-decisionCopy');
+      assert.equal(copyButtons.length, 3, 'store fixture: expected three copy buttons');
+      assert.ok(
+        copyButtons.some((element) => String(element.props.title).includes('flow decision answer')),
+        'store fixture: no answer command rendered'
+      );
+      assert.equal(
+        copyButtons[0].props.title,
+        'flow decision answer D-20261028-01 --choice approve',
+        'store fixture: approval command is wrong'
+      );
+      assert.equal(
+        copyButtons[2].props.title,
+        'flow decision answer D-20261028-03 --choice "周六 22:00 之后"',
+        'store fixture: the input decision is not quoted'
+      );
     }
     replayed += 1;
   });
