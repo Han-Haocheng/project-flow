@@ -60,7 +60,7 @@
 | `kind` | `choice` \| `approval` \| `input` | 是 | 不可改 |
 | `options` | `[{id,label,impact}]` | 视 kind | `choice`：≥2，id 唯一且匹配 `^[a-z0-9][a-z0-9-]{0,23}$`；`impact` 非空；`approval`：由 core 固定为 `approve`/`reject`，调用方不得传；`input`：固定 `[]` |
 | `default` | string \| null | 否 | 必须是某个 option id（`input` 为自由文本）；用户说"按默认/你定"时模型采用的兜底值 |
-| `recommendation` | string \| null | `choice`/`approval` 必填 | 必须是某个 option id；`input` 为自由文本建议值 |
+| `recommendation` | string \| null | `choice` 必填；`approval` 可省略 | `choice`/`approval` 必须是某个 option id；**approval 省略**（`undefined`/`null`/空串）时 core 写 `approve`，想推荐拒绝必须显式传 `reject`；`input` 为自由文本建议值 |
 | `rationale` | string | 是 | 推荐理由与影响，非空，≤300 字 |
 | `status` | `open` \| `answered` \| `withdrawn` \| `superseded` | 是 | 新建固定 `open`；终态不可回退（§4.4） |
 | `blocks` | `[T-id]` | 否 | 每个 id 必须已存在于 `tasks/`，否则 `invalid`；非空时 `affects` 必须非空 |
@@ -101,7 +101,7 @@ open ──answer────▶ answered
   1. 同指纹存在 `open` 记录 → **不新建**，返回已有记录（`created: false`），输出提示"已存在 open 决策 `<id>`，不要重复提问"；
   2. 同指纹存在已关闭记录 → **必须**显式 `--supersedes <旧 id>`，否则 `conflict` 并回显旧答案（阻止同一个问题被反复开）；旧记录按 §4.4 置 `superseded` 并保留原答案；
   3. 无同指纹 → 新建。
-- `blocks` 中每个 id 必须已存在；`kind=choice` 的 `recommendation`/`default` 必须命中 option；`kind=approval` 不接受 `options`；`kind=input` 的 `options` 必须为空。任一不满足 → `invalid`（退出码 2）。
+- `blocks` 中每个 id 必须已存在；`kind=choice` 的 `recommendation` **必填**，`recommendation`/`default` 必须命中 option；`kind=approval` 不接受 `options`，`recommendation` **可省略**——省略时 core 写 `approve`，显式给值必须命中 `approve`/`reject`（想推荐拒绝必须显式传 `reject`）；`kind=input` 的 `options` 必须为空。任一不满足 → `invalid`（退出码 2）。
 
 ### 4.6 `open` 记录 JSON 示例
 
@@ -179,7 +179,7 @@ open ──answer────▶ answered
 
 - 触发：`agent/pre-step`，仅主会话（`rootSessionVerdict === true`，与心跳提醒同门控），每轮第一个 step（`step` 为 0 或 1），读 `listDecisions(status=open)`；无 open 则不注入。
 - 合并：与心跳提醒合并进**一条** user-role 提醒消息（统一前缀 `【project-flow】`），避免两条重复消息；两者都无内容时不注入。
-- 内容上限：头部计数 + 最多 3 条明细 + 尾部动作提示，总长 ≤800 字符；超出只保留计数与前 3 条（常量 `DECISION_REMIND_MAX = 3`）。
+- 内容上限（中心已裁决，两种轮次同一规则）：总长 ≤800 字符，截断后追加「还有 N 条」——**800 字符上限对首轮与非首轮都生效**；明细条数上限 **3 条只约束非首轮**：首轮（含 fork/恢复）列**全部** open，非首轮最多 3 条（常量 `DECISION_REMIND_MAX = 3`）。
 - 文案模板：
 
 ```
@@ -191,16 +191,16 @@ open ──answer────▶ answered
 
 - 挂起计算：`asked_session` 等于当前会话 → `current_turn - asked_turn` 轮；否则按 `asked_at` 年龄（`2 小时` / `3 天`）。跨会话的 turn 不可比，所以只对提问会话显示"轮"，其它会话显示时长。
 - 升级：`⚠` 命中任一阈值（同会话 ≥3 轮 / 任意会话 ≥24 小时），升级项排最前；排序规则全局唯一：升级优先，其次 `asked_at` 旧的在前。
-- 第一轮（含 fork/恢复）：明细改为列出**全部** open，并在尾部追加一句"新会话第一步：运行 flow decision list --open 查看完整清单"。
+- 第一轮（含 fork/恢复）：不受 3 条明细上限约束，明细列出**全部** open，并在尾部追加一句"新会话第一步：运行 flow decision list --open 查看完整清单"；总长仍受 800 字符上限（超出截断后追加「还有 N 条」）。
 - 失败降级：读 store 出错时 `try/catch` 跳过提醒，不阻断本轮（与现有心跳提醒一致）。
 - 只读：提醒不修改任何记录，避免每轮写盘与 git 噪声。
 
 ### 6.2 面板待决策卡
 
-- 投影：`readStoreState` 增加 `decisions: {items, counts:{open,blocking,escalated,total}}`；HTTP GET state 的 payload 增加同名节；空 store 与未初始化返回空节（键存在、数组为空，不是缺键）。
+- 投影：`readStoreState` 增加 `decisions: {items, counts:{open,blocking,escalated,answered,withdrawn,superseded,total}}`（与 `summarizeDecisions(root, contract, {limit: DECISION_REMIND_MAX})` 逐字同形；无会话上下文，`turnAge` 恒 null，升级只有 24 小时规则）；HTTP GET state 的 payload 增加同名节；store 存在但不可读或无决策记录 → 空节（`items: []`、`counts` 全 0，键存在不是缺键）；工作区根本没有 store 仍是 `not-initialized` 错误态、不带任何节。
 - 位置：TopBar 之下、`project-flow-grid` 之上，整宽卡片；`counts.open > 0` 才渲染，否则整卡不出现（不占位）。
 - 内容：标题 `待决策 3（阻塞 1）`；每条显示 id、kind 徽标、question、阻塞任务、挂起时长、升级标记 `⚠`；最多 3 条 + "还有 N 条"（常量与提醒一致）。
-- 交互：每条一个「复制回答串」按钮，复制 `flow decision answer <id> --choice <推荐或默认选项 id>`；面板不提供写入控件，回答由用户粘回会话或直接在 CLI 执行。
+- 交互：每条一个「复制回答串」按钮，复制**固定带推荐值**的 `flow decision answer <id> --choice <推荐值>`（取值顺序 `recommendation` → `default` → 首个 option id；`input` 类型用引号包裹自由文本；浏览器端拼接）；面板不提供写入控件，回答由用户粘回会话或直接在 CLI 执行。
 - 排序：与提醒完全一致（升级优先，其次 `asked_at` 旧的在前）。
 - i18n：`client.js` 消息表新增 `decisions.title`、`decisions.blocking`、`decisions.copy`、`decisions.copyAria`、`decisions.more`、`decisions.empty` 等中英文案（locale 文件只放 meta，不新增键）。
 
@@ -246,7 +246,7 @@ flow check decisions
 
 - `--option` 格式 `id=label>>impact`，可重复，与 `gate add --step` 风格一致；`--option`/`--blocks`/`--affects` 可重复，加进 `parseArgv` 的 `REPEAT_FLAGS`；`question`/`kind`/`rationale`/`recommendation`/`default`/`choice`/`reason`/`by`/`days` 加进 `VALUE_FLAGS`。
 - `list` 默认只列 open；`--open` 是显式同义写法；`--all` 列全部（closed 按 `updated_at` 倒序）。
-- `ask` 的 `--recommendation` 在 `choice`/`approval` 必填；`--rationale` 必填。`--by` 默认 `user`；`answer` 的 `--note` 可省略（落盘为空串）。
+- `ask` 的 `--recommendation` 在 `choice` 必填、在 `approval` 可省略（省略 = 推荐 `approve`，想推荐拒绝必须显式传 `--recommendation reject`）；`--rationale` 必填。`--by` 默认 `user`；`answer` 的 `--note` 可省略（落盘为空串）。
 - `gc` 默认保留 90 天内与全部 open；`--days N` 覆盖保留天数；`--dry-run` 只报告不删除。删除对象仅限 `answered`/`withdrawn`/`superseded` 且关闭时间超过保留期。
 - 命令组纳入 `USAGE` 与 `dispatch` 的 `case 'decision'`；`flow check list` 追加 `decisions` 内置项。
 - 退出码沿用全局词汇：0 成功 · 1 用法 · 2 校验/冲突 · 3 未找到 · 4 IO。未 `flow init` → `usage`。
@@ -276,7 +276,7 @@ D-20261031-02   choice    open  -                   2 小时 面板回答串是�
 - `action`：`ask | list | show | answer | withdraw | gc`，与 CLI 一一对应，同一 `lib/core.mjs`。
 - 写动作（`ask`/`answer`/`withdraw`/`gc`）**只在主会话可用**：子会话调用抛错并给可行动提示"在最终报告里列出待决策项，由主会话建 D"（与 `flow_heartbeat` 同门控、同错误风格）；`list`/`show` 只读，任何会话可调用。
 - `ask` 的 `asked_session`/`asked_turn` 缺省取当前心跳（`heartbeatStatus`）；返回 `{root, decision, created}`。
-- 工具描述必须写清 R1/R2：先建记录再提问；用户回答当轮 `answer`。描述里点名默认值不是答案（R5）。
+- 工具描述必须写清 R1/R2：先建记录再提问；用户回答当轮 `answer`。描述里点名默认值不是答案（R5）。**approval 省略 `recommendation` = 推荐 `approve`**：想推荐拒绝必须显式传 `reject`，`rationale` 仍必填。
 
 ### 7.4 面板只读面
 
@@ -574,6 +574,7 @@ D-20261030-06   choice    answered  T-20261030-03       3 天   剩余任务按�
 | D16 | status 待决策段 | `flow status` | 输出 `待决策 N（阻塞 M）` 且 json 有 `decisions` |
 | D17 | 面板 payload | GET state | 有 `decisions.counts.open`；无 open 时计数 0 |
 | D18 | 子会话门控 | 子会话调 `flow_decision` ask/answer | 抛错并提示向主会话汇报 |
+| D19 | approval 省略 recommendation | `flow decision ask --kind approval --question Q --rationale R`（不带 `--recommendation`） | 落盘 `recommendation:"approve"`、exit 0；显式 `--recommendation reject` → `'reject'` |
 
 ## 13 未决问题
 
