@@ -21,7 +21,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   gates/<id>.json           门禁定义，如 precommit.json
   decisions/<id>.json       决策记录，如 D-20261031-01.json
   logs/<gateId>/<ts>.json   门禁运行记录，<ts> 为 started_at 把冒号换成连字符
-  .lock                     写锁（临时文件，30 秒过期，不要提交、不要展示）
+  .lock                     写锁（临时文件，含 pid/host/token；30 秒未刷新可接管；不要提交、不要展示）
 ```
 
 子目录可由契约覆盖（见 §2），但覆盖值必须留在项目根内；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
@@ -47,6 +47,28 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `loadContract` 返回 `{ contract, source, warnings }`，`source` 为 `.dsh/flow/flow.json`
 或 `defaults`（文件不存在）；文件坏掉时回退默认值并带 `manifest-invalid` warning。
 `schema` 不是 2 时只记一条 warning，仍按 schema 2 归一化。
+
+**类型校验（容错，绝不抛）**：每个顶层 section 必须是对象，成员类型如下。某键存在但类型
+不对时**回退该点的默认值**，并由 `loadContract` 记一条
+`manifest-invalid: <key>: expected <object|string|number>, got <actual>`（`<key>` 是
+`store` / `store.root` / `tasks.current` 这类点号路径；`got` 可能是 `array`/`null`）：
+
+| key | 形状 | 违约处理 |
+|---|---|---|
+| `name` | 非空 string | `<basename(root)>` |
+| `schema` | number | 归一化为 2（文案见上） |
+| `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.dsh/flow` |
+| `experiments` | object：`source` / `dir` 为 string | 逐字段回退 |
+| `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` number | 逐字段回退 |
+| `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
+| `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
+| `decisions` | object：`dir` 为 string | 逐字段回退 |
+| 其他键（含 legacy `runs`、任意未知键） | **不校验** | 原样保留、**无 warning** |
+
+`normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
+否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
+因此 `{"store":"x"}` 这类坏契约下 `flow status --json` 仍退出 0 并携带 warning，而不是
+`TypeError`/IO 错误。
 
 `experiments.source` 与 `tasks.source` 声明读法，store 模式固定为 `store` / `json`。
 `heartbeats.source` 只有 `none` 一个真实开关（关闭整个心跳小节）；心跳只读
@@ -338,16 +360,72 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 
 ## 4 写入语义
 
-**原子写**：`mkdir -p` → 写 `<name>.tmp-<pid>-<seq>` → `rename`；失败清理临时文件并抛
-`FlowError('io')`。读到的坏 JSON 文件只记 `unreadable:` warning，不影响列表。
+**原子写**：`mkdir -p` → `open(<name>.tmp-<pid>-<seq>, 'wx')` → 写 → `fsyncSync(fd)`
+→ close → `rename` → 父目录 best-effort `fsync`。`fsync` 必须在 `rename` 之前：崩溃只会
+留下旧的完整文件或新的完整文件，不会半截。父目录 `fsync` 失败一律吞掉（`/mnt/d` ntfs3
+返回 `EINVAL`），不影响写入结果。`rename` 只对 `EPERM`/`EBUSY`/`EACCES` 退避重试
+（10/50/150ms，最多 4 次），其他错误立即失败；任何失败都清理临时文件并抛
+`FlowError('io')`，消息保持 `cannot write <path>:` 前缀。拿到锁后按 10 分钟节流清理 store
+根与 experiments/tasks/gates/decisions/logs（含一级子目录）中名字匹配
+`*.tmp-<pid>-<seq>` / `.lock.takeover-<pid>-<hex>` 且 mtime 超过 10 分钟的非目录文件
+（绝不删 `.json`、`.lock` 与未知名字），删了 N 个记一条 `stale-temp-cleaned: N` warning。
+读到的坏 JSON 文件只记 `unreadable:` warning，不影响列表。
 
 **写锁**：每次写操作在 `<store>/.lock` 上用 `open(..., 'wx')` 加锁，内容
-`{"pid":N,"at":"<ISO>"}`，结束即释放。锁存在且不足 30 秒 → `FlowError('conflict')`
-（提示稍后重试）；超过 30 秒视为过期，记 `lock-stale:` warning 后接管。锁只防同机并发
-写，不跨机器。
+`{"schema":1,"pid":N,"host":"<hostname>|<platform>","at":"<ISO>","token":"<uuid>"}`，
+结束即释放。`host` 带 platform 是为了区分 WSL 与 Windows 的 PID namespace；`token` 是本次
+获取的所有权凭证：释放时只有 token + pid 都匹配才 `unlink`，不匹配只记
+`lock-release-skipped:` warning 并原样保留（不误删第三方新锁）；释放本身**永不抛**
+（它在 `finally` 里，抛会掩盖业务异常）。
+
+锁存在且不足 30 秒（`FLOW_LOCK_STALE_MS` 可覆盖，非法值忽略）→ 直接
+`FlowError('conflict')`（年龄优先，不判活）。超过 30 秒再判活：`process.kill(pid, 0)`
+成功或 `EPERM` → 视为存活，仍 conflict 并给出 pid/host/path，用户核实后手动 `rm`；
+`ESRCH` → 已死，可接管；`host` 不同的锁**不调用** `kill`，60 秒宽限期内只 conflict。
+接管是 CAS：先赢下短命的 `.lock.takeover-claim`（串行化所有接管决策，避免两个接管者
+依据同一份过期快照动作），在 claim 内重新读取并复判，再把锁 `rename` 到
+`.lock.takeover-<pid>-<hex6>`；回读内容必须与快照逐字节一致，不一致或移到的锁其实还活着
+→ 用 `link()`（原子 no-clobber）把它放回原处，**绝不用 `rename`**（会覆盖第三方新锁）。
+确认可接管后先 `open('wx')` 创建自己的锁、再删移交文件：进入临界区的唯一入口始终是这把
+新锁，任意时刻只有一个写者。
+
+claim 自身也有恢复规则：owner 可判死（或无法判活且超过 60 秒）就按同一 CAS 恢复——先
+`rename` 到 `…takeover-claim.tmp-<pid>-<seq>`（落在陈旧 tmp 清扫命名内），回读内容与快照
+一致才 unlink，否则用 `link()` 放回并记 `lock-claim-restore-skipped:`。claim 写着存活 pid
+但年龄超过 10 分钟（临界区本该是微秒级：SIGSTOP 或 pid 复用）按僵死 claim 恢复，并记
+`lock-claim-stale: recovered <path> after Ns`；等不到 claim 的写者拿到 conflict，消息给出
+pid/host/age 与「确认没有接管在跑后删除 <claim 路径>」的处置建议。
+
+claim 的**释放**同样校验归属（与锁一致）：token + pid 都匹配才 `unlink`，不匹配只记
+`lock-claim-release-skipped: <path> is held by pid N (this process is M); left in place`
+并保留，且永不抛（在 `finally` 里）。这堵住「被恢复的僵死接管者恢复运行后删掉接管者新
+claim、出现两个 claim 持有者」的窗口。接管者在破坏性 `rename` 前还会再回读一次 claim 并
+自证 token，不匹配立刻放弃（随后 `finally` 会记 `lock-claim-release-skipped:` 暴露这次
+让位）。
+
+**有意接受的残余风险**：被恢复的僵死接管者恢复运行后，仍可能正好卡在「回读自证」与
+`rename` 之间的**一次 syscall 窗口**内，按旧快照 move 一次活锁；紧随其后的 compare-mismatch
+兜底会用 `link()` 放回并记 `lock-cas-raced:`，与没有 claim 的协议同伤害面（临时缺口而非
+删除）。10 分钟阈值是「SIGSTOP 与 pid 复用不可区分」的取舍：不设自愈会回到 pid 复用导致
+的无界阻塞，设得更短则会误伤正常的长暂停接管者。
+
+锁只防**同一 PID namespace 的同机并发**写；store 放在共享网络盘上跨机器写不受保护。
+升级注意：旧版 core 的释放逻辑会无条件删锁，新旧进程同时写同一个 store 时可能误删新锁——
+升级窗口内确保没有旧进程在写同一个 store。
 
 **id 生成**：`PREFIX-YYYYMMDD-NN`；遍历现有记录取当天最大序号 +1（跳过已占用），
 当天用尽 → `FlowError('conflict')`。
+
+**不覆盖守卫**：写新记录前（`exp/task/gate/decision add` 与心跳自动建任务）先检查
+`<dir>/<id>.json` 是否已存在——存在且不是目录就抛
+`FlowError('conflict', 'record id <id> is already occupied by <绝对路径> (possibly unreadable); fix or remove that file, then retry')`，
+**绝不覆盖**无法解析的记录（目录目标不算，交给原子写报 `io`/`cannot write`）。显式
+`--id` 与自动 id 走同一守卫。已知代价（有意接受）：当天某个 id 的坏文件会让该前缀当天的
+自动 id 全部 conflict，直到坏文件被修好或删除；冲突消息带绝对路径与处置建议。
+
+**坏记录计数**：不可读的 `<id>.json` 不出现在列表里，但也不从计数里消失——
+`flow status --json` 与 `readStoreState()` 的 `counts` 各带并列 `unreadable`
+（`total` 语义不变，仍是可读记录数），人类 `flow status` 追加 ` · +N 无法读取`。
 
 ## 5 CLI 参考（`bin/flow.mjs`）
 
@@ -361,8 +439,14 @@ flow --root <dir> <command> [--json]
 | 全局参数 | 说明 |
 |---|---|
 | `--root <dir>` | 项目根目录，默认当前目录 |
-| `--json` | 机器可读输出：成功 `{ok:true,data}`；失败 `{ok:false,error:{code,message}}` |
+| `--json` | 机器可读输出：成功 `{ok:true,data,warnings}`；失败 `{ok:false,error,warnings}`（顶层 `warnings` 恒为数组，可空） |
 | `-h`, `--help` | 显示帮助并退出 0 |
+
+**警告流**：每次调用收集两个来源——`loadContract().warnings`（契约修复诊断）与
+`core.drainWarnings()`（锁接管、不可读记录、containment、`gate-expect-unknown` 等）——并
+去重。`--json` 模式下只出现在信封顶层 `warnings`，**不写 stderr**；人类模式下在命令输出
+之后、错误行之前逐条打印 `警告: <text>` 到 stderr（成功与失败路径都打印）。
+`gate run` 步骤子进程的 stderr 只进 `data.steps[].tail`，**不**转发到父进程 warnings。
 
 ### 5.1 命令
 
@@ -498,6 +582,10 @@ question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、
 `decisions: {items, counts:{open,blocking,escalated,answered,withdrawn,superseded,total}}`
 （`items` 只放前 3 条 open，与提醒/面板同一排序）。
 
+存在不可读记录时，人类输出的实验/任务/门禁计数追加 ` · +N 无法读取`；
+`--json` 的 `counts.{experiments,tasks,gates}` 各带并列 `unreadable`（`total` 不变）。
+坏记录本身的 `unreadable:` 诊断走统一的 warnings 通道（见 §5.1）。
+
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
 拼 `status · last_action`，按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；
@@ -584,6 +672,8 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
   open,blocking,failed:[{id,question,blocks,affects,matched}]}`。
 - 人类输出：通过 `✓ decisions：open 2 · blocking 0 · 暂存 3 个文件`；失败逐行
   `✗ <id> 阻塞 <T-id>：affects 命中 <path>`，末行提示可复制的 `flow decision answer` 命令。
+- 警告：决策目录里的坏记录同样产生 `unreadable:`，走 §5.1 的 warnings 通道（`--json`
+  时放在信封顶层，`data`/`error` 形状不变）。
 
 ### 6.2 退出码
 
@@ -605,15 +695,18 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 成功：
 
 ```json
-{"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9}}
+{"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9},"warnings":[]}
 ```
 
 失败：
 
 ```json
 {"ok":false,"error":{"code":"check-failed","message":"检查未通过：staged（exit 1）",
- "check":"staged","exitCode":1,"stdout":"","stderr":"[FAIL] 暂存区包含归属外文件：…"}}
+ "check":"staged","exitCode":1,"stdout":"","stderr":"[FAIL] 暂存区包含归属外文件：…"},"warnings":[]}
 ```
+
+`check <script>` 走 `lib/checks.mjs` 的 spawn、不碰 core → `warnings` 自然为空；
+`check decisions` 走 core → 契约/不可读记录诊断会出现在顶层 `warnings`。
 
 `check list --json` 返回 `{"ok":true,"data":{"checks":[{name,interpreter,script,description,args}]}}`，
 `script` 是相对包根的 POSIX 路径；内置项 `decisions` 例外——它的 `script` 是
@@ -655,10 +748,20 @@ containedPath(root, value, label, {allowAbsolute?})
                                      // manifest 路径 containment：根内绝对路径，
                                      // 不安全时记 warning 并返回 undefined（仅 store.root 可 allowAbsolute）
 drainWarnings()                      // 取走并清空全局诊断 warning（非契约 API）
+withLock(root, contract, fn)         // 在 store 写锁内同步执行 fn(paths)（非契约 API，测试用；
+                                     // fn 必须同步，锁不是可重入互斥量）
+releaseTakeoverClaim(claimPath, token)
+                                     // 只释放自己的 takeover claim（token+pid 匹配），
+                                     // 不匹配记 warning 并保留（非契约 API，测试用）
+renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
+                                     // rename 退避重试（EPERM/EBUSY/EACCES，10/50/150ms，
+                                     // 共 4 次），最终抛 FlowError('io')（非契约 API，仅供测试注入）
 
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
 listTasks       / getTask       / addTask       / updateTask       / removeTask
 listGates       / getGate       / addGate       / updateGate       / removeGate
+                                     // list* 第三个可选参数 {unreadable?: string[]}
+                                     // 收走不可读文件的绝对路径，供调用方计数
 
 runGate(root, contract, id, {timeoutMs?, tailLines?, force?})
                                      // async；disabled 且无 force → usage
@@ -700,6 +803,7 @@ readStoreState(root, contract)       // 面板聚合：experiments{items,counts,
                                      // gates{items(含 lastRun),counts}
                                      // heartbeats（= readHeartbeatSection）
                                      // decisions{items,counts}
+                                     // counts.{experiments,tasks,gates}.unreadable：不可读文件数
 ```
 
 `readStoreState().decisions` **逐字等于** `summarizeDecisions(root, contract,
@@ -725,7 +829,8 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 - `.dsh/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
 - git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
-- 写锁 `.lock` 是临时文件，不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`）。
+- 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件，
+  不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`、`*.tmp-*`、`.dsh/flow/.lock.takeover-*`）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。

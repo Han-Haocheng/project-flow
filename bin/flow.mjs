@@ -95,7 +95,8 @@ const USAGE = `project-flow CLI（schema 2）
 
 全局
   --root <dir>   项目根目录（默认当前目录）
-  --json         机器可读输出：{ok:true,data} 或 {ok:false,error:{code,message}}
+  --json         机器可读输出：{ok:true,data,warnings} 或 {ok:false,error,warnings}
+                 （warnings 恒为数组，可为空；契约修复/不可读记录/锁接管等诊断都在里面）
   -h, --help     显示本帮助
 
 退出码
@@ -427,9 +428,45 @@ function fmtClaims(claims) {
   return claims.join(', ')
 }
 
-function showWarnings(warnings) {
-  if (!Array.isArray(warnings) || warnings.length === 0) return
-  for (const warning of warnings) errOut(`警告: ${typeof warning === 'string' ? warning : JSON.stringify(warning)}`)
+// Warnings are collected from two sources — `loadContract().warnings` (manifest
+// diagnostics) and `core.drainWarnings()` (lock takeover, unreadable records,
+// containment, gate expect typos) — and surfaced exactly once per invocation:
+// `warnings: [...]` in the `--json` envelope, `警告: <text>` on stderr otherwise.
+const pendingWarnings = []
+// `core` as loaded by main(); the catch path needs it to drain late warnings.
+let coreRef = null
+
+/** Append warnings, skipping non-strings and duplicates (order preserved). */
+function collectWarnings(list) {
+  if (!Array.isArray(list)) return
+  for (const item of list) {
+    if (typeof item !== 'string' || item === '') continue
+    if (pendingWarnings.includes(item) === false) pendingWarnings.push(item)
+  }
+}
+
+/** Take (and clear) the core diagnostic log; safe before core loads. */
+function drainCoreWarnings() {
+  try {
+    if (coreRef !== null && typeof coreRef.drainWarnings === 'function') collectWarnings(coreRef.drainWarnings())
+  } catch {
+    // Diagnostics must never fail a command.
+  }
+}
+
+/** Contract for `root` with its manifest warnings collected (cached per root). */
+function loadContractFor(ctx, root) {
+  if (ctx.contract !== null && ctx.contractRoot === root) return ctx.contract
+  const loaded = ctx.core.loadContract(root)
+  collectWarnings(loaded.warnings)
+  ctx.contract = loaded.contract
+  ctx.contractRoot = root
+  return ctx.contract
+}
+
+/** Print the collected warnings (human mode only; `--json` carries them in the envelope). */
+function printWarnings() {
+  for (const warning of pendingWarnings) errOut(`警告: ${warning}`)
 }
 
 // ---------------------------------------------------------------- 参数取值
@@ -535,8 +572,14 @@ async function cmdInit(ctx) {
       out('  用 flow gate list 查看；不需要的用 flow gate disable <id>，已有一条门禁时不会再种。')
     }
   }
-  showWarnings(result?.warnings)
+  collectWarnings(result?.warnings)
   return result
+}
+
+/** ` · +N 无法读取` suffix for human status lines (empty when every record parsed). */
+function unreadableTail(list) {
+  const count = Array.isArray(list) ? list.length : 0
+  return count > 0 ? ` · +${count} 无法读取` : ''
 }
 
 function countsOf(items, keys) {
@@ -551,18 +594,23 @@ function countsOf(items, keys) {
 async function cmdStatus(ctx) {
   const { core } = ctx
   const loaded = core.loadContract(ctx.root)
+  collectWarnings(loaded.warnings)
   const contract = loaded.contract
   const initialized = loaded.source !== 'defaults'
 
+  // Invalid records are skipped from the rows but never vanish from the counts:
+  // each family reports how many files could not be parsed alongside its totals.
+  const unreadable = { experiments: [], tasks: [], gates: [] }
   let experiments = []
   let tasks = []
   let gates = []
   let store = null
   if (initialized) {
     ctx.contract = contract
-    experiments = await core.listExperiments(ctx.root, contract)
-    tasks = await core.listTasks(ctx.root, contract)
-    gates = await core.listGates(ctx.root, contract)
+    ctx.contractRoot = ctx.root
+    experiments = await core.listExperiments(ctx.root, contract, { unreadable: unreadable.experiments })
+    tasks = await core.listTasks(ctx.root, contract, { unreadable: unreadable.tasks })
+    gates = await core.listGates(ctx.root, contract, { unreadable: unreadable.gates })
     try {
       store = core.storePaths(ctx.root, contract).store
     } catch {
@@ -613,9 +661,9 @@ async function cmdStatus(ctx) {
     schema: contract.schema,
     store,
     counts: {
-      experiments: { total: experiments.length, ...expCounts },
-      tasks: { total: tasks.length, ...taskCounts },
-      gates: { total: gates.length, enabled: gateEnabled },
+      experiments: { total: experiments.length, ...expCounts, unreadable: unreadable.experiments.length },
+      tasks: { total: tasks.length, ...taskCounts, unreadable: unreadable.tasks.length },
+      gates: { total: gates.length, enabled: gateEnabled, unreadable: unreadable.gates.length },
     },
     heartbeats,
     decisions,
@@ -639,13 +687,16 @@ async function cmdStatus(ctx) {
       lines.push(['存储', store || contract?.store?.root || '.dsh/flow'])
       lines.push([
         '实验',
-        `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned}）`,
+        `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned}${unreadableTail(unreadable.experiments)}）`,
       ])
       lines.push([
         '任务',
-        `${tasks.length}（draft ${taskCounts.draft} · active ${taskCounts.active} · done ${taskCounts.done} · archived ${taskCounts.archived}）`,
+        `${tasks.length}（draft ${taskCounts.draft} · active ${taskCounts.active} · done ${taskCounts.done} · archived ${taskCounts.archived}${unreadableTail(unreadable.tasks)}）`,
       ])
-      lines.push(['门禁', `${gates.length}（启用 ${gateEnabled}）`])
+      lines.push([
+        '门禁',
+        `${gates.length}（启用 ${gateEnabled}${unreadableTail(unreadable.gates)}）`,
+      ])
       lines.push(['待决策', `${decisions.counts.open}（阻塞 ${decisions.counts.blocking}）`])
       const hiddenBeats = Number(heartbeats.counts.hidden) || 0
       lines.push([
@@ -712,14 +763,13 @@ async function cmdStatus(ctx) {
       }
     }
   }
-  showWarnings(loaded.warnings)
   return data
 }
 
 async function cmdExp(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow exp <list|show|tree|add|update|rm>')
-  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
     const records = await core.listExperiments(ctx.root, contract)
@@ -811,7 +861,7 @@ async function cmdExp(ctx, sub) {
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|rm>')
-  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
     const records = await core.listTasks(ctx.root, contract)
@@ -883,7 +933,7 @@ async function cmdTask(ctx, sub) {
 async function cmdGate(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow gate <list|show|add|update|rm|run|logs>')
-  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
     const gates = await core.listGates(ctx.root, contract)
@@ -1090,10 +1140,9 @@ async function cmdHeartbeat(ctx, sub) {
   // worktree still reads/writes the same heartbeat files.
   const workspace = heartbeatWorkspaceOf(core, ctx.root)
   const root = workspace.root
-  if (workspace.degraded === true) {
-    errOut(`warning: 心跳根无法解析到主工作区，降级到 ${root}（${workspace.reason || '未知原因'}）`)
-  }
-  const contract = core.loadContract(root).contract
+  // The degraded case is diagnosed once by core (`heartbeat-root-degraded:` in
+  // every heartbeat read/write); collecting a second copy here duplicated it.
+  const contract = loadContractFor(ctx, root)
   const sessionFlag = readString(flags, 'session')
   const note = readString(flags, 'note')
 
@@ -1342,7 +1391,7 @@ function printDecisionList(items, counts) {
 
 async function cmdDecision(ctx, sub) {
   const { core, flags } = ctx
-  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+  const contract = loadContractFor(ctx, ctx.root)
 
   if (!sub) throw new CliError('usage', '用法: flow decision <ask|list|show|answer|withdraw|gc>')
 
@@ -1451,6 +1500,7 @@ async function cmdDecision(ctx, sub) {
 function runCheckDecisions(ctx) {
   const { core } = ctx
   const loaded = core.loadContract(ctx.root)
+  collectWarnings(loaded.warnings)
   const started = Date.now()
   const result = core.checkDecisions(ctx.root, loaded.contract)
   const durationMs = Date.now() - started
@@ -1479,7 +1529,6 @@ function runCheckDecisions(ctx) {
   const stdout = lines.join('\n')
   if (!ctx.json) {
     for (const line of lines) out(line)
-    showWarnings(loaded.warnings)
   }
   if (result.failed.length === 0) {
     return { check: 'decisions', exitCode: 0, stdout, stderr: '', durationMs, open: result.open, blocking: result.blocking, failed: [] }
@@ -1680,6 +1729,7 @@ async function main() {
 
   const root = parsed.flags.root === undefined ? process.cwd() : path.resolve(String(parsed.flags.root))
   const core = await loadCore()
+  coreRef = core
   const ctx = {
     core,
     root,
@@ -1692,6 +1742,7 @@ async function main() {
     affects: parsed.affects,
     json: jsonMode,
     contract: null,
+    contractRoot: null,
   }
 
   // show/update/rm/run/logs 允许把 id 作为位置参数：flow exp show E-xxx
@@ -1717,7 +1768,11 @@ async function main() {
   }
 
   const data = await dispatch(ctx, parsed)
-  if (jsonMode) emitJson({ ok: true, data })
+  // Collect late diagnostics (lock takeover, unreadable records, expect typos)
+  // after the command ran, so they never interleave with its own output.
+  drainCoreWarnings()
+  if (jsonMode) emitJson({ ok: true, data, warnings: pendingWarnings })
+  else printWarnings()
   return 0
 }
 
@@ -1726,6 +1781,8 @@ main()
     process.exitCode = code ?? 0
   })
   .catch((error) => {
+    // A failure path still drains: core may have warned before throwing.
+    drainCoreWarnings()
     const code = typeof error?.code === 'string' ? error.code : 'io'
     const detail = { code, message: error?.message || String(error) }
     // CheckError 自带检查上下文（check/exitCode/stdout/stderr），直接并入 error 对象。
@@ -1733,7 +1790,10 @@ main()
       error?.payload && typeof error.payload === 'object' ? { ...error.payload, ...detail } : detail
     const mapped =
       (topCommand === 'check' ? CHECK_EXIT_BY_CODE[code] : undefined) ?? exitCodeOf(code)
-    if (jsonMode) emitJson({ ok: false, error: payload })
-    else if (error?.silent !== true) errOut(`错误（${payload.code}）：${payload.message}`)
+    if (jsonMode) emitJson({ ok: false, error: payload, warnings: pendingWarnings })
+    else {
+      printWarnings()
+      if (error?.silent !== true) errOut(`错误（${payload.code}）：${payload.message}`)
+    }
     process.exitCode = mapped
   })

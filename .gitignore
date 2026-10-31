@@ -8,3 +8,6 @@ test/.tmp/
 # 台账 store 入库，但锁与门禁运行记录不提交（避免每次运行产生提交噪音）
 .dsh/flow/.lock
 .dsh/flow/logs/
+# 原子写/接管中间产物：进程在任何阶段崩溃都不该把它们带进仓库
+*.tmp-*
+.dsh/flow/.lock.takeover-*

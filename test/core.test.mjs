@@ -107,6 +107,17 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
 }
 
+/** 真实已死进程的 pid（禁止魔数：服务器上 999999 可能真的存在 → 假红）。 */
+function deadPid() {
+  const result = spawnSync(process.execPath, ['-e', ''])
+  assert.equal(typeof result.pid, 'number')
+  assert.throws(() => process.kill(result.pid, 0), `spawned helper pid ${result.pid} should already be reaped`)
+  return result.pid
+}
+
+/** 与 core 的 hostTag() 一致：hostname|platform（区分 WSL/Windows PID namespace）。 */
+const HOST_TAG = `${os.hostname()}|${process.platform}`
+
 function expectFlowError(fn, code, pattern) {
   assert.throws(fn, (error) => {
     assert.ok(error instanceof FlowError, `expected FlowError, got ${error?.name}: ${error?.message}`)
@@ -503,15 +514,26 @@ test('原子写：目标为目录时抛 io 且不残留临时文件，修复后�
 
 // ---------------------------------------------------------------------- 锁
 
-test('写锁：新鲜锁拒绝写入，过期锁接管并记 warning', () => {
+test('写锁：新鲜锁拒绝写入，过期锁经 CAS 接管并记 warning', () => {
   const { root, contract } = freshProject('lock')
   const lockPath = path.join(root, '.dsh/flow/.lock')
+  const fresh = {
+    schema: 1,
+    pid: deadPid(),
+    host: HOST_TAG,
+    at: new Date().toISOString(),
+    token: 'fresh-owner',
+  }
 
-  fs.writeFileSync(lockPath, JSON.stringify({ pid: 123456, at: new Date().toISOString() }))
+  fs.writeFileSync(lockPath, JSON.stringify(fresh))
   expectFlowError(() => addExperiment(root, contract, { title: 'blocked' }), 'conflict', /locked by another writer/)
   assert.ok(fs.existsSync(lockPath), '冲突时不应擅自删掉他人锁')
+  assert.equal(readJson(lockPath).token, 'fresh-owner', '新鲜锁必须原样保留（token 不变）')
 
-  fs.writeFileSync(lockPath, JSON.stringify({ pid: 123456, at: new Date(Date.now() - 60_000).toISOString() }))
+  fs.writeFileSync(
+    lockPath,
+    JSON.stringify({ ...fresh, at: new Date(Date.now() - 60_000).toISOString(), pid: deadPid(), token: 'stale-owner' }),
+  )
   drainWarnings()
   const created = addExperiment(root, contract, { title: 'taken over' })
   assert.equal(created.title, 'taken over')
