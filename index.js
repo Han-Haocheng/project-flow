@@ -24,7 +24,6 @@ import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-
 export const inject = ['webServer']
 
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
@@ -1009,38 +1008,57 @@ async function handleState(ctx, request, response) {
     }
   }
 
+  sendJson(response, 200, await collectPanelState(ctx, root))
+}
+
+/**
+ * The read-only payload for exactly one workspace: the `/api/project-flow/state`
+ * response body and the TUI panel's read path are this one object.
+ */
+async function collectPanelState(ctx, root) {
+  const now = Date.now()
+  const workspaces = listWorkspaces(ctx)
   const entry = { path: root, name: rootName(root, workspaces) }
 
   if (hasStore(root) === false) {
-    sendJson(response, 200, {
+    return {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
       root,
       roots: [entry],
       error: { code: 'not-initialized', message: `no flow store in ${root}; run: node bin/flow.mjs init` },
-    })
-    return
+    }
   }
 
   try {
     const payload = await buildState(root, entry, now)
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
-    const body = capPayload(payload)
-    response.writeHead(200, {
-      'content-type': 'application/json; charset=utf-8',
-      'cache-control': 'no-store',
-      'content-length': Buffer.byteLength(body),
-    })
-    response.end(body)
+    // Cap by serializing once, then hand back the exact object the client sees.
+    return JSON.parse(capPayload(payload))
   } catch (error) {
-    sendJson(response, 200, {
+    return {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
       roots: [{ path: entry.path, name: entry.name }],
       root,
       error: { code: 'internal', message: brief(error, 400) },
-    })
+    }
+  }
+}
+
+/**
+ * The TUI panel's read path: resolve the workspace, reuse the HTTP projection,
+ * and never throw into the panel host.
+ */
+export function panelStateReader(ctx) {
+  return async function readPanelState(cwd) {
+    try {
+      const root = canonicalRoot(typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd())
+      return await collectPanelState(ctx, root)
+    } catch (error) {
+      return { ok: false, error: brief(error) }
+    }
   }
 }
 

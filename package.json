@@ -14,6 +14,7 @@
   },
   "exports": {
     ".": "./index.js",
+    "./tui-host": "./tui-host.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
@@ -21,7 +22,10 @@
   "files": [
     "index.js",
     "client.js",
+    "tui-host.js",
+    "tui-panel.js",
     "cordis.patch.yml",
+    "dsh-plugin.json",
     "locale/*.json",
     "icon.svg",
     "README.md",

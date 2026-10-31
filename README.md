@@ -63,6 +63,21 @@ plugin_manager install_bundle  target=<仓库根目录>
 `cordis.patch.yml` 会 insert 条目 `project-flow`。安装后刷新页面；卸载用
 `plugin_manager remove_bundle target=@local/project-flow`。
 
+## TUI 侧栏面板
+
+在 dsh-tui 里，同一份 `.dsh/flow` 台账还会以一个只读侧栏面板呈现（面板标题「项目流程」）。
+web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同一份 store，不存在第二份数据。
+
+- **打开**：`Ctrl+B` 展开侧栏后，标签栏会出现「项目流程」（临时面板默认启用）；也可用 `/panel` 选择器切换。
+- **只读**：TUI 面板不写台账；写入仍只走 CLI 与 `flow_*` 工具（「初始化」只在 web 面板的空态上提供）。
+- **刷新与滚动**：每 3 秒自动刷新当前工作区；`r` 手动刷新，`j` / `k` 上下滚动。
+- **身份（已知限制）**：面板走 `tuiPanels`，这是 dsh-tui 的实验性接缝。宿主用**调用方
+  activation 的 Component 身份**做面板 id 前缀，而 Cordis 里唯一能通过服务调用的上下文是
+  `inject` 生成的作用域 —— 它没有 Component 身份。因此当前面板 id 是每次会话的
+  `session:actN:flow`（临时面板，会自动进入侧栏启用集合）。包根 `dsh-plugin.json` 仍保留：
+  它让 dsh-tui 承认本包为 Component（componentId `project-flow`，用于效果台账/授权归属），
+  一旦上游把「注入作用域继承激活身份」补上，面板 id 就会自动变成 `project-flow:flow`，无需改本包。
+
 ## 边界
 
 - **面板只读（一个例外）**：面板唯一的写操作是「初始化」——`POST /api/project-flow/init`，
