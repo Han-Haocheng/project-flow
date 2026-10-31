@@ -1,3 +1,5 @@
-- insert:
+ - insert:
     - id: project-flow
       name: '@local/project-flow'
+    - id: project-flow-tui
+      name: '@local/project-flow/tui-host'
