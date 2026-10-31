@@ -1,6 +1,6 @@
 # DSH 0.2.0 工具面速查：自动化任务 / 智能体团队 / 目标 / 会话定时
 
-> 实测环境：`dsh 0.2.0-rc.2`（2026-10-10，profile `web`）。**本文件是派单前 / 恢复前读的细节层**；纪律在 `SKILL.md` §九（卡片与自动化任务）与 §十（智能体团队）。
+> 实测环境：`dsh 0.2.0-rc.2`（2026-10-10，profile `web`）。**本文件是派单前 / 恢复前读的细节层**；纪律在 `SKILL.md` §九（卡片与自动化任务）与 §十（智能体团队），**与项目任务的映射见 §3.1**。
 > **第一原则**：**可用性以当前会话的工具列表为准**——Host 暴露什么就是什么，别照文档猜工具名或字段；下面的"纪律"才是文档该记的东西（参数细节看工具 schema 本身）。
 
 ## 0 怎么核实"这些工具到底在不在"
@@ -39,9 +39,33 @@
 | `wait_agent` | 等下一次成员状态/邮箱/共享任务变化 | **只观察调用之后的变化**，**从不唤醒**任何人；没有其他成员在跑时立刻返回 `noProgress`；超时后应 `list_agents` 重列而不是轮询 |
 | `list_agents` | 花名册与可用性 | `inactive` = **没在跑**，不等于失败/完成/等待；`provisioning` / `failed` 才是创建态 |
 | `interrupt_agent` | Lead 专用中断某队友当前轮，**保留 pending inbox** | 中断 ≠ 取消任务；唤醒不保证恢复原状 |
-| `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒 |
+| `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒；**板随 Lead 会话消失，映射与回收见 §3.1** |
 
 **派工检查单**：任务书路径 / base（branch + commit）/ 允许写域（与其他在跑成员尽量不相交）/ 交付格式（只给结论 + 指针，≤6–8KB）/ **仅在自己分支提交 + 按模板提评审申请，不合并、不 push**（见 `contribution-flow.md`）/ 停止条件 / 验证命令。
+
+### 3.1 与项目任务（project-flow）对接：项目台账是 durable 真源，Team 板是执行视图
+
+**映射（用户已确认，写死）**：
+
+| 方向 | 位置 | 写法 | 谁写 |
+|---|---|---|---|
+| 项目 → Team | Team 任务 `description` **首行** | `flow: <T-id>`；一张 Team 任务只对应一个项目任务（覆盖多个就拆多张） | Lead 建卡时写 |
+| Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论；notes 覆盖式更新，保留原内容） | Lead（唯一台账写者） |
+| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**已合并**才置 `done`，reject/阻塞/放弃写原因后回 `active` 或 `archived` | Lead |
+| 证据 | 项目任务 `commits` | Lead 合并后回填合并提交与纳入的贡献提交 | Lead；队友不写 |
+
+**执行闭环**：`flow_task list` / `flow_task show` 读项目任务 → 按文件域与依赖拆 Team 任务（`team_task_create`：`description` 首行 `flow: <T-id>`，`blocked_by` / `write_scopes` 是协调信息不是锁）→ 项目 notes 回记 `team: <taskId>` → `spawn_teammate` + `send_message` → 队友 claim / 自己分支提交 / 门禁 / 评审申请 → Lead 按 `SKILL.md` §1.4 五条判定 → 合并 → 更新项目任务（status / commits / notes）→ 回收 Team 任务（`complete`，或 `release`/`reopen` + 原因）→ 清理分支/工作树。
+
+**禁止双写**：`status` / `commits` / 验收结论只写项目台账；Team 卡只反映执行状态；不把同一进度叙事两边各写一份；队友不写项目台账、不写心跳（心跳只面向主会话）⇒ **Team 板随 Lead 会话消失，会话结束前必须逐卡回收**。
+
+**回收检查单（Lead，会话结束前）**：
+
+- [ ] 每张 Team 任务有结论：`completed`（已合并）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
+- [ ] 对应项目任务 notes 有 `team: <taskId>`，`status` / `commits` 已更新（未合并不得 done）
+- [ ] reject / 放弃 / 接管：原因与现场（branch + path + commit）已写进项目 notes
+- [ ] 没有"只活在 Team 板或对话里"的状态与证据；下一个会话只读项目台账就能恢复
+
+**降级**：Team 工具不在当前会话工具列表时，唯一降级是一次性 subagent，且**只派只读调研**；写活回到 Lead 自己做（或用卡片 §1）。Team 可用时不得用一次性 subagent 顶替写活。
 
 ## 4 目标 `create_goal` / `get_goal` / `update_goal`
 
@@ -57,10 +81,12 @@
 
 | 场景 | 用 |
 |---|---|
+| 本次会话内并行几路写域，需与 Lead 来回对话、要逐卡回收 | **智能体团队**（§3）——**默认执行面** |
+| 只读调研 / 查证 / 长文阅读 / 方案对比 | **一次性 subagent**（只读，不进 Team 板） |
+| **Team 工具不在当前会话工具列表** | **一次性 subagent（唯一降级），且只派只读活**；写活回 Lead |
 | 跨会话 / 无人值守 / 要钉工作区与权限 / 要 cron | **任务板卡**（§1） |
-| 本次会话内并行几路写域，需与 Lead 来回对话 | **智能体团队**（§3） |
 | 大规模**只读**扇出、跨很多文件的审计/迁移 | **`workflow`**（§5） |
 | 到点提醒"这个会话" | `schedule_*`（§2） |
 | 到一个持续推进的目标 | `goal`（§4） |
 
-三者**共用同一条铁律**：**贡献者只在自己分支提交并发评审申请；中心（Lead/协调者）唯一合并主分支、唯一写主分支台账、唯一决定合并顺序**。分支隔离只是让提交可评审的手段，不是分布式协调；队友与卡片都不合并、不 push、不写主分支台账。中心按五条清单判定后给 accept / reject / request-rebase，合并与台账归中心；协议见 [contribution-flow.md](contribution-flow.md)。
+以上执行面**共用同一条铁律**：**贡献者只在自己分支提交并发评审申请；中心（Lead/协调者）唯一合并主分支、唯一写主分支台账、唯一决定合并顺序**。分支隔离只是让提交可评审的手段，不是分布式协调；队友、卡片与一次性 subagent 都不合并、不 push、不写主分支台账、不写心跳。中心按五条清单判定后给 accept / reject / request-rebase，合并与台账归中心；项目任务 ↔ Team 任务映射与回收见 §3.1，协议见 [contribution-flow.md](contribution-flow.md)。

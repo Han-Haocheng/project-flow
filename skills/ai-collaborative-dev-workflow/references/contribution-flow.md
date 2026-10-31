@@ -18,6 +18,8 @@
 
 贡献者之间不协调、不同步、不排队、不登记文件锁。冲突在中心合并阶段由中心裁决。
 
+在 Agent Teams 中执行时，一次贡献对应一张 Team 任务；**项目台账才是 durable 真源**，Team 板只是本次会话的执行视图。映射字段与回收检查单见 §7.1 / §7.2。
+
 ## 1 选 base 与建分支
 
 - **base**：任务书声明的集成线提交（默认 `dev` 的 HEAD）。不 fetch；要远端最新就由中心先同步，再从同步后的提交起分支。
@@ -68,6 +70,7 @@
 
 - 按 [assets/merge-request-template.md](../assets/merge-request-template.md) 填，发给中心（对话消息，或写入任务 notes 后发指针）。
 - 必须写 **branch + worktree path（或"同一 checkout"）+ HEAD commit**；只写"我改好了"等于没写。
+- 在 Team 中执行时，申请同时写 **Team 任务 id** 与项目 task id；`team: <taskId>` 由中心回记到项目 notes，贡献者不写项目台账。
 - 测试结果写命令原文 + 退出码/摘要；风险/未完成写"无"或具体项；写明"希望中心做什么"（`merge --no-ff` / `cherry-pick <sha>` / 若需 rebase 请给目标 base）。
 - 多份申请撞同一文件时由**中心逐份裁决**；贡献者不得自行合并，也不得抢改主工作区。
 
@@ -144,6 +147,29 @@ git branch -d <branch>        # 未合并会被拒绝；-D 仅在确认丢弃时
 - 心跳是运行态，可留在自己工作树；不得因心跳自动建卡，也不登记文件锁。
 - **分支不可见**：面板与工具面都看不到某会话在哪条分支 ⇒ 心跳 `last_action`、任务 `notes`、评审申请三处都写 `branch` + `worktree path` + `commit`。
 
+### 7.1 项目任务 ↔ Team 任务映射（项目台账是 durable 真源）
+
+Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随会话消失；项目台账（`.dsh/flow/tasks/`）跨会话、跨工作树持久。两者只靠文本字段对接：
+
+| 方向 | 位置 | 写法 | 谁写 |
+|---|---|---|---|
+| 项目 → Team | Team 任务 `description` **首行** | `flow: <T-id>`（一张 Team 任务只对应一个项目任务；覆盖多个就拆多张） | Lead 建卡时写 |
+| Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论；notes 覆盖式更新，保留原内容） | Lead（唯一台账写者） |
+| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**只有已合并**才置 `done`，reject/放弃写原因后回 `active` 或 `archived` | Lead |
+| 证据 | 项目任务 `commits` | Lead 合并后回填合并提交与纳入的贡献提交 | Lead；队友不写 |
+
+- **禁止双写**：`status` / `commits` / 验收结论只以项目台账为权威值；Team 卡状态是执行视图，不复制一份进度叙事到项目 notes；Team 描述正文不重复台账字段。
+- **队友不写项目台账、不写心跳**：心跳只面向主会话（T-20/T-26）；队友只在自己分支提交，把结论交回 Lead，由 Lead 登记映射。
+- 映射是**文本约定**：项目流面板不做 Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。
+
+### 7.2 会话结束前回收检查单（Lead 逐卡）
+
+- [ ] 每张 Team 任务都有结论：`completed`（已合并）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
+- [ ] 每个对应项目任务 notes 有 `team: <taskId>`，`status` / `commits` 已更新（未合并不得 done）
+- [ ] 被 reject / 放弃 / 接管的卡写清原因与现场（branch + path + commit）
+- [ ] 没有"只活在 Team 板或对话里"的状态、证据或验收结论；下一个会话只读项目台账就能恢复
+- [ ] 分支 / 工作树已由 Lead 决定保留或清理，并写进项目任务 notes
+
 ## 8 常见错误
 
 | 现象 | 原因 | 处理 |
@@ -174,5 +200,7 @@ git branch -d <branch>        # 未合并会被拒绝；-D 仅在确认丢弃时
 - [ ] 申请身份与 `git worktree list` 对得上；base 是集成分支祖先
 - [ ] diff 逐段看过；门禁自己复跑；影响面核对
 - [ ] 结论是 accept / reject / request-rebase 之一，理由写进任务 notes
+- [ ] 若用 Agent Teams：项目任务已回记 `team: <taskId>`，Team 任务有 `flow: <T-id>` 锚点
+- [ ] 会话结束前逐卡回收（§7.2），Team 板上不留唯一真源；队友未写项目台账/心跳
 - [ ] accept 后：合并 → 复跑门禁 → 更新台账 → 清理（写进 notes）
 - [ ] reject / request-rebase 后：给具体理由与新 base，等贡献者重提

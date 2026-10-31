@@ -134,14 +134,18 @@ metadata:
 
 > 派工前先执行「硬性约束」：预研、反驳与建议回馈给用户；任务书获得确认后，范围内推进，范围外与敏感操作当次再确认。新会话、上下文压缩或中断恢复时，先执行「六、长期项目与会话连续性」的恢复协议。
 
-1. **立项与派工**：任务书用 [assets/task-brief-template.md](assets/task-brief-template.md) 生成，必须含：base（branch + commit）、允许文件域、影响域/接口边界、验证命令（契约条目）、必须提交 + 证据、禁止项（不合并/不 push/不切主分支/不写主分支台账）、停止条件。
-2. **外部世界核对**：派工/恢复前做 `git status`、当前 HEAD、台账 `COLLAB_STATE.md`、远端/CI 是否变化；未归属改动先冻结并询问用户。
-3. **贡献者产出**：在自己分支提交、跑门禁、按模板提申请（branch + path + commit + 命令结果 + 影响面 + 希望中心做什么）。
-4. **中心判定**：按 §1.4 五条清单逐条给结论 → accept（合并）/ reject（具体理由）/ request-rebase（给出新 base）。判定与理由写进任务 notes。
-5. **合并与收口**：`git merge --no-ff` / `git cherry-pick` / fast-forward → 复跑门禁 → 更新台账 → 清理工作树与分支（保留现场原则）。
-6. **核实产出**：中心核实贡献者产出——`git status` + 文件 mtime 与最终答复；**卡片**看**会话产出**（最后一次 `turn/end` 的 reason + 有无实质文本——**看板绿 ≠ 交付**，被中断的执行会被记成 succeeded）。长时间无改动则中断并接管（接管时记录 branch + commit）。
-7. **代理完成报告**：改动清单、行为说明、验证摘要、提交 hash；交付验收四步：产出物存在 → 引用/接口可解析 → 事实零丢失 → 影响域接口兼容。
-8. 每满发布阈值执行 `scripts/release_baseline.sh '<发布提交特征>' [阈值]` 并跑发布脚本（含冒烟）。
+1. **选执行面（先定怎么跑）**：中心先读项目任务与进度（`flow_task list` / `flow_task show`），再按顺序选执行面——**本次会话内有多路可并行写域、或需要来回追问/补证据 ⇒ Agent Teams（§十，默认）**；**跨会话 / 无人值守 / 要钉工作区与权限 ⇒ Host 任务板卡片（§九）**；**大规模只读扇出 ⇒ `workflow` / 并行子代理**；**一次性只读调研，或当前会话工具列表里没有 Team 工具 ⇒ 一次性 subagent（唯一降级，只做只读）**。项目任务再多、只有一条写线时也不组队：中心自己推进更快。
+2. **立项与派工**：任务书用 [assets/task-brief-template.md](assets/task-brief-template.md) 生成，必须含：base（branch + commit）、允许文件域、影响域/接口边界、验证命令（契约条目）、必须提交 + 证据、禁止项（不合并/不 push/不切主分支/不写主分支台账）、停止条件。
+3. **拆分：项目任务 → Team 任务**：走 Agent Teams 时按**文件域与依赖**把项目任务拆成一到多张 Team 任务：`team_task_create`，`subject` 说清交付物，**`description` 首行写 `flow: <T-id>`**（一张 Team 任务只对应一个项目任务；要覆盖多个就拆多张），正文写任务书路径、允许写域、交付格式（分支 + 提交 + 证据 + 评审申请）与停止条件；依赖用 `blocked_by`、文件域用 `write_scopes` 预声明（**协调信息，不是锁**）。拆完由中心把 `team: <taskId>` 回记到**项目任务 notes**——项目台账是 durable 真源，Team 板只是本次会话的执行视图。
+4. **派队友**：`spawn_teammate`（Lead 专用）建持久队友；prompt 必须自带 Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式与停止条件（队友看不到 Lead 的对话）。**建卡与派工都不会自动开跑**：队友按 `team_task_get` 取当前 revision 后 `claim`；Lead 用 `send_message` 唤醒或追加指令。
+5. **外部世界核对**：派工/恢复前做 `git status`、当前 HEAD、台账 `COLLAB_STATE.md`、远端/CI 是否变化；未归属改动先冻结并询问用户。
+6. **贡献者产出**：队友认领后只在自己的分支/worktree 写，按任务书提交、跑门禁、按模板提申请（branch + path + commit + 命令结果 + 影响面 + 希望中心做什么），完成后把 Team 任务置 `completed`；**不写项目台账、不写心跳、不合并**。
+7. **中心判定**：按 §1.4 五条清单逐条给结论 → accept（合并）/ reject（具体理由）/ request-rebase（给出新 base）。判定与理由写进项目任务 notes（含 branch + commit），不只留在 Team 板或对话里。
+8. **合并与回收（收口，最容易漏）**：`git merge --no-ff` / `git cherry-pick` / fast-forward → **复跑门禁** → **更新项目任务**（status / commits / notes 追加验收结论与 `team: <taskId>`）→ **回收 Team 任务**（`team_task_update` 置 `completed`；被 reject / 未完成写清原因再 `release` 或保留）→ 清理工作树与分支（保留现场原则）。
+9. **会话结束前逐卡回收**：Team 板随 Lead 会话消失（与 Host 任务板卡片不同），离开会话前必须逐张检查 Team 任务：没有 `in_progress` 悬空，没有"结论只写在 Team 板/对话里"的交付，每个项目任务 notes 都能独立恢复（映射 id、branch/commit、验收结论）。检查单见 [references/contribution-flow.md](references/contribution-flow.md) §7.2 与 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1。
+10. **核实产出**：中心核实贡献者产出——`git status` + 文件 mtime 与最终答复；**卡片**看**会话产出**（最后一次 `turn/end` 的 reason + 有无实质文本——**看板绿 ≠ 交付**，被中断的执行会被记成 succeeded）。长时间无改动则中断并接管（接管时记录 branch + commit）。
+11. **代理完成报告**：改动清单、行为说明、验证摘要、提交 hash；交付验收四步：产出物存在 → 引用/接口可解析 → 事实零丢失 → 影响域接口兼容。
+12. 每满发布阈值执行 `scripts/release_baseline.sh '<发布提交特征>' [阈值]` 并跑发布脚本（含冒烟）。
 
 ## 六、长期项目与会话连续性
 
@@ -192,6 +196,8 @@ metadata:
 
 **适用**：部署里有 Host 侧任务板（DSH 为 `@linxin666/dsh-client-ui-task-board`）时，把"派子代理"升级成**派卡片**：卡片钉住**工作区 / agent 预设 / 权限**，由 Host 调度、执行与结算，**浏览器关掉也照跑**。中心（Coordinator）仍是派单、判定、合并、写台账与汇报的唯一主体；**卡片是贡献者**——只在自己分支提交并提申请。
 
+**三块"板"别混（2026-10-30 起，按 T-26/T-21 口径）**：① **项目台账** `.dsh/flow`（`flow_task` / `flow task`）是 **durable 真源**，跨会话、跨工作树；② **Host 任务板卡片**（`task_board_*`，本节）是 Host 持久调度面，浏览器关掉照跑；③ **Agent Teams 共享任务板**（`team_task_*`，§十）只活本次 Lead 会话，是会话内执行视图。**卡片与 Team 任务都不是真源**：由项目任务派生时，Team 任务 `description` 首行写 `flow: <T-id>`、项目任务 notes 回记 `team: <taskId>`；卡片若也由项目任务派生，沿用同一写法（协调建议，非硬性字段）。状态/证据/结论最终一律回收到项目任务（字段约定见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1）；项目流面板**不做** Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。跨会话 / 无人值守 / 要钉工作区与权限仍走卡片。
+
 **工具名映射（DSH 0.2.0 实测）**：`task_board_create`（落 backlog/todo，**不执行**）→ `task_board_set_parent`（挂子任务，深度上限见板摘要 `maxSubtaskDepth`）→ `task_board_run`（**才执行**；跑父卡会**并发跑整棵子树**）→ `task_board_manage`（move / archive / restore / delete / `settle` 强收卡住的执行）；读全貌 `task_board_get` / `task_board_list`（`includeArchived` 看归档）；改卡 `task_board_update`（已执行卡的 `title`/`description`/`prompt` **冻结**，执行目标可改）；排期 `task_board_schedule`（**5 段 cron + Host 本地时区**：错过**不补跑**、卡在跑则跳过、树里有未确认权限则**拒绝并顺延**）。**会话内定时是另一套**：`schedule_*` 只给会话发提示、不干活，要"到点真的干活"必须用 `task_board_schedule`。完整清单与语义见 `references/agent-teams-and-tasks.md`。
 
 **⚠ 时效纪律（2026-10-10 新增，本节最容易被文档骗的一条）**："某卡存在 / 某 cron 在跑 / 有看门狗兜底"**全是断言**，能否当真取决于**当前板上事实** ⇒ **派单或恢复前先 `task_board_list`（含 `includeArchived`）核实**，并读板摘要的 `armedSchedules` / `sessionDefaultPermission` / `maxSubtaskDepth`（**权限闸门只在"卡的权限 > 部署默认"时才武装**）。实测反例：某项目文档写着"看门狗卡每小时跑、永不归档"，真实状态是**看门狗与全部角色卡已归档、`schedule.enabled=false`、`armedSchedules=0`** ⇒ 无人值守保护**并不存在**，照文档行事等于把恢复押在一个不存在的东西上。
@@ -214,20 +220,75 @@ metadata:
 
 **分支纪律**：卡片会话**看不到你的对话上下文** ⇒ 派单必须自带任务书路径、允许的文件域、交付格式与停止条件。卡片**只在自己分支提交**，完成且已 commit 后向中心提申请（branch + path + commit + 命令结果）；**合并、主分支台账、发布归中心**。分支不可见 ⇒ 申请必须写 branch + path + commit，中心按 §1.4 判定后合并。
 
-## 十、智能体团队（Agent Teams；DSH 0.2.0 新增，2026-10-10 实测）
+## 十、智能体团队（Agent Teams；DSH 0.2.0 新增，2026-10-30 起为默认执行面）
 
-> 仅当本次会话确需多路并行贡献时启用；单人不需要组队，也不存在另一种协作模式。
+> **它是执行面，不是另一种协作模式**：中心-贡献者模型不变（§一），Team 只是"多路贡献者 + 共享任务板"的具体跑法。本次会话内有多路可并行写域、或需要来回追问/补证据时**默认组队，不需要用户点播**；单人单线不组队；跨会话 / 无人值守 / 钉工作区与权限走卡片（§九）；大规模只读扇出走 `workflow`。
 
 **工具**：`spawn_teammate`（Lead 专用；`context` = `fresh` 无历史 / `fork` 继承**已完成**轮次）· `send_message`（durable，**唯一能唤醒 inactive 队友**的手段，也是派新活的方式）· `wait_agent`（只观察**调用之后**的状态/邮箱/任务变化，**从不唤醒**任何成员；无人在跑时立即 `noProgress`）· `list_agents`（`inactive` = 此刻没在跑，**不代表失败或完成**；`provisioning` / `failed` 才是创建态）· `interrupt_agent`（Lead 专用，**保留 pending inbox**）· `team_task_create` / `get` / `list` / `update`（共享任务板；`update` 用 `expected_revision` 做 **CAS**：claim → 干活 → complete）。
 
-**纪律（与卡片模式同源；差异处已标注）**：
-1. **每个成员在自己的分支/worktree 里写**：有 `create_worktree` 时成员自己建；没有就用普通本地分支，共用 checkout 时先由中心确认或自行 `git worktree add`。`team_task_create` 的 `write_scopes` 是**协调信息，不是锁**——重叠由中心在合并时裁决，没人会替你挡住双写。若确实共用同一个 checkout，仍要避免同一文件同时改（减少返工，不是互锁）。
+### 10.1 真源与执行视图：项目台账 durable，Team 板随会话消失
+
+| 面 | 持久性 | 存什么 | 谁写 |
+|---|---|---|---|
+| **项目台账** `.dsh/flow/tasks/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | status、goal、scope、acceptance、notes、commits | 中心（Lead）；队友不写 |
+| **Team 共享任务板**（`team_task_*`） | **随 Lead 会话消失** | 执行卡片、owner、依赖、write_scopes、完成状态 | 队友 claim/complete；Lead 建卡/回收 |
+| **原生 Agent Teams UI** | 随会话 | 实时观察成员与卡 | 只展示，不是真源；项目流面板**不做** Team 投影（T-26 已删） |
+
+### 10.2 映射约定（用户已确认，写死）
+
+- **正向锚点**：Team 任务 `description` **首行**写 `flow: <T-id>`；一张 Team 任务只对应一个项目任务（覆盖多个就拆多张）；正文不重复台账字段。
+- **反向回记**：项目任务 `notes` 追加 `team: <taskId>`（可带 branch/commit/验收结论）。notes 是整字段覆盖式更新，回记时保留原内容。
+- **状态映射**：Team `pending` ↔ 项目 `draft`；`in_progress` ↔ `active`；`completed` ↔ **已合并**后才置项目 `done`（未合并不得置 done）。被 reject / 阻塞 / 放弃时写原因，项目任务回 `active` 或 `archived`。
+- **证据**：项目任务 `commits` 由 Lead 合并后回填（合并提交与纳入的贡献提交）；队友不写项目 task。
+- **禁止双写**：status / commits / 验收结论只以项目台账为权威值；Team 卡状态只是执行视图，不把同一进度叙事两边各写一份；Team 描述正文不复制台账字段。
+- **队友不写台账、不写心跳**：心跳只面向主会话（T-20/T-26 口径）；队友的进度经 Team 卡与最终报告回 Lead，由 Lead 登记。
+
+### 10.3 拆分与派工规则
+
+1. 读 `flow_task list` / `flow_task show <id>`（或 `flow task ... --root <主工作区>`）拿项目任务、依赖与验收。
+2. 按**文件域与依赖**拆分：一张 Team 任务 = 一片可独立验收的写域；`write_scopes` 预声明文件域（**协调信息，不是锁**），`blocked_by` 表达依赖（readiness 不会自动开跑，完成后仍要 `send_message`）。
+3. `team_task_create` 建卡：`description` 首行 `flow: <T-id>`；正文写任务书路径、允许写域、交付格式、验证命令与停止条件。
+4. 项目任务 notes 回记 `team: <taskId>`（Lead 写）。
+5. `spawn_teammate({ context: "fresh" })` 派持久队友：prompt 自带 Team 任务 id、项目 task id、任务书/brief 路径、base（branch + commit）、允许写域、映射约定、交付格式（只在自己分支提交 + 按模板提申请，不合并、不 push）、停止条件。
+6. 需要时 `send_message` 追加指令或唤醒；`wait_agent` 只等变化、不催活。
+
+### 10.4 执行与回收：一次会话的完整闭环
+
+```text
+项目任务（flow_task）→ 拆 Team 任务（description 首行 flow: T-id；blocked_by / write_scopes）
+  → 项目 notes 回记 team: <taskId>
+  → spawn_teammate + send_message
+  → 队友 claim → 自己分支提交 + 门禁 + 评审申请 → Team 任务 completed
+  → Lead 按 §1.4 五条判定 → 合并 → 复跑门禁
+  → 更新项目任务 status / commits / notes（含 team: 与验收结论）
+  → 回收 Team 任务（completed，或 release/reopen + 原因）→ 清理分支/工作树
+  → 会话结束前逐卡回收：Team 板上不留唯一真源
+```
+
+- **会话结束前逐卡检查**：没有 `in_progress` 悬空；每张 `completed` 卡都能在项目 notes 找到 `team: <taskId>` 与对应提交；reject / 放弃 / 接管的卡写清原因与现场（branch + path + commit）。完整检查单见 [references/contribution-flow.md](references/contribution-flow.md) §7.2。
+- **失败保留现场**：Lead 不替队友继续写；记录 branch + commit 后接管或丢弃。队友的"已完成"是声明，交付按产出物验收（`git status` + mtime + 复跑门禁 + 申请字段）。
+- **Lead 必须等必需队友收口再给最终答复**；不要在队友未回收时结束会话。
+
+### 10.5 何时用 Team，何时用一次性 subagent（唯一降级）
+
+| 场景 | 用 | 理由 |
+|---|---|---|
+| 本次会话内多路可并行写域、需要来回追问/补证据、任务可拆成独立卡 | **Agent Teams（默认）** | 持久队友 + 共享任务板 + 可回收映射 |
+| 只读调研 / 查证 / 长文阅读 / 方案对比 | **一次性 subagent**（`subagent` / `subagent_fork`） | 不需要持久状态，也不进 Team 板 |
+| **Team 工具不在当前会话工具列表** | **一次性 subagent（唯一降级）**，且**只派只读活** | 写活回到 Lead 自己做；不要假装有 Team |
+| 跨会话 / 无人值守 / 钉工作区与权限 / cron | **Host 任务板卡片（§九）** | 持久与权限闸门由 Host 保证 |
+| 大规模只读扇出（审计 / 迁移 / 多角度核验） | **`workflow` 扇出** | 脚本化并行，不占 Lead 对话 |
+| 单人单线 | **不组队、不派子代理** | 中心自己推进最快 |
+
+- 一次性 subagent **不 claim Team 任务、不写项目台账、不写心跳**；结论由 Lead 汇总进项目任务 notes。
+- Team 可用时不得用一次性 subagent 顶替写活——那是本技能明确降级的唯一场景。
+
+### 10.6 纪律（与卡片模式同源；差异处已标注）
+
+1. **每个成员在自己的分支/worktree 里写**：有 `create_worktree` 时成员自己建；没有就用普通本地分支，共用 checkout 时先由中心确认或自行 `git worktree add`。`write_scopes` 是**协调信息，不是锁**——重叠由中心在合并时裁决，没人会替你挡住双写。
 2. **只读可任意并行，写入按文件域切分**：同一文件同一时段尽量只给一个成员；**大规模只读扇出**用 `workflow` 或并行子代理，别用队友硬顶。
-3. **派工自带上下文**：队友**看不到 Lead 的对话** ⇒ 提示词必须含任务书路径、允许写域、交付格式、**只在自己分支提交 + 按模板提申请（不合并、不 push）**、停止条件。
-4. **readiness 不会自动开跑 owner**：任务存在 ≠ 有人在做；要让队友动起来必须 `send_message`，`wait_agent` 只会等。
-5. **Lead 必须等必需队友收口再给最终答复**；队友的"已完成"是**声明**，交付按**产出物**验收（`git status` + mtime + 复跑门禁 + 申请字段），与卡片共用同一套四步验收。
-6. **合并、主分支台账、发布归 Lead/中心**：队友只在自己分支提交；可以在自己的提交里写 CHANGELOG 条目，合并时的冲突与定稿由中心处理。
-7. **只在用户明确要求时组建团队**：团队适合**本次会话内**的多路并行且需要来回对话；跨会话 / 无人值守 / 要钉工作区与权限仍走卡片（§九）。
+3. **派工自带上下文**：队友**看不到 Lead 的对话** ⇒ 提示词必须含任务书路径、允许写域、映射约定（`flow:` / `team:`）、交付格式、**只在自己分支提交 + 按模板提申请（不合并、不 push）**、停止条件。
+4. **合并、主分支台账、发布归 Lead/中心**：队友只在自己分支提交，可以在自己的提交里写 CHANGELOG 条目；合并冲突与定稿由中心处理；队友不写心跳。
 
 ## 十一、CHANGELOG 建议形态：碎片 → 生成 → 同源检查（2026-09-19 建议）
 

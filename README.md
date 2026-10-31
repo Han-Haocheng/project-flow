@@ -12,7 +12,7 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个
 | 会话头小图标 / 指南卡 | 打开同一面板 |
 | `node bin/flow.mjs …` | 人改台账、跑门禁 |
 | agent 工具 `flow_*` | 模型改台账、跑门禁 |
-| 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及中心-贡献者协作（谁提交、谁判定、谁合并）与发布纪律 |
+| 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及中心-贡献者协作（谁提交、谁判定、谁合并）、Agent Teams 执行面与项目任务映射、发布纪律 |
 
 契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。前两个技能是单文件
 （`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发

@@ -48,6 +48,33 @@ flow task update T-20261028-01 --status done --notes "测试全绿"
 flow task rm T-20261028-01 --yes
 ```
 
+## 项目任务 ↔ Team 任务（Agent Teams 执行视图）
+
+项目台账（`.dsh/flow/`）是 **durable 真源**；Agent Teams 的共享任务板（`team_task_*`）只是本次
+Lead 会话的执行视图，随会话消失。两者用文本字段对接（用户已确认，写死）：
+
+| 方向 | 位置 | 写法 | 谁写 |
+|---|---|---|---|
+| 项目 → Team | Team 任务 `description` 首行 | `flow: <T-id>`；一张 Team 任务只对应一个项目任务 | Lead 建卡时写 |
+| Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论） | Lead |
+| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**已合并**才置 done | Lead |
+| 证据 | 项目任务 `commits` | Lead 合并后回填合并提交与纳入的贡献提交；队友不写 | Lead |
+
+- **只有 Lead 写映射**：队友（Team 子代理）不 `flow task update`、不建卡、不写心跳（心跳只面向
+  主会话）；进度经 Team 卡与最终报告回 Lead。
+- **禁止双写**：`status` / `commits` / 验收结论只在项目台账写权威值；Team 卡状态只作执行视图，
+  不把同一进度叙事两边各写一份。
+- **`notes` 是覆盖式更新**：回记时保留原 notes 内容再拼 `team: <taskId>` 与验收结论。
+- **会话结束前回收**：Lead 逐张 Team 卡把状态、结论、提交回收到项目任务；离开会话前不允许有
+  “只活在 Team 板里”的交付。
+- 项目流面板**不做** Team 投影（T-26 已删）；Team 板只在原生 Agent Teams UI 看，映射只走上述字段。
+- 示例（Lead 在主工作区回记）：
+
+  ```bash
+  flow --root /path/to/main-workspace task update T-20261030-31 \
+    --notes "原 notes…；team: task-6；branch t-20261030-31-x；已合并 <sha>"
+  ```
+
 ## 门禁：定义 + 运行记录
 
 门禁是**定义**（`gates/<id>.json`）加**运行记录**（`logs/<id>/<ts>.json`）。步骤顺序执行，
