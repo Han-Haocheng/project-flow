@@ -1,6 +1,6 @@
 {
   "title": "实现：决策台账 core/CLI/工具 + 提醒/门禁接线",
-  "status": "active",
+  "status": "done",
   "owner": "legacy-server",
   "goal": "按 T-22 定稿实现 D- 记录的 core 写入/读取、flow decision CLI、flow_decision 工具、pre-step 提醒、flow check decisions 门禁步骤，并补测试。",
   "scope": {
@@ -23,11 +23,16 @@
     "flow check decisions 对 blocking×affects 失败",
     "测试覆盖 open→answered→superseded 与去重/过期"
   ],
-  "notes": "依赖 T-20261030-22 定稿；面板卡片可另开一卡。\n\n2026-10-31 开工 A 波（core/CLI/契约/测试）→ 团队任务 task-9；因 Team 席位满复用 legacy-server（实现者）。B/C 波待 A 完成后复用 legacy-client/panel-display。\n\n用户已确认：面板复制串固定带推荐值；决策门禁只进 init 新种子与当前项目，不批量改已有项目。\n\n2026-10-31 A 波完成并提交（rebase 后 52df3bd→新 SHA）：core/CLI/契约/测试，node --test 90/90。\n\n待办：①flow check list 补第 5 项 decisions 并改 checks.test.mjs；②approval 的 recommendation 当前强制，需改为可选或默认 approve；③B 波 index.js 工具/提醒/门禁、C 波面板 payload+待决策卡；④已有的 project-flow 项目需手动给 precommit 加 decisions 步。",
+  "notes": "依赖 T-20261030-22 定稿；面板卡片可另开一卡。\n\n2026-10-31 开工 A 波（core/CLI/契约/测试）→ 团队任务 task-9；因 Team 席位满复用 legacy-server（实现者）。B/C 波待 A 完成后复用 legacy-client/panel-display。\n\n用户已确认：面板复制串固定带推荐值；决策门禁只进 init 新种子与当前项目，不批量改已有项目。\n\n2026-10-31 A 波完成并提交（rebase 后 52df3bd→新 SHA）：core/CLI/契约/测试，node --test 90/90。\n\n待办（A 波遗留）全部完成：\n① flow check list 补第 5 项 decisions → task-3（0238f6d，五项断言按 interpreter 分叉，前四项一条不减）；\n② approval 的 recommendation 强制 → task-2（a5f3144，省略 undefined/null/'' 时固定 approve，choice 仍必填 D02 不放宽）；\n③ B 波 index.js 工具/提醒/门禁 → task-4（b8910d5/d0d7640/d15cff3：flow_decision 六 action + 写动作仅主会话；唯一 pre-step 钩子、决策段与心跳段两段独立门控合成一条 message/一个 text block；payload decisions 11 键 items ≤3 + 7 键 counts）；\n④ 当前项目 precommit 已加 decisions 步（中心 11:31 写入，写法 \"./bin/flow.mjs\" check decisions，与本仓库既有 gate 同风格；init 种子仍用包内绝对路径，其余项目不批量改）。\nC 波面板 → task-5（922599f/3253961/b24c436：待决策卡 + 复制回答串固定带推荐值 + zh/en 6 键 + 夹具）。\n\nB/C 波组队（四角色，team: task-1 分析 → task-2/3/4/5 四实现者并行 → task-6 审查）：\nbase 001a5ab；四条分支 feat/t23-*，中心 2026-10-31 按 core→cli→host→panel 顺序 merge --no-ff（82b74d4/a22fdb9/41dfd0d/2ca3b1d）。\n审查者 reviewer-t23（非实现者）结论：四域 accept、合并预演无冲突、合并后全量绿、阻断项无（task-6）。中心复跑门禁：node --check ×4、node --test test/ 93/93、.selftest 六个探针全绿（host2-tools/harness ALL PASS、client-render 53/53、client-registration 31/31、client-poll 16/16、root-explicit OK）；/tmp 冒烟：approval 省略 recommendation → exit 0 且落盘 \"approve\"、显式 reject 保留、choice 缺 recommendation exit 2、check list 五项、check decisions 暂存命中 exit 1 / 回答后 exit 0、status 出「待决策 N（阻塞 M）」。\n\n中心裁决备案：①提醒「最多 3 条」只约束非首轮，首轮列全部，800 字符只裁决策段；②approval 省略=推荐 approve（想推荐拒绝须显式 reject）；③payload items 固定 11 键并截到 ≤3，counts 7 键；④未初始化工作区返回 not-initialized 且无任何节（不是空节）；⑤tool schema 只 required action，ask 缺 rationale 由工具抛可执行错误；⑥面板升级只有 24 小时规则（无会话上下文 turnAge 恒 null）。\n\n审查者 3 条非阻断建议（后续卡）：①docs §6.1「总长 ≤800」措辞应改「决策段 ≤800」；②首轮 open 超过 800 字符时静默截断且无「还有 N 条」提示；③panel normalize 丢弃 options[].impact（仅显示用途）。\n不改动范围（留 T-24）：skills/ 的「新会话第一步 flow decision list --open」文案（设计 §6.4 第 3 条）。\n\n未做：push（不可逆，需用户当次确认）；四域 worktree/分支待回收。",
   "schema": 1,
   "id": "T-20261030-23",
   "checkpoints": [],
-  "commits": [],
+  "commits": [
+    "82b74d4",
+    "a22fdb9",
+    "41dfd0d",
+    "2ca3b1d"
+  ],
   "created_at": "2026-10-30T21:07:54+08:00",
-  "updated_at": "2026-10-31T10:35:18+08:00"
+  "updated_at": "2026-10-31T11:59:05+08:00"
 }
