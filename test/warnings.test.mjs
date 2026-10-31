@@ -459,6 +459,33 @@ test('插件：工具成功结果附加 core warnings，失败时 logger.warn �
 
 // ---------------------------------------------- 面板轮询不得偷警告（A5）
 
+test('CLI 警告：心跳根降级只产生一条 heartbeat-root-degraded', () => {
+  const base = tempRoot('heartbeat-degraded')
+  const main = path.join(base, 'main')
+  fs.mkdirSync(main)
+  git(main, ['init', '-q'])
+  git(main, ['config', 'user.email', 'flow-test@example.invalid'])
+  git(main, ['config', 'user.name', 'Flow Test'])
+  git(main, ['config', 'commit.gpgsign', 'false'])
+  fs.writeFileSync(path.join(main, 'README.md'), '# main\n')
+  git(main, ['add', 'README.md'])
+  git(main, ['commit', '-q', '-m', 'init'])
+  const linked = path.join(base, 'linked')
+  git(main, ['worktree', 'add', '-q', linked, '-b', 'linked'])
+  // 主工作区没有 flow store → 在 linked worktree 读心跳会降级，只应诊断一次。
+
+  const json = runCli(linked, ['heartbeat', 'list', '--json'])
+  assert.equal(json.code, 0, json.stderr)
+  assert.equal(json.stderr, '')
+  const degraded = json.json.warnings.filter((item) => item.startsWith('heartbeat-root-degraded:'))
+  assert.equal(degraded.length, 1, JSON.stringify(json.json.warnings))
+
+  const human = runCli(linked, ['heartbeat', 'list'])
+  assert.equal(human.code, 0)
+  const lines = human.stderr.split('\n').filter((line) => line.includes('heartbeat-root-degraded:'))
+  assert.equal(lines.length, 1, human.stderr)
+})
+
 test('插件：面板读路径 drain 后丢弃，不把警告转进 payload', async () => {
   const { root } = freshProject('plugin-panel-drain')
   const { ctx } = pluginCtx({ root, logger: { warn() {} } })

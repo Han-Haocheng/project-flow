@@ -1140,9 +1140,8 @@ async function cmdHeartbeat(ctx, sub) {
   // worktree still reads/writes the same heartbeat files.
   const workspace = heartbeatWorkspaceOf(core, ctx.root)
   const root = workspace.root
-  if (workspace.degraded === true) {
-    collectWarnings([`heartbeat-root-degraded: 心跳根无法解析到主工作区，降级到 ${root}（${workspace.reason || '未知原因'}）`])
-  }
+  // The degraded case is diagnosed once by core (`heartbeat-root-degraded:` in
+  // every heartbeat read/write); collecting a second copy here duplicated it.
   const contract = loadContractFor(ctx, root)
   const sessionFlag = readString(flags, 'session')
   const note = readString(flags, 'note')

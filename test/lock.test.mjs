@@ -183,6 +183,137 @@ test('锁协议 h：异机锁 60 秒内只冲突，超过 60 秒才可接管（�
   assert.equal(fs.existsSync(lockPath), false)
 })
 
+test('锁协议 i：不可解析锁按 mtime 判龄（45s 冲突 / 90s 接管且 pid 未知）', () => {
+  const { root, contract, lockPath } = freshProject('unknown-lock')
+  fs.writeFileSync(lockPath, 'garbage lock')
+  const fourtyFive = new Date(Date.now() - 45_000)
+  fs.utimesSync(lockPath, fourtyFive, fourtyFive)
+  drainWarnings()
+  assert.throws(
+    () => withLock(root, contract, () => assert.fail('must not enter the critical section')),
+    (error) => error instanceof FlowError && error.code === 'conflict' && /locked by another writer/.test(error.message),
+  )
+  assert.ok(fs.existsSync(lockPath), 'UNKNOWN 锁在 60 秒宽限期内必须保留')
+
+  const ninety = new Date(Date.now() - 90_000)
+  fs.utimesSync(lockPath, ninety, ninety)
+  drainWarnings()
+  let entered = false
+  withLock(root, contract, () => {
+    entered = true
+  })
+  assert.equal(entered, true)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('lock-stale:') && /pid \?/.test(item)),
+    `UNKNOWN 锁的 lock-stale 应标 pid ?：${warnings.join(' | ')}`,
+  )
+  assert.equal(fs.existsSync(lockPath), false)
+})
+
+// ------------------------------------------------------- 接管 claim（F1/F2/F3）
+//
+// claim 是 `.lock.takeover-claim`（锁旁边、store 根内），只在接管过期锁时创建。
+// 恢复必须是 CAS：rename 到 …takeover-claim.tmp-<pid>-<seq> → 回读比对 → 一致才删。
+// 下面三条是确定性用例（不需要多进程），覆盖死 claim、零字节 claim、活 claim。
+
+test('claim 恢复 CAS：死 pid claim 残留 → 立即恢复并接管成功，claim 消失', () => {
+  const { root, contract, lockPath } = freshProject('claim-dead')
+  const claimPath = `${lockPath}.takeover-claim`
+  writeLock(lockPath, staleRecord(deadPid(), 60))
+  writeLock(claimPath, staleRecord(deadPid(), 0))
+  drainWarnings()
+
+  let entered = false
+  withLock(root, contract, () => {
+    entered = true
+  })
+  assert.equal(entered, true)
+  assert.equal(fs.existsSync(claimPath), false, '死 claim 必须被恢复清除')
+  assert.equal(fs.existsSync(lockPath), false)
+  const warnings = drainWarnings()
+  assert.ok(warnings.some((item) => item.startsWith('lock-stale:')), warnings.join(' | '))
+  assert.equal(
+    warnings.some((item) => item.startsWith('lock-claim-stale:')),
+    false,
+    '死 claim 恢复是常规路径，不记 zombie 警告',
+  )
+})
+
+test('claim 恢复 CAS：零字节 claim（mtime 90s）→ 恢复成功且无残留', () => {
+  const { root, contract, lockPath } = freshProject('claim-empty')
+  const claimPath = `${lockPath}.takeover-claim`
+  writeLock(lockPath, staleRecord(deadPid(), 60))
+  fs.writeFileSync(claimPath, '')
+  const old = new Date(Date.now() - 90_000)
+  fs.utimesSync(claimPath, old, old)
+  drainWarnings()
+
+  let entered = false
+  withLock(root, contract, () => {
+    entered = true
+  })
+  assert.equal(entered, true)
+  assert.equal(fs.existsSync(claimPath), false)
+  const leftovers = fs
+    .readdirSync(path.dirname(lockPath))
+    .filter((name) => name.includes('.takeover-claim') || name.includes('.tmp-'))
+  assert.deepEqual(leftovers, [], 'claim 恢复的临时副本必须落在清扫命名内且不残留')
+})
+
+test('claim 超时自愈：活 pid 但年龄 > 10 分钟的僵死 claim → 恢复并记 lock-claim-stale', () => {
+  const { root, contract, lockPath } = freshProject('claim-zombie')
+  const claimPath = `${lockPath}.takeover-claim`
+  writeLock(lockPath, staleRecord(deadPid(), 60))
+  writeLock(claimPath, {
+    schema: 1,
+    pid: process.pid,
+    host: HOST_TAG,
+    at: new Date(Date.now() - 11 * 60_000).toISOString(),
+    token: 'zombie',
+  })
+  drainWarnings()
+
+  let entered = false
+  withLock(root, contract, () => {
+    entered = true
+  })
+  assert.equal(entered, true, '僵死 claim 不应永久阻塞接管')
+  assert.equal(fs.existsSync(claimPath), false)
+  assert.equal(fs.existsSync(lockPath), false)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('lock-claim-stale: recovered ')),
+    `expected lock-claim-stale, got ${warnings.join(' | ')}`,
+  )
+})
+
+test('claim 恢复 CAS：活 claim 造成 conflict、claim 保留；无过期锁时不创建 claim', () => {
+  const { root, contract, lockPath } = freshProject('claim-live')
+  const claimPath = `${lockPath}.takeover-claim`
+  writeLock(lockPath, staleRecord(deadPid(), 60))
+  writeLock(claimPath, staleRecord(process.pid, 0))
+  drainWarnings()
+
+  assert.throws(
+    () => withLock(root, contract, () => assert.fail('must not enter the critical section')),
+    (error) =>
+      error instanceof FlowError &&
+      error.code === 'conflict' &&
+      /takeover is already in progress/.test(error.message) &&
+      error.message.includes(claimPath) &&
+      /if no takeover is running, remove /.test(error.message),
+  )
+  assert.ok(fs.existsSync(claimPath), '活 claim 不能被恢复者删除')
+  assert.equal(readLock(claimPath).pid, process.pid)
+
+  // 没有过期锁时走普通获取路径：不得创建 claim。
+  fs.rmSync(claimPath)
+  fs.rmSync(lockPath)
+  withLock(root, contract, () => {})
+  assert.equal(fs.existsSync(claimPath), false, '普通获取不应创建 takeover claim')
+})
+
 // ------------------------------------------------------------ A3 原子写
 
 test('原子写：fsync 在 rename 之前（源码断言；黑盒不可观测）', () => {

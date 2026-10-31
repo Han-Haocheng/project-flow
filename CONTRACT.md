@@ -389,6 +389,13 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 确认可接管后先 `open('wx')` 创建自己的锁、再删移交文件：进入临界区的唯一入口始终是这把
 新锁，任意时刻只有一个写者。
 
+claim 自身也有恢复规则：owner 可判死（或无法判活且超过 60 秒）就按同一 CAS 恢复——先
+`rename` 到 `…takeover-claim.tmp-<pid>-<seq>`（落在陈旧 tmp 清扫命名内），回读内容与快照
+一致才 unlink，否则用 `link()` 放回并记 `lock-claim-restore-skipped:`。claim 写着存活 pid
+但年龄超过 10 分钟（临界区本该是微秒级：SIGSTOP 或 pid 复用）按僵死 claim 恢复，并记
+`lock-claim-stale: recovered <path> after Ns`；等不到 claim 的写者拿到 conflict，消息给出
+pid/host/age 与「确认没有接管在跑后删除 <claim 路径>」的处置建议。
+
 锁只防**同一 PID namespace 的同机并发**写；store 放在共享网络盘上跨机器写不受保护。
 升级注意：旧版 core 的释放逻辑会无条件删锁，新旧进程同时写同一个 store 时可能误删新锁——
 升级窗口内确保没有旧进程在写同一个 store。
