@@ -121,7 +121,7 @@ const STATE_VALID = [
 
 // -------------------------------------------------------------------- list
 
-test('check list --json 暴露四项检查与包内脚本路径', () => {
+test('check list --json 暴露五项检查：四项脚本检查 + 内置 decisions', () => {
   const root = tempRoot('list')
   const result = runCli(root, ['check', 'list', '--json'])
   assert.equal(result.code, 0)
@@ -129,32 +129,55 @@ test('check list --json 暴露四项检查与包内脚本路径', () => {
   const checks = result.json.data.checks
   assert.deepEqual(
     checks.map((item) => item.name),
-    ['staged', 'release-baseline', 'state', 'doc'],
+    ['staged', 'release-baseline', 'state', 'doc', 'decisions'],
   )
-  for (const item of checks) {
+  // 第 1-4 项是随包脚本检查：断言一条不减，解释器只允许 bash/python3、脚本必须带 skills/ 前缀。
+  const scriptChecks = checks.slice(0, 4)
+  for (const item of scriptChecks) {
     assert.ok(['bash', 'python3'].includes(item.interpreter), `解释器异常：${item.interpreter}`)
     assert.match(item.script, /^skills\/ai-collaborative-dev-workflow\/scripts\//)
     assert.ok(item.description.length > 0)
     assert.ok(item.args.length > 0)
   }
+  // 第 5 项是内置检查：core 实现，脚本是包根相对路径（不是 skills/ 前缀），单独断言不放宽正则。
+  const builtin = checks[4]
+  assert.deepEqual(Object.keys(builtin), ['name', 'interpreter', 'script', 'description', 'args'])
+  assert.deepEqual(builtin, {
+    name: 'decisions',
+    interpreter: 'core',
+    script: 'lib/core.mjs#checkDecisions',
+    description: '阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）',
+    args: '（无额外参数）',
+  })
+  // 防假绿：前四项不许混入 core，内置项也不许被当成 scripts/ 脚本。
+  for (const item of scriptChecks) assert.notEqual(item.interpreter, 'core')
+  assert.doesNotMatch(builtin.script, /^skills\//)
 })
 
 test('check list 纯文本列出用法（不 spawn 脚本）', () => {
   const root = tempRoot('list-plain')
   const result = runCli(root, ['check', 'list'])
   assert.equal(result.code, 0)
-  for (const needle of ['check staged --allow', 'check release-baseline --marker', 'check state', 'check doc --file']) {
+  for (const needle of [
+    'check staged --allow',
+    'check release-baseline --marker',
+    'check state',
+    'check doc --file',
+    'check decisions',
+    'decisions  [core]',
+  ]) {
     assert.ok(result.stdout.includes(needle), `缺少：${needle}\n${result.stdout}`)
   }
 })
 
-test('未知检查名是用法错误（exit 2）', () => {
+test('未知检查名是用法错误（exit 2，提示含内置 decisions）', () => {
   const root = tempRoot('unknown')
   const result = runCli(root, ['check', 'bogus', '--json'])
   assert.equal(result.code, 2)
   assert.equal(result.json.ok, false)
   assert.equal(result.json.error.code, 'usage')
   assert.match(result.json.error.message, /未知检查/)
+  assert.match(result.json.error.message, /decisions/)
 })
 
 test('flow check --help 仍可用并列出 check 用法', () => {

@@ -1216,21 +1216,35 @@ async function loadChecks() {
   }
 }
 
+// 内置检查：由 bin 特判路由到 core，不进 scripts/ 目录（lib/checks.mjs 保持 core-free）。
+// 形状与 `checks.listChecks()` 的元素同构（五键），让 `check list` 的目录与脚本检查一致。
+const BUILTIN_CHECKS = Object.freeze([
+  Object.freeze({
+    name: 'decisions',
+    interpreter: 'core',
+    script: 'lib/core.mjs#checkDecisions',
+    description: '阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）',
+    args: '（无额外参数）',
+  }),
+])
+
 async function cmdCheck(ctx, sub) {
   // `decisions` 是唯一内置检查：bin 特判路由到 core，不经过 scripts/ 目录。
   if (sub === 'decisions') return runCheckDecisions(ctx)
   const checks = await loadChecks()
   const names = checks.CHECKS.map((entry) => entry.name)
+  // usage 与未知检查提示共用完整目录（脚本检查 + 内置检查），不再漏列内置项。
+  const listed = [...new Set([...names, ...BUILTIN_CHECKS.map((entry) => entry.name)])]
   const { flags } = ctx
 
   if (!sub) {
-    throw new CliError('usage', `用法: flow check <list|${names.join('|')}|decisions> [options]`)
+    throw new CliError('usage', `用法: flow check <list|${listed.join('|')}> [options]`)
   }
 
   if (sub === 'list') {
-    const items = checks.listChecks()
+    const items = [...checks.listChecks(), ...BUILTIN_CHECKS]
     if (!ctx.json) {
-      out('机械检查（脚本相对包根路径；只读，不写 .dsh/flow）')
+      out('机械检查（脚本相对包根路径；只读，不写 .dsh/flow；内置项注明 core 实现）')
       out('')
       items.forEach((item, index) => {
         if (index > 0) out('')
@@ -1240,6 +1254,12 @@ async function cmdCheck(ctx, sub) {
       })
     }
     return { checks: items }
+  }
+
+  // 本地预检：未知检查名在这里就按完整目录（含 decisions）报错，
+  // 不落到 checks.buildInvocation 的漏列消息（那会漏掉内置项）。
+  if (!listed.includes(sub)) {
+    throw new CliError('usage', `未知检查 "${sub}"（可用 ${listed.join('|')}）`)
   }
 
   const timeoutSeconds = readPositiveInteger(
