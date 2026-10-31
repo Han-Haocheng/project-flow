@@ -616,7 +616,9 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 ```
 
 `check list --json` 返回 `{"ok":true,"data":{"checks":[{name,interpreter,script,description,args}]}}`，
-`script` 是相对包根的 POSIX 路径。
+`script` 是相对包根的 POSIX 路径；内置项 `decisions` 例外——它的 `script` 是
+`lib/core.mjs#checkDecisions`（`#` 后是函数名，不是独立脚本文件），`interpreter` 为
+`core`，`args` 为「（无额外参数）」。
 
 **输出上限**：`stdout` 与 `stderr` 各自只保留最后 **8 KiB**（`lib/checks.mjs` 的
 `MAX_CAPTURE_BYTES`）；超长输出截头保尾，并按 UTF-8 字符边界去掉开头残缺字符。
