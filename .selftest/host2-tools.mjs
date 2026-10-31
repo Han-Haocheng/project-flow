@@ -1242,6 +1242,89 @@ check(
 
 // H13 is the existing "pre-step: subagent is not reminded" assertion above.
 
+// ------------------------------------- payload decisions section (H14-H16)
+
+const fiveRoot = reminderRoot('dec-five')
+const fiveContract = core.loadContract(fiveRoot).contract
+const fiveAgent = mockAgent('session-dec-five', fiveRoot)
+registerRootAgent(fiveAgent)
+const listedFiveIds = []
+const fiveLongLabel = '选项标签'.repeat(40)
+const fiveLongImpact = '选项影响'.repeat(60)
+for (let index = 0; index < 5; index += 1) {
+  const extra =
+    index === 0
+      ? {
+          kind: 'choice',
+          question: 'payload 决策 0',
+          recommendation: 'a',
+          options: [
+            { id: 'a', label: fiveLongLabel, impact: fiveLongImpact },
+            { id: 'b', label: '另一个选项', impact: '另一种影响' },
+          ],
+        }
+      : { question: `payload 决策 ${index}` }
+  listedFiveIds.push(askFixture(fiveRoot, fiveAgent, extra).id)
+}
+const fiveState = (await call(route, `${route.path}?root=${encodeURIComponent(fiveRoot)}`)).json ?? {}
+eq('H14 payload: items capped at 3', fiveState.decisions?.items?.length, 3)
+eq('H14 payload: counts.open stays 5', fiveState.decisions?.counts?.open, 5)
+eq(
+  'H14 payload: counts keep the seven keys',
+  JSON.stringify(Object.keys(fiveState.decisions?.counts ?? {})),
+  JSON.stringify(DECISION_COUNT_KEYS),
+)
+eq(
+  'H14 payload: item keys match the shared literal',
+  JSON.stringify(Object.keys(fiveState.decisions?.items?.[0] ?? {})),
+  JSON.stringify(DECISION_ITEM_KEYS),
+)
+check(
+  'H14 payload: internal fields are dropped',
+  ['turnAge', 'rationale', 'affects', 'fingerprint'].every((key) => Object.hasOwn(fiveState.decisions?.items?.[0] ?? {}, key) === false),
+  JSON.stringify(fiveState.decisions?.items?.[0]),
+)
+const firstPayloadItem = fiveState.decisions?.items?.[0] ?? {}
+eq('H14 payload: option label clipped to 80', firstPayloadItem.options?.[0]?.label?.length, 80)
+eq('H14 payload: option impact clipped to 120', firstPayloadItem.options?.[0]?.impact?.length, 120)
+eq(
+  'H14 payload: option keys projected',
+  JSON.stringify(Object.keys(firstPayloadItem.options?.[0] ?? {})),
+  JSON.stringify(['id', 'label', 'impact']),
+)
+eq('H14 payload: escalated is boolean', firstPayloadItem.escalated, false)
+
+// H16: the payload and core.summarizeDecisions agree — this must stay true
+// whether readStoreState supplies `decisions` or the Host rebuilds it.
+const fiveSummary = core.summarizeDecisions(fiveRoot, fiveContract, { limit: 3 })
+check(
+  'H16 payload: counts equal core.summarizeDecisions',
+  JSON.stringify(fiveState.decisions?.counts) === JSON.stringify(fiveSummary.counts),
+  JSON.stringify({ payload: fiveState.decisions?.counts, core: fiveSummary.counts }),
+)
+check(
+  'H16 payload: item id order equal core.summarizeDecisions',
+  JSON.stringify((fiveState.decisions?.items ?? []).map((item) => item.id)) ===
+    JSON.stringify(fiveSummary.items.map((item) => item.id)),
+  JSON.stringify({ payload: (fiveState.decisions?.items ?? []).map((item) => item.id), core: fiveSummary.items.map((item) => item.id) }),
+)
+
+// H15: a store without a decisions directory is an empty section, and an
+// uninitialized workspace has no section at all.
+eq('H15 evil store: decisions counts.open 0', evilStore.decisions?.counts?.open, 0)
+check(
+  'H15 evil store: decisions items empty',
+  Array.isArray(evilStore.decisions?.items) && evilStore.decisions.items.length === 0,
+  JSON.stringify(evilStore.decisions),
+)
+eq(
+  'H15 evil store: decisions counts keep the seven keys',
+  JSON.stringify(Object.keys(evilStore.decisions?.counts ?? {})),
+  JSON.stringify(DECISION_COUNT_KEYS),
+)
+check('H15 no-store: no decisions section', noStore.decisions === undefined, JSON.stringify(Object.keys(noStore)))
+
+
 // ------------------------------------------------------ no-store behavior
 
 const noStoreWrite = await throws(
@@ -1416,6 +1499,7 @@ for (const root of [
   reminderRoot10,
   reminderRoot11,
   reminderRoot12,
+  fiveRoot,
 ]) {
   try {
     rmSync(root, { recursive: true, force: true })

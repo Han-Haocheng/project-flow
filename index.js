@@ -557,6 +557,101 @@ function panelHeartbeats(section) {
 }
 
 
+// ----------------------------------------------------------------- decisions
+//
+// The decisions section is shared cross-domain: index.js, client.js and both
+// self-tests carry the same literal key list, so the projection below is built
+// from it and never grows a field by accident.
+
+/** Key set and order of one panel decision row (cross-domain literal). */
+const DECISION_ITEM_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'question',
+  'blocks',
+  'options',
+  'recommendation',
+  'default',
+  'escalated',
+  'ageSeconds',
+  'asked_at',
+]
+
+/** One decision option: only the three display fields, bounded. */
+function panelDecisionOption(option) {
+  if (isPlainObject(option) === false) return null
+  return { id: clip(option.id, 40), label: clip(option.label, 80), impact: clip(option.impact, 120) }
+}
+
+/**
+ * Project one open decision onto the row the panel renders. The row is built
+ * from DECISION_ITEM_KEYS, so fields that must not reach the browser (`turnAge`,
+ * `rationale`, `affects`, `fingerprint`) are dropped rather than filtered later.
+ */
+function panelDecision(item) {
+  if (isPlainObject(item) === false) return null
+  const options = []
+  if (Array.isArray(item.options)) {
+    for (const option of item.options) {
+      const row = panelDecisionOption(option)
+      if (row !== null) options.push(row)
+    }
+  }
+  const blocks = Array.isArray(item.blocks)
+    ? item.blocks.filter((id) => typeof id === 'string' && id !== '').map((id) => clip(id, 40))
+    : []
+  const values = {
+    id: clip(item.id, 40),
+    kind: clip(item.kind, 20),
+    status: clip(item.status, 20),
+    question: clip(item.question, 200),
+    blocks,
+    options,
+    recommendation: clip(item.recommendation, 60),
+    default: clip(item.default, 60),
+    escalated: item.escalated === true,
+    ageSeconds:
+      typeof item.ageSeconds === 'number' && Number.isFinite(item.ageSeconds)
+        ? Math.max(0, Math.trunc(item.ageSeconds))
+        : null,
+    asked_at: clip(item.asked_at, 64),
+  }
+  const row = {}
+  for (const key of DECISION_ITEM_KEYS) row[key] = values[key]
+  return row
+}
+
+/**
+ * Panel decisions section: bounded rows plus the seven counts. A missing or
+ * unusable section degrades to the empty one instead of failing the payload.
+ */
+function panelDecisions(section, limit = decisionRemindMax()) {
+  const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
+  const rows = []
+  for (const item of items) {
+    if (rows.length >= limit) break
+    const row = panelDecision(item)
+    if (row !== null) rows.push(row)
+  }
+  return { items: rows, counts: decisionCountsOf(isPlainObject(section) ? section.counts : null) }
+}
+
+/**
+ * The decisions section of one store payload. A newer lib/core.mjs already
+ * returns it from `readStoreState`; otherwise the same projection is rebuilt with
+ * `summarizeDecisions`, so the payload shape does not depend on which side of the
+ * Host/core split landed first.
+ */
+function decisionSection(state, root, contract) {
+  const supplied = isPlainObject(state) ? state.decisions : undefined
+  if (isPlainObject(supplied)) return supplied
+  const c = requireCore()
+  if (typeof c.summarizeDecisions !== 'function') return null
+  return c.summarizeDecisions(root, contract, { limit: decisionRemindMax() })
+}
+
+
 // -------------------------------------------------------------------- payload
 
 /** Drop tree nodes whose id is no longer in `items`, recursively. */
@@ -667,6 +762,7 @@ async function emptyStoreState(root, entry, now, warnings) {
     },
     gates: [],
     heartbeats: [],
+    decisions: { items: [], counts: emptyDecisionCounts() },
     warnings,
   }
 }
@@ -755,6 +851,14 @@ async function buildStoreState(root, entry, now, warnings) {
     warnings.push(`heartbeats unreadable: ${brief(error)}`)
   }
 
+  let decisions
+  try {
+    decisions = panelDecisions(decisionSection(state, root, contract))
+  } catch (error) {
+    warnings.push(`decisions unreadable: ${brief(error)}`)
+    decisions = panelDecisions(null)
+  }
+
   return {
     ok: true,
     generatedAt: isoLocal(new Date(now)),
@@ -766,6 +870,7 @@ async function buildStoreState(root, entry, now, warnings) {
     tasks,
     gates,
     heartbeats,
+    decisions,
     warnings,
   }
 }
