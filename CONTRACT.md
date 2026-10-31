@@ -296,7 +296,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
     { "id": "reject", "label": "拒绝", "impact": "决策只靠提醒与面板可见" }
   ],
   "default": null,                              // 可选；必须是 option id
-  "recommendation": "approve",                  // choice/approval 必填（option id）；input 为自由文本
+  "recommendation": "approve",                  // choice 必填（option id）；approval 省略时 core 写 approve；input 为自由文本
   "rationale": "门禁是唯一能在提交动作上强制拦截的表面。",   // 必填，≤300 字
   "status": "open",                             // open | answered | withdrawn | superseded
   "blocks": ["T-20261030-23"],                  // 每个 id 必须已存在；非空时 affects 必须非空
@@ -327,9 +327,11 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - **校验**：`blocks` 每个 id 必须已存在于 `tasks/`；`blocks` 非空必须声明 `affects`；
   `choice` 至少两个 option、id 匹配 `^[a-z0-9][a-z0-9-]{0,23}$` 且唯一，`recommendation`
   必填并命中 option，`default` 若给出也须命中 option；`approval` 由 core 固定
-  `approve`/`reject`（调用方不得传 `options`）；`input` 无 `options`，`recommendation`/
-  `default` 为自由文本；`affects` 不得绝对路径、不得 `..` 逃逸，存储时 `\` → `/`、去 `./`、
-  去尾 `/`。任一不满足 → `invalid`（退出码 2）。
+  `approve`/`reject`（调用方不得传 `options`），`recommendation` **可省略**：approval 省略
+  `recommendation`（`undefined`/`null`/空串）时 core 写 `approve`，显式给值必须命中
+  `approve`/`reject`——想推荐拒绝必须显式传 `reject`；`input` 无 `options`，
+  `recommendation`/`default` 为自由文本；`affects` 不得绝对路径、不得 `..` 逃逸，
+  存储时 `\` → `/`、去 `./`、去尾 `/`。任一不满足 → `invalid`（退出码 2）。
 - **系统字段**：`fingerprint`、`superseded_by`、`answered_at`、`answer`、`withdraw` 由 core
   维护，调用方传入 → `invalid`；`id`/`schema`/`kind`/`asked_at`/`created_at`/`question`/
   `options` 一经创建不可改（没有独立 update 命令）。
@@ -448,7 +450,8 @@ flow check decisions
 - `decision list` 默认只列 `open`；`--open` 是显式同义写法，`--all` 列全部（closed 按
   `updated_at` 倒序，排在 open 之后）。排序全局唯一：升级优先，其次 `asked_at` 旧的在前。
 - `decision ask` 的 `--option` 格式 `id=label>>impact`，可重复；`choice` 至少两个。
-  `--recommendation` 在 `choice`/`approval` 必填，`--rationale` 必填；`--blocks`/`--affects`
+  `--recommendation` 在 `choice` 必填；approval 省略 `--recommendation` 时 core 写
+  `approve`（想推荐拒绝必须显式传 `reject`）；`--rationale` 必填；`--blocks`/`--affects`
   可重复；`--supersedes` 用于同题重开（见 §3.6）。
 - `decision answer` 的 `--choice` 必填（`input` 为自由文本）；`--by` 默认 `user`，
   `--note` 可省略（落盘为空串）。`decision withdraw` 的 `--reason` 必填。
@@ -524,8 +527,20 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 
 **唯一内置例外**：`flow check decisions` 不来自脚本目录，而由 `bin/flow.mjs` 特判路由到
 `core.checkDecisions()`（只读，复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
-保持**不 import core、不读写 `.dsh/flow`** 的纪律。`check list` 仍只列脚本检查（四项）：
-`decisions` 是 core 实现的内置检查，不出现在该清单里。
+保持**不 import core、不读写 `.dsh/flow`** 的纪律：内置项由 bin 侧追加，不进
+`checks.CHECKS`/`listChecks()`。所以 **`check list` 共五项** = 四项脚本检查
+（`staged`/`release-baseline`/`state`/`doc`）+ 内置项 `decisions`：
+
+```json
+{"name":"decisions","interpreter":"core","script":"lib/core.mjs#checkDecisions",
+ "description":"阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）",
+ "args":"（无额外参数）"}
+```
+
+`interpreter: "core"` 是唯一非 `bash`/`python3` 的合法值，`script` 是包根相对的 POSIX 路径
+（`lib/core.mjs#checkDecisions`，不是 `skills/…/scripts/` 下的脚本），`args` 非空；内置项
+**永远不会 spawn、不经 `scripts/`**，由 `bin/flow.mjs` 路由到 core（`lib/checks.mjs` 既不加项
+也不改 `runCheck`）。
 
 ### 6.1 子命令与参数映射
 
@@ -536,6 +551,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 | `release-baseline` | `flow check release-baseline --marker <text> [--threshold <N>]` | `bash release_baseline.sh '<marker>' [N]` |
 | `state` | `flow check state [--file <path>]` | `bash check_state.sh <file>` |
 | `doc` | `flow check doc --file <path> --type task\|design\|incident\|release` | `python3 doc_check.py <file> --type <type> --root <项目根>` |
+| `decisions` | `flow check decisions [--json]` | **不 spawn**：bin 特判路由 `core.checkDecisions()`（只读内置项，见 §6.1.1） |
 
 - 所有子命令都吃全局 `--root <dir>`（默认 cwd）与 `--json`。脚本以 `--root` 为 cwd 执行，
   所以脚本里的 `git diff --cached` / `git log` / `git rev-list` 落在项目根。
@@ -600,7 +616,9 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 ```
 
 `check list --json` 返回 `{"ok":true,"data":{"checks":[{name,interpreter,script,description,args}]}}`，
-`script` 是相对包根的 POSIX 路径。
+`script` 是相对包根的 POSIX 路径；内置项 `decisions` 例外——它的 `script` 是
+`lib/core.mjs#checkDecisions`（`#` 后是函数名，不是独立脚本文件），`interpreter` 为
+`core`，`args` 为「（无额外参数）」。
 
 **输出上限**：`stdout` 与 `stderr` 各自只保留最后 **8 KiB**（`lib/checks.mjs` 的
 `MAX_CAPTURE_BYTES`）；超长输出截头保尾，并按 UTF-8 字符边界去掉开头残缺字符。
@@ -681,7 +699,15 @@ readStoreState(root, contract)       // 面板聚合：experiments{items,counts,
                                      // tasks{items,counts,current,source}
                                      // gates{items(含 lastRun),counts}
                                      // heartbeats（= readHeartbeatSection）
+                                     // decisions{items,counts}
 ```
+
+`readStoreState().decisions` **逐字等于** `summarizeDecisions(root, contract,
+{limit: DECISION_REMIND_MAX})`（两条读路径必须同形）：`items` 只含 `open`，按「升级优先 →
+`asked_at` 旧的在前 → id」排序后截断到 `DECISION_REMIND_MAX`（3）条；`counts` 恰好 7 键
+`{open,blocking,escalated,answered,withdrawn,superseded,total}`。该投影不带 session/turn，
+所以 item 上的 `turnAge` 恒为 `null`，`escalated` 只由 `asked_at` 的 **24 小时**规则命中。
+无决策记录（含 `decisions/` 目录不存在）→ `items: []`、`counts` 全 0（键必须在）。
 
 `created` 是根相对 POSIX 路径数组；`seededGates` 是本次种入的默认门禁 id 数组
 （空数组表示已有门禁或 `noGates`），种子不写入 `created`。`get*` 未找到抛 `not-found`；
@@ -710,7 +736,7 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 | 方法 | 路径 | 作用 |
 |---|---|---|
-| GET | `/api/project-flow/state?root=<dir>` | 只读投影：实验树、任务、门禁、心跳 |
+| GET | `/api/project-flow/state?root=<dir>` | 只读投影：实验树、任务、门禁、心跳、决策 |
 | POST | `/api/project-flow/init` | 初始化台账（`{root}`），走 core |
 | POST | `/api/project-flow/gate` | 门禁开关（`{root, id, enabled}`），走 core |
 
@@ -743,8 +769,39 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 
 ### 9.3 与工具的关系
 
-模型侧另有 5 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`。
+模型侧另有 6 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`、
+`flow_decision`。
 `flow_heartbeat` 的 `action` 为 `start|update|end|list|status`，session 取当前会话 id，
 语义与 CLI `flow heartbeat ...` 完全一致（同一 `lib/core.mjs`）。start/update/end 只在
 主会话可用；心跳根解析到项目主工作区；`root` 参数仍可覆盖工作区，但不会绕开主工作区
 解析与会话判定。
+`flow_decision` 的 `action` 为 `ask|list|show|answer|withdraw|gc`，与 CLI `flow decision ...`
+一一对应（同一 `lib/core.mjs`）。`ask`/`answer`/`withdraw`/`gc` 是写动作，**只在主会话可用**：
+子会话调用抛错并提示把待决策项写进最终报告、由主会话建/关 `D-` 记录；`list`/`show` 只读，
+**任意会话可调用**。`ask` 的 `asked_session`/`asked_turn` 缺省取当前心跳；approval 省略
+`recommendation` 等同推荐 `approve`（想推荐拒绝必须显式传 `reject`），`rationale` 仍必填。
+
+### 9.4 面板决策节（`GET state` 的 `decisions`）
+
+- payload 形状（`data.decisions`）：`{items, counts}`。`counts` 与
+  `readStoreState().decisions.counts`、`summarizeDecisions(root, contract,
+  {limit: DECISION_REMIND_MAX}).counts` **逐字相同**，恰好 7 键
+  `{open,blocking,escalated,answered,withdrawn,superseded,total}`。
+- `items` **同源、不重排**：取 `readStoreState().decisions.items`（= `summarizeDecisions` 的
+  `items`）——只含 `open`，最多 3 条，顺序为「升级优先 → `asked_at` 旧的在前 → id」；payload
+  再把它投影成固定 11 键 `{id,kind,status,question,blocks,options,recommendation,default,
+  escalated,ageSeconds,asked_at}`（`options[].label`/`impact` 按长度上限裁剪）。core 侧的
+  item 是「完整记录 + `escalated`/`turnAge`/`ageSeconds`」标注，还含 `schema`/`rationale`/
+  `affects`/`fingerprint`/`asked_session` 等字段，**不**直接进 payload。
+- **升级判定只有 24 小时规则**：这条读路径没有会话上下文，core 投影里的 `turnAge` 恒为
+  `null`（payload 也不含该键），所以 `escalated` 只可能由 `asked_at` 超过 **24 小时**触发；
+  「同会话挂起 ≥3 轮」的升级只出现在 `agent/pre-step` 提醒里（主会话面，§9.2），面板**不是**
+  漏了轮数升级。
+- 空态分三种，规则唯一：
+  1. 工作区无 store → `ok:false` + `error.code: "not-initialized"`，**不带任何节**；
+  2. store 存在但不可读（`emptyStoreState`）→ `decisions` 节在、`items: []`、`counts` 全 0；
+  3. store 可读但无决策记录（含 `decisions/` 目录不存在）→ 同上，`items: []`、`counts` 全 0。
+  **键必须存在、数组为空**，不是缺键；面板侧对缺键要按空节兜底（不抛）。
+- 面板**只读**：不新增 HTTP 写端点、不调工具、不写 store；「复制回答串」在浏览器端拼接
+  `flow decision answer <id> --choice <推荐值>`（取值顺序 `recommendation` → `default` →
+  首个 option id；`input` 类型用引号包裹自由文本），回答由用户粘回会话或直接在 CLI 执行。
