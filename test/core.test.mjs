@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import {
   FlowError,
   DECISION_GC_DAYS,
+  DECISION_REMIND_MAX,
   DECISION_SCHEMA,
   HEARTBEAT_STALE_SECONDS,
   SCHEMA_VERSION,
@@ -1729,6 +1730,149 @@ test('checkDecisions：仅 open + blocking + affects 命中暂存文件才失败
   const nonGit = tempRoot('decision-check-nogit')
   initProject(nonGit, { name: 'nogit', noGates: true })
   expectFlowError(() => checkDecisions(nonGit, loadContract(nonGit).contract), 'io', /git diff --cached failed/)
+})
+
+// ------------------------------------------- B/C 波：默认推荐与决策投影
+
+test('决策 ask：approval 省略 recommendation 时默认 approve；choice 仍必填（D02）', () => {
+  const { root, contract } = freshProject('decision-default-recommendation')
+  const omitted = [
+    { label: 'undefined', recommendation: undefined },
+    { label: 'null', recommendation: null },
+    { label: '空串', recommendation: '' },
+  ]
+  for (const item of omitted) {
+    const created = addDecision(root, contract, {
+      question: `省略推荐值（${item.label}）？`,
+      kind: 'approval',
+      rationale: '省略即推荐 approve',
+      recommendation: item.recommendation,
+    })
+    assert.equal(created.created, true)
+    assert.deepEqual(created.decision.options.map((option) => option.id), ['approve', 'reject'])
+    assert.equal(created.decision.recommendation, 'approve', `${item.label} 应默认 approve`)
+    assert.equal(readJson(decisionFile(root, created.decision.id)).recommendation, 'approve', '落盘也是 approve')
+  }
+
+  const explicit = addDecision(root, contract, {
+    question: '显式推荐拒绝？',
+    kind: 'approval',
+    rationale: '想推荐拒绝必须显式传',
+    recommendation: 'reject',
+  })
+  assert.equal(explicit.decision.recommendation, 'reject')
+  assert.equal(readJson(decisionFile(root, explicit.decision.id)).recommendation, 'reject')
+
+  expectFlowError(
+    () =>
+      addDecision(root, contract, {
+        question: '非法推荐值？',
+        kind: 'approval',
+        rationale: '非法值仍要拦住',
+        recommendation: 'bogus',
+      }),
+    'invalid',
+    /recommendation must be one of/,
+  )
+
+  // choice 的 recommendation 仍必填：D02 不放宽
+  const choiceBase = {
+    question: '选哪个方案？',
+    kind: 'choice',
+    rationale: '需要用户选',
+    options: [
+      { id: 'a', label: 'A', impact: '影响 A' },
+      { id: 'b', label: 'B', impact: '影响 B' },
+    ],
+  }
+  expectFlowError(() => addDecision(root, contract, { ...choiceBase }), 'invalid', /recommendation is required/)
+  expectFlowError(
+    () => addDecision(root, contract, { ...choiceBase, recommendation: null }),
+    'invalid',
+    /recommendation is required/,
+  )
+  expectFlowError(
+    () => addDecision(root, contract, { ...choiceBase, recommendation: 'c' }),
+    'invalid',
+    /recommendation must be one of/,
+  )
+  assert.equal(addDecision(root, contract, { ...choiceBase, recommendation: 'a' }).decision.recommendation, 'a')
+})
+
+test('readStoreState 决策投影：与 summarizeDecisions 逐字同形、items ≤3、counts 7 键', () => {
+  const { root, contract } = freshProject('state-decisions')
+  const emptyCounts = {
+    open: 0,
+    blocking: 0,
+    escalated: 0,
+    answered: 0,
+    withdrawn: 0,
+    superseded: 0,
+    total: 0,
+  }
+  // 空 store：键必须在、数组为空（不是缺键）
+  const empty = readStoreState(root, contract)
+  assert.deepEqual(empty.decisions, { items: [], counts: emptyCounts })
+  assert.deepEqual(
+    Object.keys(empty.decisions.counts).sort(),
+    ['answered', 'blocking', 'escalated', 'open', 'superseded', 'total', 'withdrawn'],
+    'counts 恰好 7 键',
+  )
+
+  // decisions/ 目录不存在（init 未建）同样给空节
+  fs.rmSync(storePaths(root, contract).decisions, { recursive: true, force: true })
+  assert.deepEqual(readStoreState(root, contract).decisions, { items: [], counts: emptyCounts })
+  fs.mkdirSync(storePaths(root, contract).decisions, { recursive: true })
+
+  // 冻结时钟，让两条读路径的 ageSeconds/escalated 逐字可比（否则跨秒会差 1）
+  const FIXED_NOW = Date.parse('2026-10-31T12:00:00+08:00')
+  const frozen = (fn) => {
+    const realNow = Date.now
+    Date.now = () => FIXED_NOW
+    try {
+      return fn()
+    } finally {
+      Date.now = realNow
+    }
+  }
+  const askedOffsets = [30, 5, 4, 3, 2] // 小时前；第一条跨过 24 小时升级线
+  for (const hours of askedOffsets) {
+    addDecision(root, contract, {
+      question: `${hours} 小时前的待拍板问题？`,
+      kind: 'approval',
+      rationale: '投影用例',
+      asked_at: new Date(FIXED_NOW - hours * 60 * 60 * 1000).toISOString(),
+    })
+  }
+
+  const state = frozen(() => readStoreState(root, contract))
+  assert.equal(state.decisions.items.length, DECISION_REMIND_MAX, 'items 截断到 DECISION_REMIND_MAX')
+  assert.equal(DECISION_REMIND_MAX, 3)
+  assert.equal(state.decisions.counts.open, 5, 'counts 不受 limit 影响')
+  assert.equal(state.decisions.counts.total, 5)
+  assert.equal(state.decisions.counts.escalated, 1)
+  assert.ok(state.decisions.items.every((item) => item.status === 'open'), 'items 只含 open')
+  assert.ok(state.decisions.items.every((item) => item.turnAge === null), '投影没有 session/turn，turnAge 恒 null')
+  assert.deepEqual(state.decisions.items.map((item) => item.escalated), [true, false, false], '升级项排最前')
+  assert.deepEqual(state.decisions.items.map((item) => item.ageSeconds), [30 * 3600, 5 * 3600, 4 * 3600])
+
+  // C3：面板读路径与提醒/flow status 的读路径逐字同形
+  const same = frozen(() => summarizeDecisions(root, contract, { limit: DECISION_REMIND_MAX }))
+  assert.deepEqual(state.decisions, same)
+  assert.deepEqual(frozen(() => summarizeDecisions(root, contract).counts), state.decisions.counts)
+})
+
+test('契约与设计文档文本同步：五项检查 / approval 省略 / 6 个工具 / D19', () => {
+  const repo = path.resolve(HERE, '..')
+  const contractText = fs.readFileSync(path.join(repo, 'CONTRACT.md'), 'utf8')
+  assert.ok(contractText.includes('五项'), 'CONTRACT §6 写明 check list 五项')
+  assert.ok(contractText.includes('approval 省略'), 'CONTRACT 写明 approval 省略 recommendation = approve')
+  assert.ok(contractText.includes('6 个工具'), 'CONTRACT §9.3 工具数 5 → 6')
+  assert.ok(contractText.includes('flow_decision'), 'CONTRACT §9.3 列出 flow_decision')
+  assert.ok(contractText.includes('turnAge'), 'CONTRACT 面板决策节说明 turnAge 恒 null')
+  const designText = fs.readFileSync(path.join(repo, 'docs', 'decision-log.md'), 'utf8')
+  assert.ok(designText.includes('D19'), '设计文档 §12.2 增 D19')
+  assert.ok(designText.includes('首轮'), '设计文档 §6.1 首轮提醒裁决')
 })
 
 // ------------------------------------------------------ CLI 决策与门禁
