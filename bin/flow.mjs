@@ -28,7 +28,7 @@ const USAGE = `project-flow CLI（schema 2）
 
 命令
   init      初始化 .dsh/flow（--name X --force --no-gates）
-  status    项目名、契约源、实验/任务/门禁计数与最近记录
+  status    项目名、契约源、实验/任务/门禁/决策计数与最近记录
 
   exp list | show <id> | tree
   exp add --title T [--hypothesis H] [--factor F] [--parent ID]
@@ -64,11 +64,21 @@ const USAGE = `project-flow CLI（schema 2）
   heartbeat status [--require-active] [--session S]
   heartbeat gc [--dry-run]      清理旧子会话心跳（agent=subagent 的历史文件）
 
+  decision ask --question Q --kind choice|approval|input
+               [--option 'id=label>>impact']... [--default ID] [--recommendation ID]
+               [--rationale R] [--blocks T-id]... [--affects PATH]... [--supersedes D-id]
+  decision list [--open] [--all]
+  decision show <id>
+  decision answer <id> --choice C [--note N] [--by user|agent]
+  decision withdraw <id> --reason R [--by user|agent]
+  decision gc [--days N] [--dry-run]
+
   check list
   check staged --allow <path> [--allow <path> ...]
   check release-baseline --marker <text> [--threshold <N>]
   check state [--file <path>]
   check doc --file <path> --type task|design|incident|release
+  check decisions                内置检查：阻塞决策命中暂存文件时失败（core 实现）
 
   心跳只面向主会话（同一项目的多个主会话互相避让）：子会话不登记心跳，
   在子会话里运行 heartbeat start/update/end 会被明确拒绝；list/status 只读，
@@ -76,6 +86,12 @@ const USAGE = `project-flow CLI（schema 2）
 
   机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
   scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
+  check decisions 是唯一内置检查：bin 特判路由到 core.checkDecisions（只读），
+  不跑 scripts/；lib/checks.mjs 仍不 import core、不读写 store。
+
+  决策只面向主会话：需要用户拍板的问题先 ask 建记录再提问，用户回答当轮 answer；
+  open 同题复用、已关闭同题必须 --supersedes；阻塞决策（blocks 非空）影响暂存文件时
+  check decisions 让 precommit 失败。
 
 全局
   --root <dir>   项目根目录（默认当前目录）
@@ -104,7 +120,7 @@ const CHECK_EXIT_BY_CODE = {
 // status 只逐条展示最近的心跳，其余用总数提示。
 const STATUS_HEARTBEAT_ROWS = 5
 
-const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run'])
+const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all'])
 const VALUE_FLAGS = new Set([
   'root', 'name',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
@@ -113,8 +129,10 @@ const VALUE_FLAGS = new Set([
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
   'allow', 'marker', 'threshold', 'file', 'type',
   'session', 'agent', 'claim', 'note', 'task',
+  'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
+  'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
 ])
-const REPEAT_FLAGS = new Set(['step', 'allow', 'claim'])
+const REPEAT_FLAGS = new Set(['step', 'allow', 'claim', 'option', 'blocks', 'affects'])
 
 class CliError extends Error {
   constructor(code, message) {
@@ -187,7 +205,17 @@ function parseArgv(argv) {
     positional.push(tok)
   }
 
-  return { flags, steps: repeated.step || [], allows: repeated.allow || [], claims: repeated.claim || [], positional, errors }
+  return {
+    flags,
+    steps: repeated.step || [],
+    allows: repeated.allow || [],
+    claims: repeated.claim || [],
+    decisionOptions: repeated.option || [],
+    blocks: repeated.blocks || [],
+    affects: repeated.affects || [],
+    positional,
+    errors,
+  }
 }
 
 // ---------------------------------------------------------------- 输出工具
@@ -558,6 +586,21 @@ async function cmdStatus(ctx) {
   // 心跳独立于 store 聚合，未初始化也读取（与面板一致）。
   const heartbeats = core.readHeartbeatSection(ctx.root, contract)
 
+  // 待决策段：与提醒/面板同一份读模型（open 排序：升级优先、asked_at 旧的在前）。
+  let decisions = {
+    items: [],
+    counts: { open: 0, blocking: 0, escalated: 0, answered: 0, withdrawn: 0, superseded: 0, total: 0 },
+  }
+  if (initialized) {
+    try {
+      const info = decisionSessionInfo(ctx, contract)
+      const summary = core.summarizeDecisions(ctx.root, contract, { ...info, limit: 3 })
+      decisions = { items: summary.items, counts: summary.counts }
+    } catch {
+      // 决策读取失败不影响 status 的其余部分
+    }
+  }
+
   const expCounts = countsOf(experiments, ['open', 'confirmed', 'refuted', 'abandoned'])
   const taskCounts = countsOf(tasks, ['draft', 'active', 'done', 'archived'])
   const gateEnabled = gates.filter((gate) => gate.enabled !== false).length
@@ -575,6 +618,7 @@ async function cmdStatus(ctx) {
       gates: { total: gates.length, enabled: gateEnabled },
     },
     heartbeats,
+    decisions,
     recent: {
       experiments: experiments.slice(0, 3),
       tasks: tasks.slice(0, 3),
@@ -602,6 +646,7 @@ async function cmdStatus(ctx) {
         `${tasks.length}（draft ${taskCounts.draft} · active ${taskCounts.active} · done ${taskCounts.done} · archived ${taskCounts.archived}）`,
       ])
       lines.push(['门禁', `${gates.length}（启用 ${gateEnabled}）`])
+      lines.push(['待决策', `${decisions.counts.open}（阻塞 ${decisions.counts.blocking}）`])
       const hiddenBeats = Number(heartbeats.counts.hidden) || 0
       lines.push([
         '心跳',
@@ -630,6 +675,15 @@ async function cmdStatus(ctx) {
     }
 
     if (initialized) {
+      if (decisions.items.length > 0) {
+        out('')
+        out(`待决策 ${decisions.counts.open}（阻塞 ${decisions.counts.blocking}）`)
+        for (const item of decisions.items) {
+          out(
+            `  ${item.escalated === true ? '⚠ ' : ''}${item.id}  [${item.kind}]  ${clip(item.question, 48)}  ${decisionSuspended(item)}`,
+          )
+        }
+      }
       if (data.recent.experiments.length > 0) {
         out('')
         out('最近实验')
@@ -1163,12 +1217,14 @@ async function loadChecks() {
 }
 
 async function cmdCheck(ctx, sub) {
+  // `decisions` 是唯一内置检查：bin 特判路由到 core，不经过 scripts/ 目录。
+  if (sub === 'decisions') return runCheckDecisions(ctx)
   const checks = await loadChecks()
   const names = checks.CHECKS.map((entry) => entry.name)
   const { flags } = ctx
 
   if (!sub) {
-    throw new CliError('usage', `用法: flow check <list|${names.join('|')}> [options]`)
+    throw new CliError('usage', `用法: flow check <list|${names.join('|')}|decisions> [options]`)
   }
 
   if (sub === 'list') {
@@ -1204,6 +1260,224 @@ async function cmdCheck(ctx, sub) {
     passthrough: !ctx.json,
   })
   return result
+}
+
+// ---------------------------------------------------------------- flow decision
+
+/** `id=label>>impact` (same shape family as `gate add --step`). Core validates the content. */
+function parseDecisionOption(raw) {
+  const text = String(raw ?? '').trim()
+  if (text === '') throw new CliError('usage', "--option 不能为空，格式：'id=label>>impact'")
+  const arrow = text.indexOf('>>')
+  const head = arrow >= 0 ? text.slice(0, arrow) : text
+  const impact = arrow >= 0 ? text.slice(arrow + 2).trim() : ''
+  const eq = head.indexOf('=')
+  if (eq <= 0) throw new CliError('usage', `--option 格式应为 'id=label>>impact'，收到：${text}`)
+  return { id: head.slice(0, eq).trim(), label: head.slice(eq + 1).trim(), impact }
+}
+
+/** Current main-session id + heartbeat turn, for list/ask escalation annotations. */
+function decisionSessionInfo(ctx, contract) {
+  const session = typeof process.env.DSH_SESSION_ID === 'string' ? process.env.DSH_SESSION_ID.trim() : ''
+  if (session === '') return { session: '', turn: null }
+  try {
+    const status = ctx.core.heartbeatStatus(ctx.root, contract, session)
+    const record = status !== null && typeof status === 'object' ? status.record : null
+    const turn = record !== null && record !== undefined && Number.isInteger(record.turn) ? record.turn : null
+    return { session, turn }
+  } catch {
+    return { session, turn: null }
+  }
+}
+
+/** 挂起 display: turns for the asking session, otherwise the age since asked_at. */
+function decisionSuspended(item) {
+  const turnAge = Number.isInteger(item?.turnAge) ? item.turnAge : null
+  if (turnAge !== null) return `${turnAge} 轮`
+  const age = item?.ageSeconds
+  if (!Number.isFinite(age)) return '-'
+  if (age < 3600) return `${Math.max(1, Math.round(age / 60))} 分钟`
+  if (age < 86400) return `${Math.round(age / 3600)} 小时`
+  return `${Math.round(age / 86400)} 天`
+}
+
+function printDecisionList(items, counts) {
+  out(
+    `决策 ${counts.total}（open ${counts.open} · 阻塞 ${counts.blocking} · 升级 ${counts.escalated} · answered ${counts.answered} · withdrawn ${counts.withdrawn} · superseded ${counts.superseded}）`,
+  )
+  if (items.length === 0) {
+    out('（没有待决策）')
+    return
+  }
+  const rows = items.map((item) => [
+    `${item.escalated === true ? '⚠ ' : ''}${item.id}`,
+    item.kind || '-',
+    item.status || '-',
+    Array.isArray(item.blocks) && item.blocks.length > 0 ? item.blocks.join(',') : '-',
+    decisionSuspended(item),
+    clip(item.question, 48),
+  ])
+  out(table(['ID', '类型', '状态', '阻塞', '挂起', '问题'], rows))
+}
+
+async function cmdDecision(ctx, sub) {
+  const { core, flags } = ctx
+  const contract = ctx.contract || (ctx.contract = core.loadContract(ctx.root).contract)
+
+  if (!sub) throw new CliError('usage', '用法: flow decision <ask|list|show|answer|withdraw|gc>')
+
+  if (sub === 'ask') {
+    const kind = requireString(flags, 'kind', '用法: flow decision ask --question Q --kind choice|approval|input')
+    const question = requireString(flags, 'question', 'flow decision ask 需要 --question')
+    const input = {
+      question,
+      kind,
+      rationale: requireString(flags, 'rationale', 'flow decision ask 需要 --rationale'),
+    }
+    if (kind === 'choice') {
+      // 选项数量由 core 校验（invalid → 退出码 2），CLI 只做格式解析。
+      input.options = ctx.decisionOptions.map(parseDecisionOption)
+    }
+    const recommendation = readString(flags, 'recommendation')
+    if (recommendation !== undefined) input.recommendation = recommendation
+    const fallback = readString(flags, 'default')
+    if (fallback !== undefined) input.default = fallback
+    if (ctx.blocks.length > 0) input.blocks = ctx.blocks
+    if (ctx.affects.length > 0) input.affects = ctx.affects
+    const supersedes = readString(flags, 'supersedes')
+    if (supersedes !== undefined) input.supersedes = supersedes
+    const info = decisionSessionInfo(ctx, contract)
+    if (info.session !== '') input.asked_session = info.session
+    if (info.turn !== null) input.asked_turn = info.turn
+    const result = await core.addDecision(ctx.root, contract, input)
+    if (!ctx.json) {
+      if (result.created === true) {
+        out(`已创建决策 ${result.decision.id}  [${result.decision.kind}] ${result.decision.question}`)
+      } else {
+        out(`已存在 open 决策 ${result.decision.id}（未重复创建）`)
+      }
+    }
+    return result
+  }
+
+  if (sub === 'list') {
+    const info = decisionSessionInfo(ctx, contract)
+    const items = await core.listDecisions(ctx.root, contract, { all: flags.all === true, ...info })
+    const summary = core.summarizeDecisions(ctx.root, contract, info)
+    if (!ctx.json) printDecisionList(items, summary.counts)
+    return { items, counts: summary.counts }
+  }
+
+  if (sub === 'show') {
+    const id = requireString(flags, 'id', '用法: flow decision show <id>')
+    const record = await core.getDecision(ctx.root, contract, id)
+    if (!ctx.json) printRecord(record)
+    return record
+  }
+
+  if (sub === 'answer') {
+    const id = requireString(flags, 'id', '用法: flow decision answer <id> --choice C')
+    const patch = { choice: requireString(flags, 'choice', 'flow decision answer 需要 --choice') }
+    const note = readString(flags, 'note')
+    if (note !== undefined) patch.note = note
+    const by = readString(flags, 'by')
+    if (by !== undefined) patch.by = by
+    const record = core.answerDecision(ctx.root, contract, id, patch)
+    if (!ctx.json) {
+      out(`已回答决策 ${record.id}（${record.answer.choice}）`)
+      printRecord(record)
+    }
+    return record
+  }
+
+  if (sub === 'withdraw') {
+    const id = requireString(flags, 'id', '用法: flow decision withdraw <id> --reason R')
+    // `--reason` 缺省由 core 按 §4.5 判 invalid（退出码 2），CLI 不吞掉这条规则。
+    const patch = {}
+    const reason = readString(flags, 'reason')
+    if (reason !== undefined) patch.reason = reason
+    const by = readString(flags, 'by')
+    if (by !== undefined) patch.by = by
+    const record = core.withdrawDecision(ctx.root, contract, id, patch)
+    if (!ctx.json) {
+      out(`已撤回决策 ${record.id}（${record.withdraw.reason}）`)
+      printRecord(record)
+    }
+    return record
+  }
+
+  if (sub === 'gc') {
+    const days = readPositiveInteger(flags, 'days', '--days 需要正整数（保留天数）')
+    const dryRun = flags['dry-run'] === true
+    const options = { dryRun }
+    if (days !== undefined) options.days = days
+    const result = core.gcDecisions(ctx.root, contract, options)
+    if (!ctx.json) {
+      out(`${dryRun ? '将清理' : '已清理'}决策 ${result.removed.length} 条（保留 ${result.kept} 条）`)
+      for (const id of result.removed) out(`  - ${id}`)
+      if (result.removed.length === 0) out('（没有超过保留期的已关闭决策）')
+    }
+    return result
+  }
+
+  throw new CliError('usage', `未知子命令 decision ${sub}（可用 ask|list|show|answer|withdraw|gc）`)
+}
+
+/**
+ * `flow check decisions`: open + blocking decisions whose affects match a staged
+ * file fail the check. Read-only; the only `check` implementation routed to
+ * core instead of `lib/checks.mjs` (which stays core-free).
+ */
+function runCheckDecisions(ctx) {
+  const { core } = ctx
+  const loaded = core.loadContract(ctx.root)
+  const started = Date.now()
+  const result = core.checkDecisions(ctx.root, loaded.contract)
+  const durationMs = Date.now() - started
+  const lines = []
+  if (result.failed.length === 0) {
+    lines.push(`✓ decisions：open ${result.open} · blocking ${result.blocking} · 暂存 ${result.staged.length} 个文件`)
+  } else {
+    for (const item of result.failed) {
+      lines.push(`✗ ${item.id} 阻塞 ${item.blocks.join(',')}：affects 命中 ${item.matched.join(', ')}`)
+    }
+    const first = result.failed[0]
+    try {
+      const record = core.getDecision(ctx.root, loaded.contract, first.id)
+      const options = Array.isArray(record.options) ? record.options.map((option) => option.id) : []
+      const choice =
+        typeof record.recommendation === 'string' && record.recommendation !== ''
+          ? record.recommendation
+          : typeof record.default === 'string' && record.default !== ''
+            ? record.default
+            : (options[0] ?? '')
+      if (choice !== '') lines.push(`先回答：flow decision answer ${first.id} --choice ${choice}`)
+    } catch {
+      // 提示是尽力而为，读不到就不打印
+    }
+  }
+  const stdout = lines.join('\n')
+  if (!ctx.json) {
+    for (const line of lines) out(line)
+    showWarnings(loaded.warnings)
+  }
+  if (result.failed.length === 0) {
+    return { check: 'decisions', exitCode: 0, stdout, stderr: '', durationMs, open: result.open, blocking: result.blocking, failed: [] }
+  }
+  const error = new Error('检查未通过：decisions（阻塞决策命中暂存文件）')
+  error.code = 'check-failed'
+  error.silent = true
+  error.payload = {
+    check: 'decisions',
+    exitCode: 1,
+    stdout,
+    stderr: '',
+    durationMs,
+    open: result.open,
+    blocking: result.blocking,
+    failed: result.failed,
+  }
+  throw error
 }
 
 // ---------------------------------------------------------------- 展示辅助
@@ -1360,10 +1634,12 @@ async function dispatch(ctx, parsed) {
       return cmdGate(ctx, sub)
     case 'heartbeat':
       return cmdHeartbeat(ctx, sub)
+    case 'decision':
+      return cmdDecision(ctx, sub)
     case 'check':
       return cmdCheck(ctx, sub)
     default:
-      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|check；-h 查看帮助）`)
+      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|decision|check；-h 查看帮助）`)
   }
 }
 
@@ -1391,6 +1667,9 @@ async function main() {
     steps: parsed.steps,
     allows: parsed.allows,
     claims: parsed.claims,
+    decisionOptions: parsed.decisionOptions,
+    blocks: parsed.blocks,
+    affects: parsed.affects,
     json: jsonMode,
     contract: null,
   }
@@ -1401,8 +1680,8 @@ async function main() {
     throw new CliError('usage', `多余的参数：${extra.slice(1).join(' ')}`)
   }
   if (
-    ['exp', 'task', 'gate'].includes(command) &&
-    ['show', 'update', 'rm', 'run', 'logs', 'enable', 'disable'].includes(action) &&
+    ['exp', 'task', 'gate', 'decision'].includes(command) &&
+    ['show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw'].includes(action) &&
     // `gate run --phase X` takes no id.
     !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined)
   ) {

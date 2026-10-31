@@ -19,6 +19,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   experiments/<id>.json     实验记录，如 E-20261028-01.json
   tasks/<id>.json           任务记录，如 T-20261028-57.json
   gates/<id>.json           门禁定义，如 precommit.json
+  decisions/<id>.json       决策记录，如 D-20261031-01.json
   logs/<gateId>/<ts>.json   门禁运行记录，<ts> 为 started_at 把冒号换成连字符
   .lock                     写锁（临时文件，30 秒过期，不要提交、不要展示）
 ```
@@ -37,7 +38,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   "experiments": { "source": "store", "dir": ".dsh/flow/experiments" },
   "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6 },
   "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
-  "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 }
+  "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 },
+  "decisions": { "dir": ".dsh/flow/decisions" }
 }
 ```
 
@@ -51,14 +53,16 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `contract.heartbeats.dir` 下的 `*.json`。旧 manifest 残留的 `gate` / `runs` 等键按未知键
 保留，但不再被读取，也不再参与默认值或面板投影。
 
+`decisions.dir` 是决策记录 `D-` 的目录（默认 `.dsh/flow/decisions`，缺键自动补默认值）。
+
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
-`gates` / `logs`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
+`gates` / `logs` / `decisions`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
 解析结果永远落在项目根内；不安全的值按下述规则降级并产生 warning。
 
 ### 2.1 manifest 路径 containment
 
 manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`、`gates.dir`、
-`gates.logs`、`tasks.current`、`heartbeats.dir`）都必须是**项目根内的相对路径**。core 的
+`gates.logs`、`tasks.current`、`heartbeats.dir`、`decisions.dir`）都必须是**项目根内的相对路径**。core 的
 `containedPath` 与 Host 侧的本地镜像按同一规则校验：
 
 - 绝对路径输入（`store.root` 例外，见下）、`..` 解析后逃出根、以及符号链接逃逸
@@ -174,7 +178,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | id | phase | enabled | 步骤（`expect` 均为 `exit 0`） | 标题 |
 |---|---|---|---|---|
 | `session-open` | manual | true | `"<包内绝对路径>/bin/flow.mjs" heartbeat status --require-active` | 会话心跳检查 |
-| `precommit` | commit | true | `git diff --cached --check` | 提交前暂存区检查 |
+| `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` | 提交前暂存区检查（含阻塞决策） |
 | `tests` | commit | false | `node --test test/` | 单元测试（默认关闭，按项目自填命令） |
 | `staged-files` | commit | false | `"<包内绝对路径>/bin/flow.mjs" check staged --allow src` | 暂存文件归属检查（占位） |
 | `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` | 发布基线检查（占位） |
@@ -182,7 +186,10 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 引用本插件 CLI 的两个步骤用 `import.meta.url` 在运行时解析出的**包内绝对路径**
 （`PLUGIN_BIN`），因为门禁的 cwd 是项目根，不能假设根下存在 `bin/flow.mjs`。
 `tests` / `staged-files` / `release` 默认关闭：`node --test test/` 与 `--allow src`
-只是模板，必须由项目改成自己的命令/路径后再 `gate enable`。
+只是模板，必须由项目改成自己的命令/路径后再 `gate enable`。`precommit` 的第二步
+`check decisions` 是内置检查（见 §6.1.1）：阻塞决策命中暂存文件时提交被拦下。已有项目
+不会自动补这一步，需要手动 `flow gate update precommit --step '<原步骤>' --step 'decisions=…>>exit 0'`
+（`--step` 是整体替换，必须带上原步骤）。
 
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
 
@@ -272,6 +279,61 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   计数 `{total, active, stale, hidden}`（total/active/stale 只统计可见项；`root` 是解析后的
   主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。
 
+### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`
+
+需要用户拍板的事建一条 `D-` 记录（规格见 `docs/decision-log.md`）：**提问即建记录，回答当轮
+关闭，未关闭的每轮都在场**。与实验/任务/门禁同族：`schema: 1`、`created_at`/`updated_at`、
+未知字段保留、同一把锁与原子写；目录由 `decisions.dir` 声明。
+
+```jsonc
+{
+  "schema": 1,
+  "id": "D-20261031-01",                        // 自动 D-YYYYMMDD-NN；不可改
+  "question": "是否把 flow check decisions 接入 precommit 门禁？",  // 非空，≤200 字
+  "kind": "approval",                           // choice | approval | input
+  "options": [                                  // choice: ≥2 且 id 唯一；approval 固定 approve/reject；input 固定 []
+    { "id": "approve", "label": "同意", "impact": "预提交门禁会拦住阻塞中的提交" },
+    { "id": "reject", "label": "拒绝", "impact": "决策只靠提醒与面板可见" }
+  ],
+  "default": null,                              // 可选；必须是 option id
+  "recommendation": "approve",                  // choice/approval 必填（option id）；input 为自由文本
+  "rationale": "门禁是唯一能在提交动作上强制拦截的表面。",   // 必填，≤300 字
+  "status": "open",                             // open | answered | withdrawn | superseded
+  "blocks": ["T-20261030-23"],                  // 每个 id 必须已存在；非空时 affects 必须非空
+  "affects": ["lib/core.mjs", "bin/flow.mjs"],  // 仓库相对 POSIX 路径/前缀
+  "answer": null,                               // answered 时 {choice,note,at,by}
+  "asked_at": "2026-10-31T09:50:00+08:00",
+  "answered_at": null,
+  "withdraw": null,                             // withdrawn 时 {reason,at,by}
+  "supersedes": null,                           // 被本记录取代的旧 D-id
+  "superseded_by": null,                        // 系统维护（反指针）
+  "fingerprint": "9b2f7c4a1e6d8035",            // 系统维护：sha256(kind+"\n"+归一化 question) 前 16 位
+  "asked_session": "session-…", "asked_turn": 1,
+  "created_at": "2026-10-31T09:50:00+08:00",
+  "updated_at": "2026-10-31T09:50:00+08:00"
+}
+```
+
+- **状态机**：新建固定 `open`；`answer` 只接受 `open` → `answered`（写 `answer` 与
+  `answered_at`）；`withdraw` 只接受 `open` → `withdrawn`（写 `withdraw`，`answered_at`
+  保持 null）；新 ask 带 `supersedes` 可把**任意非 `superseded`** 记录置 `superseded`
+  （保留其原 `answer`/`withdraw` 供审计，写 `superseded_by`，两条互相指向）。终态不可回退：
+  对已关闭记录再 `answer`/`withdraw` → `conflict`；重新决策只能新建记录并 supersede 旧记录。
+- **指纹去重（唯一规则）**：`sha256(kind + "\n" + normalize(question))` 取前 16 位十六进制，
+  `normalize` = NFKC → 去掉全部空白与标点 → 转小写；指纹只由 core 计算、不接受传入。ask 的
+  三种结果：① 同指纹存在 `open` 记录 → 不新建，返回已有记录（`created: false`）；
+  ② 同指纹存在已关闭记录 → **必须** `supersedes` 恰好指向该记录，否则 `conflict` 并回显旧
+  答案；③ 无同指纹 → 新建。
+- **校验**：`blocks` 每个 id 必须已存在于 `tasks/`；`blocks` 非空必须声明 `affects`；
+  `choice` 至少两个 option、id 匹配 `^[a-z0-9][a-z0-9-]{0,23}$` 且唯一，`recommendation`
+  必填并命中 option，`default` 若给出也须命中 option；`approval` 由 core 固定
+  `approve`/`reject`（调用方不得传 `options`）；`input` 无 `options`，`recommendation`/
+  `default` 为自由文本；`affects` 不得绝对路径、不得 `..` 逃逸，存储时 `\` → `/`、去 `./`、
+  去尾 `/`。任一不满足 → `invalid`（退出码 2）。
+- **系统字段**：`fingerprint`、`superseded_by`、`answered_at`、`answer`、`withdraw` 由 core
+  维护，调用方传入 → `invalid`；`id`/`schema`/`kind`/`asked_at`/`created_at`/`question`/
+  `options` 一经创建不可改（没有独立 update 命令）。
+
 ## 4 写入语义
 
 **原子写**：`mkdir -p` → 写 `<name>.tmp-<pid>-<seq>` → `rename`；失败清理临时文件并抛
@@ -343,11 +405,22 @@ flow heartbeat list
 flow heartbeat status [--require-active] [--session S]
 flow heartbeat gc [--dry-run]
 
+flow decision ask    --question Q --kind choice|approval|input
+                     [--option 'id=label>>impact']... [--default ID]
+                     [--recommendation ID] [--rationale R]
+                     [--blocks T-id]... [--affects PATH]... [--supersedes D-id]
+flow decision list   [--open] [--all]
+flow decision show   <id>
+flow decision answer <id> --choice C [--note N] [--by user|agent]
+flow decision withdraw <id> --reason R [--by user|agent]
+flow decision gc     [--days N] [--dry-run]
+
 flow check list
 flow check staged --allow <path> [--allow <path> ...]
 flow check release-baseline --marker <text> [--threshold <N>]
 flow check state [--file <path>]
 flow check doc --file <path> --type task|design|incident|release
+flow check decisions
 ```
 
 - `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
@@ -372,6 +445,17 @@ flow check doc --file <path> --type task|design|incident|release
 - `heartbeat status` 无 `--require-active` 时永远退出 0（只打印状态）；带
   `--require-active` 且没有 active 心跳（无文件，或 status 不是 working/idle）→ 退出 **1**，
   供 `session-open` 这类门禁直接使用。
+- `decision list` 默认只列 `open`；`--open` 是显式同义写法，`--all` 列全部（closed 按
+  `updated_at` 倒序，排在 open 之后）。排序全局唯一：升级优先，其次 `asked_at` 旧的在前。
+- `decision ask` 的 `--option` 格式 `id=label>>impact`，可重复；`choice` 至少两个。
+  `--recommendation` 在 `choice`/`approval` 必填，`--rationale` 必填；`--blocks`/`--affects`
+  可重复；`--supersedes` 用于同题重开（见 §3.6）。
+- `decision answer` 的 `--choice` 必填（`input` 为自由文本）；`--by` 默认 `user`，
+  `--note` 可省略（落盘为空串）。`decision withdraw` 的 `--reason` 必填。
+- `decision gc` 默认保留 90 天内与全部 open；`--days N` 覆盖保留天数，`--dry-run` 只报告
+  不删除；只删 `answered`/`withdrawn`/`superseded` 且关闭超过保留期的记录。
+- `flow check decisions` 是唯一内置检查（bin 特判路由 core，见 §6.1.1），语义与退出码按检查
+  词汇归一。
 - `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
 - `exp update` 的 `--metrics` 必须是 JSON 对象，如 `'{"tie":0.4}'`；`--commits` 逗号分隔。
@@ -403,10 +487,13 @@ flow check doc --file <path> --type task|design|incident|release
 
 ### 5.3 `flow status`
 
-人类输出：项目名、根目录、契约源 + schema、存储目录、实验/任务/门禁计数，随后是心跳
-汇总（`N（可能已停 M）`）与前 5 条心跳明细（文件名 / 相对时间 / 状态行，超过 5 条提示总数），
-再往后是最近 3 条实验、最近 3 条任务、最近 3 次门禁运行。未初始化时提示 `flow init`，退出
-码仍为 0。
+人类输出：项目名、根目录、契约源 + schema、存储目录、实验/任务/门禁计数与
+`待决策 N（阻塞 M）`，随后是心跳汇总（`N（可能已停 M）`）与前 5 条心跳明细（文件名 /
+相对时间 / 状态行，超过 5 条提示总数），再往后是最多 3 条 open 决策明细（id / kind /
+question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、最近 3 条任务、最近 3 次门禁运行。
+未初始化时提示 `flow init`，退出码仍为 0。`--json` 的 `data` 增加
+`decisions: {items, counts:{open,blocking,escalated,answered,withdrawn,superseded,total}}`
+（`items` 只放前 3 条 open，与提醒/面板同一排序）。
 
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
@@ -435,6 +522,11 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 `<pkg>/skills/ai-collaborative-dev-workflow/scripts/`），与 `--root` 指向的项目无关；
 解释器固定为 `bash`（`.sh`）与 `python3`（`doc_check.py`）。
 
+**唯一内置例外**：`flow check decisions` 不来自脚本目录，而由 `bin/flow.mjs` 特判路由到
+`core.checkDecisions()`（只读，复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
+保持**不 import core、不读写 `.dsh/flow`** 的纪律。`check list` 仍只列脚本检查（四项）：
+`decisions` 是 core 实现的内置检查，不出现在该清单里。
+
 ### 6.1 子命令与参数映射
 
 | 子命令 | CLI 用法 | 实际调用 |
@@ -462,6 +554,20 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
   内含 required_sections / max_lines / vague_words）与任务目录配置；注意
   `precision_common.repo_root` 优先读环境变量 `TASK_ROOT`，若设置了它会覆盖 `--root`。
 - 每项检查默认超时 **120 秒**，`--timeout <seconds>` 覆盖（正整数）。
+
+### 6.1.1 `check decisions`（决策门禁）
+
+- 语义（唯一规则）：**`status=open` 且 `blocks` 非空（blocking）且 `affects` 命中本次暂存
+  改动 → 失败（exit 1）**；其余情况通过（exit 0）。暂存区为空 → 通过。
+- 本次改动 = `git diff --cached --name-only --diff-filter=ACMR`（相对仓库根、POSIX 路径）。
+  未暂存不拦截是设计行为：门禁只在提交动作上生效。
+- 匹配：暂存文件 `f` 命中 `affects` 项 `a` 当 `f === a` 或 `f` 以 `a + "/"` 开头；大小写敏感。
+- 退出码沿用 §6.2：0 通过 · 1 阻塞决策命中 · 2 未初始化/用法 · 4 `git` 失败。
+- JSON 成功：`{ok:true,data:{check:"decisions",exitCode:0,stdout,stderr,durationMs,open,blocking,failed:[]}}`；
+  失败错误对象：`{code:"check-failed",message,check:"decisions",exitCode:1,stdout,stderr,
+  open,blocking,failed:[{id,question,blocks,affects,matched}]}`。
+- 人类输出：通过 `✓ decisions：open 2 · blocking 0 · 暂存 3 个文件`；失败逐行
+  `✗ <id> 阻塞 <T-id>：affects 命中 <path>`，末行提示可复制的 `flow decision answer` 命令。
 
 ### 6.2 退出码
 
@@ -554,6 +660,21 @@ readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,
 readHeartbeatSection(root, contract)       // 富形状 {root, dir, items[], counts{total,active,stale,hidden}}
 resolveHeartbeatWorkspace(root)            // {root, degraded, reason}：心跳根=项目主工作区
 gcLegacyHeartbeats(root, contract, {dryRun?})  // {root, dir, removed[], kept, dryRun}
+
+// 决策（记录族；同锁/原子写；指纹去重与终态规则见 §3.6）
+listDecisions(root, contract, {all?, session?, turn?, now?})   // 数组；默认只 open
+getDecision(root, contract, id)
+addDecision(root, contract, input)          // {decision, created}（created:false = 复用 open）
+answerDecision(root, contract, id, {choice, note?, by?})
+withdrawDecision(root, contract, id, {reason, by?})
+gcDecisions(root, contract, {days?, dryRun?, now?})            // {removed[], kept, dryRun}
+summarizeDecisions(root, contract, {limit?, session?, turn?, now?})
+                                            // {items, counts:{open,blocking,escalated,
+                                            //  answered,withdrawn,superseded,total}}
+checkDecisions(root, contract, {staged?})   // {open, blocking, staged[], failed[]}
+DECISION_SCHEMA / DECISION_STATUS / DECISION_KINDS
+DECISION_ESCALATE_TURNS / DECISION_ESCALATE_HOURS
+DECISION_GC_DAYS / DECISION_REMIND_MAX
 
 experimentTree(records)              // [{...record, children:[...]}]，环安全
 readStoreState(root, contract)       // 面板聚合：experiments{items,counts,source}

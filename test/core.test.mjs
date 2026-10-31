@@ -13,11 +13,16 @@ import { fileURLToPath } from 'node:url'
 
 import {
   FlowError,
+  DECISION_GC_DAYS,
+  DECISION_SCHEMA,
   HEARTBEAT_STALE_SECONDS,
   SCHEMA_VERSION,
+  addDecision,
   addExperiment,
   addGate,
   addTask,
+  answerDecision,
+  checkDecisions,
   containedPath,
   drainWarnings,
   endHeartbeat,
@@ -25,11 +30,14 @@ import {
   getExperiment,
   getGate,
   getTask,
+  gcDecisions,
   gcLegacyHeartbeats,
+  getDecision,
   heartbeatStatus,
   initProject,
   listExperiments,
   listGateRuns,
+  listDecisions,
   listGates,
   listTasks,
   loadContract,
@@ -45,10 +53,12 @@ import {
   saveContract,
   startHeartbeat,
   storePaths,
+  summarizeDecisions,
   updateExperiment,
   updateGate,
   updateHeartbeat,
   updateTask,
+  withdrawDecision,
 } from '../lib/core.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -831,7 +841,7 @@ test('CLI --help 退出 0 且列出全部命令', () => {
   const { root } = freshProject('cli-help')
   const result = runCli(root, ['--help'])
   assert.equal(result.code, 0)
-  for (const line of ['init', 'status', 'exp list', 'exp update', 'task add', 'gate run', 'gate logs', '--json']) {
+  for (const line of ['init', 'status', 'exp list', 'exp update', 'task add', 'gate run', 'gate logs', 'decision ask', 'check decisions', '--json']) {
     assert.ok(result.stdout.includes(line), `帮助缺少 "${line}"`)
   }
 })
@@ -1392,6 +1402,478 @@ test('runGatesByPhase：单条门禁出错时汇总成失败记录，不影响�
   assert.deepEqual(summary.skipped, [])
 })
 
+// -------------------------------------------------------------------- 决策
+
+/** Ask one approval decision with valid defaults; callers override what they test. */
+function askDecision(root, contract, overrides = {}) {
+  return addDecision(root, contract, {
+    question: '是否继续推进？',
+    kind: 'approval',
+    rationale: '需要用户拍板',
+    recommendation: 'approve',
+    ...overrides,
+  })
+}
+
+function decisionFile(root, id) {
+  return path.join(root, '.dsh/flow/decisions', `${id}.json`)
+}
+
+/** Rewrite one record's updated_at (gc retention fixtures). */
+function backdateDecision(root, id, iso) {
+  const file = decisionFile(root, id)
+  const record = readJson(file)
+  record.updated_at = iso
+  fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`)
+}
+
+test('决策 ask：approval 固定选项、字段落盘与契约 decisions 目录', () => {
+  const { root, contract } = freshProject('decision-ask')
+  assert.deepEqual(contract.decisions, { dir: '.dsh/flow/decisions' })
+  assert.equal(storePaths(root, contract).decisions, path.join(root, '.dsh/flow/decisions'))
+  assert.ok(fs.statSync(storePaths(root, contract).decisions).isDirectory(), 'init 应创建 decisions 目录')
+
+  const task = addTask(root, contract, { title: '被阻塞任务', status: 'active' })
+  const result = askDecision(root, contract, {
+    question: '是否把决策门禁接入 precommit？',
+    rationale: '门禁是唯一强制拦截面',
+    blocks: [task.id],
+    affects: ['lib/', './bin/flow.mjs'],
+    asked_session: 'session-x',
+    asked_turn: 2,
+  })
+  assert.equal(result.created, true)
+  const record = result.decision
+  assert.equal(record.schema, 1)
+  assert.match(record.id, /^D-\d{8}-\d{2}$/)
+  assert.equal(record.status, 'open')
+  assert.deepEqual(record.options.map((option) => option.id), ['approve', 'reject'])
+  assert.equal(record.recommendation, 'approve')
+  assert.equal(record.default, null)
+  assert.deepEqual(record.blocks, [task.id])
+  assert.deepEqual(record.affects, ['lib', 'bin/flow.mjs'])
+  assert.match(record.fingerprint, /^[0-9a-f]{16}$/)
+  assert.equal(record.asked_session, 'session-x')
+  assert.equal(record.asked_turn, 2)
+  assert.equal(record.answer, null)
+  assert.equal(record.answered_at, null)
+  assert.equal(record.withdraw, null)
+  assert.equal(record.supersedes, null)
+  assert.equal(record.superseded_by, null)
+  assert.match(record.asked_at, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(record.created_at, record.asked_at)
+  assert.deepEqual(readJson(decisionFile(root, record.id)), record, '落盘 JSON 可解析且与返回值一致')
+  assert.deepEqual(listDecisions(root, contract).map((item) => item.id), [record.id])
+})
+
+test('决策 指纹去重：open 同题复用，空白/标点差异视为同一题，kind 参与指纹', () => {
+  const { root, contract } = freshProject('decision-dedupe-open')
+  const first = askDecision(root, contract, { question: '是否把 A 接进 B？' })
+  const second = askDecision(root, contract, { question: ' 是否把 A 接进 B? ', rationale: '另一个理由', recommendation: 'reject' })
+  assert.equal(second.created, false)
+  assert.equal(second.decision.id, first.decision.id)
+  assert.equal(fs.readdirSync(storePaths(root, contract).decisions).length, 1, '复用不新增文件')
+
+  const choice = addDecision(root, contract, {
+    question: '是否把 A 接进 B？',
+    kind: 'choice',
+    rationale: 'r',
+    recommendation: 'yes',
+    options: [
+      { id: 'yes', label: '是', impact: '接' },
+      { id: 'no', label: '否', impact: '不接' },
+    ],
+  })
+  assert.equal(choice.created, true)
+  assert.notEqual(choice.decision.fingerprint, first.decision.fingerprint)
+  assert.equal(listDecisions(root, contract).length, 2)
+})
+
+test('决策 ask：choice/approval/input 的字段校验', () => {
+  const { root, contract } = freshProject('decision-invalid')
+  const options = [
+    { id: 'a', label: 'A', impact: '影响 A' },
+    { id: 'b', label: 'B', impact: '影响 B' },
+  ]
+  const base = { question: '选哪个？', kind: 'choice', rationale: '需要选', recommendation: 'a', options }
+  expectFlowError(() => addDecision(root, contract, { ...base, options: [options[0]] }), 'invalid', /at least two options/)
+  expectFlowError(
+    () => addDecision(root, contract, { ...base, options: [options[0], { ...options[1], id: 'a' }] }),
+    'invalid',
+    /duplicate option id/,
+  )
+  expectFlowError(
+    () => addDecision(root, contract, { ...base, options: [options[0], { ...options[1], id: 'Bad ID' }] }),
+    'invalid',
+    /options\[1\]\.id/,
+  )
+  expectFlowError(() => addDecision(root, contract, { ...base, recommendation: undefined }), 'invalid', /recommendation is required/)
+  expectFlowError(() => addDecision(root, contract, { ...base, recommendation: 'c' }), 'invalid', /recommendation must be one of/)
+  expectFlowError(() => addDecision(root, contract, { ...base, default: 'c' }), 'invalid', /default must be one of/)
+  expectFlowError(() => addDecision(root, contract, { ...base, rationale: '   ' }), 'invalid', /rationale/)
+  expectFlowError(() => addDecision(root, contract, { ...base, question: '' }), 'invalid', /question/)
+  expectFlowError(() => addDecision(root, contract, { ...base, question: '问'.repeat(201) }), 'invalid', /200/)
+  expectFlowError(() => addDecision(root, contract, { ...base, kind: 'bogus' }), 'invalid', /kind must be one of/)
+  expectFlowError(() => addDecision(root, contract, { ...base, kind: 'approval' }), 'invalid', /fixed options/)
+  expectFlowError(
+    () => addDecision(root, contract, { question: '输入？', kind: 'input', rationale: 'r', options }),
+    'invalid',
+    /take no options/,
+  )
+  expectFlowError(() => addDecision(root, contract, { ...base, fingerprint: 'deadbeefdeadbeef' }), 'invalid', /fingerprint/)
+  expectFlowError(() => addDecision(root, contract, { ...base, status: 'answered' }), 'invalid', /always open/)
+
+  // input：options 固定空，recommendation/default 是自由文本
+  const input = addDecision(root, contract, {
+    question: '输入什么？',
+    kind: 'input',
+    rationale: '自由输入',
+    recommendation: '建议填 X',
+    default: 'X',
+  })
+  assert.deepEqual(input.decision.options, [])
+  assert.equal(input.decision.recommendation, '建议填 X')
+  assert.equal(input.decision.default, 'X')
+})
+
+test('决策 ask：blocks 必须指向现有任务，非空 blocks 必须 affects，affects 归一化', () => {
+  const { root, contract } = freshProject('decision-blocks')
+  const task = addTask(root, contract, { title: '任务', status: 'active' })
+  expectFlowError(() => askDecision(root, contract, { blocks: ['T-20990101-99'], affects: ['lib/'] }), 'invalid', /does not exist/)
+  expectFlowError(() => askDecision(root, contract, { blocks: [task.id] }), 'invalid', /at least one affects/)
+  expectFlowError(() => askDecision(root, contract, { affects: ['/etc/passwd'] }), 'invalid', /repository-relative/)
+  expectFlowError(() => askDecision(root, contract, { affects: ['lib/../../etc'] }), 'invalid', /escapes/)
+  const ok = askDecision(root, contract, {
+    blocks: [task.id],
+    affects: ['lib/', 'lib', './bin/', 'bin//flow.mjs', 'a\\b'],
+  })
+  assert.deepEqual(ok.decision.affects, ['lib', 'bin', 'bin/flow.mjs', 'a/b'])
+})
+
+test('决策 指纹去重：已关闭同题必须 supersedes，旧记录保留答案并写反指针', () => {
+  const { root, contract } = freshProject('decision-supersede')
+  const first = askDecision(root, contract, { question: '是否采用方案 A？' })
+  const answered = answerDecision(root, contract, first.decision.id, { choice: 'approve', note: '同意' })
+  assert.equal(answered.status, 'answered')
+
+  let conflict = null
+  try {
+    askDecision(root, contract, { question: '是否采用方案A?' })
+  } catch (error) {
+    conflict = error
+  }
+  assert.ok(conflict instanceof FlowError)
+  assert.equal(conflict.code, 'conflict')
+  assert.match(conflict.message, new RegExp(first.decision.id))
+  assert.match(conflict.message, /answered/)
+
+  const again = askDecision(root, contract, {
+    question: '是否采用方案 A？',
+    supersedes: first.decision.id,
+    recommendation: 'reject',
+  })
+  assert.equal(again.created, true)
+  const old = getDecision(root, contract, first.decision.id)
+  assert.equal(old.status, 'superseded')
+  assert.equal(old.superseded_by, again.decision.id)
+  assert.deepEqual(old.answer, answered.answer, '旧答案保留供审计')
+  assert.equal(old.answered_at, answered.answered_at)
+  assert.equal(again.decision.supersedes, first.decision.id)
+  assert.equal(listDecisions(root, contract).length, 1, '默认只列 open')
+  assert.deepEqual(listDecisions(root, contract, { all: true }).map((item) => item.status), ['open', 'superseded'])
+
+  expectFlowError(
+    () => askDecision(root, contract, { question: '还是方案 A？', supersedes: first.decision.id }),
+    'invalid',
+    /cannot be superseded again/,
+  )
+})
+
+test('决策 状态机：answer/withdraw 只接受 open，终态不可改', () => {
+  const { root, contract } = freshProject('decision-state')
+  const answeredAsk = askDecision(root, contract, { question: '答完的？' })
+  const answered = answerDecision(root, contract, answeredAsk.decision.id, { choice: 'reject' })
+  assert.equal(answered.status, 'answered')
+  assert.equal(answered.answer.choice, 'reject')
+  assert.equal(answered.answer.note, '')
+  assert.equal(answered.answer.by, 'user')
+  assert.ok(answered.answered_at)
+  expectFlowError(() => answerDecision(root, contract, answeredAsk.decision.id, { choice: 'approve' }), 'conflict', /cannot be answered/)
+  expectFlowError(() => withdrawDecision(root, contract, answeredAsk.decision.id, { reason: '撤回' }), 'conflict', /cannot be withdrawn/)
+
+  const invalidAsk = askDecision(root, contract, { question: '选项校验？' })
+  expectFlowError(() => answerDecision(root, contract, invalidAsk.decision.id, {}), 'invalid', /choice/)
+  expectFlowError(() => answerDecision(root, contract, invalidAsk.decision.id, { choice: 'bogus' }), 'invalid', /choice must be one of/)
+  expectFlowError(() => answerDecision(root, contract, invalidAsk.decision.id, { choice: 'approve', by: 'robot' }), 'invalid', /by must be one of/)
+  expectFlowError(() => withdrawDecision(root, contract, invalidAsk.decision.id, {}), 'invalid', /reason/)
+
+  const withdrawn = withdrawDecision(root, contract, invalidAsk.decision.id, { reason: '  不用问了  ', by: 'agent' })
+  assert.equal(withdrawn.status, 'withdrawn')
+  assert.equal(withdrawn.withdraw.reason, '不用问了')
+  assert.equal(withdrawn.withdraw.by, 'agent')
+  assert.equal(withdrawn.answered_at, null)
+  expectFlowError(() => withdrawDecision(root, contract, invalidAsk.decision.id, { reason: 'again' }), 'conflict', /cannot be withdrawn/)
+
+  const inputAsk = addDecision(root, contract, { question: '自由输入？', kind: 'input', rationale: 'r' })
+  expectFlowError(() => answerDecision(root, contract, inputAsk.decision.id, {}), 'invalid', /choice/)
+  const inputAnswered = answerDecision(root, contract, inputAsk.decision.id, { choice: '自定义值', by: 'agent' })
+  assert.equal(inputAnswered.answer.choice, '自定义值')
+  assert.equal(inputAnswered.answer.by, 'agent')
+})
+
+test('决策 gc：只删关闭超过保留期的记录，open 保留，dry-run 不删除', () => {
+  const { root, contract } = freshProject('decision-gc')
+  const open = askDecision(root, contract, { question: '还开着的？' })
+  const answeredAsk = askDecision(root, contract, { question: '已答的？' })
+  answerDecision(root, contract, answeredAsk.decision.id, { choice: 'approve' })
+  const withdrawnAsk = askDecision(root, contract, { question: '撤回的？' })
+  withdrawDecision(root, contract, withdrawnAsk.decision.id, { reason: '不用' })
+  backdateDecision(root, open.decision.id, '2019-01-01T00:00:00+08:00')
+  backdateDecision(root, answeredAsk.decision.id, '2019-01-01T00:00:00+08:00')
+  backdateDecision(root, withdrawnAsk.decision.id, '2019-01-01T00:00:00+08:00')
+
+  const expected = [answeredAsk.decision.id, withdrawnAsk.decision.id].sort()
+  const dry = gcDecisions(root, contract, { dryRun: true })
+  assert.equal(dry.dryRun, true)
+  assert.deepEqual(dry.removed, expected)
+  assert.equal(dry.kept, 1)
+  assert.ok(fs.existsSync(decisionFile(root, answeredAsk.decision.id)), 'dry-run 不删除')
+
+  const real = gcDecisions(root, contract)
+  assert.deepEqual(real.removed, expected)
+  assert.equal(real.kept, 1)
+  assert.ok(fs.existsSync(decisionFile(root, open.decision.id)))
+  assert.equal(fs.existsSync(decisionFile(root, answeredAsk.decision.id)), false)
+
+  const recent = askDecision(root, contract, { question: '刚关闭的？' })
+  answerDecision(root, contract, recent.decision.id, { choice: 'approve' })
+  assert.deepEqual(gcDecisions(root, contract, { days: 1 }).removed, [], '保留期内不删')
+  const purged = gcDecisions(root, contract, { days: 1, now: Date.now() + 2 * 24 * 60 * 60 * 1000 })
+  assert.ok(purged.removed.includes(recent.decision.id), '超过 --days 后删除')
+  expectFlowError(() => gcDecisions(root, contract, { days: 0 }), 'invalid', /days/)
+})
+
+test('决策 summarize：升级优先 + asked_at 旧的在前，counts 统计全状态', () => {
+  const { root, contract } = freshProject('decision-summary')
+  const old = addDecision(root, contract, {
+    question: '最早的问题？', kind: 'approval', rationale: 'r', recommendation: 'approve',
+    asked_session: 'session-me', asked_turn: 1, asked_at: '2026-10-01T00:00:00+08:00',
+  })
+  const newer = addDecision(root, contract, {
+    question: '较新的问题？', kind: 'approval', rationale: 'r', recommendation: 'approve',
+    asked_session: 'session-me', asked_turn: 2, asked_at: '2026-10-02T00:00:00+08:00',
+  })
+  const other = addDecision(root, contract, {
+    question: '别会话的问题？', kind: 'approval', rationale: 'r', recommendation: 'approve',
+    asked_session: 'session-other', asked_turn: 1, asked_at: '2026-10-03T18:00:00+08:00',
+  })
+  const now = Date.parse('2026-10-04T00:00:00+08:00')
+  const summary = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now })
+  assert.deepEqual(summary.items.map((item) => item.id), [old.decision.id, newer.decision.id, other.decision.id])
+  assert.deepEqual(summary.items.map((item) => item.escalated), [true, true, false])
+  assert.deepEqual(summary.items.map((item) => item.turnAge), [4, 3, null])
+  assert.deepEqual(summary.counts, {
+    open: 3, blocking: 0, escalated: 2, answered: 0, withdrawn: 0, superseded: 0, total: 3,
+  })
+  const limited = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now, limit: 2 })
+  assert.equal(limited.items.length, 2)
+  assert.equal(limited.counts.open, 3)
+
+  answerDecision(root, contract, newer.decision.id, { choice: 'approve' })
+  const after = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now })
+  assert.equal(after.counts.open, 2)
+  assert.equal(after.counts.answered, 1)
+  assert.equal(after.counts.total, 3)
+})
+
+test('checkDecisions：仅 open + blocking + affects 命中暂存文件才失败', () => {
+  const root = tempRoot('decision-check')
+  initProject(root, { name: 'decision-check', noGates: true })
+  const { contract } = loadContract(root)
+  git(root, ['init', '-q'])
+  git(root, ['config', 'user.email', 'flow-test@example.invalid'])
+  git(root, ['config', 'user.name', 'Flow Test'])
+  git(root, ['config', 'commit.gpgsign', 'false'])
+  const task = addTask(root, contract, { title: '被阻塞任务', status: 'active' })
+  const blocking = askDecision(root, contract, { question: '阻塞且命中？', blocks: [task.id], affects: ['lib/'] })
+  askDecision(root, contract, { question: '阻塞但不命中？', blocks: [task.id], affects: ['src/'] })
+  askDecision(root, contract, { question: '没有阻塞？', affects: ['lib/'] })
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export {}\n')
+
+  const none = checkDecisions(root, contract)
+  assert.equal(none.open, 3)
+  assert.equal(none.blocking, 2)
+  assert.deepEqual(none.staged, [])
+  assert.deepEqual(none.failed, [])
+
+  git(root, ['add', 'lib/a.mjs'])
+  const hit = checkDecisions(root, contract)
+  assert.deepEqual(hit.staged, ['lib/a.mjs'])
+  assert.equal(hit.failed.length, 1)
+  assert.equal(hit.failed[0].id, blocking.decision.id)
+  assert.deepEqual(hit.failed[0].matched, ['lib/a.mjs'])
+  assert.deepEqual(hit.failed[0].blocks, [task.id])
+  assert.deepEqual(hit.failed[0].affects, ['lib'])
+
+  assert.deepEqual(checkDecisions(root, contract, { staged: ['docs/x.md'] }).failed, [])
+  assert.equal(checkDecisions(root, contract, { staged: ['lib/sub/b.mjs'] }).failed.length, 1, '目录前缀命中')
+  assert.deepEqual(checkDecisions(root, contract, { staged: ['library/x'] }).failed, [], '前缀按路径边界匹配')
+
+  answerDecision(root, contract, blocking.decision.id, { choice: 'approve' })
+  assert.deepEqual(checkDecisions(root, contract).failed, [], '回答后不再拦截')
+  assert.equal(checkDecisions(root, contract).open, 2)
+
+  const bare = tempRoot('decision-check-bare')
+  expectFlowError(() => checkDecisions(bare, loadContract(bare).contract), 'usage', /run flow init first/)
+  const nonGit = tempRoot('decision-check-nogit')
+  initProject(nonGit, { name: 'nogit', noGates: true })
+  expectFlowError(() => checkDecisions(nonGit, loadContract(nonGit).contract), 'io', /git diff --cached failed/)
+})
+
+// ------------------------------------------------------ CLI 决策与门禁
+
+test('CLI decision：ask/list/show/answer/withdraw/gc 与冲突退出码', () => {
+  const root = tempRoot('cli-decision')
+  const init = runCli(root, ['init', '--name', 'cli-dec', '--no-gates', '--json'])
+  assert.equal(init.code, 0)
+  const task = runCli(root, ['task', 'add', '--title', '被阻塞任务', '--json']).json.data.id
+
+  const ask = runCli(root, [
+    'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
+    '--rationale', '门禁能强制拦截', '--recommendation', 'approve',
+    '--blocks', task, '--affects', 'lib/', '--json',
+  ])
+  assert.equal(ask.code, 0, ask.stderr)
+  assert.equal(ask.json.data.created, true)
+  const id = ask.json.data.decision.id
+  assert.match(id, /^D-\d{8}-\d{2}$/)
+  assert.equal(ask.json.data.decision.status, 'open')
+
+  const reused = runCli(root, [
+    'decision', 'ask', '--question', ' 是否接入门禁? ', '--kind', 'approval',
+    '--rationale', '再问一次', '--recommendation', 'reject', '--json',
+  ])
+  assert.equal(reused.code, 0)
+  assert.equal(reused.json.data.created, false)
+  assert.equal(reused.json.data.decision.id, id)
+
+  const list = runCli(root, ['decision', 'list', '--json'])
+  assert.equal(list.code, 0)
+  assert.equal(list.json.data.items.length, 1)
+  assert.equal(list.json.data.counts.open, 1)
+  assert.equal(list.json.data.counts.blocking, 1)
+  const humanList = runCli(root, ['decision', 'list'])
+  assert.ok(humanList.stdout.includes(id), humanList.stdout)
+  assert.ok(humanList.stdout.includes('是否接入门禁？'), humanList.stdout)
+
+  const status = runCli(root, ['status', '--json'])
+  assert.equal(status.json.data.decisions.counts.open, 1)
+  assert.equal(status.json.data.decisions.counts.blocking, 1)
+  assert.equal(status.json.data.decisions.items.length, 1)
+  const humanStatus = runCli(root, ['status'])
+  assert.ok(humanStatus.stdout.includes('待决策 1（阻塞 1）'), humanStatus.stdout)
+
+  const answered = runCli(root, ['decision', 'answer', id, '--choice', 'approve', '--note', 'ok', '--json'])
+  assert.equal(answered.code, 0)
+  assert.equal(answered.json.data.status, 'answered')
+  assert.equal(answered.json.data.answer.choice, 'approve')
+  assert.ok(answered.json.data.answered_at)
+
+  const conflict = runCli(root, [
+    'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
+    '--rationale', '同题重开', '--recommendation', 'reject', '--json',
+  ])
+  assert.equal(conflict.code, 2)
+  assert.equal(conflict.json.error.code, 'conflict')
+  assert.ok(conflict.json.error.message.includes(id), conflict.json.error.message)
+
+  const superseded = runCli(root, [
+    'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
+    '--rationale', '同题重开', '--recommendation', 'reject', '--supersedes', id, '--json',
+  ])
+  assert.equal(superseded.code, 0)
+  assert.equal(superseded.json.data.created, true)
+  assert.equal(superseded.json.data.decision.supersedes, id)
+  const newId = superseded.json.data.decision.id
+  const old = runCli(root, ['decision', 'show', id, '--json'])
+  assert.equal(old.json.data.status, 'superseded')
+  assert.equal(old.json.data.answer.choice, 'approve')
+
+  const withdrawn = runCli(root, ['decision', 'withdraw', newId, '--reason', '不用问了', '--json'])
+  assert.equal(withdrawn.code, 0)
+  assert.equal(withdrawn.json.data.status, 'withdrawn')
+  assert.equal(withdrawn.json.data.withdraw.reason, '不用问了')
+
+  const gc = runCli(root, ['decision', 'gc', '--dry-run', '--json'])
+  assert.equal(gc.code, 0)
+  assert.equal(gc.json.data.dryRun, true)
+  assert.deepEqual(gc.json.data.removed, [])
+  assert.equal(gc.json.data.kept, 2)
+
+  const bad = runCli(root, [
+    'decision', 'ask', '--question', 'X', '--kind', 'choice', '--rationale', 'R',
+    '--recommendation', 'a', '--option', 'a=A>>影响', '--json',
+  ])
+  assert.equal(bad.code, 2)
+  assert.equal(bad.json.error.code, 'invalid')
+  const missing = runCli(root, ['decision', 'show', 'D-20990101-99', '--json'])
+  assert.equal(missing.code, 3)
+  assert.equal(missing.json.error.code, 'not-found')
+  const unknown = runCli(root, ['decision', 'bogus', '--json'])
+  assert.equal(unknown.code, 1)
+})
+
+test('CLI check decisions：阻塞决策命中暂存文件 exit 1，回答后 exit 0', () => {
+  const root = tempRoot('cli-check-decisions')
+  runCli(root, ['init', '--name', 'cli-check', '--no-gates', '--json'])
+  git(root, ['init', '-q'])
+  git(root, ['config', 'user.email', 'flow-test@example.invalid'])
+  git(root, ['config', 'user.name', 'Flow Test'])
+  git(root, ['config', 'commit.gpgsign', 'false'])
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export {}\n')
+  fs.writeFileSync(path.join(root, 'docs', 'x.md'), '# x\n')
+
+  const task = runCli(root, ['task', 'add', '--title', '被阻塞任务', '--json']).json.data.id
+  const id = runCli(root, [
+    'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
+    '--rationale', '门禁能强制拦截', '--recommendation', 'approve',
+    '--blocks', task, '--affects', 'lib/', '--json',
+  ]).json.data.decision.id
+
+  const empty = runCli(root, ['check', 'decisions', '--json'])
+  assert.equal(empty.code, 0)
+  assert.equal(empty.json.data.check, 'decisions')
+  assert.equal(empty.json.data.open, 1)
+  assert.equal(empty.json.data.blocking, 1)
+  assert.deepEqual(empty.json.data.failed, [])
+
+  git(root, ['add', 'docs/x.md'])
+  assert.equal(runCli(root, ['check', 'decisions', '--json']).code, 0, '文档改动不命中')
+
+  git(root, ['add', 'lib/a.mjs'])
+  const hit = runCli(root, ['check', 'decisions', '--json'])
+  assert.equal(hit.code, 1)
+  assert.equal(hit.json.error.code, 'check-failed')
+  assert.equal(hit.json.error.check, 'decisions')
+  assert.equal(hit.json.error.exitCode, 1)
+  assert.equal(hit.json.error.failed[0].id, id)
+  assert.deepEqual(hit.json.error.failed[0].matched, ['lib/a.mjs'])
+  const humanHit = runCli(root, ['check', 'decisions'])
+  assert.equal(humanHit.code, 1)
+  assert.ok(humanHit.stdout.includes(`✗ ${id}`), humanHit.stdout)
+  assert.ok(humanHit.stdout.includes('flow decision answer'), humanHit.stdout)
+
+  runCli(root, ['decision', 'answer', id, '--choice', 'approve', '--json'])
+  assert.equal(runCli(root, ['check', 'decisions', '--json']).code, 0, '回答后通过')
+
+  const uninitialized = tempRoot('cli-check-decisions-bare')
+  assert.equal(runCli(uninitialized, ['check', 'decisions', '--json']).code, 2, '未初始化 → usage(2)')
+})
+
+
 // ------------------------------------------------------ flow init 默认门禁
 
 test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种、noGates 跳过', () => {
@@ -1431,6 +1913,11 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   assert.match(byId['staged-files'].steps[0].run, /check staged --allow src/)
   assert.match(byId.release.steps[0].run, /check release-baseline --marker RELEASE/)
   assert.equal(byId.precommit.steps[0].run, 'git diff --cached --check')
+  assert.equal(byId.precommit.steps.length, 2, 'precommit 第二步是决策门禁')
+  assert.equal(byId.precommit.steps[1].id, 'decisions')
+  assert.ok(byId.precommit.steps[1].run.includes(expectedBin), byId.precommit.steps[1].run)
+  assert.match(byId.precommit.steps[1].run, /check decisions$/)
+  assert.equal(byId.precommit.steps[1].expect, 'exit 0')
   assert.equal(byId.tests.steps[0].run, 'node --test test/')
 
   // 幂等：再 init 一条都不加
