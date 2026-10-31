@@ -396,6 +396,19 @@ claim 自身也有恢复规则：owner 可判死（或无法判活且超过 60 �
 `lock-claim-stale: recovered <path> after Ns`；等不到 claim 的写者拿到 conflict，消息给出
 pid/host/age 与「确认没有接管在跑后删除 <claim 路径>」的处置建议。
 
+claim 的**释放**同样校验归属（与锁一致）：token + pid 都匹配才 `unlink`，不匹配只记
+`lock-claim-release-skipped: <path> is held by pid N (this process is M); left in place`
+并保留，且永不抛（在 `finally` 里）。这堵住「被恢复的僵死接管者恢复运行后删掉接管者新
+claim、出现两个 claim 持有者」的窗口。接管者在破坏性 `rename` 前还会再回读一次 claim 并
+自证 token，不匹配立刻放弃（随后 `finally` 会记 `lock-claim-release-skipped:` 暴露这次
+让位）。
+
+**有意接受的残余风险**：被恢复的僵死接管者恢复运行后，仍可能正好卡在「回读自证」与
+`rename` 之间的**一次 syscall 窗口**内，按旧快照 move 一次活锁；紧随其后的 compare-mismatch
+兜底会用 `link()` 放回并记 `lock-cas-raced:`，与没有 claim 的协议同伤害面（临时缺口而非
+删除）。10 分钟阈值是「SIGSTOP 与 pid 复用不可区分」的取舍：不设自愈会回到 pid 复用导致
+的无界阻塞，设得更短则会误伤正常的长暂停接管者。
+
 锁只防**同一 PID namespace 的同机并发**写；store 放在共享网络盘上跨机器写不受保护。
 升级注意：旧版 core 的释放逻辑会无条件删锁，新旧进程同时写同一个 store 时可能误删新锁——
 升级窗口内确保没有旧进程在写同一个 store。
@@ -737,6 +750,9 @@ containedPath(root, value, label, {allowAbsolute?})
 drainWarnings()                      // 取走并清空全局诊断 warning（非契约 API）
 withLock(root, contract, fn)         // 在 store 写锁内同步执行 fn(paths)（非契约 API，测试用；
                                      // fn 必须同步，锁不是可重入互斥量）
+releaseTakeoverClaim(claimPath, token)
+                                     // 只释放自己的 takeover claim（token+pid 匹配），
+                                     // 不匹配记 warning 并保留（非契约 API，测试用）
 renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
                                      // rename 退避重试（EPERM/EBUSY/EACCES，10/50/150ms，
                                      // 共 4 次），最终抛 FlowError('io')（非契约 API，仅供测试注入）

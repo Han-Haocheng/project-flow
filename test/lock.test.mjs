@@ -17,6 +17,7 @@ import {
   drainWarnings,
   initProject,
   loadContract,
+  releaseTakeoverClaim,
   renameWithRetrySync,
   storePaths,
   withLock,
@@ -312,6 +313,52 @@ test('claim 恢复 CAS：活 claim 造成 conflict、claim 保留；无过期锁
   fs.rmSync(lockPath)
   withLock(root, contract, () => {})
   assert.equal(fs.existsSync(claimPath), false, '普通获取不应创建 takeover claim')
+})
+
+test('claim 释放校验归属：被恢复的持有者不会删掉接管者的新 claim（F9）', () => {
+  const { root, contract, lockPath } = freshProject('claim-release')
+  const claimPath = `${lockPath}.takeover-claim`
+  const tokenA = 'token-of-suspended-taker'
+  const tokenB = 'token-of-zombie-recoverer'
+  writeLock(claimPath, {
+    schema: 1,
+    pid: process.pid,
+    host: HOST_TAG,
+    at: new Date().toISOString(),
+    token: tokenA,
+  })
+  // 模拟：A 被 SIGSTOP >10min，B 把 A 的僵死 claim 恢复后建了自己的 claim。
+  writeLock(claimPath, {
+    schema: 1,
+    pid: process.pid,
+    host: HOST_TAG,
+    at: new Date().toISOString(),
+    token: tokenB,
+  })
+  drainWarnings()
+
+  releaseTakeoverClaim(claimPath, tokenA)
+  assert.ok(fs.existsSync(claimPath), 'A 的 finally 绝不能删除 B 的活 claim')
+  assert.equal(readLock(claimPath).token, tokenB)
+  const warnings = drainWarnings()
+  assert.ok(
+    warnings.some((item) => item.startsWith('lock-claim-release-skipped:') && item.includes('left in place')),
+    warnings.join(' | '),
+  )
+
+  // 自己的 claim 仍能正常释放，且不再产生 warning。
+  releaseTakeoverClaim(claimPath, tokenB)
+  assert.equal(fs.existsSync(claimPath), false)
+  assert.deepEqual(drainWarnings(), [])
+})
+
+test('claim 释放校验归属：claim 已被恢复/删除时 release 静默返回（F9 边界）', () => {
+  const { root, contract, lockPath } = freshProject('claim-release-gone')
+  const claimPath = `${lockPath}.takeover-claim`
+  drainWarnings()
+  releaseTakeoverClaim(claimPath, 'anything')
+  assert.equal(fs.existsSync(claimPath), false)
+  assert.deepEqual(drainWarnings(), [])
 })
 
 // ------------------------------------------------------------ A3 原子写
