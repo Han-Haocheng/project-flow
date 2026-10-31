@@ -6,7 +6,7 @@
 // uninitialized empty state.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -100,6 +100,36 @@ function draftRowsDesc(rows) {
     previous = value
   }
   return true
+}
+
+/**
+ * Key set and order of one panel decision row. index.js, client.js and both
+ * self-tests carry this literal; a diff in the order is a cross-domain contract
+ * break, so it is compared verbatim below.
+ */
+const DECISION_ITEM_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'question',
+  'blocks',
+  'options',
+  'recommendation',
+  'default',
+  'escalated',
+  'ageSeconds',
+  'asked_at',
+]
+
+/** The seven counts keys of the decisions section, in contract order. */
+const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total']
+
+/** Text of the single reminder message an `agent/pre-step` result carries. */
+function reminderText(result) {
+  const messages = Array.isArray(result?.messages) ? result.messages : []
+  if (messages.length === 0) return ''
+  const content = Array.isArray(messages[0]?.content) ? messages[0].content : []
+  return typeof content[0]?.text === 'string' ? content[0].text : ''
 }
 
 // ------------------------------------------------------------- fake context
@@ -272,8 +302,8 @@ check('gate route present', gateRoute !== undefined && gateRoute.kind === 'exact
 
 // ------------------------------------------------------------- tool surface
 
-const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat']
-check('five tools registered', registeredTools.size === 5, `got ${[...registeredTools.keys()].join(', ')}`)
+const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat', 'flow_decision']
+check('six tools registered', registeredTools.size === 6, `got ${[...registeredTools.keys()].join(', ')}`)
 for (const name of EXPECTED_TOOLS) {
   const definition = registeredTools.get(name)
   if (check(`${name}: registered`, definition !== undefined) === false) continue
@@ -350,6 +380,30 @@ const expTool = registeredTools.get('flow_exp')
 const taskTool = registeredTools.get('flow_task')
 const gateTool = registeredTools.get('flow_gate')
 const statusTool = registeredTools.get('flow_status')
+const decisionTool = registeredTools.get('flow_decision')
+
+// H1: the decision tool is a write gate like flow_heartbeat — non-concurrent and
+// on the write timeout — and its schema stays inside the registry subset.
+if (check('flow_decision: registered', decisionTool !== undefined) === true) {
+  eq('flow_decision: write timeout', decisionTool.timeoutMs, 30_000)
+  eq('flow_decision: not concurrency safe', decisionTool.isConcurrencySafe, false)
+  check(
+    'flow_decision: action enum',
+    JSON.stringify(decisionTool.parameters?.properties?.action?.enum) ===
+      JSON.stringify(['ask', 'list', 'show', 'answer', 'withdraw', 'gc']),
+    JSON.stringify(decisionTool.parameters?.properties?.action?.enum),
+  )
+  check(
+    'flow_decision: only action is required',
+    JSON.stringify(decisionTool.parameters?.required) === JSON.stringify(['action']),
+    JSON.stringify(decisionTool.parameters?.required),
+  )
+  check(
+    'flow_decision: description states R1/R2/R5 and the main-session rule',
+    ['R1', 'R2', 'R5', 'main session', 'subagent'].every((needle) => decisionTool.description.includes(needle)),
+    decisionTool.description,
+  )
+}
 
 // ----------------------------------------------------------- flow_status
 
@@ -496,9 +550,9 @@ function registerChildAgent(agent) {
 }
 
 /** Drive the registered pre-step reminder hook with a synthetic decision. */
-async function runPreStep(agent) {
+async function runPreStep(agent, turn = 1, step = 1) {
   if (preStepHandlers.length === 0) return null
-  return preStepHandlers[0]({ agent, step: 1, turn: 1 }, async () => ({ kind: 'enter', messages: [] }))
+  return preStepHandlers[0]({ agent, step, turn }, async () => ({ kind: 'enter', messages: [] }))
 }
 
 const hbRootAgent = mockAgent('session-hb-root', storeRoot)
@@ -512,6 +566,9 @@ check(
   JSON.stringify(reminded),
 )
 eq('guard: one heartbeat guard registered', guards.length, 1)
+// H-4: the merged reminder keeps ONE hook; a second one would make the
+// host drive only the first and silently lose a section.
+eq('pre-step: exactly one reminder hook', preStepHandlers.length, 1)
 const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
 check(
   'guard: root without heartbeat denies edit',
@@ -944,6 +1001,141 @@ check(
   [GATE_SECRET, RUN_SECRET, CURRENT_SECRET].every((secret) => JSON.stringify(evilStore).includes(secret) === false),
 )
 
+// ------------------------------------------------ flow_decision (H2 … H6)
+//
+// A dedicated store: the decisions below must not depend on the task and
+// experiment fixtures the panel-payload assertions already pinned.
+
+const decRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-dec-'))
+core.initProject(decRoot, { name: 'DecisionTest', noGates: true })
+const decAgent = mockAgent('session-dec-root', decRoot)
+registerRootAgent(decAgent)
+const decExec = { agent: decAgent }
+const decTask = await taskTool.execute(
+  { action: 'add', root: decRoot, title: '决策阻塞任务', status: 'active', owner: decAgent.id },
+  decExec,
+)
+const decTaskId = decTask.task?.id
+const decHeartbeat = await heartbeatTool.execute(
+  { action: 'start', root: decRoot, goal: '决策工具测试', task: decTaskId },
+  decExec,
+)
+const decTurn = decHeartbeat.heartbeat?.turn
+const decisionsDir = join(decRoot, '.dsh', 'flow', 'decisions')
+check('decision fixture: heartbeat turn recorded', Number.isInteger(decTurn), JSON.stringify(decHeartbeat))
+
+// H2: an approval asked without a recommendation recommends approve, and the
+// record carries this session plus its heartbeat turn as provenance.
+const approvalAsk = {
+  action: 'ask',
+  root: decRoot,
+  kind: 'approval',
+  question: '是否允许 T-23 的 payload 增加 decisions 节？',
+  rationale: '面板需要显示待决策项，写入门控也已就位',
+  blocks: [decTaskId],
+  affects: ['index.js'],
+}
+const askedApproval = await decisionTool.execute(approvalAsk, decExec)
+eq('flow_decision ask: created', askedApproval.created, true)
+eq('flow_decision ask: approval default recommendation', askedApproval.decision?.recommendation, 'approve')
+eq('flow_decision ask: status open', askedApproval.decision?.status, 'open')
+eq('flow_decision ask: asked_session is the main session', askedApproval.decision?.asked_session, decAgent.id)
+eq('flow_decision ask: asked_turn is the heartbeat turn', askedApproval.decision?.asked_turn, decTurn)
+check(
+  'flow_decision ask: blocks/affects recorded',
+  JSON.stringify(askedApproval.decision?.blocks) === JSON.stringify([decTaskId]) &&
+    JSON.stringify(askedApproval.decision?.affects) === JSON.stringify(['index.js']),
+  JSON.stringify({ blocks: askedApproval.decision?.blocks, affects: askedApproval.decision?.affects }),
+)
+
+// H3: the same question reuses the open record (fingerprint dedupe, no new file).
+const filesBeforeRepeat = readdirSync(decisionsDir).length
+const repeatedAsk = await decisionTool.execute(approvalAsk, decExec)
+eq('flow_decision ask repeat: created false', repeatedAsk.created, false)
+eq('flow_decision ask repeat: same id', repeatedAsk.decision?.id, askedApproval.decision?.id)
+eq('flow_decision ask repeat: no new decisions file', readdirSync(decisionsDir).length, filesBeforeRepeat)
+
+// H4: answer closes the record; a second answer on a terminal record is refused.
+const answeredDecision = await decisionTool.execute(
+  { action: 'answer', root: decRoot, id: askedApproval.decision?.id, choice: 'approve', note: '同意' },
+  decExec,
+)
+eq('flow_decision answer: status answered', answeredDecision.decision?.status, 'answered')
+eq('flow_decision answer: choice recorded', answeredDecision.decision?.answer?.choice, 'approve')
+await throws(
+  'flow_decision answer: answering twice is refused',
+  () => decisionTool.execute({ action: 'answer', root: decRoot, id: askedApproval.decision?.id, choice: 'reject' }, decExec),
+  (message) => message.includes('answered'),
+)
+
+// H5: withdraw requires a reason; gc reports without deleting on dryRun.
+const askedChoice = await decisionTool.execute(
+  {
+    action: 'ask',
+    root: decRoot,
+    kind: 'choice',
+    question: 'payload 的 decisions 节用哪种投影？',
+    rationale: '两种投影的键集不同',
+    // core requires a recommendation for kind=choice (it validates the id
+    // against the option list); the tool only defaults it for approvals.
+    recommendation: 'fixed',
+    options: [
+      { id: 'fixed', label: '固定 11 键', impact: '面板与 selftest 共用一份字面数组' },
+      { id: 'raw', label: '原样透传', impact: '面板需要自己兜底' },
+    ],
+  },
+  decExec,
+)
+eq('flow_decision ask choice: created', askedChoice.created, true)
+eq('flow_decision ask choice: recommendation recorded', askedChoice.decision?.recommendation, 'fixed')
+// The reason is required by core; asking again here keeps the record open.
+await throws(
+  'flow_decision withdraw: reason is required',
+  () => decisionTool.execute({ action: 'withdraw', root: decRoot, id: askedChoice.decision?.id, reason: '' }, decExec),
+  (message) => message.includes('reason'),
+)
+const withdrawnDecision = await decisionTool.execute(
+  { action: 'withdraw', root: decRoot, id: askedChoice.decision?.id, reason: '任务书已固定投影' },
+  decExec,
+)
+eq('flow_decision withdraw: status withdrawn', withdrawnDecision.decision?.status, 'withdrawn')
+eq('flow_decision withdraw: reason recorded', withdrawnDecision.decision?.withdraw?.reason, '任务书已固定投影')
+const gcDryRun = await decisionTool.execute({ action: 'gc', root: decRoot, dryRun: true }, decExec)
+eq('flow_decision gc: dryRun echoed', gcDryRun.dryRun, true)
+check('flow_decision gc: removed is an array', Array.isArray(gcDryRun.removed), JSON.stringify(gcDryRun))
+check('flow_decision gc: kept is a number', typeof gcDryRun.kept === 'number', JSON.stringify(gcDryRun))
+
+// H6: a subagent may read the ledger but never writes it.
+const decSubAgent = mockAgent('session-dec-sub', decRoot, {
+  origin: 'subagent',
+  delegationDepth: 1,
+  parentSession: decAgent.id,
+})
+registerChildAgent(decSubAgent)
+const decSubExec = { agent: decSubAgent }
+for (const writeArgs of [
+  { action: 'ask', kind: 'approval', question: '子代理不应建决策', rationale: '违反门控' },
+  { action: 'answer', id: askedApproval.decision?.id, choice: 'approve' },
+  { action: 'withdraw', id: askedApproval.decision?.id, reason: '子代理不应撤回' },
+  { action: 'gc', dryRun: true },
+]) {
+  await throws(
+    `flow_decision ${writeArgs.action}: subagent refused`,
+    () => decisionTool.execute({ ...writeArgs, root: decRoot }, decSubExec),
+    (message) => message.includes('main session') && message.includes('subagent'),
+  )
+}
+const subDecisionList = await decisionTool.execute({ action: 'list', root: decRoot }, decSubExec)
+check(
+  'flow_decision list: subagent allowed',
+  Array.isArray(subDecisionList.items) && JSON.stringify(Object.keys(subDecisionList.counts ?? {})) === JSON.stringify(DECISION_COUNT_KEYS),
+  JSON.stringify(subDecisionList.counts),
+)
+const subDecisionShow = await decisionTool.execute(
+  { action: 'show', root: decRoot, id: askedApproval.decision?.id },
+  decSubExec,
+)
+eq('flow_decision show: subagent allowed', subDecisionShow.decision?.id, askedApproval.decision?.id)
 
 // ------------------------------------------------------ no-store behavior
 
@@ -1097,7 +1289,7 @@ const injectCtx = {
 }
 
 apply(injectCtx)
-eq('inject path: five tools registered', injectedTools.size, 5)
+eq('inject path: six tools registered', injectedTools.size, 6)
 eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()
@@ -1106,7 +1298,16 @@ eq('inject path: disposal unregisters skills', injectedSkills.size, 0)
 
 // ------------------------------------------------------------- cleanup
 
-for (const root of [storeRoot, noStoreRoot, capRoot, wtMain, wtDir, secretRoot, evilStoreRoot]) {
+for (const root of [
+  storeRoot,
+  noStoreRoot,
+  capRoot,
+  wtMain,
+  wtDir,
+  secretRoot,
+  evilStoreRoot,
+  decRoot,
+]) {
   try {
     rmSync(root, { recursive: true, force: true })
   } catch {

@@ -1195,7 +1195,7 @@ async function handleGate(ctx, request, response) {
 
 // ------------------------------------------------------------------- tools
 //
-// Five model-facing tools over the same lib/core.mjs writer the CLI uses. They
+// Six model-facing tools over the same lib/core.mjs writer the CLI uses. They
 // are declared as plain objects (this package has no node_modules resolution
 // for @deepseek-ai/dsh-tools); the registry accepts
 // {name, description, parameters:<JSON Schema>, output:{schema, render},
@@ -1407,6 +1407,15 @@ function rootSessionVerdict(ctx, agent) {
 const ROOT_SESSION_HEARTBEAT_ONLY =
   'flow_heartbeat start/update/end only serve main sessions: this call runs in a subagent session, which does not keep a heartbeat. Report progress in the child final message; only the parent (main) session registers and closes a heartbeat.'
 
+/**
+ * Human-readable refusal for a decision write attempted from a subagent. The
+ * decision ledger is the main session's conversation with the user: a subagent
+ * cannot see the answer, so it reports the pending item in its final message and
+ * the main session opens or closes the D record.
+ */
+const ROOT_SESSION_DECISION_ONLY =
+  'flow_decision ask/answer/withdraw/gc only serve main sessions: this call runs in a subagent session, which cannot open or close a decision record. Report the pending decision in the child final message; only the parent (main) session creates and closes a D record.'
+
 /** Resolve the heartbeat ledger root (the project main worktree); degrade to the workspace root. */
 function heartbeatRootOf(root) {
   try {
@@ -1590,6 +1599,84 @@ function heartbeatGuardReason(ctx, execution) {
   } catch {
     return undefined
   }
+}
+
+// ---------------------------------------------------------------- decisions
+//
+// One decision record stays `open` until the user answers it. The tool below is
+// the model-side writer; bin/flow.mjs drives the same lib/core.mjs API, and the
+// per-turn reminder only reads it.
+
+/** Count keys of one decisions section; the tool, the panel and both self-tests share them. */
+const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total']
+
+/** Project arbitrary counts onto the seven fixed keys; missing or broken values become 0. */
+function decisionCountsOf(counts) {
+  const source = isPlainObject(counts) ? counts : {}
+  const out = {}
+  for (const key of DECISION_COUNT_KEYS) {
+    const value = source[key]
+    out[key] = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  }
+  return out
+}
+
+/** Every count zero, in the canonical key order. */
+function emptyDecisionCounts() {
+  return decisionCountsOf(null)
+}
+
+/** The turn of this session's heartbeat record; `null` when it cannot be read. */
+function decisionTurnOf(c, root, contract, session) {
+  if (typeof session !== 'string' || session === '') return null
+  try {
+    if (typeof c.heartbeatStatus !== 'function') return null
+    const status = c.heartbeatStatus(root, contract, session)
+    const record = isPlainObject(status) ? status.record : null
+    return isPlainObject(record) && Number.isInteger(record.turn) ? record.turn : null
+  } catch {
+    return null
+  }
+}
+
+/** One `choice` option, restricted to the three fields the tool schema accepts. */
+function decisionOptionInput(option) {
+  if (isPlainObject(option) === false) throw new Error('flow_decision ask: every option needs id, label and impact')
+  if (typeof option.id !== 'string' || typeof option.label !== 'string' || typeof option.impact !== 'string') {
+    throw new Error('flow_decision ask: every option needs id, label and impact')
+  }
+  return { id: option.id, label: option.label, impact: option.impact }
+}
+
+/**
+ * The lib/core.mjs `addDecision` input of one ask. `asked_session` (this session)
+ * and `asked_turn` (its heartbeat turn) are the ledger's provenance: they let the
+ * reminder say how many turns an item has been waiting. The turn is written only
+ * when it is a real integer; the session is written regardless.
+ */
+function decisionAskInput(args, c, root, contract, session) {
+  const kind = typeof args.kind === 'string' ? args.kind.trim() : ''
+  if (kind === '') throw new Error('flow_decision ask requires kind: choice, approval or input')
+  if (typeof args.rationale !== 'string' || args.rationale.trim() === '') {
+    throw new Error('flow_decision ask requires rationale: say why the user must decide now')
+  }
+  const input = { question: args.question, kind, rationale: args.rationale }
+  if (Array.isArray(args.options)) input.options = args.options.map(decisionOptionInput)
+  const recommendation =
+    typeof args.recommendation === 'string' && args.recommendation.trim() !== '' ? args.recommendation.trim() : ''
+  if (recommendation !== '') input.recommendation = recommendation
+  // An approval asked without a recommendation recommends approve; a session that
+  // wants the user to reject passes recommendation: 'reject' explicitly.
+  else if (kind === 'approval') input.recommendation = 'approve'
+  if (args.default !== undefined && args.default !== null) input.default = args.default
+  for (const name of ['blocks', 'affects']) {
+    if (Array.isArray(args[name])) input[name] = args[name]
+  }
+  if (typeof args.supersedes === 'string' && args.supersedes.trim() !== '') input.supersedes = args.supersedes.trim()
+  input.asked_session = session
+  const turn = decisionTurnOf(c, root, contract, session)
+  if (turn !== null) input.asked_turn = turn
+  return input
 }
 
 function buildToolDefinitions(ctx) {
@@ -2039,6 +2126,147 @@ function buildToolDefinitions(ctx) {
           return { root, workspace, store: true, session, heartbeat: c.endHeartbeat(root, contract, options) }
         }
         throw new Error(`unknown flow_heartbeat action: ${String(action)}`)
+      },
+    },
+    {
+      name: 'flow_decision',
+      description:
+        'Decision ledger for questions only the user can settle: `ask` records one open item (choice/approval/input), `list` and `show` read it, `answer` closes it with the user\'s choice, `withdraw` drops it with a reason, `gc` removes closed records past the retention window. R1: call ask BEFORE you pose the question, then put the returned id in the question text as [D-<id>]. R2: in the same turn the user answers, call answer with their choice. R5: recommendation and default are proposals, not the answer - never adopt one on the user\'s behalf. An approval asked without a recommendation recommends approve (pass recommendation reject to recommend rejection). Write actions serve main sessions only: a subagent reports the pending decision in its final message, and only the parent (main) session creates and closes a D record. list/show work in any session; writes require a .dsh/flow store.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['ask', 'list', 'show', 'answer', 'withdraw', 'gc'],
+            description: 'ask creates, list/show read, answer/withdraw close one, gc prunes closed records.',
+          },
+          root: ROOT_PROPERTY,
+          id: { type: 'string', description: 'Decision id, e.g. D-20261031-01.' },
+          question: { type: 'string', description: 'ask: the one-sentence question the user must settle.' },
+          kind: {
+            type: 'string',
+            enum: ['choice', 'approval', 'input'],
+            description: 'ask: choice needs 2+ options, approval uses the fixed approve|reject pair, input takes free text.',
+          },
+          options: {
+            type: 'array',
+            description: 'ask + kind=choice: the mutually exclusive options.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Short option id the answer names, e.g. adopt.' },
+                label: { type: 'string', description: 'What the user picks.' },
+                impact: { type: 'string', description: 'What changes when this option is chosen.' },
+              },
+              required: ['id', 'label', 'impact'],
+              additionalProperties: false,
+            },
+          },
+          default: { type: 'string', description: 'ask: option id used when the user never answers; not an answer.' },
+          recommendation: {
+            type: 'string',
+            description: 'ask: option id this session proposes; not an answer. Omitted on kind=approval means approve.',
+          },
+          rationale: { type: 'string', description: 'ask: why the user must decide now; required.' },
+          blocks: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'ask: task ids that cannot proceed until the user answers.',
+          },
+          affects: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'ask: repo-relative files or directories the answer changes.',
+          },
+          supersedes: {
+            type: 'string',
+            description: 'ask: closed decision id this one replaces; required to re-ask the same question.',
+          },
+          choice: { type: 'string', description: 'answer: the option id (kind=input: free text) the user picked.' },
+          note: { type: 'string', description: 'answer: the user\'s wording or a short note.' },
+          by: { type: 'string', enum: ['user', 'agent'], description: 'Who confirmed it; defaults to user.' },
+          reason: { type: 'string', description: 'withdraw: why the question no longer applies; required.' },
+          days: { type: 'integer', description: 'gc: closed-record retention window in days (default 90).' },
+          dryRun: { type: 'boolean', description: 'gc: report what would be removed without deleting it.' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput(),
+      isConcurrencySafe: false,
+      timeoutMs: WRITE_TIMEOUT_MS,
+      async execute(args, exec) {
+        const root = toolRoot(ctx, args, exec)
+        const c = requireCore()
+        const action = args.action
+
+        // Read actions are open to every session: a subagent may want to know
+        // which decision already blocks its task.
+        if (action === 'list') {
+          if (hasStore(root) === false) {
+            return { root, items: [], counts: emptyDecisionCounts(), note: EMPTY_STORE_NOTE }
+          }
+          if (typeof c.summarizeDecisions !== 'function' || typeof c.listDecisions !== 'function') {
+            throw new Error('flow_decision list needs a newer lib/core.mjs: decision support is missing')
+          }
+          const { contract } = c.loadContract(root)
+          const session = usableSessionId(sessionIdOf(exec) ?? '')
+          const turn = decisionTurnOf(c, root, contract, session)
+          const info = { session, turn }
+          const summary = c.summarizeDecisions(root, contract, info)
+          return { root, items: c.listDecisions(root, contract, info), counts: decisionCountsOf(summary.counts) }
+        }
+
+        if (action === 'show') {
+          if (typeof c.getDecision !== 'function') {
+            throw new Error('flow_decision show needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          const { contract } = c.loadContract(root)
+          return { root, decision: c.getDecision(root, contract, id) }
+        }
+
+        // Writes: the decision ledger belongs to the main session's conversation
+        // with the user. Refuse loudly instead of writing an answer nobody asked.
+        if (rootSessionVerdict(ctx, exec.agent) === false) {
+          throw new Error(ROOT_SESSION_DECISION_ONLY)
+        }
+        requireStore(root)
+        const { contract } = c.loadContract(root)
+
+        if (action === 'ask') {
+          if (typeof c.addDecision !== 'function') {
+            throw new Error('flow_decision ask needs a newer lib/core.mjs: decision support is missing')
+          }
+          const session = requireSession(exec)
+          const result = c.addDecision(root, contract, decisionAskInput(args, c, root, contract, session))
+          return { root, decision: result.decision, created: result.created === true }
+        }
+        if (action === 'answer') {
+          if (typeof c.answerDecision !== 'function') {
+            throw new Error('flow_decision answer needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          return { root, decision: c.answerDecision(root, contract, id, pickFields(args, ['choice', 'note', 'by'])) }
+        }
+        if (action === 'withdraw') {
+          if (typeof c.withdrawDecision !== 'function') {
+            throw new Error('flow_decision withdraw needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          return { root, decision: c.withdrawDecision(root, contract, id, pickFields(args, ['reason', 'by'])) }
+        }
+        if (action === 'gc') {
+          if (typeof c.gcDecisions !== 'function') {
+            throw new Error('flow_decision gc needs a newer lib/core.mjs: decision support is missing')
+          }
+          const options = {}
+          if (args.days !== undefined) options.days = args.days
+          if (args.dryRun !== undefined) options.dryRun = args.dryRun === true
+          const result = c.gcDecisions(root, contract, options)
+          return { root, removed: result.removed, kept: result.kept, dryRun: result.dryRun }
+        }
+        throw new Error(`unknown flow_decision action: ${String(action)}`)
       },
     },
   ]
