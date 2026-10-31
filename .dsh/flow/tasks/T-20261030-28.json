@@ -1,6 +1,6 @@
 {
   "title": "开源清理：去个人数据 + 自包含夹具 + 历史重写",
-  "status": "done",
+  "status": "archived",
   "owner": "history-sanitize",
   "goal": "为 MIT 公开仓库清理历史中的个人数据：移除真实项目 payload 夹具与 dev 任务卡、把本机绝对路径/项目名换成通用占位、让 selftest 用 /tmp 合成夹具自包含；随后在 mirror 副本上用 git-filter-repo 重写历史并 force push（含备份与本地分支对齐）。",
   "scope": {
@@ -25,5 +25,5 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:32:30+08:00",
-  "updated_at": "2026-10-30T21:55:22+08:00"
+  "updated_at": "2026-10-31T10:20:50+08:00"
 }

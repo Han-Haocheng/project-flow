@@ -1,6 +1,6 @@
 {
   "title": "中心合并与生效：worktree→main + 台账入库 + 重启验证",
-  "status": "done",
+  "status": "archived",
   "owner": "",
   "goal": "用户已授权：T-20 验收后把中心分支（dsh-7d92a615-9107）一次提交并合并回 main，台账 27 张 task JSON 随代码一起提交；合并后重启/刷新桌面版验证面板、心跳、技能实际生效。",
   "scope": {
@@ -22,5 +22,5 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:09:20+08:00",
-  "updated_at": "2026-10-30T21:55:09+08:00"
+  "updated_at": "2026-10-31T10:20:50+08:00"
 }

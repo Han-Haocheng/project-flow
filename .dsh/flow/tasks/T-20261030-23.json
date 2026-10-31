@@ -1,7 +1,7 @@
 {
   "title": "实现：决策台账 core/CLI/工具 + 提醒/门禁接线",
-  "status": "draft",
-  "owner": "",
+  "status": "active",
+  "owner": "legacy-server",
   "goal": "按 T-22 定稿实现 D- 记录的 core 写入/读取、flow decision CLI、flow_decision 工具、pre-step 提醒、flow check decisions 门禁步骤，并补测试。",
   "scope": {
     "allow": [
@@ -23,11 +23,11 @@
     "flow check decisions 对 blocking×affects 失败",
     "测试覆盖 open→answered→superseded 与去重/过期"
   ],
-  "notes": "依赖 T-20261030-22 定稿；面板卡片可另开一卡。",
+  "notes": "依赖 T-20261030-22 定稿；面板卡片可另开一卡。\n\n2026-10-31 开工 A 波（core/CLI/契约/测试）→ 团队任务 task-9；因 Team 席位满复用 legacy-server（实现者）。B/C 波待 A 完成后复用 legacy-client/panel-display。\n\n用户已确认：面板复制串固定带推荐值；决策门禁只进 init 新种子与当前项目，不批量改已有项目。",
   "schema": 1,
   "id": "T-20261030-23",
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:07:54+08:00",
-  "updated_at": "2026-10-30T21:07:54+08:00"
+  "updated_at": "2026-10-31T10:19:29+08:00"
 }

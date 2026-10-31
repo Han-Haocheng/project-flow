@@ -1,6 +1,6 @@
 {
   "title": "心跳只面向主会话：移除子会话心跳自动化，提醒/门禁只对根会话生效",
-  "status": "done",
+  "status": "archived",
   "owner": "heartbeat-scope",
   "goal": "按用户 2026-10-30 要求：心跳机制只描述“同一项目的不同主会话之间的关系”，忽视子会话。删除 subagent/start|end 自动开合心跳；pre-step 提醒与 edit/write 硬门禁只对 agents.roots() 中的根会话生效；遗留子会话心跳在读侧归类为过期/隐藏并提供清理；CONTRACT §3.5/§10.3 同步。",
   "scope": {
@@ -30,5 +30,5 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:00:15+08:00",
-  "updated_at": "2026-10-30T21:54:51+08:00"
+  "updated_at": "2026-10-31T10:20:50+08:00"
 }

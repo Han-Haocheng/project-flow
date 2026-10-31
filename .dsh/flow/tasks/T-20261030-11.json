@@ -28,8 +28,8 @@
   ],
   "checkpoints": [],
   "commits": [],
-  "notes": "来源：审查 P3-25/26/27 + B/C 的测试盲点。\n\n第四路新增：heartbeatGate 默认开启但 README/CONTRACT/技能完全未写；.selftest 硬编码本机 demo-alpha/qbank 路径且写回 tracked 快照，不是自包含资产；README 说 400 条而树最多 300 行，CONTRACT 说 64 项而实际 16/3。",
+  "notes": "来源：审查 P3-25/26/27 + B/C 的测试盲点。\n\n第四路新增：heartbeatGate 默认开启但 README/CONTRACT/技能完全未写；.selftest 硬编码本机 demo-alpha/qbank 路径且写回 tracked 快照，不是自包含资产；README 说 400 条而树最多 300 行，CONTRACT 说 64 项而实际 16/3。\n\n2026-10-31 范围更新：selftest 自包含已由 T-28 完成；README 数字/legacy 描述已由 T-26 同步；剩余：CI、事件钩子夹具、多进程锁/win32 用例。\n\n2026-10-31 范围更新：selftest 自包含已由 T-28 完成；README 数字/legacy 描述已由 T-26 同步；剩余：CI、事件钩子夹具、多进程锁与 win32 用例。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-10-30T21:55:09+08:00",
+  "updated_at": "2026-10-31T09:49:49+08:00",
   "schema": 1
 }

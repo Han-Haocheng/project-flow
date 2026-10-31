@@ -1,6 +1,6 @@
 {
   "title": "移除 legacy 模式、运行输出与团队投影（只留 store）",
-  "status": "done",
+  "status": "archived",
   "owner": "lead",
   "goal": "按用户确认删除不需要的模块：legacy 读取/迁移、运行输出 runs、旧 gate.log、md 心跳，以及重复的 Agent Teams 只读投影（原生团队 UI 已有）。保留实验、门禁、心跳（只主会话）与技能脚本。删除放在 T-20 之后、合并之前。",
   "scope": {
@@ -37,5 +37,5 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:13:03+08:00",
-  "updated_at": "2026-10-31T00:29:00+08:00"
+  "updated_at": "2026-10-31T10:20:50+08:00"
 }
