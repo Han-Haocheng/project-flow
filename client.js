@@ -83,6 +83,17 @@ window.__ModuleLoader__.load({
     const MAX_LIST_ROWS = 25;
     const STALE_AFTER_SECONDS = 6 * 60 * 60;
 
+    /** The seven tallies the Host reports for the decision section. */
+    const DECISION_COUNT_KEYS = [
+      'open',
+      'blocking',
+      'escalated',
+      'answered',
+      'withdrawn',
+      'superseded',
+      'total',
+    ];
+
     const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
     // #region locale dictionaries
@@ -204,6 +215,12 @@ window.__ModuleLoader__.load({
       'error.notInitialized': '这个工作区还没有项目流台账。',
       'error.initHint': '点「初始化」在当前工作区创建 .dsh/flow 台账，或在项目根运行 node bin/flow.mjs init。',
       'error.initFailed': '初始化失败：{message}',
+      'decisions.title': '待决策 {n}',
+      'decisions.blocking': '阻塞 {n}',
+      'decisions.copy': '复制回答串',
+      'decisions.copyAria': '复制决策 {id} 的回答命令',
+      'decisions.more': '还有 {n} 条',
+      'decisions.empty': '没有待决策',
       'misc.dash': '—',
     };
 
@@ -324,6 +341,12 @@ window.__ModuleLoader__.load({
       'error.notInitialized': 'This workspace has no project flow ledger yet.',
       'error.initHint': 'Click Initialize to create the .dsh/flow ledger in this workspace, or run node bin/flow.mjs init in the project root.',
       'error.initFailed': 'Initialization failed: {message}',
+      'decisions.title': '{n} pending decisions',
+      'decisions.blocking': '{n} blocking',
+      'decisions.copy': 'Copy answer command',
+      'decisions.copyAria': 'Copy the answer command for {id}',
+      'decisions.more': '{n} more',
+      'decisions.empty': 'No pending decisions',
       'misc.dash': '—',
     };
     // #endregion
@@ -608,6 +631,89 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * One pending decision, exactly the eleven canonical keys written below
+     * (`id`, `kind`, `status`, `question`, `blocks`, `options`,
+     * `recommendation`, `default`, `escalated`, `ageSeconds`, `asked_at`); the
+     * selftest diffs that key set against its own copy of the shared contract.
+     * `options` accepts `{id, label}` entries or bare ids; every other field
+     * degrades to '' / [] / null on hostile input, so nothing here throws.
+     */
+    function normalizeDecision(raw) {
+      const item = asObject(raw);
+      const options = asArray(item.options)
+        .map((option) => {
+          if (!option || typeof option !== 'object' || Array.isArray(option)) {
+            const id = asText(option).trim();
+            return id ? { id, label: id } : null;
+          }
+          const entry = asObject(option);
+          return { id: asText(entry.id).trim(), label: asText(entry.label) };
+        })
+        .filter((option) => option && (option.id !== '' || option.label !== ''));
+      return {
+        id: asText(item.id).trim(),
+        kind: asText(item.kind),
+        status: asText(item.status),
+        question: asText(item.question),
+        blocks: asArray(item.blocks)
+          .map((block) => asText(block).trim())
+          .filter(Boolean),
+        options,
+        recommendation: asText(item.recommendation),
+        default: asText(item.default),
+        escalated: item.escalated === true,
+        ageSeconds: asNumber(item.ageSeconds, null),
+        asked_at: asText(item.asked_at),
+      };
+    }
+
+    /**
+     * `decisions` is `{ items, counts }`; a missing, non-object or hostile
+     * section becomes `{ items: [], counts: zeros }`. The seven counts are the
+     * Host's tally — a missing key stays 0 here instead of being derived from
+     * `items`, because the card keys off `counts.open`.
+     */
+    function normalizeDecisions(raw) {
+      const section = asObject(raw);
+      const countsSrc = asObject(section.counts);
+      const counts = {};
+      DECISION_COUNT_KEYS.forEach((key) => {
+        counts[key] = asNumber(countsSrc[key], 0);
+      });
+      return {
+        items: asArray(section.items)
+          .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
+          .map(normalizeDecision),
+        counts,
+      };
+    }
+
+    /**
+     * The single line that answers one decision: the recommendation, else the
+     * default, else the first option id. '' means the decision offers no choice
+     * (the card then renders no copy button). `input` decisions quote the text
+     * because it may contain spaces.
+     */
+    function decisionAnswerCommand(item) {
+      const decision = asObject(item);
+      const id = asText(decision.id).trim();
+      if (!id) return '';
+      const options = asArray(decision.options);
+      const first = options.length > 0 ? options[0] : null;
+      const firstId =
+        first && typeof first === 'object' && !Array.isArray(first)
+          ? asText(asObject(first).id)
+          : asText(first);
+      const choice =
+        asText(decision.recommendation).trim() ||
+        asText(decision.default).trim() ||
+        firstId.trim();
+      if (!choice) return '';
+      const line = 'flow decision answer ' + id + ' --choice ';
+      return asText(decision.kind) === 'input' ? line + '"' + choice + '"' : line + choice;
+    }
+
+    /**
      * One task row. Title and goal are the two visible lines; notes, scope,
      * acceptance, commits and the timestamps feed the expanded detail block.
      * Every field degrades to '' / [] on hostile input, never throws.
@@ -734,6 +840,7 @@ window.__ModuleLoader__.load({
         gates,
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
+        decisions: normalizeDecisions(src.decisions),
         warnings,
       };
     }
@@ -1277,6 +1384,148 @@ window.__ModuleLoader__.load({
         recentTasks.length === 0
           ? React.createElement(EmptyLine, null, t('tasks.recentEmpty'))
           : renderRows('done', recentTasks.slice(0, MAX_LIST_ROWS))
+      );
+    }
+
+    /**
+     * Best-effort clipboard copy. The panel is read-only, so a missing or
+     * rejecting Clipboard API degrades to a no-op instead of throwing — the
+     * render selftest clicks every button without a DOM or a clipboard.
+     */
+    function copyTextToClipboard(text) {
+      const value = asText(text);
+      if (!value) return;
+      try {
+        const clipboard = typeof navigator !== 'undefined' && navigator ? navigator.clipboard : null;
+        if (!clipboard || typeof clipboard.writeText !== 'function') return;
+        const pending = clipboard.writeText(value);
+        if (pending && typeof pending.catch === 'function') pending.catch(() => {});
+      } catch (error) {
+        /* clipboard access may be denied; the read-only panel reports nothing */
+      }
+    }
+
+    /**
+     * One pending decision line: the ⚠ mark when escalated, the business id,
+     * the kind chip, the question, the blocked ids, the age and the copy
+     * button. Rows follow the Host payload order; nothing is re-sorted here.
+     */
+    function DecisionRow(props) {
+      const item = asObject(props.item);
+      const t = props.t;
+      const id = asText(item.id);
+      const kind = asText(item.kind);
+      const question = asText(item.question);
+      const blocks = asArray(item.blocks)
+        .map((block) => asText(block).trim())
+        .filter(Boolean);
+      const escalated = item.escalated === true;
+      const age = ageText(asNumber(item.ageSeconds, null), null, props.now, t);
+      /* A decision whose choice is unknowable gets no button (and no lie). */
+      const command = decisionAnswerCommand(item);
+      return React.createElement(
+        'li',
+        {
+          className:
+            'project-flow-decisionRow' + (escalated ? ' project-flow-decisionRow--escalated' : ''),
+        },
+        escalated
+          ? React.createElement(
+              'span',
+              { className: 'project-flow-decisionMark', 'aria-hidden': 'true' },
+              '\u26a0'
+            )
+          : null,
+        React.createElement(
+          'span',
+          { className: 'project-flow-decisionId', title: id || undefined },
+          id || t('misc.dash')
+        ),
+        kind ? React.createElement(Chip, null, kind) : null,
+        React.createElement(
+          'span',
+          { className: 'project-flow-decisionQuestion', title: question || undefined },
+          question || t('misc.dash')
+        ),
+        blocks.length > 0
+          ? React.createElement(
+              'span',
+              { className: 'project-flow-muted project-flow-decisionBlocks', title: blocks.join(', ') },
+              blocks.join(', ')
+            )
+          : null,
+        age
+          ? React.createElement('span', { className: 'project-flow-muted project-flow-decisionAge' }, age)
+          : null,
+        command
+          ? React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'project-flow-btn project-flow-decisionCopy',
+                /* The tooltip is the exact line the user will paste. */
+                title: command,
+                'aria-label': t('decisions.copyAria', { id: id || t('misc.dash') }),
+                onClick: () => copyTextToClipboard(command),
+              },
+              t('decisions.copy')
+            )
+          : null
+      );
+    }
+
+    /**
+     * Pending decisions of this workspace, full width above the two columns.
+     * `counts.open === 0` renders nothing at all, so an idle board keeps its
+     * old height instead of reserving an empty card.
+     */
+    function DecisionsCard(props) {
+      const decisions = asObject(props.decisions);
+      const counts = asObject(decisions.counts);
+      const items = asArray(decisions.items);
+      const t = props.t;
+      const now = props.now;
+      const open = asNumber(counts.open, 0);
+      const blocking = asNumber(counts.blocking, 0);
+      if (open === 0) return null;
+      /* The Host may report more open rows than it shipped (bounded payload). */
+      const hidden = open > items.length ? open - items.length : 0;
+      return React.createElement(
+        'section',
+        { className: 'project-flow-card project-flow-decisions' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-cardHead' },
+          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('decisions.title', { n: open })),
+          blocking > 0
+            ? React.createElement(
+                'span',
+                { className: 'project-flow-chip project-flow-chip--warn' },
+                t('decisions.blocking', { n: blocking })
+              )
+            : null
+        ),
+        items.length === 0
+          ? React.createElement(EmptyLine, null, t('decisions.empty'))
+          : React.createElement(
+              'ul',
+              { className: 'project-flow-list project-flow-decisionList' },
+              items.map((item, index) =>
+                React.createElement(DecisionRow, {
+                  key: asText(item.id) || 'decision-' + index,
+                  item,
+                  t,
+                  now,
+                })
+              )
+            ),
+        hidden > 0
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-more' },
+              t('decisions.more', { n: hidden })
+            )
+          : null
       );
     }
 
@@ -2088,6 +2337,8 @@ window.__ModuleLoader__.load({
             : React.createElement(
                 React.Fragment,
                 null,
+                /* Pending decisions sit above both columns, full width. */
+                React.createElement(DecisionsCard, { decisions: view.decisions, t, now }),
                 React.createElement(
                   'div',
                   { className: 'project-flow-grid' },
@@ -2480,6 +2731,17 @@ window.__ModuleLoader__.load({
 .project-flow-headerBtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px;}
 .project-flow-tabTitle{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:100%;font-size:12px;line-height:16px;color:inherit;}
 .project-flow-tabTitleText{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.project-flow-decisions{margin-top:12px;}
+.project-flow-decisionList{gap:2px;}
+.project-flow-decisionRow{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:6px;row-gap:2px;padding:4px 3px;border-radius:5px;min-width:0;}
+.project-flow-decisionRow:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-decisionRow--escalated{box-shadow:inset 2px 0 0 var(--dsw-alias-state-warn-primary);}
+.project-flow-decisionMark{flex:none;width:1em;text-align:center;color:var(--dsw-alias-state-warn-primary);font-size:11px;line-height:1.5;}
+.project-flow-decisionId{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-weight:600;font-size:11px;}
+.project-flow-decisionQuestion{flex:1 1 100%;min-width:0;white-space:normal;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);font-size:11.5px;line-height:1.45;}
+.project-flow-decisionBlocks{flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:10px;}
+.project-flow-decisionAge{flex:none;margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;}
+.project-flow-decisionCopy{flex:none;height:22px;padding:0 8px;font-size:10.5px;}
 @container (min-width:640px){
 .project-flow-top{align-items:flex-start;gap:12px 16px;}
 .project-flow-lead{gap:12px;}
