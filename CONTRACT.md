@@ -21,7 +21,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   gates/<id>.json           门禁定义，如 precommit.json
   decisions/<id>.json       决策记录，如 D-20261031-01.json
   logs/<gateId>/<ts>.json   门禁运行记录，<ts> 为 started_at 把冒号换成连字符
-  .lock                     写锁（临时文件，30 秒过期，不要提交、不要展示）
+  .lock                     写锁（临时文件，含 pid/host/token；30 秒未刷新可接管；不要提交、不要展示）
 ```
 
 子目录可由契约覆盖（见 §2），但覆盖值必须留在项目根内；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
@@ -338,13 +338,38 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 
 ## 4 写入语义
 
-**原子写**：`mkdir -p` → 写 `<name>.tmp-<pid>-<seq>` → `rename`；失败清理临时文件并抛
-`FlowError('io')`。读到的坏 JSON 文件只记 `unreadable:` warning，不影响列表。
+**原子写**：`mkdir -p` → `open(<name>.tmp-<pid>-<seq>, 'wx')` → 写 → `fsyncSync(fd)`
+→ close → `rename` → 父目录 best-effort `fsync`。`fsync` 必须在 `rename` 之前：崩溃只会
+留下旧的完整文件或新的完整文件，不会半截。父目录 `fsync` 失败一律吞掉（`/mnt/d` ntfs3
+返回 `EINVAL`），不影响写入结果。`rename` 只对 `EPERM`/`EBUSY`/`EACCES` 退避重试
+（10/50/150ms，最多 4 次），其他错误立即失败；任何失败都清理临时文件并抛
+`FlowError('io')`，消息保持 `cannot write <path>:` 前缀。拿到锁后按 10 分钟节流清理 store
+根与 experiments/tasks/gates/decisions/logs（含一级子目录）中名字匹配
+`*.tmp-<pid>-<seq>` / `.lock.takeover-<pid>-<hex>` 且 mtime 超过 10 分钟的非目录文件
+（绝不删 `.json`、`.lock` 与未知名字），删了 N 个记一条 `stale-temp-cleaned: N` warning。
+读到的坏 JSON 文件只记 `unreadable:` warning，不影响列表。
 
 **写锁**：每次写操作在 `<store>/.lock` 上用 `open(..., 'wx')` 加锁，内容
-`{"pid":N,"at":"<ISO>"}`，结束即释放。锁存在且不足 30 秒 → `FlowError('conflict')`
-（提示稍后重试）；超过 30 秒视为过期，记 `lock-stale:` warning 后接管。锁只防同机并发
-写，不跨机器。
+`{"schema":1,"pid":N,"host":"<hostname>|<platform>","at":"<ISO>","token":"<uuid>"}`，
+结束即释放。`host` 带 platform 是为了区分 WSL 与 Windows 的 PID namespace；`token` 是本次
+获取的所有权凭证：释放时只有 token + pid 都匹配才 `unlink`，不匹配只记
+`lock-release-skipped:` warning 并原样保留（不误删第三方新锁）；释放本身**永不抛**
+（它在 `finally` 里，抛会掩盖业务异常）。
+
+锁存在且不足 30 秒（`FLOW_LOCK_STALE_MS` 可覆盖，非法值忽略）→ 直接
+`FlowError('conflict')`（年龄优先，不判活）。超过 30 秒再判活：`process.kill(pid, 0)`
+成功或 `EPERM` → 视为存活，仍 conflict 并给出 pid/host/path，用户核实后手动 `rm`；
+`ESRCH` → 已死，可接管；`host` 不同的锁**不调用** `kill`，60 秒宽限期内只 conflict。
+接管是 CAS：先赢下短命的 `.lock.takeover-claim`（串行化所有接管决策，避免两个接管者
+依据同一份过期快照动作），在 claim 内重新读取并复判，再把锁 `rename` 到
+`.lock.takeover-<pid>-<hex6>`；回读内容必须与快照逐字节一致，不一致或移到的锁其实还活着
+→ 用 `link()`（原子 no-clobber）把它放回原处，**绝不用 `rename`**（会覆盖第三方新锁）。
+确认可接管后先 `open('wx')` 创建自己的锁、再删移交文件：进入临界区的唯一入口始终是这把
+新锁，任意时刻只有一个写者。
+
+锁只防**同一 PID namespace 的同机并发**写；store 放在共享网络盘上跨机器写不受保护。
+升级注意：旧版 core 的释放逻辑会无条件删锁，新旧进程同时写同一个 store 时可能误删新锁——
+升级窗口内确保没有旧进程在写同一个 store。
 
 **id 生成**：`PREFIX-YYYYMMDD-NN`；遍历现有记录取当天最大序号 +1（跳过已占用），
 当天用尽 → `FlowError('conflict')`。
@@ -655,6 +680,11 @@ containedPath(root, value, label, {allowAbsolute?})
                                      // manifest 路径 containment：根内绝对路径，
                                      // 不安全时记 warning 并返回 undefined（仅 store.root 可 allowAbsolute）
 drainWarnings()                      // 取走并清空全局诊断 warning（非契约 API）
+withLock(root, contract, fn)         // 在 store 写锁内同步执行 fn(paths)（非契约 API，测试用；
+                                     // fn 必须同步，锁不是可重入互斥量）
+renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
+                                     // rename 退避重试（EPERM/EBUSY/EACCES，10/50/150ms，
+                                     // 共 4 次），最终抛 FlowError('io')（非契约 API，仅供测试注入）
 
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
 listTasks       / getTask       / addTask       / updateTask       / removeTask
@@ -725,7 +755,8 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 - `.dsh/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
 - git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
-- 写锁 `.lock` 是临时文件，不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`）。
+- 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件，
+  不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`、`*.tmp-*`、`.dsh/flow/.lock.takeover-*`）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。
