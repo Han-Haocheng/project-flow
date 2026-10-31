@@ -783,16 +783,20 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 
 ### 9.4 面板决策节（`GET state` 的 `decisions`）
 
-- payload 形状（`data.decisions`）：`{items, counts}`，与 `readStoreState().decisions`、
-  `summarizeDecisions(root, contract, {limit: DECISION_REMIND_MAX})` **同源同形**；`counts`
-  恰好 7 键 `{open,blocking,escalated,answered,withdrawn,superseded,total}`。
-- `items` 只含 `open`，最多 3 条，顺序由 core 决定（升级优先 → `asked_at` 旧的在前 → id），
-  **面板不得重排**。item 键集固定为
-  `{id,kind,status,question,blocks,options,recommendation,default,escalated,ageSeconds,asked_at}`
-  （不含 `turnAge`/`rationale`/`affects`/`fingerprint`）。
-- **升级判定只有 24 小时规则**：面板 payload 没有会话上下文，`turnAge` 恒为 `null`，
-  `escalated` 只可能由 `asked_at` 超过 24 小时触发；「同会话挂起 ≥3 轮」的升级只出现在
-  `agent/pre-step` 提醒里（主会话面，§9.2），面板**不是**漏了轮数升级。
+- payload 形状（`data.decisions`）：`{items, counts}`。`counts` 与
+  `readStoreState().decisions.counts`、`summarizeDecisions(root, contract,
+  {limit: DECISION_REMIND_MAX}).counts` **逐字相同**，恰好 7 键
+  `{open,blocking,escalated,answered,withdrawn,superseded,total}`。
+- `items` **同源、不重排**：取 `readStoreState().decisions.items`（= `summarizeDecisions` 的
+  `items`）——只含 `open`，最多 3 条，顺序为「升级优先 → `asked_at` 旧的在前 → id」；payload
+  再把它投影成固定 11 键 `{id,kind,status,question,blocks,options,recommendation,default,
+  escalated,ageSeconds,asked_at}`（`options[].label`/`impact` 按长度上限裁剪）。core 侧的
+  item 是「完整记录 + `escalated`/`turnAge`/`ageSeconds`」标注，还含 `schema`/`rationale`/
+  `affects`/`fingerprint`/`asked_session` 等字段，**不**直接进 payload。
+- **升级判定只有 24 小时规则**：这条读路径没有会话上下文，core 投影里的 `turnAge` 恒为
+  `null`（payload 也不含该键），所以 `escalated` 只可能由 `asked_at` 超过 **24 小时**触发；
+  「同会话挂起 ≥3 轮」的升级只出现在 `agent/pre-step` 提醒里（主会话面，§9.2），面板**不是**
+  漏了轮数升级。
 - 空态分三种，规则唯一：
   1. 工作区无 store → `ok:false` + `error.code: "not-initialized"`，**不带任何节**；
   2. store 存在但不可读（`emptyStoreState`）→ `decisions` 节在、`items: []`、`counts` 全 0；
