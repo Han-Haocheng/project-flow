@@ -1,7 +1,7 @@
 {
   "id": "T-20261030-04",
   "title": "flow.json 容错 + warning 全链路可见",
-  "status": "draft",
+  "status": "done",
   "owner": "",
   "goal": "section 类型错误回退默认值而不是抛 TypeError；CLI 与插件在成功/失败路径都 drainWarnings；坏记录不再从计数消失，nextId 不覆盖坏文件。",
   "scope": {
@@ -9,22 +9,26 @@
       "lib/core.mjs",
       "bin/flow.mjs",
       "index.js",
-      "test/"
+      "test/",
+      "CONTRACT.md"
     ],
     "deny": [
       ".git/"
     ]
   },
   "acceptance": [
-    "任意 section 类型错误（store/experiments/tasks/gates/heartbeats/runs 写成字符串/数字）→ 回退默认值 + manifest-invalid warning，读命令仍可跑",
-    "CLI 人类输出与 --json 都带 warnings（含 check/gate 子命令）；插件 payload 不再永久累积历史错误",
-    "坏记录读取失败进入 warnings 且不从列表静默消失；nextId 发现目标文件存在时抛 conflict 而非覆盖",
-    "形状错误 flow.json、坏记录、expect 拼错三组用例"
+    "section 错型（store/experiments/tasks/gates/heartbeats/decisions 写成字符串/数字/数组，store.root 与 tasks.current 写数字）→ loadContract 不抛、回退默认值、warnings 含 manifest-invalid: <key>；legacy 未知键（runs/任意未知键）原样保留且不产生 warning",
+    "CLI 人类输出（stderr）与 --json（顶层 warnings 恒为数组）都带 warnings，覆盖普通命令、check decisions、gate、init 与错误路径；插件工具结果成功时附加 warnings、失败时 logger.warn，payload 不再携带上次 apply 的陈旧诊断",
+    "坏记录：读取失败进 warnings、不进列表、status 显示 unreadable 计数（不改 total 语义）；nextId 与显式 --id 撞已存在文件（含坏文件）时抛 conflict 且不覆盖，消息含路径与处置建议",
+    "三组用例：契约错型矩阵 / 坏记录+nextId / expect 拼错；既有 106 用例零回归"
   ],
   "checkpoints": [],
-  "commits": [],
-  "notes": "来源：审查 P0-3 + P1-13。",
+  "commits": [
+    "364b944",
+    "180ad87"
+  ],
+  "notes": "来源：审查 P0-3 + P1-13。\n\n2026-10-31 完成（团队：task-7 分析 → task-9 实现 → task-10 审查）。串行于 T-03，合并提交 180ad87；实现提交 364b944。\n\n落地：\n- sanitizeContract(root, raw) -> {contract, issues[]}：幂等、绝不抛；normalizeContract 只取 .contract（静默修复、不产 warning）；只有 loadContract 把 issues 转成 manifest-invalid: <key>: expected X, got Y\n- 覆盖 name/schema/store/experiments/tasks/gates/heartbeats/decisions；legacy runs 等未知键原样保留、不校验、无 warning\n- readCollection 采集 unreadable：列表仍只含合法记录（不塞占位）；status 人类输出「+N 无法读取」；status --json 与 readStoreState 在 counts 旁加并列 unreadable，total 语义不变\n- 写入点 assertTargetFree：自动 id 与显式 --id 撞已存在文件（含坏文件）抛 conflict，消息含绝对路径 + 「fix or remove that file, then retry」；对目录目标放行（目录不可能是记录，仍由原子写报 io）；心跳自动建任务同样守卫\n- CLI：--json 信封顶层 warnings 恒为数组（成功/失败都带）；人类 warning 走 stderr 且在命令输出之后、错误行之前；--json 模式不再往 stderr 打 warning；loadContractFor 替换 5 处丢弃点；main dispatch 后统一 drain + catch 再 drain\n- 插件：apply() 开头重置 mountWarnings（core 缺失时重新 warnMount）；工具 execute 成功附加 warnings、失败 drain 后 logger.warn 不改 message；buildState 开头 drain 并丢弃（面板 2.5s 轮询不能偷走工具应看到的警告）\n- gate-expect-unknown 提前到 gate add/update 的 buildStep（运行期告警保留）；心跳根降级改走 warnings 通道（并去掉 bin 的重复 collect，实测恰好一条）\n\n测试：test/warnings.test.mjs（18 例，契约错型矩阵 / 坏记录+nextId / expect 拼错 / CLI 信封 / 插件两态）。\n\n中心实测：{\"store\":\"x\"} → exit 0 + manifest-invalid（原本 exit 4 TypeError）；坏记录 + task add → exit 2 conflict 且坏文件内容未变（原本 exit 0 静默覆盖）；gate add 拼错 expect → warnings 可见。\n\n已知代价（中心已接受，写进 CONTRACT）：当天某 -01 坏文件会让该前缀当天所有自动 id conflict，直到坏文件被修/删（消息给路径与处置建议）。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-31T21:32:47+08:00",
   "schema": 1
 }

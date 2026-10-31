@@ -1,28 +1,35 @@
 {
   "id": "T-20261030-03",
   "title": "存储写入健壮性：锁 CAS + 原子写持久化",
-  "status": "draft",
+  "status": "done",
   "owner": "",
   "goal": "锁加所有权 token：释放只在 token 匹配时删除；过期接管用 rename CAS 复核并 kill(pid,0) 判活；原子写补 fsync、win32 rename 退避重试、陈旧 tmp 清理。",
   "scope": {
     "allow": [
       "lib/core.mjs",
-      "test/"
+      "test/",
+      "CONTRACT.md",
+      ".gitignore"
     ],
     "deny": [
       ".git/"
     ]
   },
   "acceptance": [
-    "锁记录 token；releaseLock 不匹配即拒绝；接管先 CAS 再判活，杜绝删掉别人新锁",
-    "两个真实进程并发写同一 store：无同 id、无记录丢失、无双方都成功",
-    "writeJsonAtomic 写后 fsync；EPERM/EBUSY/EACCES 退避重试；withLock 清理陈旧 .tmp-*；.gitignore 覆盖 tmp",
-    "锁测试改为 spawn 多进程用例（替换现有单进程手写锁文件）"
+    "锁记录 schema/pid/host/at/token；releaseLock 只在 token+pid 匹配时删除，不匹配只 warn、不删、不抛；过期接管走 rename CAS + 复核被移内容 + 判活矩阵，杜绝删掉别人的新锁",
+    "并发：真实进程并发写同一 store，成功者 id 两两不同、每个成功 id 都有可解析记录、失败者必须是 conflict、结束后无 .lock/*.tmp-*/*.lock.takeover-* 残留",
+    "writeJsonAtomic 在 rename 前 fsyncSync；rename 仅对 EPERM/EBUSY/EACCES 按 10/50/150ms 退避重试最多 4 次；withLock 清理 10 分钟前的陈旧 tmp；.gitignore 覆盖 *.tmp-* 与 .lock.takeover-*",
+    "锁测试改写既有单进程用例 + 新增 spawn 多进程用例（不是替换原用例）"
   ],
   "checkpoints": [],
-  "commits": [],
-  "notes": "来源：审查 P0-2。",
+  "commits": [
+    "718a287",
+    "2e2895a",
+    "3a29ebc",
+    "180ad87"
+  ],
+  "notes": "来源：审查 P0-2。\n\n2026-10-31 完成（团队：task-7 分析 → task-8 实现 → task-10 审查）。\n\nbase：main @ 541fa45；合并提交 180ad87（merge --no-ff feat/store-robustness）；实现提交 718a287（协议）+ 2e2895a（claim 加固）+ 3a29ebc（claim 归属校验）。\n\n落地：\n- 锁 JSON {schema,pid,host,at,token}；host=hostname|platform 区分 PID namespace；token=randomUUID\n- releaseLock 只在 token+pid 匹配时删，不匹配只 warn 不抛（finally 抛会掩盖业务异常）\n- 过期接管：快照判活 → 短命 .lock.takeover-claim（O_EXCL）串行化 → 赢 claim 后重读复判 → rename 到 .lock.takeover-<pid>-<hex6> → 回读逐字节比对 → 判活 → 先建新锁再删移交文件；内容不等用 link()（不是 rename）no-clobber 放回\n- 判活矩阵：kill 返回/EPERM=ALIVE、ESRCH=DEAD、无 pid=UNKNOWN、host 不同=FOREIGN 且不调 kill；UNKNOWN/FOREIGN 需 age≥60s\n- claim 恢复走 CAS（rename → 比对 → 一致才删，否则 link 放回）；活 claim >10min 按僵尸自愈并记 lock-claim-stale；releaseTakeoverClaim 校验 token+pid；rename 前自证 token\n- 原子写：open(wx) → write → fsyncSync → close → rename（仅 EPERM/EBUSY/EACCES 退避 10/50/150ms，最多 4 次）→ 目录 fsync best-effort 全吞（/mnt/d ntfs3 会 EINVAL）\n- 陈旧 tmp/takeover 清理：withLock 内按 store 节流 10 分钟，只删匹配 .tmp-<pid>-<seq> / .lock.takeover-* 的普通文件\n- .gitignore 增 *.tmp-* 与 .lock.takeover-*\n\n测试：test/lock.test.mjs（20 例，含 claim 死/零字节/活/僵尸、UNKNOWN 判活、token 不匹配、rename 退避、fsync 源码断言、tmp 清理）、test/concurrency.test.mjs（spawn 3 进程 + 过期锁，8 轮，只断言不变量不断言谁赢）。修复前同一用例在 541fa45 上 8 跑 4 红（同 id 被两个写者拿到），修复后连跑 14 次 0 红。\n\n审查（analyst-store，非实现者）：两轮 accept，第二轮 reject 出 F9（releaseTakeoverClaim 无条件 unlink，被 zombie 自愈激活为可达漏洞），修完复核通过。F1/F2/F3/F6/F7 全部关闭；F4（并发轮数）、F5（不可达兜底）留作已知项。\n\n中心实测确认修复：过期但 pid 存活的锁现在 conflict 而非接管；过期且 owner 已死的锁接管 + lock-stale 可见。\n\n已知限制（写进 CONTRACT）：只防同 PID namespace 并发；跨机/共享网络盘不支持；升级窗口内旧版 core 的 release 仍会无条件删锁，需避免新旧进程同时写同一 store；SIGSTOP 超过 10 分钟的接管者被恢复后仍可能按旧快照 move 一次活锁（由 compare-mismatch 兜底，与无 claim 协议同伤害面）。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-10-31T21:32:47+08:00",
   "schema": 1
 }
