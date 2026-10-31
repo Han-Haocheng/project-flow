@@ -48,6 +48,28 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 或 `defaults`（文件不存在）；文件坏掉时回退默认值并带 `manifest-invalid` warning。
 `schema` 不是 2 时只记一条 warning，仍按 schema 2 归一化。
 
+**类型校验（容错，绝不抛）**：每个顶层 section 必须是对象，成员类型如下。某键存在但类型
+不对时**回退该点的默认值**，并由 `loadContract` 记一条
+`manifest-invalid: <key>: expected <object|string|number>, got <actual>`（`<key>` 是
+`store` / `store.root` / `tasks.current` 这类点号路径；`got` 可能是 `array`/`null`）：
+
+| key | 形状 | 违约处理 |
+|---|---|---|
+| `name` | 非空 string | `<basename(root)>` |
+| `schema` | number | 归一化为 2（文案见上） |
+| `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.dsh/flow` |
+| `experiments` | object：`source` / `dir` 为 string | 逐字段回退 |
+| `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` number | 逐字段回退 |
+| `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
+| `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
+| `decisions` | object：`dir` 为 string | 逐字段回退 |
+| 其他键（含 legacy `runs`、任意未知键） | **不校验** | 原样保留、**无 warning** |
+
+`normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
+否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
+因此 `{"store":"x"}` 这类坏契约下 `flow status --json` 仍退出 0 并携带 warning，而不是
+`TypeError`/IO 错误。
+
 `experiments.source` 与 `tasks.source` 声明读法，store 模式固定为 `store` / `json`。
 `heartbeats.source` 只有 `none` 一个真实开关（关闭整个心跳小节）；心跳只读
 `contract.heartbeats.dir` 下的 `*.json`。旧 manifest 残留的 `gate` / `runs` 等键按未知键
@@ -374,6 +396,17 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 **id 生成**：`PREFIX-YYYYMMDD-NN`；遍历现有记录取当天最大序号 +1（跳过已占用），
 当天用尽 → `FlowError('conflict')`。
 
+**不覆盖守卫**：写新记录前（`exp/task/gate/decision add` 与心跳自动建任务）先检查
+`<dir>/<id>.json` 是否已存在——存在且不是目录就抛
+`FlowError('conflict', 'record id <id> is already occupied by <绝对路径> (possibly unreadable); fix or remove that file, then retry')`，
+**绝不覆盖**无法解析的记录（目录目标不算，交给原子写报 `io`/`cannot write`）。显式
+`--id` 与自动 id 走同一守卫。已知代价（有意接受）：当天某个 id 的坏文件会让该前缀当天的
+自动 id 全部 conflict，直到坏文件被修好或删除；冲突消息带绝对路径与处置建议。
+
+**坏记录计数**：不可读的 `<id>.json` 不出现在列表里，但也不从计数里消失——
+`flow status --json` 与 `readStoreState()` 的 `counts` 各带并列 `unreadable`
+（`total` 语义不变，仍是可读记录数），人类 `flow status` 追加 ` · +N 无法读取`。
+
 ## 5 CLI 参考（`bin/flow.mjs`）
 
 全局：
@@ -386,8 +419,14 @@ flow --root <dir> <command> [--json]
 | 全局参数 | 说明 |
 |---|---|
 | `--root <dir>` | 项目根目录，默认当前目录 |
-| `--json` | 机器可读输出：成功 `{ok:true,data}`；失败 `{ok:false,error:{code,message}}` |
+| `--json` | 机器可读输出：成功 `{ok:true,data,warnings}`；失败 `{ok:false,error,warnings}`（顶层 `warnings` 恒为数组，可空） |
 | `-h`, `--help` | 显示帮助并退出 0 |
+
+**警告流**：每次调用收集两个来源——`loadContract().warnings`（契约修复诊断）与
+`core.drainWarnings()`（锁接管、不可读记录、containment、`gate-expect-unknown` 等）——并
+去重。`--json` 模式下只出现在信封顶层 `warnings`，**不写 stderr**；人类模式下在命令输出
+之后、错误行之前逐条打印 `警告: <text>` 到 stderr（成功与失败路径都打印）。
+`gate run` 步骤子进程的 stderr 只进 `data.steps[].tail`，**不**转发到父进程 warnings。
 
 ### 5.1 命令
 
@@ -523,6 +562,10 @@ question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、
 `decisions: {items, counts:{open,blocking,escalated,answered,withdrawn,superseded,total}}`
 （`items` 只放前 3 条 open，与提醒/面板同一排序）。
 
+存在不可读记录时，人类输出的实验/任务/门禁计数追加 ` · +N 无法读取`；
+`--json` 的 `counts.{experiments,tasks,gates}` 各带并列 `unreadable`（`total` 不变）。
+坏记录本身的 `unreadable:` 诊断走统一的 warnings 通道（见 §5.1）。
+
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
 拼 `status · last_action`，按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；
@@ -609,6 +652,8 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
   open,blocking,failed:[{id,question,blocks,affects,matched}]}`。
 - 人类输出：通过 `✓ decisions：open 2 · blocking 0 · 暂存 3 个文件`；失败逐行
   `✗ <id> 阻塞 <T-id>：affects 命中 <path>`，末行提示可复制的 `flow decision answer` 命令。
+- 警告：决策目录里的坏记录同样产生 `unreadable:`，走 §5.1 的 warnings 通道（`--json`
+  时放在信封顶层，`data`/`error` 形状不变）。
 
 ### 6.2 退出码
 
@@ -630,15 +675,18 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 成功：
 
 ```json
-{"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9}}
+{"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9},"warnings":[]}
 ```
 
 失败：
 
 ```json
 {"ok":false,"error":{"code":"check-failed","message":"检查未通过：staged（exit 1）",
- "check":"staged","exitCode":1,"stdout":"","stderr":"[FAIL] 暂存区包含归属外文件：…"}}
+ "check":"staged","exitCode":1,"stdout":"","stderr":"[FAIL] 暂存区包含归属外文件：…"},"warnings":[]}
 ```
+
+`check <script>` 走 `lib/checks.mjs` 的 spawn、不碰 core → `warnings` 自然为空；
+`check decisions` 走 core → 契约/不可读记录诊断会出现在顶层 `warnings`。
 
 `check list --json` 返回 `{"ok":true,"data":{"checks":[{name,interpreter,script,description,args}]}}`，
 `script` 是相对包根的 POSIX 路径；内置项 `decisions` 例外——它的 `script` 是
@@ -689,6 +737,8 @@ renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
 listTasks       / getTask       / addTask       / updateTask       / removeTask
 listGates       / getGate       / addGate       / updateGate       / removeGate
+                                     // list* 第三个可选参数 {unreadable?: string[]}
+                                     // 收走不可读文件的绝对路径，供调用方计数
 
 runGate(root, contract, id, {timeoutMs?, tailLines?, force?})
                                      // async；disabled 且无 force → usage
@@ -730,6 +780,7 @@ readStoreState(root, contract)       // 面板聚合：experiments{items,counts,
                                      // gates{items(含 lastRun),counts}
                                      // heartbeats（= readHeartbeatSection）
                                      // decisions{items,counts}
+                                     // counts.{experiments,tasks,gates}.unreadable：不可读文件数
 ```
 
 `readStoreState().decisions` **逐字等于** `summarizeDecisions(root, contract,

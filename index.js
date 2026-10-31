@@ -70,6 +70,17 @@ try {
 /** Non-fatal problems detected while mounting; surfaced in every payload's warnings. */
 const mountWarnings = []
 
+/** Drain core's global diagnostic log (never throws; keeps only usable strings). */
+function takeCoreWarnings() {
+  if (coreAvailable() === false || typeof core.drainWarnings !== 'function') return []
+  try {
+    const items = core.drainWarnings()
+    return Array.isArray(items) ? items.filter((item) => typeof item === 'string' && item !== '') : []
+  } catch {
+    return []
+  }
+}
+
 /** One warning per distinct mount problem: apply may run more than once per process. */
 function warnMount(message, ctx) {
   if (typeof message !== 'string' || message.length === 0) return
@@ -83,8 +94,9 @@ function warnMount(message, ctx) {
   }
 }
 
-if (core === null) {
-  warnMount(`core-unavailable: lib/core.mjs could not be loaded (${coreFailure || 'unknown error'}); the store, flow_* tools and skills are unavailable`)
+/** The single message for an unloadable core; both `apply` and the payload add it. */
+function coreUnavailableMessage() {
+  return `core-unavailable: lib/core.mjs could not be loaded (${coreFailure || 'unknown error'}); the store, flow_* tools and skills are unavailable`
 }
 
 function coreAvailable() {
@@ -875,9 +887,15 @@ async function buildStoreState(root, entry, now, warnings) {
 }
 
 async function buildState(root, entry, now) {
+  // The panel polls every ~2.5s and core's warning log is a module singleton:
+  // draining here (and dropping) keeps poll-driven reads from stealing the
+  // diagnostics the next tool call should surface. The panel computes its own
+  // diagnostics locally, so nothing visible is lost.
+  takeCoreWarnings()
   const warnings = mountWarnings.slice()
   if (coreAvailable()) return buildStoreState(root, entry, now, warnings)
-  warnings.push(`core-unavailable: ${coreFailure || 'unknown error'}`)
+  const message = coreUnavailableMessage()
+  if (warnings.includes(message) === false) warnings.push(message)
   return emptyStoreState(root, entry, now, warnings)
 }
 
@@ -2531,6 +2549,49 @@ function provide(ctx, name, label, setup) {
   }
 }
 
+/**
+ * Wrap a tool's `execute` so core diagnostics reach the caller. On success they
+ * are appended to `warnings`; on failure they go to the logger and the error
+ * itself stays untouched (callers match on its message).
+ */
+function wrapToolDefinition(definition, ctx) {
+  const execute = definition.execute
+  if (typeof execute !== 'function') return definition
+  const warningSink = () => {
+    try {
+      if (ctx !== null && ctx !== undefined && ctx.logger !== undefined && typeof ctx.logger.warn === 'function') {
+        return ctx.logger
+      }
+    } catch {
+      // logging is best-effort
+    }
+    return null
+  }
+  return {
+    ...definition,
+    async execute(args, exec) {
+      try {
+        const result = await execute.call(this, args, exec)
+        const warnings = takeCoreWarnings()
+        if (warnings.length === 0 || isPlainObject(result) === false) return result
+        const existing = Array.isArray(result.warnings) ? result.warnings : []
+        return { ...result, warnings: [...existing, ...warnings] }
+      } catch (error) {
+        const warnings = takeCoreWarnings()
+        if (warnings.length > 0) {
+          const logger = warningSink()
+          try {
+            if (logger !== null) logger.warn(`project-flow: ${definition.name}: ${warnings.join(' | ')}`)
+          } catch {
+            // logging is best-effort
+          }
+        }
+        throw error
+      }
+    },
+  }
+}
+
 function registerTools(ctx, settings) {
   provide(ctx, 'tools', 'tools', (scoped) => {
     const tools = service(scoped, 'tools')
@@ -2538,7 +2599,7 @@ function registerTools(ctx, settings) {
     const disposers = []
     for (const definition of buildToolDefinitions(scoped)) {
       try {
-        const dispose = tools.register(definition)
+        const dispose = tools.register(wrapToolDefinition(definition, scoped))
         if (typeof dispose === 'function') disposers.push(dispose)
       } catch (error) {
         warnMount(`tools: cannot register ${definition.name}: ${brief(error)}`, scoped)
@@ -2729,6 +2790,11 @@ function mountJsonRoute(ctx, path, label, handler) {
 }
 
 export function apply(ctx, config) {
+  // `apply` may run again in a long-lived host: drop diagnostics from the
+  // previous mount so a successful re-apply never reports stale failures. A
+  // still-broken core re-adds its message every time.
+  mountWarnings.length = 0
+  if (core === null) warnMount(coreUnavailableMessage(), ctx)
   const settings = { heartbeatGate: heartbeatGateEnabled(config) }
 
   mountJsonRoute(ctx, ROUTE_PATH, 'state route', handleState)
