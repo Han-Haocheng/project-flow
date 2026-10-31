@@ -557,6 +557,101 @@ function panelHeartbeats(section) {
 }
 
 
+// ----------------------------------------------------------------- decisions
+//
+// The decisions section is shared cross-domain: index.js, client.js and both
+// self-tests carry the same literal key list, so the projection below is built
+// from it and never grows a field by accident.
+
+/** Key set and order of one panel decision row (cross-domain literal). */
+const DECISION_ITEM_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'question',
+  'blocks',
+  'options',
+  'recommendation',
+  'default',
+  'escalated',
+  'ageSeconds',
+  'asked_at',
+]
+
+/** One decision option: only the three display fields, bounded. */
+function panelDecisionOption(option) {
+  if (isPlainObject(option) === false) return null
+  return { id: clip(option.id, 40), label: clip(option.label, 80), impact: clip(option.impact, 120) }
+}
+
+/**
+ * Project one open decision onto the row the panel renders. The row is built
+ * from DECISION_ITEM_KEYS, so fields that must not reach the browser (`turnAge`,
+ * `rationale`, `affects`, `fingerprint`) are dropped rather than filtered later.
+ */
+function panelDecision(item) {
+  if (isPlainObject(item) === false) return null
+  const options = []
+  if (Array.isArray(item.options)) {
+    for (const option of item.options) {
+      const row = panelDecisionOption(option)
+      if (row !== null) options.push(row)
+    }
+  }
+  const blocks = Array.isArray(item.blocks)
+    ? item.blocks.filter((id) => typeof id === 'string' && id !== '').map((id) => clip(id, 40))
+    : []
+  const values = {
+    id: clip(item.id, 40),
+    kind: clip(item.kind, 20),
+    status: clip(item.status, 20),
+    question: clip(item.question, 200),
+    blocks,
+    options,
+    recommendation: clip(item.recommendation, 60),
+    default: clip(item.default, 60),
+    escalated: item.escalated === true,
+    ageSeconds:
+      typeof item.ageSeconds === 'number' && Number.isFinite(item.ageSeconds)
+        ? Math.max(0, Math.trunc(item.ageSeconds))
+        : null,
+    asked_at: clip(item.asked_at, 64),
+  }
+  const row = {}
+  for (const key of DECISION_ITEM_KEYS) row[key] = values[key]
+  return row
+}
+
+/**
+ * Panel decisions section: bounded rows plus the seven counts. A missing or
+ * unusable section degrades to the empty one instead of failing the payload.
+ */
+function panelDecisions(section, limit = decisionRemindMax()) {
+  const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
+  const rows = []
+  for (const item of items) {
+    if (rows.length >= limit) break
+    const row = panelDecision(item)
+    if (row !== null) rows.push(row)
+  }
+  return { items: rows, counts: decisionCountsOf(isPlainObject(section) ? section.counts : null) }
+}
+
+/**
+ * The decisions section of one store payload. A newer lib/core.mjs already
+ * returns it from `readStoreState`; otherwise the same projection is rebuilt with
+ * `summarizeDecisions`, so the payload shape does not depend on which side of the
+ * Host/core split landed first.
+ */
+function decisionSection(state, root, contract) {
+  const supplied = isPlainObject(state) ? state.decisions : undefined
+  if (isPlainObject(supplied)) return supplied
+  const c = requireCore()
+  if (typeof c.summarizeDecisions !== 'function') return null
+  return c.summarizeDecisions(root, contract, { limit: decisionRemindMax() })
+}
+
+
 // -------------------------------------------------------------------- payload
 
 /** Drop tree nodes whose id is no longer in `items`, recursively. */
@@ -667,6 +762,7 @@ async function emptyStoreState(root, entry, now, warnings) {
     },
     gates: [],
     heartbeats: [],
+    decisions: { items: [], counts: emptyDecisionCounts() },
     warnings,
   }
 }
@@ -755,6 +851,14 @@ async function buildStoreState(root, entry, now, warnings) {
     warnings.push(`heartbeats unreadable: ${brief(error)}`)
   }
 
+  let decisions
+  try {
+    decisions = panelDecisions(decisionSection(state, root, contract))
+  } catch (error) {
+    warnings.push(`decisions unreadable: ${brief(error)}`)
+    decisions = panelDecisions(null)
+  }
+
   return {
     ok: true,
     generatedAt: isoLocal(new Date(now)),
@@ -766,6 +870,7 @@ async function buildStoreState(root, entry, now, warnings) {
     tasks,
     gates,
     heartbeats,
+    decisions,
     warnings,
   }
 }
@@ -1195,7 +1300,7 @@ async function handleGate(ctx, request, response) {
 
 // ------------------------------------------------------------------- tools
 //
-// Five model-facing tools over the same lib/core.mjs writer the CLI uses. They
+// Six model-facing tools over the same lib/core.mjs writer the CLI uses. They
 // are declared as plain objects (this package has no node_modules resolution
 // for @deepseek-ai/dsh-tools); the registry accepts
 // {name, description, parameters:<JSON Schema>, output:{schema, render},
@@ -1407,6 +1512,15 @@ function rootSessionVerdict(ctx, agent) {
 const ROOT_SESSION_HEARTBEAT_ONLY =
   'flow_heartbeat start/update/end only serve main sessions: this call runs in a subagent session, which does not keep a heartbeat. Report progress in the child final message; only the parent (main) session registers and closes a heartbeat.'
 
+/**
+ * Human-readable refusal for a decision write attempted from a subagent. The
+ * decision ledger is the main session's conversation with the user: a subagent
+ * cannot see the answer, so it reports the pending item in its final message and
+ * the main session opens or closes the D record.
+ */
+const ROOT_SESSION_DECISION_ONLY =
+  'flow_decision ask/answer/withdraw/gc only serve main sessions: this call runs in a subagent session, which cannot open or close a decision record. Report the pending decision in the child final message; only the parent (main) session creates and closes a D record.'
+
 /** Resolve the heartbeat ledger root (the project main worktree); degrade to the workspace root. */
 function heartbeatRootOf(root) {
   try {
@@ -1504,20 +1618,108 @@ function registerDisciplineSection(ctx) {
 const HEARTBEAT_REMINDER_TEXT =
   '【project-flow】本轮还没有 working 心跳。先调用 flow_heartbeat start 登记 goal/task/claims（claims 写本会话独占写入的文件域），结束前调用 flow_heartbeat end。'
 
+/** Reminder budget: one bounded message, one text block. */
+const DECISION_QUESTION_CLIP = 60
+const DECISION_REMINDER_CLIP = 800
+
 /** One user-role reminder message; the fields match `MessageBase` + `role`. */
-function heartbeatReminderMessage(session, turn, step) {
+function reminderMessage(session, turn, step, text) {
   return {
     id: `project-flow:${session}:${turn}:${step}:${Date.now()}`,
     role: 'user',
-    content: [{ type: 'text', text: HEARTBEAT_REMINDER_TEXT }],
+    content: [{ type: 'text', text }],
     source: { kind: 'user' },
   }
 }
 
+/** Open-decision rows the reminder and the panel carry: core's DECISION_REMIND_MAX. */
+function decisionRemindMax() {
+  const value = coreAvailable() ? core.DECISION_REMIND_MAX : undefined
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 3
+}
+
+/** The store contract of one root, or null when it cannot be loaded. */
+function decisionContractOf(root) {
+  try {
+    const c = requireCore()
+    if (typeof c.loadContract !== 'function') return null
+    const loaded = c.loadContract(root)
+    return isPlainObject(loaded) ? loaded.contract : null
+  } catch {
+    return null
+  }
+}
+
 /**
- * Per-turn fallback: on the first step of a turn, append a user reminder when
- * the session has no `working` heartbeat. `step` is 1-based in the loop; `0` is
- * accepted too so the hook survives a loop that counts differently.
+ * 挂起 display of one open decision: the turns it has waited for the session that
+ * asked it, else the age since `asked_at`. Same rule as `decisionSuspended` in
+ * bin/flow.mjs — two copies, because the Host and the CLI share no code. Only the
+ * 3600 / 86400 thresholds are allowed; a change here must be mirrored there.
+ */
+function decisionSuspendedText(item) {
+  const turnAge = isPlainObject(item) && Number.isInteger(item.turnAge) ? item.turnAge : null
+  if (turnAge !== null) return `${turnAge} 轮`
+  const age = isPlainObject(item) ? item.ageSeconds : null
+  if (typeof age !== 'number' || Number.isFinite(age) === false) return '-'
+  if (age < 3600) return `${Math.max(1, Math.round(age / 60))} 分钟`
+  if (age < 86400) return `${Math.round(age / 3600)} 小时`
+  return `${Math.round(age / 86400)} 天`
+}
+
+/** One reminder row: `- ⚠ D-… [kind] question  阻塞 T-…；挂起 3 轮`. */
+function decisionReminderLine(item) {
+  const blocks = Array.isArray(item.blocks)
+    ? item.blocks.filter((id) => typeof id === 'string' && id !== '').map((id) => clip(id, 40))
+    : []
+  const blocked = blocks.length > 0 ? `阻塞 ${blocks.join('、')}；` : ''
+  const head =
+    `${item.escalated === true ? '⚠ ' : ''}${clip(item.id, 40)} [${clip(item.kind, 20)}] ` +
+    clip(item.question, DECISION_QUESTION_CLIP)
+  return `- ${head}  ${blocked}挂起 ${decisionSuspendedText(item)}`
+}
+
+/**
+ * The decision section of the per-turn reminder, or '' when nothing is open. The
+ * first turn of a session lists the whole ledger; later turns cap the detail at
+ * DECISION_REMIND_MAX rows and count the rest. Row order is core's and is never
+ * re-sorted here.
+ */
+function decisionReminderText(root, contract, session, turn) {
+  try {
+    if (hasStore(root) === false) return ''
+    if (isPlainObject(contract) === false) return ''
+    const c = requireCore()
+    if (typeof c.summarizeDecisions !== 'function') return ''
+    const firstTurn = Number.isInteger(turn) && turn === 1
+    const info = { session, turn: Number.isInteger(turn) ? turn : null }
+    if (firstTurn === false) info.limit = decisionRemindMax()
+    const summary = c.summarizeDecisions(root, contract, info)
+    const items = isPlainObject(summary) && Array.isArray(summary.items) ? summary.items : []
+    const counts = isPlainObject(summary) ? summary.counts : null
+    const open = isPlainObject(counts) && typeof counts.open === 'number' ? counts.open : 0
+    if (open === 0 || items.length === 0) return ''
+    const blocking = isPlainObject(counts) && typeof counts.blocking === 'number' ? counts.blocking : 0
+    const lines = [`【project-flow】有 ${open} 个待用户拍板的决策（阻塞 ${blocking}）：`]
+    for (const item of items) {
+      if (isPlainObject(item)) lines.push(decisionReminderLine(item))
+    }
+    const remaining = open - items.length
+    if (remaining > 0) lines.push(`还有 ${remaining} 条，运行 flow decision list --open 查看全部`)
+    lines.push('回答后当轮调用 flow_decision answer <id> --choice <选项 id>；不要按推荐自行决定。')
+    if (firstTurn) lines.push('新会话第一步：运行 flow decision list --open 查看完整清单')
+    return clip(lines.join('\n'), DECISION_REMINDER_CLIP)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Per-turn fallback: on the first step of a turn, append ONE user reminder that
+ * merges two independently gated sections — the open decisions (whatever the
+ * heartbeat state is) and the missing `working` heartbeat. Both empty means no
+ * message at all; otherwise a single message with a single text block carries
+ * both, decision section first. `step` is 1-based in the loop; `0` is accepted
+ * too so the hook survives a loop that counts differently.
  */
 function registerHeartbeatReminder(ctx) {
   try {
@@ -1531,15 +1733,19 @@ function registerHeartbeatReminder(ctx) {
           if (step !== 0 && step !== 1) return decision
           const agent = payload.agent
           if (agent === undefined || agent === null) return decision
-          // Only main sessions are reminded; a subagent never registers one.
+          // Only main sessions are reminded; a subagent gets neither section.
           if (rootSessionVerdict(ctx, agent) !== true) return decision
           const session = usableSessionId(agent.id)
           if (session === '') return decision
           const root = agentRoot(ctx, agent)
           if (root === undefined) return decision
-          if (heartbeatWorking(root, session) !== false) return decision
+          const turn = Number.isInteger(payload.turn) ? payload.turn : null
+          const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
+          const heartbeatText = heartbeatWorking(root, session) === false ? HEARTBEAT_REMINDER_TEXT : ''
+          const text = [decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
+          if (text === '') return decision
           const messages = Array.isArray(decision.messages) ? decision.messages.slice() : []
-          messages.push(heartbeatReminderMessage(session, payload.turn, step))
+          messages.push(reminderMessage(session, payload.turn, step, text))
           return { ...decision, messages }
         } catch {
           return decision
@@ -1590,6 +1796,84 @@ function heartbeatGuardReason(ctx, execution) {
   } catch {
     return undefined
   }
+}
+
+// ---------------------------------------------------------------- decisions
+//
+// One decision record stays `open` until the user answers it. The tool below is
+// the model-side writer; bin/flow.mjs drives the same lib/core.mjs API, and the
+// per-turn reminder only reads it.
+
+/** Count keys of one decisions section; the tool, the panel and both self-tests share them. */
+const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total']
+
+/** Project arbitrary counts onto the seven fixed keys; missing or broken values become 0. */
+function decisionCountsOf(counts) {
+  const source = isPlainObject(counts) ? counts : {}
+  const out = {}
+  for (const key of DECISION_COUNT_KEYS) {
+    const value = source[key]
+    out[key] = typeof value === 'number' && Number.isFinite(value) ? value : 0
+  }
+  return out
+}
+
+/** Every count zero, in the canonical key order. */
+function emptyDecisionCounts() {
+  return decisionCountsOf(null)
+}
+
+/** The turn of this session's heartbeat record; `null` when it cannot be read. */
+function decisionTurnOf(c, root, contract, session) {
+  if (typeof session !== 'string' || session === '') return null
+  try {
+    if (typeof c.heartbeatStatus !== 'function') return null
+    const status = c.heartbeatStatus(root, contract, session)
+    const record = isPlainObject(status) ? status.record : null
+    return isPlainObject(record) && Number.isInteger(record.turn) ? record.turn : null
+  } catch {
+    return null
+  }
+}
+
+/** One `choice` option, restricted to the three fields the tool schema accepts. */
+function decisionOptionInput(option) {
+  if (isPlainObject(option) === false) throw new Error('flow_decision ask: every option needs id, label and impact')
+  if (typeof option.id !== 'string' || typeof option.label !== 'string' || typeof option.impact !== 'string') {
+    throw new Error('flow_decision ask: every option needs id, label and impact')
+  }
+  return { id: option.id, label: option.label, impact: option.impact }
+}
+
+/**
+ * The lib/core.mjs `addDecision` input of one ask. `asked_session` (this session)
+ * and `asked_turn` (its heartbeat turn) are the ledger's provenance: they let the
+ * reminder say how many turns an item has been waiting. The turn is written only
+ * when it is a real integer; the session is written regardless.
+ */
+function decisionAskInput(args, c, root, contract, session) {
+  const kind = typeof args.kind === 'string' ? args.kind.trim() : ''
+  if (kind === '') throw new Error('flow_decision ask requires kind: choice, approval or input')
+  if (typeof args.rationale !== 'string' || args.rationale.trim() === '') {
+    throw new Error('flow_decision ask requires rationale: say why the user must decide now')
+  }
+  const input = { question: args.question, kind, rationale: args.rationale }
+  if (Array.isArray(args.options)) input.options = args.options.map(decisionOptionInput)
+  const recommendation =
+    typeof args.recommendation === 'string' && args.recommendation.trim() !== '' ? args.recommendation.trim() : ''
+  if (recommendation !== '') input.recommendation = recommendation
+  // An approval asked without a recommendation recommends approve; a session that
+  // wants the user to reject passes recommendation: 'reject' explicitly.
+  else if (kind === 'approval') input.recommendation = 'approve'
+  if (args.default !== undefined && args.default !== null) input.default = args.default
+  for (const name of ['blocks', 'affects']) {
+    if (Array.isArray(args[name])) input[name] = args[name]
+  }
+  if (typeof args.supersedes === 'string' && args.supersedes.trim() !== '') input.supersedes = args.supersedes.trim()
+  input.asked_session = session
+  const turn = decisionTurnOf(c, root, contract, session)
+  if (turn !== null) input.asked_turn = turn
+  return input
 }
 
 function buildToolDefinitions(ctx) {
@@ -2039,6 +2323,147 @@ function buildToolDefinitions(ctx) {
           return { root, workspace, store: true, session, heartbeat: c.endHeartbeat(root, contract, options) }
         }
         throw new Error(`unknown flow_heartbeat action: ${String(action)}`)
+      },
+    },
+    {
+      name: 'flow_decision',
+      description:
+        'Decision ledger for questions only the user can settle: `ask` records one open item (choice/approval/input), `list` and `show` read it, `answer` closes it with the user\'s choice, `withdraw` drops it with a reason, `gc` removes closed records past the retention window. R1: call ask BEFORE you pose the question, then put the returned id in the question text as [D-<id>]. R2: in the same turn the user answers, call answer with their choice. R5: recommendation and default are proposals, not the answer - never adopt one on the user\'s behalf. An approval asked without a recommendation recommends approve (pass recommendation reject to recommend rejection). Write actions serve main sessions only: a subagent reports the pending decision in its final message, and only the parent (main) session creates and closes a D record. list/show work in any session; writes require a .dsh/flow store.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: {
+            type: 'string',
+            enum: ['ask', 'list', 'show', 'answer', 'withdraw', 'gc'],
+            description: 'ask creates, list/show read, answer/withdraw close one, gc prunes closed records.',
+          },
+          root: ROOT_PROPERTY,
+          id: { type: 'string', description: 'Decision id, e.g. D-20261031-01.' },
+          question: { type: 'string', description: 'ask: the one-sentence question the user must settle.' },
+          kind: {
+            type: 'string',
+            enum: ['choice', 'approval', 'input'],
+            description: 'ask: choice needs 2+ options, approval uses the fixed approve|reject pair, input takes free text.',
+          },
+          options: {
+            type: 'array',
+            description: 'ask + kind=choice: the mutually exclusive options.',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Short option id the answer names, e.g. adopt.' },
+                label: { type: 'string', description: 'What the user picks.' },
+                impact: { type: 'string', description: 'What changes when this option is chosen.' },
+              },
+              required: ['id', 'label', 'impact'],
+              additionalProperties: false,
+            },
+          },
+          default: { type: 'string', description: 'ask: option id used when the user never answers; not an answer.' },
+          recommendation: {
+            type: 'string',
+            description: 'ask: option id this session proposes; not an answer. Omitted on kind=approval means approve.',
+          },
+          rationale: { type: 'string', description: 'ask: why the user must decide now; required.' },
+          blocks: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'ask: task ids that cannot proceed until the user answers.',
+          },
+          affects: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'ask: repo-relative files or directories the answer changes.',
+          },
+          supersedes: {
+            type: 'string',
+            description: 'ask: closed decision id this one replaces; required to re-ask the same question.',
+          },
+          choice: { type: 'string', description: 'answer: the option id (kind=input: free text) the user picked.' },
+          note: { type: 'string', description: 'answer: the user\'s wording or a short note.' },
+          by: { type: 'string', enum: ['user', 'agent'], description: 'Who confirmed it; defaults to user.' },
+          reason: { type: 'string', description: 'withdraw: why the question no longer applies; required.' },
+          days: { type: 'integer', description: 'gc: closed-record retention window in days (default 90).' },
+          dryRun: { type: 'boolean', description: 'gc: report what would be removed without deleting it.' },
+        },
+        required: ['action'],
+        additionalProperties: false,
+      },
+      output: toolOutput(),
+      isConcurrencySafe: false,
+      timeoutMs: WRITE_TIMEOUT_MS,
+      async execute(args, exec) {
+        const root = toolRoot(ctx, args, exec)
+        const c = requireCore()
+        const action = args.action
+
+        // Read actions are open to every session: a subagent may want to know
+        // which decision already blocks its task.
+        if (action === 'list') {
+          if (hasStore(root) === false) {
+            return { root, items: [], counts: emptyDecisionCounts(), note: EMPTY_STORE_NOTE }
+          }
+          if (typeof c.summarizeDecisions !== 'function' || typeof c.listDecisions !== 'function') {
+            throw new Error('flow_decision list needs a newer lib/core.mjs: decision support is missing')
+          }
+          const { contract } = c.loadContract(root)
+          const session = usableSessionId(sessionIdOf(exec) ?? '')
+          const turn = decisionTurnOf(c, root, contract, session)
+          const info = { session, turn }
+          const summary = c.summarizeDecisions(root, contract, info)
+          return { root, items: c.listDecisions(root, contract, info), counts: decisionCountsOf(summary.counts) }
+        }
+
+        if (action === 'show') {
+          if (typeof c.getDecision !== 'function') {
+            throw new Error('flow_decision show needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          const { contract } = c.loadContract(root)
+          return { root, decision: c.getDecision(root, contract, id) }
+        }
+
+        // Writes: the decision ledger belongs to the main session's conversation
+        // with the user. Refuse loudly instead of writing an answer nobody asked.
+        if (rootSessionVerdict(ctx, exec.agent) === false) {
+          throw new Error(ROOT_SESSION_DECISION_ONLY)
+        }
+        requireStore(root)
+        const { contract } = c.loadContract(root)
+
+        if (action === 'ask') {
+          if (typeof c.addDecision !== 'function') {
+            throw new Error('flow_decision ask needs a newer lib/core.mjs: decision support is missing')
+          }
+          const session = requireSession(exec)
+          const result = c.addDecision(root, contract, decisionAskInput(args, c, root, contract, session))
+          return { root, decision: result.decision, created: result.created === true }
+        }
+        if (action === 'answer') {
+          if (typeof c.answerDecision !== 'function') {
+            throw new Error('flow_decision answer needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          return { root, decision: c.answerDecision(root, contract, id, pickFields(args, ['choice', 'note', 'by'])) }
+        }
+        if (action === 'withdraw') {
+          if (typeof c.withdrawDecision !== 'function') {
+            throw new Error('flow_decision withdraw needs a newer lib/core.mjs: decision support is missing')
+          }
+          const id = requireId('flow_decision', action, args.id)
+          return { root, decision: c.withdrawDecision(root, contract, id, pickFields(args, ['reason', 'by'])) }
+        }
+        if (action === 'gc') {
+          if (typeof c.gcDecisions !== 'function') {
+            throw new Error('flow_decision gc needs a newer lib/core.mjs: decision support is missing')
+          }
+          const options = {}
+          if (args.days !== undefined) options.days = args.days
+          if (args.dryRun !== undefined) options.dryRun = args.dryRun === true
+          const result = c.gcDecisions(root, contract, options)
+          return { root, removed: result.removed, kept: result.kept, dryRun: result.dryRun }
+        }
+        throw new Error(`unknown flow_decision action: ${String(action)}`)
       },
     },
   ]

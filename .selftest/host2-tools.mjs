@@ -6,7 +6,7 @@
 // uninitialized empty state.
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -100,6 +100,36 @@ function draftRowsDesc(rows) {
     previous = value
   }
   return true
+}
+
+/**
+ * Key set and order of one panel decision row. index.js, client.js and both
+ * self-tests carry this literal; a diff in the order is a cross-domain contract
+ * break, so it is compared verbatim below.
+ */
+const DECISION_ITEM_KEYS = [
+  'id',
+  'kind',
+  'status',
+  'question',
+  'blocks',
+  'options',
+  'recommendation',
+  'default',
+  'escalated',
+  'ageSeconds',
+  'asked_at',
+]
+
+/** The seven counts keys of the decisions section, in contract order. */
+const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total']
+
+/** Text of the single reminder message an `agent/pre-step` result carries. */
+function reminderText(result) {
+  const messages = Array.isArray(result?.messages) ? result.messages : []
+  if (messages.length === 0) return ''
+  const content = Array.isArray(messages[0]?.content) ? messages[0].content : []
+  return typeof content[0]?.text === 'string' ? content[0].text : ''
 }
 
 // ------------------------------------------------------------- fake context
@@ -272,8 +302,8 @@ check('gate route present', gateRoute !== undefined && gateRoute.kind === 'exact
 
 // ------------------------------------------------------------- tool surface
 
-const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat']
-check('five tools registered', registeredTools.size === 5, `got ${[...registeredTools.keys()].join(', ')}`)
+const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat', 'flow_decision']
+check('six tools registered', registeredTools.size === 6, `got ${[...registeredTools.keys()].join(', ')}`)
 for (const name of EXPECTED_TOOLS) {
   const definition = registeredTools.get(name)
   if (check(`${name}: registered`, definition !== undefined) === false) continue
@@ -350,6 +380,30 @@ const expTool = registeredTools.get('flow_exp')
 const taskTool = registeredTools.get('flow_task')
 const gateTool = registeredTools.get('flow_gate')
 const statusTool = registeredTools.get('flow_status')
+const decisionTool = registeredTools.get('flow_decision')
+
+// H1: the decision tool is a write gate like flow_heartbeat — non-concurrent and
+// on the write timeout — and its schema stays inside the registry subset.
+if (check('flow_decision: registered', decisionTool !== undefined) === true) {
+  eq('flow_decision: write timeout', decisionTool.timeoutMs, 30_000)
+  eq('flow_decision: not concurrency safe', decisionTool.isConcurrencySafe, false)
+  check(
+    'flow_decision: action enum',
+    JSON.stringify(decisionTool.parameters?.properties?.action?.enum) ===
+      JSON.stringify(['ask', 'list', 'show', 'answer', 'withdraw', 'gc']),
+    JSON.stringify(decisionTool.parameters?.properties?.action?.enum),
+  )
+  check(
+    'flow_decision: only action is required',
+    JSON.stringify(decisionTool.parameters?.required) === JSON.stringify(['action']),
+    JSON.stringify(decisionTool.parameters?.required),
+  )
+  check(
+    'flow_decision: description states R1/R2/R5 and the main-session rule',
+    ['R1', 'R2', 'R5', 'main session', 'subagent'].every((needle) => decisionTool.description.includes(needle)),
+    decisionTool.description,
+  )
+}
 
 // ----------------------------------------------------------- flow_status
 
@@ -496,9 +550,9 @@ function registerChildAgent(agent) {
 }
 
 /** Drive the registered pre-step reminder hook with a synthetic decision. */
-async function runPreStep(agent) {
+async function runPreStep(agent, turn = 1, step = 1) {
   if (preStepHandlers.length === 0) return null
-  return preStepHandlers[0]({ agent, step: 1, turn: 1 }, async () => ({ kind: 'enter', messages: [] }))
+  return preStepHandlers[0]({ agent, step, turn }, async () => ({ kind: 'enter', messages: [] }))
 }
 
 const hbRootAgent = mockAgent('session-hb-root', storeRoot)
@@ -512,6 +566,9 @@ check(
   JSON.stringify(reminded),
 )
 eq('guard: one heartbeat guard registered', guards.length, 1)
+// H-4: the merged reminder keeps ONE hook; a second one would make the
+// host drive only the first and silently lose a section.
+eq('pre-step: exactly one reminder hook', preStepHandlers.length, 1)
 const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
 check(
   'guard: root without heartbeat denies edit',
@@ -944,6 +1001,329 @@ check(
   [GATE_SECRET, RUN_SECRET, CURRENT_SECRET].every((secret) => JSON.stringify(evilStore).includes(secret) === false),
 )
 
+// ------------------------------------------------ flow_decision (H2 … H6)
+//
+// A dedicated store: the decisions below must not depend on the task and
+// experiment fixtures the panel-payload assertions already pinned.
+
+const decRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-dec-'))
+core.initProject(decRoot, { name: 'DecisionTest', noGates: true })
+const decAgent = mockAgent('session-dec-root', decRoot)
+registerRootAgent(decAgent)
+const decExec = { agent: decAgent }
+const decTask = await taskTool.execute(
+  { action: 'add', root: decRoot, title: '决策阻塞任务', status: 'active', owner: decAgent.id },
+  decExec,
+)
+const decTaskId = decTask.task?.id
+const decHeartbeat = await heartbeatTool.execute(
+  { action: 'start', root: decRoot, goal: '决策工具测试', task: decTaskId },
+  decExec,
+)
+const decTurn = decHeartbeat.heartbeat?.turn
+const decisionsDir = join(decRoot, '.dsh', 'flow', 'decisions')
+check('decision fixture: heartbeat turn recorded', Number.isInteger(decTurn), JSON.stringify(decHeartbeat))
+
+// H2: an approval asked without a recommendation recommends approve, and the
+// record carries this session plus its heartbeat turn as provenance.
+const approvalAsk = {
+  action: 'ask',
+  root: decRoot,
+  kind: 'approval',
+  question: '是否允许 T-23 的 payload 增加 decisions 节？',
+  rationale: '面板需要显示待决策项，写入门控也已就位',
+  blocks: [decTaskId],
+  affects: ['index.js'],
+}
+const askedApproval = await decisionTool.execute(approvalAsk, decExec)
+eq('flow_decision ask: created', askedApproval.created, true)
+eq('flow_decision ask: approval default recommendation', askedApproval.decision?.recommendation, 'approve')
+eq('flow_decision ask: status open', askedApproval.decision?.status, 'open')
+eq('flow_decision ask: asked_session is the main session', askedApproval.decision?.asked_session, decAgent.id)
+eq('flow_decision ask: asked_turn is the heartbeat turn', askedApproval.decision?.asked_turn, decTurn)
+check(
+  'flow_decision ask: blocks/affects recorded',
+  JSON.stringify(askedApproval.decision?.blocks) === JSON.stringify([decTaskId]) &&
+    JSON.stringify(askedApproval.decision?.affects) === JSON.stringify(['index.js']),
+  JSON.stringify({ blocks: askedApproval.decision?.blocks, affects: askedApproval.decision?.affects }),
+)
+
+// H3: the same question reuses the open record (fingerprint dedupe, no new file).
+const filesBeforeRepeat = readdirSync(decisionsDir).length
+const repeatedAsk = await decisionTool.execute(approvalAsk, decExec)
+eq('flow_decision ask repeat: created false', repeatedAsk.created, false)
+eq('flow_decision ask repeat: same id', repeatedAsk.decision?.id, askedApproval.decision?.id)
+eq('flow_decision ask repeat: no new decisions file', readdirSync(decisionsDir).length, filesBeforeRepeat)
+
+// H4: answer closes the record; a second answer on a terminal record is refused.
+const answeredDecision = await decisionTool.execute(
+  { action: 'answer', root: decRoot, id: askedApproval.decision?.id, choice: 'approve', note: '同意' },
+  decExec,
+)
+eq('flow_decision answer: status answered', answeredDecision.decision?.status, 'answered')
+eq('flow_decision answer: choice recorded', answeredDecision.decision?.answer?.choice, 'approve')
+await throws(
+  'flow_decision answer: answering twice is refused',
+  () => decisionTool.execute({ action: 'answer', root: decRoot, id: askedApproval.decision?.id, choice: 'reject' }, decExec),
+  (message) => message.includes('answered'),
+)
+
+// H5: withdraw requires a reason; gc reports without deleting on dryRun.
+const askedChoice = await decisionTool.execute(
+  {
+    action: 'ask',
+    root: decRoot,
+    kind: 'choice',
+    question: 'payload 的 decisions 节用哪种投影？',
+    rationale: '两种投影的键集不同',
+    // core requires a recommendation for kind=choice (it validates the id
+    // against the option list); the tool only defaults it for approvals.
+    recommendation: 'fixed',
+    options: [
+      { id: 'fixed', label: '固定 11 键', impact: '面板与 selftest 共用一份字面数组' },
+      { id: 'raw', label: '原样透传', impact: '面板需要自己兜底' },
+    ],
+  },
+  decExec,
+)
+eq('flow_decision ask choice: created', askedChoice.created, true)
+eq('flow_decision ask choice: recommendation recorded', askedChoice.decision?.recommendation, 'fixed')
+// The reason is required by core; asking again here keeps the record open.
+await throws(
+  'flow_decision withdraw: reason is required',
+  () => decisionTool.execute({ action: 'withdraw', root: decRoot, id: askedChoice.decision?.id, reason: '' }, decExec),
+  (message) => message.includes('reason'),
+)
+const withdrawnDecision = await decisionTool.execute(
+  { action: 'withdraw', root: decRoot, id: askedChoice.decision?.id, reason: '任务书已固定投影' },
+  decExec,
+)
+eq('flow_decision withdraw: status withdrawn', withdrawnDecision.decision?.status, 'withdrawn')
+eq('flow_decision withdraw: reason recorded', withdrawnDecision.decision?.withdraw?.reason, '任务书已固定投影')
+const gcDryRun = await decisionTool.execute({ action: 'gc', root: decRoot, dryRun: true }, decExec)
+eq('flow_decision gc: dryRun echoed', gcDryRun.dryRun, true)
+check('flow_decision gc: removed is an array', Array.isArray(gcDryRun.removed), JSON.stringify(gcDryRun))
+check('flow_decision gc: kept is a number', typeof gcDryRun.kept === 'number', JSON.stringify(gcDryRun))
+
+// H6: a subagent may read the ledger but never writes it.
+const decSubAgent = mockAgent('session-dec-sub', decRoot, {
+  origin: 'subagent',
+  delegationDepth: 1,
+  parentSession: decAgent.id,
+})
+registerChildAgent(decSubAgent)
+const decSubExec = { agent: decSubAgent }
+for (const writeArgs of [
+  { action: 'ask', kind: 'approval', question: '子代理不应建决策', rationale: '违反门控' },
+  { action: 'answer', id: askedApproval.decision?.id, choice: 'approve' },
+  { action: 'withdraw', id: askedApproval.decision?.id, reason: '子代理不应撤回' },
+  { action: 'gc', dryRun: true },
+]) {
+  await throws(
+    `flow_decision ${writeArgs.action}: subagent refused`,
+    () => decisionTool.execute({ ...writeArgs, root: decRoot }, decSubExec),
+    (message) => message.includes('main session') && message.includes('subagent'),
+  )
+}
+const subDecisionList = await decisionTool.execute({ action: 'list', root: decRoot }, decSubExec)
+check(
+  'flow_decision list: subagent allowed',
+  Array.isArray(subDecisionList.items) && JSON.stringify(Object.keys(subDecisionList.counts ?? {})) === JSON.stringify(DECISION_COUNT_KEYS),
+  JSON.stringify(subDecisionList.counts),
+)
+const subDecisionShow = await decisionTool.execute(
+  { action: 'show', root: decRoot, id: askedApproval.decision?.id },
+  decSubExec,
+)
+eq('flow_decision show: subagent allowed', subDecisionShow.decision?.id, askedApproval.decision?.id)
+
+// ------------------------ merged per-turn reminder: decisions + heartbeat
+//
+// H7-H12: ONE message, ONE text block, the decision section first and the
+// heartbeat section second. Fixtures go through lib/core.mjs so asked_turn and
+// asked_at are exact; ordering itself is core's job and must not be redone here.
+
+let reminderSeq = 0
+
+function reminderRoot(label) {
+  const root = mkdtempSync(join(tmpdir(), `project-flow-host2-${label}-`))
+  core.initProject(root, { name: label, noGates: true })
+  return root
+}
+
+function askFixture(root, agent, extra = {}) {
+  reminderSeq += 1
+  const contract = core.loadContract(root).contract
+  return core.addDecision(root, contract, {
+    kind: 'approval',
+    question: `待决问题 ${reminderSeq}`,
+    rationale: '提醒测试',
+    recommendation: 'approve',
+    asked_session: agent.id,
+    ...extra,
+  }).decision
+}
+
+// H7: no heartbeat + one open decision → both sections in one text block.
+const reminderRoot7 = reminderRoot('rem-merged')
+const reminderAgent7 = mockAgent('session-dec-rem7', reminderRoot7)
+registerRootAgent(reminderAgent7)
+const reminderItem7 = askFixture(reminderRoot7, reminderAgent7)
+const mergedReminder = await runPreStep(reminderAgent7)
+const mergedText = reminderText(mergedReminder)
+eq('H7 merged reminder: one message', Array.isArray(mergedReminder?.messages) ? mergedReminder.messages.length : -1, 1)
+eq('H7 merged reminder: one text block', Array.isArray(mergedReminder?.messages?.[0]?.content) ? mergedReminder.messages[0].content.length : -1, 1)
+for (const needle of ['【project-flow】', reminderItem7.id, '待用户拍板', 'working 心跳', '不要按推荐自行决定']) {
+  check(`H7 merged reminder: text carries ${needle}`, mergedText.includes(needle), mergedText)
+}
+check('H7 merged reminder: decision section comes first', mergedText.indexOf('待用户拍板') < mergedText.indexOf('working 心跳'), mergedText)
+check('H7 merged reminder: first turn lists the whole ledger', mergedText.includes('新会话第一步'), mergedText)
+
+// H8: working heartbeat + open decision → the decision section still appears,
+// the heartbeat section does not (the two gates are independent).
+const reminderExec7 = { agent: reminderAgent7 }
+await heartbeatTool.execute({ action: 'start', root: reminderRoot7, goal: '心跳工作中' }, reminderExec7)
+const workingReminder = await runPreStep(reminderAgent7, 2)
+const workingText = reminderText(workingReminder)
+eq('H8 working heartbeat: one message', Array.isArray(workingReminder?.messages) ? workingReminder.messages.length : -1, 1)
+check('H8 working heartbeat: decision section kept', workingText.includes(reminderItem7.id) && workingText.includes('待用户拍板'), workingText)
+check('H8 working heartbeat: heartbeat section absent', workingText.includes('working 心跳') === false, workingText)
+
+// H10: no heartbeat and no open decision → the heartbeat section alone.
+const reminderRoot10 = reminderRoot('rem-heartbeat-only')
+const reminderAgent10 = mockAgent('session-dec-rem10', reminderRoot10)
+registerRootAgent(reminderAgent10)
+const heartbeatOnly = reminderText(await runPreStep(reminderAgent10))
+check('H10 heartbeat only: one heartbeat section', heartbeatOnly.includes('本轮还没有 working 心跳'), JSON.stringify(heartbeatOnly))
+check('H10 heartbeat only: no decision section', heartbeatOnly.includes('待用户拍板') === false, JSON.stringify(heartbeatOnly))
+
+// H11: the first turn lists every open item, later turns cap at
+// DECISION_REMIND_MAX and say how many are hidden.
+const reminderRoot11 = reminderRoot('rem-four')
+const reminderAgent11 = mockAgent('session-dec-rem11', reminderRoot11)
+registerRootAgent(reminderAgent11)
+const fourIds = []
+for (let index = 0; index < 4; index += 1) fourIds.push(askFixture(reminderRoot11, reminderAgent11, { asked_turn: 1 }).id)
+const firstTurnText = reminderText(await runPreStep(reminderAgent11, 1))
+check(
+  'H11 first turn: all four decisions listed',
+  fourIds.every((id) => firstTurnText.includes(id)),
+  firstTurnText,
+)
+const limitedTurnText = reminderText(await runPreStep(reminderAgent11, 2))
+eq(
+  'H11 limited turn: three decisions listed',
+  fourIds.filter((id) => limitedTurnText.includes(id)).length,
+  3,
+)
+check('H11 limited turn: remaining hint', limitedTurnText.includes('还有 1 条'), limitedTurnText)
+
+// H12: an item asked by this session 3 turns ago is escalated, carries ⚠ and is
+// ordered first by core.
+const reminderRoot12 = reminderRoot('rem-escalated')
+const reminderAgent12 = mockAgent('session-dec-rem12', reminderRoot12)
+registerRootAgent(reminderAgent12)
+const escalatedItem = askFixture(reminderRoot12, reminderAgent12, { asked_turn: 1, question: '早已挂起的决策' })
+const calmItem = askFixture(reminderRoot12, reminderAgent12, { asked_turn: 3, question: '刚刚提出的决策' })
+const escalatedText = reminderText(await runPreStep(reminderAgent12, 4))
+const escalatedLines = escalatedText.split('\n')
+const escalatedLine = escalatedLines.findIndex((line) => line.includes(escalatedItem.id))
+const calmLine = escalatedLines.findIndex((line) => line.includes(calmItem.id))
+check(
+  'H12 escalated: the aged item carries the warning',
+  escalatedLine >= 0 && escalatedLines[escalatedLine].startsWith('- ⚠ '),
+  escalatedText,
+)
+check(
+  'H12 escalated: the aged item is ordered first',
+  escalatedLine >= 0 && calmLine >= 0 && escalatedLine < calmLine,
+  JSON.stringify({ escalatedLine, calmLine, text: escalatedText }),
+)
+
+// H13 is the existing "pre-step: subagent is not reminded" assertion above.
+
+// ------------------------------------- payload decisions section (H14-H16)
+
+const fiveRoot = reminderRoot('dec-five')
+const fiveContract = core.loadContract(fiveRoot).contract
+const fiveAgent = mockAgent('session-dec-five', fiveRoot)
+registerRootAgent(fiveAgent)
+const listedFiveIds = []
+const fiveLongLabel = '选项标签'.repeat(40)
+const fiveLongImpact = '选项影响'.repeat(60)
+for (let index = 0; index < 5; index += 1) {
+  const extra =
+    index === 0
+      ? {
+          kind: 'choice',
+          question: 'payload 决策 0',
+          recommendation: 'a',
+          options: [
+            { id: 'a', label: fiveLongLabel, impact: fiveLongImpact },
+            { id: 'b', label: '另一个选项', impact: '另一种影响' },
+          ],
+        }
+      : { question: `payload 决策 ${index}` }
+  listedFiveIds.push(askFixture(fiveRoot, fiveAgent, extra).id)
+}
+const fiveState = (await call(route, `${route.path}?root=${encodeURIComponent(fiveRoot)}`)).json ?? {}
+eq('H14 payload: items capped at 3', fiveState.decisions?.items?.length, 3)
+eq('H14 payload: counts.open stays 5', fiveState.decisions?.counts?.open, 5)
+eq(
+  'H14 payload: counts keep the seven keys',
+  JSON.stringify(Object.keys(fiveState.decisions?.counts ?? {})),
+  JSON.stringify(DECISION_COUNT_KEYS),
+)
+eq(
+  'H14 payload: item keys match the shared literal',
+  JSON.stringify(Object.keys(fiveState.decisions?.items?.[0] ?? {})),
+  JSON.stringify(DECISION_ITEM_KEYS),
+)
+check(
+  'H14 payload: internal fields are dropped',
+  ['turnAge', 'rationale', 'affects', 'fingerprint'].every((key) => Object.hasOwn(fiveState.decisions?.items?.[0] ?? {}, key) === false),
+  JSON.stringify(fiveState.decisions?.items?.[0]),
+)
+const firstPayloadItem = fiveState.decisions?.items?.[0] ?? {}
+eq('H14 payload: option label clipped to 80', firstPayloadItem.options?.[0]?.label?.length, 80)
+eq('H14 payload: option impact clipped to 120', firstPayloadItem.options?.[0]?.impact?.length, 120)
+eq(
+  'H14 payload: option keys projected',
+  JSON.stringify(Object.keys(firstPayloadItem.options?.[0] ?? {})),
+  JSON.stringify(['id', 'label', 'impact']),
+)
+eq('H14 payload: escalated is boolean', firstPayloadItem.escalated, false)
+
+// H16: the payload and core.summarizeDecisions agree — this must stay true
+// whether readStoreState supplies `decisions` or the Host rebuilds it.
+const fiveSummary = core.summarizeDecisions(fiveRoot, fiveContract, { limit: 3 })
+check(
+  'H16 payload: counts equal core.summarizeDecisions',
+  JSON.stringify(fiveState.decisions?.counts) === JSON.stringify(fiveSummary.counts),
+  JSON.stringify({ payload: fiveState.decisions?.counts, core: fiveSummary.counts }),
+)
+check(
+  'H16 payload: item id order equal core.summarizeDecisions',
+  JSON.stringify((fiveState.decisions?.items ?? []).map((item) => item.id)) ===
+    JSON.stringify(fiveSummary.items.map((item) => item.id)),
+  JSON.stringify({ payload: (fiveState.decisions?.items ?? []).map((item) => item.id), core: fiveSummary.items.map((item) => item.id) }),
+)
+
+// H15: a store without a decisions directory is an empty section, and an
+// uninitialized workspace has no section at all.
+eq('H15 evil store: decisions counts.open 0', evilStore.decisions?.counts?.open, 0)
+check(
+  'H15 evil store: decisions items empty',
+  Array.isArray(evilStore.decisions?.items) && evilStore.decisions.items.length === 0,
+  JSON.stringify(evilStore.decisions),
+)
+eq(
+  'H15 evil store: decisions counts keep the seven keys',
+  JSON.stringify(Object.keys(evilStore.decisions?.counts ?? {})),
+  JSON.stringify(DECISION_COUNT_KEYS),
+)
+check('H15 no-store: no decisions section', noStore.decisions === undefined, JSON.stringify(Object.keys(noStore)))
+
 
 // ------------------------------------------------------ no-store behavior
 
@@ -1097,7 +1477,7 @@ const injectCtx = {
 }
 
 apply(injectCtx)
-eq('inject path: five tools registered', injectedTools.size, 5)
+eq('inject path: six tools registered', injectedTools.size, 6)
 eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()
@@ -1106,7 +1486,21 @@ eq('inject path: disposal unregisters skills', injectedSkills.size, 0)
 
 // ------------------------------------------------------------- cleanup
 
-for (const root of [storeRoot, noStoreRoot, capRoot, wtMain, wtDir, secretRoot, evilStoreRoot]) {
+for (const root of [
+  storeRoot,
+  noStoreRoot,
+  capRoot,
+  wtMain,
+  wtDir,
+  secretRoot,
+  evilStoreRoot,
+  decRoot,
+  reminderRoot7,
+  reminderRoot10,
+  reminderRoot11,
+  reminderRoot12,
+  fiveRoot,
+]) {
   try {
     rmSync(root, { recursive: true, force: true })
   } catch {
