@@ -1,6 +1,6 @@
 {
   "title": "TUI 侧栏面板：project-flow 面板注册、渲染与稳定组件身份",
-  "status": "active",
+  "status": "done",
   "owner": "lead",
   "goal": "dsh-tui 侧栏出现 project-flow 面板，内容与 web 面板一致（任务/实验/门禁/心跳/决策），数据来自宿主进程内 state，只读、轮询刷新；补 dsh-plugin.json 取稳定组件身份 project-flow，使面板 id 固定为 project-flow:flow。",
   "schema": 1,
@@ -12,7 +12,7 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "",
+  "notes": "已合并 6a1beb1（feat/tui-panel → main，--no-ff；特性提交 4faf8f2）。新增 tui-panel.js（view model + 组件 + 注册）、tui-host.js（独立 Cordis 行 inject=['tuiPanels']）、dsh-plugin.json（v0.15 Component，componentId project-flow）、cordis.patch.yml 第二行；index.js 抽出 collectPanelState 并导出 panelStateReader。测试 106 全绿，gate tests/precommit 通过。已知限制：面板 id 为 session:actN:flow —— dsh-tui 用调用 activation 的 Component 身份做前缀，但 Cordis 服务只能从 inject 作用域调用，该作用域无身份；临时面板默认启用，侧栏仍会自动出现，上游修复后自动变为 project-flow:flow。",
   "created_at": "2026-10-31T18:30:08+08:00",
-  "updated_at": "2026-10-31T18:30:08+08:00"
+  "updated_at": "2026-10-31T18:59:36+08:00"
 }
