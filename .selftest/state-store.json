@@ -188,6 +188,80 @@
     }
   ],
   "warnings": [],
+  "decisions": {
+    "counts": {
+      "open": 3,
+      "blocking": 1,
+      "escalated": 1,
+      "answered": 0,
+      "withdrawn": 0,
+      "superseded": 0,
+      "total": 3
+    },
+    "items": [
+      {
+        "id": "D-20261028-01",
+        "kind": "approval",
+        "status": "open",
+        "question": "批准 T-20261028-01 的合并吗？",
+        "blocks": [
+          "T-20261028-01"
+        ],
+        "options": [
+          {
+            "id": "approve",
+            "label": "批准"
+          },
+          {
+            "id": "reject",
+            "label": "驳回"
+          }
+        ],
+        "recommendation": "approve",
+        "default": "reject",
+        "escalated": true,
+        "ageSeconds": 190457,
+        "asked_at": "2026-10-28T16:46:43+08:00"
+      },
+      {
+        "id": "D-20261028-02",
+        "kind": "choice",
+        "status": "open",
+        "question": "先做面板还是先做 CLI？",
+        "blocks": [],
+        "options": [
+          {
+            "id": "panel",
+            "label": "面板"
+          },
+          {
+            "id": "cli",
+            "label": "CLI"
+          }
+        ],
+        "recommendation": "",
+        "default": "",
+        "escalated": false,
+        "ageSeconds": 7200,
+        "asked_at": "2026-10-28T16:52:00+08:00"
+      },
+      {
+        "id": "D-20261028-03",
+        "kind": "input",
+        "status": "open",
+        "question": "迁移窗口选在什么时候？",
+        "blocks": [
+          "T-20261028-01"
+        ],
+        "options": [],
+        "recommendation": "周六 22:00 之后",
+        "default": "",
+        "escalated": false,
+        "ageSeconds": 600,
+        "asked_at": "2026-10-28T16:55:00+08:00"
+      }
+    ]
+  },
   "gates": [
     {
       "id": "smoke",
