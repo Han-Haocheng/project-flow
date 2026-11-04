@@ -193,9 +193,10 @@ test('TUI：旧记录（无 liveness 字段）行为同今日，仍按 status �
     { file: 'legacy.json', session: 'legacy', status: 'working', goal: '旧记录', ageSeconds: 5 },
   ]), { width: 80, height: 40, now: Date.now() })
   const section = model.sections.find((item) => item.title === '心跳')
-  assert.equal(section.rows[0].text, '活跃 1 / 共 1')
+  assert.equal(section.rows[0].text, '活跃 1 · 已结束 0 / 共 1')
   assert.ok(section.rows.some((row) => row.text.startsWith('▶')))
-  assert.equal(section.rows.some((row) => row.text.includes('已结束')), false)
+  // The header always names `已结束 0` now (web parity); only the beat rows must stay unmarked.
+  assert.equal(section.rows.slice(1).some((row) => row.text.includes('已结束')), false)
 })
 
 test('client.js 接线：dead 会话用 hb-dead chip 替代 working，头部计数含 dead', () => {

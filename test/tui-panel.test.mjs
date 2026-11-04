@@ -25,8 +25,9 @@ function fixture() {
     root: '/mnt/d/Project/project-flow',
     head: { sha: '7bb0fe0', branch: 'main', dirty: 0 },
     experiments: {
+      enabled: true,
       total: 1,
-      counts: { total: 1, open: 1, confirmed: 0, refuted: 0, abandoned: 0 },
+      counts: { total: 1, open: 1, confirmed: 0, refuted: 0, abandoned: 0, inconclusive: 0, pivoted: 0 },
       items: [{ id: 'E-20261030-01', title: '队列延迟与吞吐', status: 'open' }],
       tree: [],
       groups: [],
@@ -143,6 +144,42 @@ test('心跳计数行用「活跃」，dead 判据同时认 liveness 与布尔 d
     heartbeat.rows.some((entry) => entry.text.includes('只有布尔标记') && entry.text.includes('已结束')),
     'a beat with only `dead: true` must render as ended, not working'
   );
+});
+
+test('实验区可选：enabled 非 strict-true 时无「实验」计数与区段，六态 tone 兜底', () => {
+  for (const experiments of [undefined, { enabled: false, counts: {} }, { counts: {} }]) {
+    const payload = fixture();
+    if (experiments === undefined) delete payload.experiments;
+    else payload.experiments = experiments;
+    const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+    assert.ok(!model.counters.join(' ').includes('实验'), 'a closed area must drop the experiment counter');
+    assert.ok(!model.sections.some((section) => section.title === '实验'), 'a closed area must drop the experiment section');
+    assert.deepEqual(model.sections.map((section) => section.title), ['任务', '门禁', '心跳', '决策']);
+  }
+
+  const payload = fixture();
+  payload.experiments = {
+    enabled: true,
+    total: 2,
+    counts: { total: 2, open: 0, confirmed: 0, refuted: 0, abandoned: 0, inconclusive: 1, pivoted: 1 },
+    items: [
+      { id: 'E-1', title: '未定论实验', status: 'inconclusive' },
+      { id: 'E-2', title: '转向实验', status: 'pivoted' },
+    ],
+    tree: [],
+  };
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+  const section = model.sections.find((entry) => entry.title === '实验');
+  assert.ok(section, 'an open area must render the experiment section');
+  const rows = section.rows.filter((entry) => entry.text.includes('未定论实验') || entry.text.includes('转向实验'));
+  assert.equal(rows.length, 2, 'both six-state rows must render');
+  for (const entry of rows) assert.equal(entry.tone, 'accent', 'inconclusive/pivoted must fall back to the accent tone');
+});
+
+test('心跳计数行恒带「已结束 D」：dead=0 时也输出 已结束 0（与 web 文案对齐）', () => {
+  const model = panelModel(fixture(), { width: 80, height: 40, now: NOW });
+  const heartbeat = model.sections.find((section) => section.title === '心跳');
+  assert.equal(heartbeat.rows[0].text, '活跃 1 · 已结束 0 / 共 1');
 });
 
 test('every line is clipped to the requested width (CJK counted as one)', () => {
@@ -515,10 +552,11 @@ test('首读失败才显示错误卡；not-initialized 仍是正常空态（不�
 test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 字段', () => {
   const single = panelModel(fixture())
   // 与 T-05 之前（HEAD 版 tui-panel.js）的输出逐字节一致。
-  // task-88：唯一的差异是心跳计数行由 `working N` 改为与 web 一致的 `活跃 N`
-  // （T-10 文案对齐），其余字段未变；单参调用仍然不产出 `staleNote`。
+  // task-88：心跳计数行由 `working N` 改为与 web 一致的 `活跃 N`（T-10 文案对齐）。
+  // task-99（T-12 B3）：心跳计数行恒带「已结束 D」（与 web 的 hb.counts 对齐），
+  // 其余字段未变；单参调用仍然不产出 `staleNote`。
   const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
-  assert.equal(digest, 'fd33740145839eba22e47b82fb5899ec5e01ce36c6b3a2a8a78028516857aab7')
+  assert.equal(digest, 'd0bd484e2a7add14118e54625e71faccd226b2022875d4c7aafeff5d767eea2c')
   assert.equal(Object.hasOwn(single, 'staleNote'), false)
 
   const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })
@@ -551,10 +589,11 @@ test('TUI 与 web 用同一 Host fixture 对照：store 与 not-initialized 同�
     storeModel.counters.join(' ').includes('任务 ' + storeFixture.tasks.total),
     'TUI 计数必须与 Host/web 同一 fixture 的 tasks.total 一致',
   )
+  const fixtureExpEnabled = storeFixture.experiments && storeFixture.experiments.enabled === true
   assert.deepEqual(
     storeModel.sections.map((section) => section.title).slice(0, 3),
-    ['任务', '实验', '门禁'],
-    'TUI section 顺序与 web 面板一致',
+    fixtureExpEnabled ? ['任务', '实验', '门禁'] : ['任务', '门禁', '心跳'],
+    'TUI section 顺序与 web 面板一致（实验区是否出现由 fixture 的 enabled 决定）',
   )
   assert.equal(Object.hasOwn(storeModel, 'staleNote'), false)
 

@@ -145,6 +145,9 @@ function experimentTone(status) {
   if (status === 'confirmed') return 'success'
   if (status === 'refuted') return 'error'
   if (status === 'abandoned') return 'dim'
+  /* Six-state vocabulary: inconclusive / pivoted (and any unknown future state)
+     fall back to the neutral accent tone instead of rendering unstyled. */
+  if (status === 'inconclusive' || status === 'pivoted') return 'accent'
   return 'accent'
 }
 
@@ -197,7 +200,7 @@ function buildHeartbeatRows(heartbeats) {
   const header =
     list.length === 0
       ? '没有心跳文件'
-      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + list.length
+      : '活跃 ' + working.length + ' · 已结束 ' + deadCount + ' / 共 ' + list.length
   const rows = [row(header, working.length > 0 ? 'normal' : 'dim')]
   const ordered = working.concat(list.filter((beat) => asText(beat.status) !== 'working' || dead(beat)))
   for (const beat of ordered.slice(0, MAX_BEAT_ROWS)) {
@@ -261,23 +264,23 @@ function readyModel(payload, now) {
   const decisionCounts = asObject(decisions.counts) || {}
   const gates = asArray(payload.gates)
 
+  /* The experiment area is opt-in: when the payload omits the flag the whole
+     counter + section disappear (strict true, same rule as the web panel). */
+  const expEnabled = experiments.enabled === true
   const counters = [
     '任务 ' + asNumber(tasks.total, 0)
       + '（草稿 ' + asNumber(counts.draft, 0)
       + ' / 进行 ' + asNumber(counts.active, 0)
       + ' / 完成 ' + asNumber(counts.done, 0) + '）',
-    '实验 ' + asNumber(experiments.total, 0),
-    '门禁 ' + gates.length,
   ]
+  if (expEnabled) counters.push('实验 ' + asNumber(experiments.total, 0))
+  counters.push('门禁 ' + gates.length)
   const openDecisions = asNumber(decisionCounts.open, 0)
   if (openDecisions > 0) counters.push('待决策 ' + openDecisions)
 
-  const sections = [
-    section('任务', buildTaskRows(tasks)),
-    section('实验', buildExperimentRows(experiments)),
-    section('门禁', buildGateRows(gates, now)),
-    section('心跳', buildHeartbeatRows(payload.heartbeats)),
-  ]
+  const sections = [section('任务', buildTaskRows(tasks))]
+  if (expEnabled) sections.push(section('实验', buildExperimentRows(experiments)))
+  sections.push(section('门禁', buildGateRows(gates, now)), section('心跳', buildHeartbeatRows(payload.heartbeats)))
   const decisionSection = buildDecisionSection(decisions)
   if (decisionSection !== null) sections.push(decisionSection)
   const warningSection = buildWarningSection(payload.warnings)

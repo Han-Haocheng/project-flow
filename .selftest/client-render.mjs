@@ -28,6 +28,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { legacyExperimentsWarning } from '../lib/state-snapshot.mjs';
 
 const SRC = fileURLToPath(new URL('../client.js', import.meta.url));
 const PROBE_DIR = fileURLToPath(new URL('./.client-probe/', import.meta.url));
@@ -493,6 +494,23 @@ function renderWithState(component, props, options = {}) {
   return tree;
 }
 
+/**
+ * Render ExperimentTree with its section fold OPEN. It starts collapsed (that is
+ * the B3 contract), so every legacy "rows render" check goes through here and
+ * asserts the closed state on the way in.
+ */
+function openTree(exp, translate = t) {
+  const closed = renderWithState(probe.ExperimentTree, { exp, t: translate, now: NOW }, { reset: true });
+  const toggle = collect(closed, 'project-flow-groupToggle')[0];
+  /* An empty ledger has no fold header at all (the guide replaces it). */
+  if (toggle === undefined) return closed;
+  assert.equal(toggle.props['aria-controls'], 'project-flow-expTree', 'the fold header must control project-flow-expTree');
+  assert.equal(toggle.props['aria-expanded'], false, 'the experiment tree must start folded');
+  assert.equal(collect(closed, 'project-flow-row').length, 0, 'a folded tree must not render rows');
+  toggle.props.onClick({});
+  return renderWithState(probe.ExperimentTree, { exp, t: translate, now: NOW });
+}
+
 /** A freshly mounted TasksCard (hook state reset) for the given payload. */
 function mountTasks(tasks, translate = t) {
   return renderWithState(probe.TasksCard, { tasks, t: translate, now: NOW }, { reset: true });
@@ -628,7 +646,7 @@ check('normalize: hostile values do not throw', () => {
 });
 
 check('ExperimentTree: renders the store tree rows, verdicts and chips', () => {
-  const tree = probe.ExperimentTree({ exp: view.exp, t });
+  const tree = openTree(view.exp);
   const rows = collect(tree, 'project-flow-row');
   assert.equal(rows.length, 3, 'expected three experiment rows');
   assert.equal(collect(tree, 'project-flow-branch').length, 3);
@@ -645,7 +663,7 @@ check('ExperimentTree: renders the store tree rows, verdicts and chips', () => {
 });
 
 check('ExperimentTree: click handlers are safe', () => {
-  const tree = probe.ExperimentTree({ exp: view.exp, t });
+  const tree = openTree(view.exp);
   assert.ok(clickEverything(tree) >= 3, 'expected one handler per tree row');
 });
 
@@ -666,7 +684,7 @@ check('ExperimentTree: a missing tree rebuilds the forest from parent', () => {
       ],
     },
   });
-  const tree = probe.ExperimentTree({ exp: payload.exp, t });
+  const tree = openTree(payload.exp);
   assert.equal(collect(tree, 'project-flow-row').length, 2);
   assert.equal(collect(tree, 'project-flow-branch').length, 2);
   assert.ok(JSON.stringify(collect(tree, 'project-flow-row')[0]).includes('E-1'));
@@ -718,7 +736,7 @@ check('ExperimentTree: row expansion is keyed by experiment id and survives a re
       },
     }).exp;
   const first = build(['E-B', 'E-A']);
-  let tree = renderWithState(probe.ExperimentTree, { exp: first, t, now: NOW }, { reset: true });
+  let tree = openTree(first);
   const rows = collect(tree, 'project-flow-row');
   assert.equal(rows.length, 2, 'expected two experiment rows');
   const target = rows.find((row) => textOf(row).includes('E-A'));
@@ -738,6 +756,101 @@ check('ExperimentTree: row expansion is keyed by experiment id and survives a re
   const bAfter = collect(after, 'project-flow-row').find((row) => textOf(row).includes('E-B'));
   assert.equal(aAfter.props['aria-expanded'], true, 'expansion lost when rows reordered (state keyed by render index)');
   assert.equal(bAfter.props['aria-expanded'], false, 'the other row must stay collapsed');
+});
+
+check('host contract: a closed experiment area points at the opt-in flag once, and never auto-enables', () => {
+  const closed = { experiments: {} };                      // legacy manifest: no flag at all
+  const open = { experiments: { enabled: true } };
+  const records = [{ id: 'E-1', status: 'open' }];
+
+  const first = legacyExperimentsWarning(closed, records, '/tmp/pf-legacy-a');
+  assert.ok(typeof first === 'string', 'a legacy manifest with records must warn');
+  assert.ok(first.startsWith('experiments-disabled-legacy: 1 '), 'unexpected warning copy: ' + first);
+  assert.ok(first.includes('experiments.enabled=true'), 'the warning must say how to opt in');
+  assert.ok(/never enabled|nothing is enabled|not enabled/i.test(first), 'the warning must state it will not auto-enable');
+
+  assert.equal(
+    legacyExperimentsWarning(closed, records, '/tmp/pf-legacy-a'),
+    null,
+    'the warning must be one-shot per root (a 2.5 s poll must not storm)'
+  );
+  assert.equal(legacyExperimentsWarning(closed, [], '/tmp/pf-legacy-b'), null, 'no records means nothing to warn about');
+  assert.equal(legacyExperimentsWarning(open, records, '/tmp/pf-legacy-c'), null, 'an open area must not warn');
+  assert.ok(
+    typeof legacyExperimentsWarning(closed, records, '/tmp/pf-legacy-d') === 'string',
+    'each root gets its own single warning'
+  );
+});
+
+// ---------------------------------------- experiment area is opt-in (T-12 B3)
+check('normalize: experiments.enabled is strict-true and the counts carry six states', () => {
+  const withFlag = probe.normalize({ experiments: { enabled: true, total: 2, counts: { open: 2 }, items: [{ id: 'E-1' }], tree: [] } }).exp;
+  assert.equal(withFlag.enabled, true, 'enabled:true must open the area');
+  assert.equal(withFlag.total, 2);
+  assert.equal(withFlag.items.length, 1);
+  const closed = probe.normalize({ experiments: { enabled: false, counts: { open: 0 } } }).exp;
+  assert.equal(closed.enabled, false, 'enabled:false must close the area');
+  assert.deepEqual(closed.items, [], 'a closed payload ships no items');
+  assert.deepEqual(closed.tree, [], 'a closed payload ships no tree');
+  assert.equal(closed.total, 0);
+  const missing = probe.normalize({ experiments: { counts: { open: 1 } } }).exp;
+  assert.equal(missing.enabled, false, 'a payload without the flag must close the area');
+  for (const state of ['open', 'confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted']) {
+    assert.equal(typeof withFlag.counts[state], 'number', `normalize must expose the six-state count ${state}`);
+  }
+});
+
+check('ExperimentTree: folded by default, the fold target always exists, count chip carries the total', () => {
+  const closed = renderWithState(probe.ExperimentTree, { exp: view.exp, t, now: NOW }, { reset: true });
+  const toggles = collect(closed, 'project-flow-groupToggle');
+  assert.equal(toggles.length, 1, 'expected exactly one section fold header');
+  assert.equal(toggles[0].props['aria-expanded'], false, 'the tree must start folded');
+  assert.equal(toggles[0].props['aria-controls'], 'project-flow-expTree');
+  // The target element itself: a div with the controlled id, hidden while folded.
+  const holder = (function find(node) {
+    if (!node || typeof node !== 'object') return null;
+    if (node.props && node.props.id === 'project-flow-expTree') return node;
+    for (const child of node.children || []) {
+      const hit = Array.isArray(child) ? null : find(child);
+      if (hit) return hit;
+    }
+    for (const child of node.children || []) {
+      if (Array.isArray(child)) for (const entry of child) { const hit = find(entry); if (hit) return hit; }
+    }
+    return null;
+  })(closed);
+  assert.ok(holder, 'aria-controls target project-flow-expTree does not exist');
+  assert.equal(holder.props.hidden, true, 'the folded tree container must be hidden');
+  assert.equal(collect(closed, 'project-flow-row').length, 0, 'a folded tree renders no rows');
+  const countChip = collect(closed, 'project-flow-groupCount')[0];
+  assert.ok(countChip, 'the fold header needs a count chip');
+  assert.equal(String(countChip.children[0]), view.exp.total + ' 条', 'the count chip must carry the experiment total');
+});
+
+check('ExperimentTree: expanding the section renders the tree, and the empty ledger keeps the guide', () => {
+  const opened = openTree(view.exp);
+  assert.ok(collect(opened, 'project-flow-row').length >= 1, 'expanding must reveal the rows');
+  const empty = probe.normalize({}).exp;
+  const emptyTree = renderWithState(probe.ExperimentTree, { exp: empty, t, now: NOW }, { reset: true });
+  assert.equal(collect(emptyTree, 'project-flow-groupToggle').length, 0, 'an empty ledger needs no fold header');
+  const text = JSON.stringify(emptyTree);
+  assert.ok(text.includes('exp.empty') || text.includes('还没有实验记录'), 'empty guide title missing');
+  assert.ok(text.includes('exp.emptyHint') || text.includes('flow exp add'), 'empty guide hint missing');
+});
+
+check('Panel wiring: the experiment card is opt-in, single column keeps the literal grid class', () => {
+  const text = readFileSync(SRC, 'utf8');
+  assert.ok(text.includes("className: 'project-flow-grid'"), 'the literal grid class must survive (single-column modifier is appended)');
+  assert.ok(text.includes('project-flow-grid--single'), 'the single-column modifier class is missing');
+  assert.ok(text.includes('view.exp.enabled === true'), 'the Panel does not gate the experiment card on the payload flag');
+  const experiment = text.indexOf('ExperimentTree, { exp: view.exp');
+  const tasks = text.indexOf('TasksCard, { tasks: view.tasks');
+  assert.ok(experiment > 0 && tasks > 0 && experiment < tasks, 'the experiment card must mount before the task card (left column first)');
+  // The modifier must win over the wide two-column rule.
+  const single = text.indexOf('.project-flow-grid--single{');
+  const wide = text.indexOf('.project-flow-grid{grid-template-columns:minmax(0,1.15fr)');
+  assert.ok(single > 0, 'the single-column stylesheet rule is missing');
+  assert.ok(wide > 0 && single > wide, 'the single-column rule must come after the two-column rule');
 });
 
 check('TasksCard: chips, current task, folded groups and one row per task', () => {
@@ -1729,7 +1842,7 @@ function renderParts(payload) {
   return [
     probe.TopBar({ view: v, t, now: NOW, lastOkAt: NOW, failed: false, refreshing: false, onRefresh: () => {} }),
     probe.DecisionsCard({ decisions: v.decisions, t, now: NOW }),
-    probe.ExperimentTree({ exp: v.exp, t }),
+    openTree(v.exp),
     probe.TasksCard({ tasks: v.tasks, t, now: NOW }),
     probe.GatesCard({ gates: v.gates || [], t, now: NOW, workspaceRoot: v.root }),
     probe.SignalsCard({ heartbeats: v.heartbeats, heartbeatCounts: v.heartbeatCounts, t, now: NOW }),

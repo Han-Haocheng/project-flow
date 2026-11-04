@@ -155,6 +155,9 @@ window.__ModuleLoader__.load({
       'exp.status.confirmed': '已确认',
       'exp.status.refuted': '已证伪',
       'exp.status.abandoned': '已放弃',
+      'exp.status.inconclusive': '未定论',
+      'exp.status.pivoted': '已转向',
+      'exp.tree': '实验树',
       'tasks.title': '任务进度',
       'tasks.total': '共 {n} 个任务',
       'tasks.status.draft': '草稿',
@@ -285,6 +288,9 @@ window.__ModuleLoader__.load({
       'exp.status.confirmed': 'confirmed',
       'exp.status.refuted': 'refuted',
       'exp.status.abandoned': 'abandoned',
+      'exp.status.inconclusive': 'inconclusive',
+      'exp.status.pivoted': 'pivoted',
+      'exp.tree': 'Experiment tree',
       'tasks.title': 'Task progress',
       'tasks.total': '{n} tasks',
       'tasks.status.draft': 'draft',
@@ -801,7 +807,7 @@ window.__ModuleLoader__.load({
         .map((node) => normalizeTreeNode(node, 0));
 
       /* Status tally from each item; explicit `counts` on the payload win. */
-      const statusTally = { open: 0, confirmed: 0, refuted: 0, abandoned: 0 };
+      const statusTally = { open: 0, confirmed: 0, refuted: 0, abandoned: 0, inconclusive: 0, pivoted: 0 };
       items.forEach((item) => {
         if (Object.prototype.hasOwnProperty.call(statusTally, item.status)) statusTally[item.status] += 1;
       });
@@ -811,6 +817,8 @@ window.__ModuleLoader__.load({
         confirmed: asNumber(expCounts.confirmed, statusTally.confirmed),
         refuted: asNumber(expCounts.refuted, statusTally.refuted),
         abandoned: asNumber(expCounts.abandoned, statusTally.abandoned),
+        inconclusive: asNumber(expCounts.inconclusive, statusTally.inconclusive),
+        pivoted: asNumber(expCounts.pivoted, statusTally.pivoted),
       };
       const expTotal = asNumber(
         expSrc.total,
@@ -845,11 +853,15 @@ window.__ModuleLoader__.load({
           dirty: asNumber(headSrc.dirty, 0),
         },
         exp: {
+          /* Strict true: a payload without the flag closes the experiment area. */
+          enabled: expSrc.enabled === true,
           total: expTotal,
           confirmed: counts.confirmed,
           refuted: counts.refuted,
           open: counts.open,
           abandoned: counts.abandoned,
+          inconclusive: counts.inconclusive,
+          pivoted: counts.pivoted,
           counts,
           items,
           tree,
@@ -1249,6 +1261,9 @@ window.__ModuleLoader__.load({
       const t = props.t;
       const now = props.now;
       const [openItems, setOpenItems] = useState({});
+      /* The whole tree starts folded: the card then costs three lines, and a
+         50-experiment ledger never pushes the task queue off screen. */
+      const [treeOpen, setTreeOpen] = useState(false);
 
       const toggleItem = (key) => {
         setOpenItems((previous) => {
@@ -1264,6 +1279,8 @@ window.__ModuleLoader__.load({
       const refuted = asNumber(counts.refuted, 0);
       const openCount = asNumber(counts.open, 0);
       const abandoned = asNumber(counts.abandoned, 0);
+      const inconclusive = asNumber(counts.inconclusive, 0);
+      const pivoted = asNumber(counts.pivoted, 0);
       const total = asNumber(exp.total, confirmed + refuted + openCount + abandoned);
 
       const children = [];
@@ -1337,6 +1354,12 @@ window.__ModuleLoader__.load({
           React.createElement(Chip, { key: 'abandoned' }, '\u2298 ' + abandoned + ' ' + t('exp.status.abandoned'))
         );
       }
+      if (inconclusive > 0) {
+        chips.push(React.createElement(Chip, { key: 'inconclusive' }, '? ' + inconclusive + ' ' + t('exp.status.inconclusive')));
+      }
+      if (pivoted > 0) {
+        chips.push(React.createElement(Chip, { key: 'pivoted' }, '\u21bb ' + pivoted + ' ' + t('exp.status.pivoted')));
+      }
       chips.push(React.createElement(Chip, { key: 'total' }, total + ' ' + t('exp.total')));
 
       return React.createElement(
@@ -1355,9 +1378,27 @@ window.__ModuleLoader__.load({
               React.createElement('p', { className: 'project-flow-guideTitle' }, t('exp.empty')),
               React.createElement('p', { className: 'project-flow-muted' }, t('exp.emptyHint'))
             )
-          : children.length === 0
-            ? React.createElement(EmptyLine, null, t('misc.dash'))
-            : React.createElement('div', { className: 'project-flow-tree' }, children)
+          : React.createElement(FoldHeader, {
+              t,
+              label: t('exp.tree'),
+              count: total,
+              expanded: treeOpen,
+              controlsId: 'project-flow-expTree',
+              onToggle: () => setTreeOpen((open) => !open),
+            }),
+        /* Always rendered so the toggle's aria-controls always resolves; the
+           rows themselves only exist while the tree is open. */
+        total === 0
+          ? null
+          : React.createElement(
+              'div',
+              { id: 'project-flow-expTree', hidden: treeOpen ? undefined : true },
+              treeOpen
+                ? children.length === 0
+                  ? React.createElement(EmptyLine, null, t('misc.dash'))
+                  : React.createElement('div', { className: 'project-flow-tree' }, children)
+                : null
+            )
       );
     }
     // #endregion
@@ -2560,12 +2601,16 @@ window.__ModuleLoader__.load({
                 React.createElement(DecisionsCard, { decisions: view.decisions, t, now }),
                 React.createElement(
                   'div',
-                  { className: 'project-flow-grid' },
-                  React.createElement(
-                    'div',
-                    { className: 'project-flow-col' },
-                    React.createElement(ExperimentTree, { exp: view.exp, t, now })
-                  ),
+                  /* The base class stays a literal (a selftest pins it); the closed
+                     area only adds the single-column modifier. */
+                  { className: 'project-flow-grid' + (view.exp.enabled === true ? '' : ' project-flow-grid--single') },
+                  view.exp.enabled === true
+                    ? React.createElement(
+                        'div',
+                        { className: 'project-flow-col' },
+                        React.createElement(ExperimentTree, { exp: view.exp, t, now })
+                      )
+                    : null,
                   React.createElement(
                     'div',
                     { className: 'project-flow-col' },
@@ -2989,6 +3034,7 @@ window.__ModuleLoader__.load({
 .project-flow-stale{gap:8px;margin-top:12px;padding:8px 12px;border-radius:10px;font-size:12px;}
 .project-flow-staleMark{width:16px;height:16px;font-size:11px;}
 .project-flow-grid{grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr);gap:16px;margin-top:16px;}
+.project-flow-grid--single{grid-template-columns:minmax(0,1fr);}
 .project-flow-col{gap:16px;}
 .project-flow-card{padding:14px 16px;border-radius:12px;}
 .project-flow-cardHead{margin-bottom:10px;gap:8px;}

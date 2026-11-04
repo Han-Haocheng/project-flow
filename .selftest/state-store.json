@@ -27,7 +27,9 @@
       "open": 3,
       "confirmed": 0,
       "refuted": 0,
-      "abandoned": 0
+      "abandoned": 0,
+      "inconclusive": 0,
+      "pivoted": 0
     },
     "items": [
       {
@@ -138,7 +140,8 @@
           }
         ]
       }
-    ]
+    ],
+    "enabled": true
   },
   "tasks": {
     "source": "json",

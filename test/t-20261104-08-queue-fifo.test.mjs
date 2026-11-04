@@ -135,7 +135,7 @@ test('tasks.current 派生与 updated_at 解耦：created 最老但 updated 最�
   assert.deepEqual(ids(payload.tasks.active), [a.id, 'T-20260101-19'])
 })
 
-test('draft FIFO 与 updated_at 解耦：created 最老但 updated 最新者排第一', async () => {
+test('draft FIFO 与 updated_at 解耦：created 最老但 updated 最旧者排第一', async () => {
   const { root, contract } = freshProject('draft-created-wins')
   // A = created 最老 + updated 最旧；B = created 较新 + updated 最新：updated_at 倒序
   // 会先排 B，与 FIFO 期望相反。
