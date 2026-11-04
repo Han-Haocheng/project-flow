@@ -88,6 +88,10 @@ window.__ModuleLoader__.load({
     const MAX_GATE_TAIL_LINES = 8;
     const MAX_WARNINGS = 10;
     const MAX_LIST_ROWS = 25;
+    /* Trend sparkline (T-09): fixed 26 px band, one stacked bar per day. */
+    const TREND_BAR_HEIGHT = 26;
+    const TREND_BAR_GAP = 0.12;
+    const TREND_DAY_MS = 86400000;
     /* First-screen budget for the task card: the active group opens on this many
        rows so a 50-task ledger still fits the sidebar. Everything beyond it stays
        behind the group toggle and is always announced by the "N more" line. */
@@ -169,6 +173,12 @@ window.__ModuleLoader__.load({
       'tasks.currentNone': '无',
       'tasks.draft': '待办（草稿）',
       'tasks.more': '还有 {n} 条未显示',
+      'tasks.trendSummary': '近 {days} 天 · 新增 {created} · 完成 {done} · 归档 {archived}',
+      'tasks.trendBar': '{date} 新增 {created} · 完成 {done} · 归档 {archived}',
+      'tasks.trendApprox': '≈',
+      'tasks.trendApproxTitle': '完成/归档按 updated_at 近似（无 done_at/archived_at）',
+      'tasks.trendEmpty': '暂无趋势',
+      'tasks.trendAria': '近 {days} 天任务趋势',
       'tasks.queueHead': '队列头',
       'tasks.queueEmpty': '暂无进行中任务',
       'tasks.active': '进行中',
@@ -302,6 +312,12 @@ window.__ModuleLoader__.load({
       'tasks.currentNone': 'none',
       'tasks.draft': 'Todo (drafts)',
       'tasks.more': '{n} more not shown',
+      'tasks.trendSummary': 'Last {days}d · {created} new · {done} done · {archived} archived',
+      'tasks.trendBar': '{date} · {created} new · {done} done · {archived} archived',
+      'tasks.trendApprox': '≈',
+      'tasks.trendApproxTitle': 'done/archived approximated from updated_at (no done_at/archived_at)',
+      'tasks.trendEmpty': 'No trend yet',
+      'tasks.trendAria': 'Task trend over the last {days} days',
       'tasks.queueHead': 'Queue head',
       'tasks.queueEmpty': 'Nothing in progress',
       'tasks.active': 'In progress',
@@ -781,6 +797,54 @@ window.__ModuleLoader__.load({
     }
 
     /** A task group (`active` / `draft` / `recentDone`); non-objects are dropped. */
+    /** `YYYY-MM-DD` → epoch day number on the local calendar (NaN when invalid). */
+    function trendDayNumber(key) {
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(asText(key));
+      if (match === null) return Number.NaN;
+      return Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / TREND_DAY_MS);
+    }
+
+    /** `MM-DD` label for the day `index` steps after `from`. */
+    function trendDayLabel(from, index, fallback) {
+      const start = trendDayNumber(from);
+      if (Number.isFinite(start) === false) return fallback;
+      const date = new Date((start + index) * TREND_DAY_MS);
+      return String(date.getUTCMonth() + 1).padStart(2, '0') + '-' + String(date.getUTCDate()).padStart(2, '0');
+    }
+
+    /**
+     * Trend section (T-09): `{from,to,days,estimatedFrom,created[],done[],archived[]}`.
+     * Anything missing, mis-sized or non-numeric collapses to `null`, which hides
+     * the whole row — an older payload must not render a bogus chart.
+     */
+    function normalizeTrend(value) {
+      if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return null;
+      const src = value;
+      const days = asNumber(src.days, 0);
+      if (Number.isInteger(days) === false || days < 1 || days > 400) return null;
+      const series = (key) => {
+        const list = asArray(src[key]);
+        if (list.length !== days) return null;
+        return list.map((entry) => asNumber(entry, 0));
+      };
+      const created = series('created');
+      const done = series('done');
+      const archived = series('archived');
+      if (created === null || done === null || archived === null) return null;
+      const from = asText(src.from);
+      const to = asText(src.to);
+      if (from === '' || to === '') return null;
+      return {
+        from,
+        to,
+        days,
+        estimatedFrom: asText(src.estimatedFrom) || null,
+        created,
+        done,
+        archived,
+      };
+    }
+
     function normalizeTasks(value) {
       return asArray(value)
         .filter((task) => task && typeof task === 'object' && !Array.isArray(task))
@@ -881,6 +945,7 @@ window.__ModuleLoader__.load({
           draft: normalizeTasks(tasksSrc.draft),
           active: normalizeTasks(tasksSrc.active),
           recentDone: normalizeTasks(tasksSrc.recentDone),
+          trend: normalizeTrend(tasksSrc.trend),
         },
         gates,
         heartbeats: heartbeatSection.items,
@@ -1404,6 +1469,161 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region right column cards
+    /**
+     * Trend sparkline (T-09): one stacked bar per day, created / done / archived.
+     *
+     * `estimatedFrom !== null` means the derived series leaned on `updated_at`
+     * for that day onwards (the ledger has no `done_at`/`archived_at` there):
+     * those bars drop to 60% opacity, the summary gets a `≈`, and the bar title
+     * says why. An all-zero window is a placeholder, not an empty chart; a
+     * payload without `trend` renders nothing at all.
+     */
+    function TrendBlock(props) {
+      /* `asObject()` normalizes null to {}, so the raw value is checked here —
+         an older payload (no `tasks.trend`) must render nothing at all. */
+      const trend = props.trend;
+      if (
+        trend === null ||
+        trend === undefined ||
+        typeof trend !== 'object' ||
+        Array.isArray(trend) ||
+        Array.isArray(trend.created) === false ||
+        Array.isArray(trend.done) === false ||
+        Array.isArray(trend.archived) === false
+      ) {
+        return null;
+      }
+      const t = props.t;
+      const days = trend.days;
+      const created = trend.created;
+      const done = trend.done;
+      const archived = trend.archived;
+      const sum = (list) => list.reduce((total, value) => total + asNumber(value, 0), 0);
+      const totals = [];
+      for (let index = 0; index < days; index += 1) {
+        totals.push(asNumber(created[index], 0) + asNumber(done[index], 0) + asNumber(archived[index], 0));
+      }
+      const approxFrom =
+        trend.estimatedFrom === null
+          ? -1
+          : (() => {
+              const from = trendDayNumber(trend.from);
+              const at = trendDayNumber(trend.estimatedFrom);
+              if (Number.isFinite(from) === false || Number.isFinite(at) === false) return -1;
+              const index = at - from;
+              return index < 0 || index >= days ? -1 : index;
+            })();
+      const approx = approxFrom >= 0;
+
+      const head = React.createElement(
+        'div',
+        { className: 'project-flow-trendHead' },
+        approx
+          ? React.createElement(
+              'span',
+              { className: 'project-flow-trendApprox', title: t('tasks.trendApproxTitle') },
+              t('tasks.trendApprox')
+            )
+          : null,
+        React.createElement(
+          'span',
+          { className: 'project-flow-muted project-flow-trendSummary' },
+          t('tasks.trendSummary', {
+            days,
+            created: sum(created),
+            done: sum(done),
+            archived: sum(archived),
+          })
+        )
+      );
+
+      if (totals.every((value) => value === 0)) {
+        return React.createElement(
+          'div',
+          { className: 'project-flow-trend' },
+          head,
+          React.createElement(
+            'p',
+            { className: 'project-flow-muted project-flow-trendEmpty' },
+            t('tasks.trendEmpty')
+          )
+        );
+      }
+
+      const peak = Math.max(1, ...totals);
+      const unit = TREND_BAR_HEIGHT / peak;
+      const barWidth = 1 - TREND_BAR_GAP;
+      const bars = [];
+      for (let index = 0; index < days; index += 1) {
+        const values = [asNumber(created[index], 0), asNumber(done[index], 0), asNumber(archived[index], 0)];
+        const dayApprox = approx && index >= approxFrom;
+        const label = trendDayLabel(trend.from, index, String(created[index] ?? ''));
+        const title =
+          t('tasks.trendBar', {
+            date: label,
+            created: values[0],
+            done: values[1],
+            archived: values[2],
+          }) + (dayApprox ? ' · ' + t('tasks.trendApproxTitle') : '');
+        let y = TREND_BAR_HEIGHT;
+        const segments = [];
+        const tones = ['project-flow-trendCreated', 'project-flow-trendDone', 'project-flow-trendArchived'];
+        for (let slot = 0; slot < 3; slot += 1) {
+          const amount = values[slot];
+          if (amount <= 0) continue;
+          const height = Math.min(y, Math.max(1, amount * unit));
+          y -= height;
+          segments.push(
+            React.createElement('rect', {
+              key: tones[slot],
+              className: tones[slot],
+              x: index + TREND_BAR_GAP / 2,
+              y,
+              width: barWidth,
+              height,
+            })
+          );
+        }
+        bars.push(
+          React.createElement(
+            'g',
+            {
+              key: 'trend-' + index,
+              className: 'project-flow-trendDay',
+              opacity: dayApprox ? 0.6 : 1,
+            },
+            React.createElement('title', null, title),
+            segments
+          )
+        );
+      }
+
+      return React.createElement(
+        'div',
+        { className: 'project-flow-trend' },
+        head,
+        React.createElement(
+          'svg',
+          {
+            className: 'project-flow-trendChart',
+            viewBox: '0 0 ' + days + ' ' + TREND_BAR_HEIGHT,
+            preserveAspectRatio: 'none',
+            width: '100%',
+            height: TREND_BAR_HEIGHT,
+            role: 'img',
+            'aria-label': t('tasks.trendAria', { days }),
+          },
+          bars
+        ),
+        React.createElement(
+          'div',
+          { className: 'project-flow-trendAxis' },
+          React.createElement('span', null, trendDayLabel(trend.from, 0, trend.from)),
+          React.createElement('span', null, trendDayLabel(trend.from, days - 1, trend.to))
+        )
+      );
+    }
+
     function TasksCard(props) {
       const tasks = props.tasks || {};
       const counts = asObject(tasks.counts);
@@ -1551,6 +1771,8 @@ window.__ModuleLoader__.load({
             )
           )
         ),
+        /* Trend band: hidden entirely for an older payload without `tasks.trend`. */
+        React.createElement(TrendBlock, { trend: tasks.trend, t }),
         React.createElement(
           'div',
           { className: 'project-flow-current' },
@@ -2872,6 +3094,16 @@ window.__ModuleLoader__.load({
 .project-flow-btn:disabled{opacity:.55;cursor:default;}
 .project-flow-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 .project-flow-chips{display:flex;flex-wrap:wrap;gap:5px;}
+.project-flow-trend{margin-top:8px;min-width:0;}
+.project-flow-trendHead{display:flex;align-items:baseline;gap:4px;font-size:11px;min-width:0;}
+.project-flow-trendApprox{color:var(--dsw-alias-label-secondary);font-weight:600;cursor:help;}
+.project-flow-trendSummary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.project-flow-trendChart{display:block;width:100%;height:26px;margin-top:4px;shape-rendering:crispEdges;}
+.project-flow-trendCreated{fill:var(--dsw-alias-brand-primary);}
+.project-flow-trendDone{fill:var(--dsw-alias-state-success-primary);}
+.project-flow-trendArchived{fill:var(--dsw-alias-label-secondary);opacity:.55;}
+.project-flow-trendAxis{display:flex;justify-content:space-between;gap:6px;margin-top:2px;font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-trendEmpty{margin:4px 0 0;font-size:11px;}
 .project-flow-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-chip--ok{color:var(--dsw-alias-state-success-primary);}
 .project-flow-chip--error{color:var(--dsw-alias-state-error-primary);}

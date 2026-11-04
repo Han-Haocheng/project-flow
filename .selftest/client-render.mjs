@@ -782,6 +782,125 @@ check('host contract: a closed experiment area points at the opt-in flag once, a
   );
 });
 
+// -------------------------------------------------- task trend (T-09 card C)
+/** 14-day trend fixture: created 6 · done 4 · archived 1, one empty day. */
+function trendTasks(overrides = {}) {
+  return probe.normalize({
+    tasks: {
+      total: 6,
+      counts: { draft: 0, active: 1, done: 4, archived: 1, other: 0 },
+      current: null,
+      active: [{ id: 'T-A1', title: 'active one' }],
+      recentDone: [],
+      draft: [],
+      trend: {
+        from: '2026-10-22',
+        to: '2026-11-04',
+        days: 14,
+        estimatedFrom: null,
+        created: [0, 1, 0, 0, 2, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+        done: [1, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0],
+        archived: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        ...overrides,
+      },
+    },
+  }).tasks;
+}
+
+const trendDayTitles = (card) =>
+  collect(card, 'project-flow-trendDay').map((day) => {
+    const title = (day.children || []).find((child) => child && child.type === 'title');
+    return title ? String(title.children[0]) : '';
+  });
+
+check('TasksCard: trend summary, one bar per day and per-bar titles', () => {
+  const card = mountTasks(trendTasks());
+  const text = textOf(card);
+  assert.ok(text.includes('近 14 天 · 新增 6 · 完成 4 · 归档 1'), 'trend summary missing: ' + text.slice(0, 200));
+  const charts = collect(card, 'project-flow-trendChart');
+  assert.equal(charts.length, 1, 'expected exactly one trend chart');
+  assert.equal(charts[0].type, 'svg');
+  assert.equal(charts[0].props.width, '100%');
+  assert.equal(charts[0].props.height, 26, 'the band is 26 px tall');
+  assert.equal(charts[0].props.viewBox, '0 0 14 26');
+
+  const days = collect(card, 'project-flow-trendDay');
+  assert.equal(days.length, 14, 'one stacked bar per day');
+  const titles = trendDayTitles(card);
+  assert.equal(titles[0], '10-22 新增 0 · 完成 1 · 归档 0', 'the first bar title must carry all three numbers');
+  assert.equal(titles[4], '10-26 新增 2 · 完成 0 · 归档 0');
+  for (const title of titles) assert.match(title, /新增 \d+ · 完成 \d+ · 归档 \d+/, 'every bar needs the three counters');
+
+  // Only the first and last dates are labelled.
+  const axis = collect(card, 'project-flow-trendAxis');
+  assert.equal(axis.length, 1);
+  assert.deepEqual(axis[0].children.map((child) => child.children[0]), ['10-22', '11-04']);
+
+  // Stacked segments: created + done + archived rects exist, with a real gap.
+  const created = collect(card, 'project-flow-trendCreated');
+  const done = collect(card, 'project-flow-trendDone');
+  const archived = collect(card, 'project-flow-trendArchived');
+  // One segment per NON-ZERO day (a day with 2 created draws a single 2-unit rect).
+  assert.equal(created.length, 5, 'created series must render one segment per non-zero day');
+  assert.equal(done.length, 3, 'done series must render one segment per non-zero day');
+  assert.equal(archived.length, 1);
+  assert.ok(created[0].props.x + created[0].props.width < created[1].props.x, 'a gap is required between bars');
+
+  // A tiny value next to a tall neighbour still gets a visible 1 px segment.
+  const spiky = mountTasks(trendTasks({ created: [50, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }));
+  for (const rect of collect(spiky, 'project-flow-trendCreated')) {
+    assert.ok(rect.props.height >= 1, 'every non-zero segment is at least 1 px tall');
+    assert.ok(rect.props.y >= 0, 'segments must stay inside the band');
+  }
+});
+
+check('TasksCard: an approximated segment drops to 60% opacity and the summary gets ≈', () => {
+  const card = mountTasks(trendTasks({ estimatedFrom: '2026-11-01' }));
+  assert.equal(collect(card, 'project-flow-trendApprox').length, 1, 'the ≈ marker is missing');
+  assert.ok(textOf(card).includes('≈'), 'the summary must show ≈ for an approximated segment');
+  const days = collect(card, 'project-flow-trendDay');
+  // from 2026-10-22, so 11-01 is index 10: days 0..9 exact, 10..13 approximated.
+  for (let index = 0; index < days.length; index += 1) {
+    assert.equal(days[index].props.opacity, index >= 10 ? 0.6 : 1, `day ${index} opacity`);
+  }
+  assert.ok(trendDayTitles(card)[10].includes('近似'), 'an approximated bar title must say why');
+  assert.ok(!trendDayTitles(card)[0].includes('近似'), 'an exact bar must not claim approximation');
+  assert.equal(
+    collect(mountTasks(trendTasks()), 'project-flow-trendApprox').length,
+    0,
+    'an exact series must not render ≈'
+  );
+});
+
+check('TasksCard: no trend section for an older payload, placeholder for an all-zero window', () => {
+  const legacy = probe.normalize({
+    tasks: { total: 1, counts: { active: 1 }, current: null, active: [{ id: 'T-A1', title: 'a' }], recentDone: [], draft: [] },
+  }).tasks;
+  assert.equal(legacy.trend, null, 'a payload without trend normalizes to null');
+  const card = mountTasks(legacy);
+  assert.equal(collect(card, 'project-flow-trend').length, 0, 'an older payload must not render the trend row');
+  assert.ok(!textOf(card).includes('近 14 天'), 'an older payload must not render the summary');
+
+  const zero = mountTasks(trendTasks({ created: new Array(14).fill(0), done: new Array(14).fill(0), archived: new Array(14).fill(0) }));
+  assert.equal(collect(zero, 'project-flow-trendChart').length, 0, 'an all-zero window must not draw bars');
+  assert.equal(collect(zero, 'project-flow-trendEmpty').length, 1, 'an all-zero window needs the placeholder');
+  assert.ok(textOf(zero).includes('暂无趋势'), 'the placeholder copy is missing');
+  assert.ok(textOf(zero).includes('近 14 天 · 新增 0 · 完成 0 · 归档 0'), 'the zero summary is missing');
+
+  // Malformed trend sections collapse to null instead of throwing.
+  const broken = probe.normalize({ tasks: { total: 0, counts: {}, current: null, active: [], recentDone: [], draft: [], trend: { days: 3, created: [1] } } }).tasks;
+  assert.equal(broken.trend, null, 'a mis-sized trend series must be dropped');
+});
+
+check('TasksCard: trend copy is locale-paired (en has no Chinese left)', () => {
+  const english = mountTasks(trendTasks(), tEn);
+  const text = textOf(english);
+  assert.ok(text.includes('Last 14d · 6 new · 4 done · 1 archived'), 'en trend summary missing: ' + text.slice(0, 160));
+  const trendText = collect(english, 'project-flow-trend').map((node) => textOf(node)).join('\n');
+  assert.ok(!/[\u4e00-\u9fff]/.test(trendText), 'en trend block still contains Chinese');
+  assert.ok(textOf(english).includes('10-22') && textOf(english).includes('11-04'), 'the axis labels are locale independent');
+});
+
 // ---------------------------------------- experiment area is opt-in (T-12 B3)
 check('normalize: experiments.enabled is strict-true and the counts carry six states', () => {
   const withFlag = probe.normalize({ experiments: { enabled: true, total: 2, counts: { open: 2 }, items: [{ id: 'E-1' }], tree: [] } }).exp;
