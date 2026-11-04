@@ -11,7 +11,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { initProject, loadContract } from '../lib/core.mjs'
+import { initProject } from '../lib/core.mjs'
+import { apply } from '../index.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -33,6 +34,36 @@ function initRoot(label) {
   TEMP_ROOTS.push(root)
   initProject(root, { name: label, noGates: true })
   return root
+}
+
+function bareRoot(label) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `flow-b2-${label}-`))
+  TEMP_ROOTS.push(root)
+  return root
+}
+
+/** Minimal plugin ctx double: registers the flow_* tools (same shape as host wiring). */
+function pluginCtx({ root }) {
+  const registeredTools = new Map()
+  const services = {
+    webServer: { register: () => () => {}, getOrigin: () => 'http://127.0.0.1:4021' },
+    tools: { register: (definition) => { registeredTools.set(definition.name, definition); return () => {} } },
+    skills: { register: () => () => {} },
+    workingDirectory: { get: () => root },
+    workspaceRegistry: { list: () => [{ path: root, title: path.basename(root) }] },
+  }
+  const ctx = {
+    get: (name) => services[name],
+    effect: (fn) => {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+    on: () => () => {},
+    logger: { warn() {} },
+  }
+  return { ctx, registeredTools }
 }
 
 function runCli(cwd, args) {
@@ -239,4 +270,75 @@ test('status --json：实验计数含六态（inconclusive/pivoted）；refuted 
   assert.equal(counts.refuted, 1)
   assert.equal(counts.pivoted, 1)
   assert.equal(counts.inconclusive, 1)
+})
+
+// ------------------------------------------------- tool layer（task-121）
+test('flow_exp list（工具层）：counts 六态齐全（含 inconclusive/pivoted），空 store 全零', async () => {
+  const root = initRoot('tool-counts')
+  const dir = path.join(root, '.dsh', 'flow', 'experiments')
+  fs.mkdirSync(dir, { recursive: true })
+  const record = (id, status, extra = {}) => ({
+    schema: 2,
+    id,
+    title: `实验 ${id}`,
+    hypothesis: 'H',
+    direction: 'D',
+    expected: 'E',
+    primaryMetric: 'M',
+    guardrails: ['G'],
+    falsify: 'F',
+    windowDays: 7,
+    stopLoss: 'S',
+    status,
+    factor: '',
+    parent: null,
+    scale: 'small',
+    measured: '',
+    metrics: {},
+    commits: [],
+    notes: '',
+    learned: '',
+    cleanup: { flags: [], code: [], data: [] },
+    cleanupAt: null,
+    productizedAt: null,
+    productizeGate: null,
+    created_at: '2026-11-01T09:00:00+08:00',
+    updated_at: '2026-11-01T09:00:00+08:00',
+    ...extra,
+  })
+  fs.writeFileSync(path.join(dir, 'E-20261101-01.json'), JSON.stringify(record('E-20261101-01', 'open')))
+  fs.writeFileSync(path.join(dir, 'E-20261101-02.json'), JSON.stringify(record('E-20261101-02', 'inconclusive')))
+  fs.writeFileSync(path.join(dir, 'E-20261101-03.json'), JSON.stringify(record('E-20261101-03', 'pivoted', { learned: '换方向' })))
+  fs.writeFileSync(path.join(dir, 'E-20261101-04.json'), JSON.stringify(record('E-20261101-04', 'refuted', { learned: '不成立' })))
+
+  const { ctx, registeredTools } = pluginCtx({ root })
+  apply(ctx)
+  const expTool = registeredTools.get('flow_exp')
+  assert.ok(expTool, 'flow_exp 应注册')
+  const exec = { agent: { session: { cwd: root } } }
+
+  const listed = await expTool.execute({ action: 'list', root }, exec)
+  assert.equal(listed.store, true)
+  assert.deepEqual(listed.counts, {
+    total: 4,
+    open: 1,
+    confirmed: 0,
+    refuted: 1,
+    abandoned: 0,
+    inconclusive: 1,
+    pivoted: 1,
+  })
+
+  const empty = bareRoot('tool-empty')
+  const emptyListed = await expTool.execute({ action: 'list', root: empty }, { agent: { session: { cwd: empty } } })
+  assert.equal(emptyListed.store, false)
+  assert.deepEqual(emptyListed.counts, {
+    total: 0,
+    open: 0,
+    confirmed: 0,
+    refuted: 0,
+    abandoned: 0,
+    inconclusive: 0,
+    pivoted: 0,
+  })
 })

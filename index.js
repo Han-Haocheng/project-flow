@@ -1218,8 +1218,11 @@ const REVIEW_BRANCH = {
 /**
  * Read-only verdict for one experiment: the same rules `flow check experiments`
  * enforces (schema2 completeness + per-status closure), expressed as `missing`.
- * Keep in sync with the copy in `bin/flow.mjs`; the tool and CLI must report
- * identical verdicts for the same record.
+ *
+ * ⚠ 同源副本：`bin/flow.mjs` (`reviewExperimentRecord`) 有一份相同逻辑，**勿单独修改**。
+ * 已知极限：本副本只做「数组非空/整数下限」判断，而 core 的 `schema2FieldProblems`
+ * 还会拒绝空串 guardrail 项与 `windowDays > 3650`（task-118 复核反例）。抽成 core
+ * 单一导出后删除两份副本。
  */
 function reviewExperimentRecord(record, { hasSuccessor }) {
   if (record === null || typeof record !== 'object' || record.schema !== 2) {
@@ -1902,21 +1905,37 @@ function buildToolDefinitions(ctx) {
             store: false,
             source: 'store',
             total: 0,
-            counts: { total: 0, open: 0, confirmed: 0, refuted: 0, abandoned: 0 },
+            counts: {
+              total: 0,
+              open: 0,
+              confirmed: 0,
+              refuted: 0,
+              abandoned: 0,
+              inconclusive: 0,
+              pivoted: 0,
+            },
             items: [],
             note: EMPTY_STORE_NOTE,
           }
         }
         if (action === 'list') {
-          const records = c.listExperiments(root, contract)
-          const counts = { total: records.length, open: 0, confirmed: 0, refuted: 0, abandoned: 0 }
-          for (const record of records) {
-            if (typeof record.status === 'string' && Object.hasOwn(counts, record.status) && record.status !== 'total') {
-              counts[record.status] += 1
-            }
+          // Counts come from the same aggregate the CLI/panel use (`readStoreState`),
+          // so the six experiment states (open/confirmed/refuted/abandoned/
+          // inconclusive/pivoted) can never drift apart again.
+          const state = c.readStoreState(root, contract)
+          const records = Array.isArray(state.experiments.items) ? state.experiments.items : []
+          const aggregate = state.experiments.counts ?? {}
+          const counts = {
+            total: Number.isInteger(aggregate.total) ? aggregate.total : records.length,
+            open: aggregate.open ?? 0,
+            confirmed: aggregate.confirmed ?? 0,
+            refuted: aggregate.refuted ?? 0,
+            abandoned: aggregate.abandoned ?? 0,
+            inconclusive: aggregate.inconclusive ?? 0,
+            pivoted: aggregate.pivoted ?? 0,
           }
           const items = records.slice(0, MAX_TOOL_ITEMS)
-          return { root, store: true, source: 'store', total: records.length, counts, items, ...(items.length < records.length ? { truncated: true } : {}) }
+          return { root, store: true, source: 'store', total: counts.total, counts, items, ...(items.length < records.length ? { truncated: true } : {}) }
         }
         if (action === 'show') {
           return { root, experiment: c.getExperiment(root, contract, requireId('flow_exp', action, args.id)) }
