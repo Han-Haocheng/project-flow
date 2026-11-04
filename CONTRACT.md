@@ -302,7 +302,12 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   "started_at": "2026-10-29T11:10:37+08:00",
   "updated_at": "2026-10-29T11:14:02+08:00",
   "ended_at": null,
-  "stats": { "turns": 3, "missed": 0 }
+  "stats": { "turns": 3, "missed": 0 },
+  // 存活证据（T-10）：宿主进程写全部四个字段；CLI 只补缺失的 host、不覆盖已有证据
+  "host": "my-laptop|linux",            // machine_id = hostname|platform
+  "boot_id": "f0e1…",                   // /proc/sys/kernel/random/boot_id
+  "pid": 48213,                         // 宿主进程 pid
+  "pid_start": 9943211                  // /proc/<pid>/stat 第 22 字段（pid 复用判定）
 }
 ```
 
@@ -320,8 +325,35 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - `status` 只有 `working` / `idle` 算 active；`done` / `missed` 是结束态。
   `ageSeconds` 按 `updated_at` 计算（解析失败回退文件 mtime），`> 6h`
   （`HEARTBEAT_STALE_SECONDS`）记 `stale`。
+- **存活证据与 `liveness`（T-10）**：`host` / `boot_id` / `pid` / `pid_start` 由**宿主进程**
+  写入（`process.pid`、`/proc/<pid>/stat` 第 22 字段、boot id）。**CLI 子进程不写自己的
+  pid/boot_id/pid_start**；记录里已有的 `host`/`boot_id`/`pid`/`pid_start` **一律保留**
+  （跨机记录不会被本机 CLI update 抹成 `dead`），只有记录原本没有 `host` 时才补一个。
+  `livenessOf(record, {now, host, bootId, mtime})` 是只读判定：
+
+  | 证据 | liveness | reason |
+  |---|---|---|
+  | 记录 `host` 与当前机器不同 | `foreign` | `other-host`（跨机器只标记，绝不判死） |
+  | 同机、`boot_id` 不同 | `dead` | `boot-changed`（宿主重启） |
+  | 同机同 boot、`pid` 已不存在 | `dead` | `pid-gone` |
+  | 同机同 boot、`pid` 存活但 `pid_start` 不匹配 | `dead` | `pid-reused`（pid 被复用） |
+  | 同机同 boot、`pid` 存活且 `pid_start` 匹配 | `live` | `pid-alive` |
+  | 无任何证据且 age ≤ 6h | `unknown` | `no-liveness-evidence` |
+  | 无任何证据且 age > 6h | `stale` | `no-liveness-evidence` |
+
+  `ageSeconds`（及 liveness 的年龄兜底）按 `updated_at` 计算；`updated_at` 不可解析时
+  回退心跳文件的 mtime，**不会**因为坏时间戳而误判 `stale`。旧记录缺字段按
+  `unknown` / `stale` 兜底，不报错（向后兼容）。`heartbeatStatus` 返回
+  `{active, liveness, reason, ageSeconds, record}`；`active` = `status ∈ {working,idle}` 且
+  （`liveness === "live"` → 直接 active（**pid 证活不受 6h 门槛**），否则
+  `liveness ∉ {dead,foreign,stale}` 且 `ageSeconds ≤ 6h`）。`heartbeatStatus(root, contract,
+  session, {live:true})` 是给宿主的正向证据入口（`agents` 服务命中该会话）：判定覆盖为
+  `live`/`agent-live`，忙碌但 >6h 未续写的活跃会话仍 active；没有记录时不会凭空造 active。
+  因此 `flow heartbeat status --require-active` 对死会话/陈旧/跨机心跳退出 1（`session-open`
+  门禁不再对死会话假绿）。
 - 写操作（start/update/end）与 store 共用同一把锁与原子写（`withLock` +
-  `writeJsonAtomic`），要求项目已 `flow init`（否则 `usage`）。
+  `writeJsonAtomic`），要求项目已 `flow init`（否则 `usage`）；宿主写操作刷新存活证据，
+  CLI 写操作只补缺失的 `host`、保留已有证据（F1）。
 - `endHeartbeat` 只写 `ended_at` 并保留文件（面板仍要列出），不删除。
 - **旧子会话心跳**：已移除的「子代理自动开合心跳」留下的 `agent: "subagent"` 记录是历史
   数据。读侧把它投影为 `legacy: true` / `hidden: true`，**不进入面板与 CLI list**，只计入
@@ -329,8 +361,10 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - **读取只认 `*.json`**（心跳目录下的 `.md` 不再读取）：`readHeartbeats` 保留旧形状
   `{file,title,statusLine,ageSeconds,mtime}`（隐藏旧子会话记录）；`readHeartbeatSection`
   返回富形状 `{root,dir,items,counts}`，item 含
-  `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime}`，
-  计数 `{total, active, stale, hidden}`（total/active/stale 只统计可见项；`root` 是解析后的
+  `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime,liveness,reason}`，
+  计数 `{total, active, stale, dead, hidden}`（total/active/stale/dead 只统计可见项；
+  `active` 口径见上：status active 且（live 或 fresh 且非 dead/foreign/stale）；`dead` 计
+  `liveness === "dead"`；存活判定只读，GET state 读路径不写心跳文件；`root` 是解析后的
   主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。
 
 ### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`
@@ -903,7 +937,8 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 `root` 缺省取宿主 cwd；它必须是已注册工作区、其子目录，或自带 `.dsh/flow` store 的目录。
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
-旧布局读法、运行输出扫描或 Agent Teams 投影。
+旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
+同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
 
 #### 9.1.1 state 的根解析与文件系统纪律
 
@@ -915,34 +950,62 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   分隔符做前缀比较，判断「root 是否在该注册工作区内」，不落地文件系统。因此注册行
   即使指向不存在/不可访问的目录也不影响本请求的耗时；代价是**不解析符号链接**——注册行
   若是 symlink，请求端 `realpath` 后的 root 可能不再与它前缀匹配（调用方应注册真实路径）。
-- **请求路径上的 fs 必须异步**：`index.js` 在 HTTP/TUI 读路径上只使用 `node:fs/promises`
-  的 `realpath`/`stat`/`readFile`（工作区行连这些都不调用），`sendJson`/`sendError`、
+- **请求路径上的 fs 必须异步**：`index.js` 在 HTTP/TUI 读路径的**主线程**侧只使用
+  `node:fs/promises`（根解析、`stat`；工作区行连这些都不调用），`sendJson`/`sendError`、
   方法/Origin 校验与错误码（`bad-root`/`unknown-root`/`no-project`/`not-initialized`）
   保持不变。原因同上：同步 `realpath` 会阻塞宿主事件循环；异步版本最坏只让**本请求**变慢。
+  快照组装里的同步 store 读取不在主线程执行（见「读隔离」）。
 - **一次请求只枚举一次注册表**：`handleState()` 只枚举一次 `workspaceRegistry.list()`，把行
-  集作为第三参传给 `collectPanelState(ctx, root, workspaces)`（`workspaces` 必填，投影内
-  不再枚举）；`panelStateReader(ctx)`（TUI 读路径）同样取一次后传入。`lib/core.mjs` 的
-  store 读取仍是同步实现（CLI/工具共用），因此请求的 root 必须先通过异步 `stat` 判定为
-  存在目录，才会进入 store 读取。
-- **同步 fs 只留在被请求 root 内部**：请求路径上不再出现针对注册表行或 root 发现的
-  `realpathSync`/`statSync`/`readFileSync`；剩余的同步调用只作用于「已被异步 `stat` 确认
-  存在」的那个 root 内部（`containedPath()` 的 containment 校验、core 的 store 读取）。
-  新增读路径代码默认只准用 `node:fs/promises`，引入同步 fs 必须在评审里给出理由。
-  同一请求内同一路径的同步 `realpath` 至多 1 次：请求入口把 `canonicalRoot()` 已算出的真实
-  路径与一个**请求级** `Map` 传给 core 的读聚合入口（`pathMemo`）；memo 随请求回收，禁止
-  进程级缓存（挂载状态会变），未传 memo 的 CLI/工具路径保持逐次 realpath 的旧行为。
-- **验收值（失联挂载）**：注册表里存在一个不可访问的工作区行（例如未挂载的 `/mnt/g/...`
-  automount）时，单次 `GET state` 的响应**< 100 ms**，且该请求进行期间其它端点（含同一
-  路由的并发请求）的延迟**< 50 ms**——事件循环不被独占，坏盘只让本请求自己变慢。注册表
-  投影本身取不到行时按空列表处理（随后只接受自带 store 的 root），不因此报错。这两条上限
-  由 `test/t-20261104-01-state.test.mjs` 守着：「带最小 flow.json 契约的真实 root」用例的
-  < 100 ms（该用例上限已收紧到 100 ms），以及「并发端点：慢 root 在飞时另一正常 root 请求
-  <50ms settle」用例的 < 50 ms。
+  集随快照请求（IPC）传入读子进程（`workspaces` 必填；子进程不持有 registry、不会二次
+  枚举）；`panelStateReader(ctx)`（TUI 读路径）同样取一次后传入。`lib/core.mjs` 的 store
+  读取仍是同步实现（CLI/工具共用），因此请求的 root 必须先通过异步 `stat` 判定为存在目录，
+  才会把快照请求发进子进程。
+- **同步 fs 只留在读子进程与被请求 root 内部**：主线程请求路径上不再出现针对注册表行或
+  root 发现的 `realpathSync`/`statSync`/`readFileSync`；同步调用只在两处——读子进程内的
+  快照组装（`containedPath()` 的 containment 校验 + core 的 store 读取），以及写路径对被
+  异步 `stat` 确认存在的那个 root 的校验。新增读路径代码默认只准用 `node:fs/promises`，
+  引入同步 fs 必须在评审里给出理由。
+  同一请求内同一路径的同步 `realpath` 至多 1 次：读子进程为本次请求**自建** memo
+  （`pathMemo`），主线程只把 `canonicalRoot()` 已算出的 `realRoot` 随 IPC 请求传进去——
+  memo 与 fs `Error.code` 都无法结构化克隆，所以绝不跨进程传递；memo 随请求与子进程回收，
+  禁止进程级缓存（挂载状态会变）；CLI/工具与写路径不传 memo，保持逐次 realpath 的旧行为。
+- **验收值（失联挂载、假死 root、假死回收）**：注册表里存在一个不可访问的工作区行（例如
+  未挂载的 `/mnt/g/...` automount）时，单次 `GET state` 的响应**< 100 ms**；正常 root 预热
+  后仍**< 100 ms**；假死 root（真实存在但 `realpath`/`stat` 永久阻塞，如 FIFO）**≤ 2 s**
+  返回 `state-timeout`，期间事件循环 `max` 延迟**< 50 ms**（其它端点不被拖慢），超时后读
+  子进程**≤ 300 ms** 消失且无悬挂 Promise；假死与正常 root 并发时，正常请求**≤ 500 ms**、
+  两者 `payload.root` 各自正确。注册表投影本身取不到行时按空列表处理（随后只接受自带
+  store 的 root），不因此报错。这些上限由 `test/t-20261104-01-state.test.mjs`（<100 ms /
+  并发 <50 ms）与 `test/t-20261104-05-state-worker.test.mjs`（期限、回收、事件循环、
+  并发）守着。
+- **请求期限与返回形状**：读路径有硬期限 **1800 ms**（`STATE_DEADLINE_MS`）：到点返回 HTTP
+  **200** + `{ok:false, error:{code:'state-timeout', message}}`，**不返回半成品、不返回旧
+  payload**。另两个设施错误码：`state-worker-crashed`（读子进程异常退出或 IPC 发送失败；
+  下一次请求自动重建子进程）与 `state-worker-unavailable`（无法 fork、启动期未 ready 或池
+  已 dispose；`init`/`gate` 等写端点不受影响）。三者都是 `ok:false`，与
+  `bad-root`/`unknown-root`/`no-project`/`not-initialized` 并列，HTTP 状态码语义不变
+  （读路径仍是 200；`bad-root`/`unknown-root` 仍是 400）。
+- **读隔离：fork + SIGKILL**：只读快照在 `child_process.fork` 出的读子进程里组装（**不用**
+  `worker_threads`：`terminate()` 对阻塞在 fs syscall 的线程无效，FIFO 场景实测 >3 s 仍未
+  回收；fork + `SIGKILL` 约 3 ms 回收）。主线程只做异步根解析、注册表枚举、IPC 与期限；
+  子进程只读：只调用 core 的只读聚合与投影辅助，不调用写 API、不 import 宿主 `index.js`；
+  stdio 全 `ignore`（只剩 IPC 通道），请求与回复都是 JSON。写路径（`init`/`gate`）仍在
+  主线程、仍在 `withLock` 内完成，读路径不取锁。
+- **stale 呈现归读端**：宿主不缓存、不重放上一份 payload——`ok:false` 就是「这次没读到」。
+  是否降级为陈旧展示由读端决定：web 面板保留最后一份 good payload、只更新
+  `errorInfo{code,message,at}` 并渲染 `stale.text` 陈旧条（附错误码 chip）；TUI 面板保留
+  上一份 payload、在元信息后插一行 `数据过期：<message>（上次成功 <time>）`。两边都**只在
+  没有 good payload（首读失败）时**才显示错误卡；`not-initialized`/`no-project` 的**首读**
+  按空态处理（web 给初始化入口、TUI 显示未初始化提示），不算读失败。
+- **已知边界（无 worker 池的宿主）**：没有读子进程池的入口——裸测试替身，或 TUI 那一行
+  （`tui-host.js` 是独立的 apply 行，拿不到 host 侧的池）——快照在主线程 in-process 组装、
+  **没有 1800 ms 期限**；这与搬迁前一致，不是回退。web 端点（host 的 `apply` 里创建池）
+  始终有期限。
 
 #### 9.1.2 面板轮询：单飞，按 settle 排期
 
-面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多一个在途请求，下一次的计时从上次
-**落定**（settle：成功或失败）开始，不是固定墙钟间隔。
+web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多一个在途请求，下一次的计时从
+上次**落定**（settle：成功或失败）开始，不是固定墙钟间隔。
 
 - **首拉立即**：面板挂载、工作区切换、手动刷新都立刻发一次请求，不等 2500 ms；工作区尚未
   确定时完全不起链（也就没有空请求）。
@@ -953,8 +1016,19 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   超时、标签页切到后台都不 abort。teardown 后这条链不再排期、不再写状态。
 - **`document.hidden` 不发请求但保链**：隐藏时跳过一次抓取、照常重排下一次，链不中断；
   回到可见时立即补拉一次，若此刻已有在途请求则记下意愿、在它 settle 后立刻补拉（仍不并发）。
-- **失败保留最后 good snapshot**：抓取失败只记 `errorInfo{code, message, at}` 并在面板上
-  显示陈旧标记；`data` 仍是上一次成功的 payload，不清空、不退回空态。
+- **失败保留最后 good snapshot**：抓取失败（网络错误，或宿主返回 `ok:false`——含
+  `state-timeout`/`state-worker-crashed`/`state-worker-unavailable`）只记
+  `errorInfo{code, message, at}` 并显示陈旧标记；`data` 仍是上一次成功的 payload，不清空、
+  不退回空态。连续失败不堆叠提示；恢复成功后陈旧标记消失。
+- **TUI 与 web 同一契约**：同一份 payload 形状、同一 stale 语义、同一错误码透出；差异只在
+  传输——web 走 `GET state`（上述单飞链 + 2500 ms 排期），TUI 由 `refreshMs` tick 驱动、
+  进程内调用 `panelStateReader(ctx)`（TUI 是独立的 `tui-host.js` apply 行，没有宿主那侧的
+  读子进程池，所以快照 in-process 组装、同样没有 1800 ms 期限，见 §9.1.1「已知边界」）。
+  TUI 不 abort 在途读：每次 tick 起的读由 effect 清理标记 `cancelled`，只有最新一次的结果
+  会落到面板，旧结果丢弃、不并发写状态。
+- **`cwd` 变化清空 last-good**：TUI 的工作目录（`host.snapshot().cwd`）一变，上一份 payload、
+  stale 状态与「已有 good」标记立即清空、回到 loading 再读——禁止把 A 项目的陈旧数据标注
+  后挂在 B 项目下。web 侧等价于工作区切换即重启整条链（abort + 清空 + 立即首拉）。
 - 整条链只发 `GET state`，不发写请求；写操作只有用户点击触发的 init/gate 两个 POST。
 
 ### 9.2 心跳作用域：只面向主会话

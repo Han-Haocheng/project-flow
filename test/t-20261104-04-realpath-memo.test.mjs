@@ -1,12 +1,14 @@
-// T-20261104-04 回归：一次 GET state / panelStateReader 内，同一路径的同步
-// realpathSync 至多 1 次；memo 是「每请求」的，绝不是进程级缓存。
+// T-20261104-04 回归（T-05 后迁移）：请求级 realpath 去重的两个落点现在分居两个进程——
+//
+//   * 宿主请求路径：不再读 store，同步 fs（尤其 realpathSync）必须是 0 次；
+//   * 快照函数（lib/state-snapshot.mjs 的 buildSnapshot，也是 fork 子进程里跑的代码）：
+//     一次调用内同一路径的同步 realpath 至多 1 次，且 memo 每次调用新建（不跨请求复用）。
 //
 // 探针机制（与 t-20261104-01-state.test.mjs 同）：
 //   node:fs 的 ESM 命名导出是模块槽绑定，`syncBuiltinESMExports()` 把 fs 对象上
-//   *当前*的值同步进这些槽。因此顺序必须是「先静态导入 index.js / core.mjs（与生产
-//   同序），再 patch fs.realpathSync，再 sync」；patch 生效期间不再动态 import 任何
-//   模块（ESM loader 自己也用 realpathSync 加载源码，会被计入）。
-import { test } from 'node:test'
+//   *当前*的值同步进这些槽。顺序必须是「先静态导入 index.js / core.mjs，再 patch，
+//   再 sync」；patch 生效期间不再动态 import 任何模块。
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,6 +16,7 @@ import path from 'node:path'
 import { syncBuiltinESMExports } from 'node:module'
 
 import * as core from '../lib/core.mjs'
+import { buildSnapshot } from '../lib/state-snapshot.mjs'
 
 // 静态导入已完成，此时还没有任何 patch。
 const plugin = await import('../index.js')
@@ -92,6 +95,7 @@ writeJson('.agents/heartbeat/session-a.json', {
 const ORIGIN = 'http://127.0.0.1:3080'
 const ROUTE = '/api/project-flow/state'
 const routes = new Map()
+const disposers = []
 const services = {
   webServer: {
     getOrigin: () => ORIGIN,
@@ -106,7 +110,8 @@ const ctx = {
   get: (name) => services[name],
   effect: (callback) => {
     const dispose = callback()
-    return typeof dispose === 'function' ? dispose : () => {}
+    if (typeof dispose === 'function') disposers.push(dispose)
+    return () => {}
   },
   logger: { warn() {} },
 }
@@ -116,6 +121,11 @@ const readPanelState = plugin.panelStateReader(ctx)
 
 function requestState() {
   return new Promise((settle) => {
+    let guard
+    const finish = (response) => {
+      clearTimeout(guard)
+      settle(response)
+    }
     const response = {
       statusCode: 0,
       body: '',
@@ -131,108 +141,111 @@ function requestState() {
         if (this.finished) return
         this.finished = true
         this.body = body === undefined ? '' : String(body)
-        settle(this)
+        finish(this)
       },
       destroy() {
-        settle(this)
+        finish(this)
       },
     }
     stateRoute.handler({ url: `${ROUTE}?root=${encodeURIComponent(ROOT)}`, method: 'GET', headers: {} }, response)
-    const guard = setTimeout(() => settle(response), 20_000)
-    guard.unref()
+    // 兜底：handler 不 settle 时让用例失败而不是挂住测试进程（结束即清掉）。
+    guard = setTimeout(() => finish(response), 20_000)
   })
 }
 
 // -------------------------------------------------------------------- probe
-const ORIGINAL_REALPATH = fs.realpathSync
+const SYNC_NAMES = ['realpathSync', 'statSync', 'lstatSync', 'readFileSync', 'readdirSync', 'existsSync']
+const ORIGINALS = Object.fromEntries(SYNC_NAMES.map((name) => [name, fs[name]]))
 let counts = new Map()
+let syncCalls = []
+
 const installProbe = () => {
   counts = new Map()
-  fs.realpathSync = function probedRealpath(target, ...rest) {
-    const key = String(target)
-    counts.set(key, (counts.get(key) ?? 0) + 1)
-    return ORIGINAL_REALPATH.call(this, target, ...rest)
+  syncCalls = []
+  for (const name of SYNC_NAMES) {
+    fs[name] = function probedSync(target, ...rest) {
+      const key = String(target)
+      syncCalls.push(`${name}\t${key}`)
+      if (name === 'realpathSync') counts.set(key, (counts.get(key) ?? 0) + 1)
+      return ORIGINALS[name].call(this, target, ...rest)
+    }
   }
   syncBuiltinESMExports()
 }
 const restoreProbe = () => {
-  fs.realpathSync = ORIGINAL_REALPATH
+  for (const name of SYNC_NAMES) fs[name] = ORIGINALS[name]
   syncBuiltinESMExports()
 }
-const totalOf = (map) => [...map.values()].reduce((sum, n) => sum + n, 0)
+const insideRoot = (line) => {
+  const target = line.split('\t')[1]
+  return target === ROOT || target.startsWith(`${ROOT}${path.sep}`)
+}
 const repeatedOf = (map) => [...map].filter(([, n]) => n > 1)
 
 /** One measured section: install, run, restore (restore runs even when `run` throws). */
 async function measured(run) {
-  const before = new Map(counts)
   installProbe()
   try {
     const value = await run()
-    return { value, counts: new Map(counts), before }
+    return { value, counts: new Map(counts), syncCalls: [...syncCalls] }
   } finally {
     restoreProbe()
   }
 }
 
 // -------------------------------------------------------------------- cases
-test('GET state：每个路径的同步 realpath 至多 1 次，且被请求 root 不再重复 realpath', async () => {
-  const { value: response, counts: seen } = await measured(() => requestState())
+test('宿主 GET state：store 读取在 fork 子进程里，主线程同步 realpathSync = 0', async () => {
+  const { value: response, counts: seen, syncCalls: calls } = await measured(() => requestState())
 
   assert.equal(response.statusCode, 200)
   const payload = JSON.parse(response.body)
+  // 快照确实被读出来了（证明是子进程完成，而不是宿主跳过了读）。
   assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
-  // 语义不变：四个 section 都读到了 fixture 的记录。
   assert.equal(payload.experiments.total, 1)
   assert.equal(payload.tasks.total, 1)
   assert.equal(payload.gates.length, 1)
   assert.equal(payload.decisions.counts.open, 1)
   assert.equal(payload.heartbeats.length, 1)
 
-  const repeated = repeatedOf(seen)
-  assert.deepEqual(
-    repeated,
-    [],
-    `同一请求内不得重复 realpath：${repeated.map(([p, n]) => `${n}x ${p}`).join(', ')}`,
-  )
-  // 至少覆盖 store 目录 + 心跳目录 + tasks.current 的失败回溯。
-  assert.ok(seen.size >= 6, `期望 ≥6 个不同路径被校验，实际 ${seen.size}`)
-  assert.ok(totalOf(seen) >= seen.size)
-  // root 本身由 canonicalRoot 的异步 realpath 得到并预置进 memo：同步 realpath 0 次。
-  assert.equal(seen.get(ROOT) ?? 0, 0, '被请求 root 不得再做一次同步 realpath')
+  assert.equal(seen.size, 0, `宿主请求路径不得出现同步 realpath：${JSON.stringify([...seen])}`)
+  const storeCalls = calls.filter((line) => insideRoot(line))
+  assert.deepEqual(storeCalls, [], `宿主请求路径不得同步访问被请求 root 内部：${JSON.stringify(storeCalls)}`)
 })
 
-test('panelStateReader（TUI 读路径）：同样每路径 ≤1 次', async () => {
-  const { value: payload, counts: seen } = await measured(() => readPanelState(ROOT))
+test('宿主 panelStateReader（TUI 读路径）：同样 0 次同步 store 访问', async () => {
+  const { value: payload, counts: seen, syncCalls: calls } = await measured(() => readPanelState(ROOT))
 
   assert.equal(payload.ok, true)
-  assert.deepEqual(repeatedOf(seen), [], `TUI 读路径重复 realpath：${repeatedOf(seen).map(([p]) => p).join(', ')}`)
-  assert.ok(seen.size >= 5)
+  assert.equal(payload.tasks.total, 1)
+  assert.equal(seen.size, 0)
+  assert.deepEqual(calls.filter((line) => insideRoot(line)), [])
 })
 
-test('memo 是每请求的：相邻两次请求各自重新 realpath（没有进程级缓存）', async () => {
-  const flowDir = path.join(ROOT, '.dsh', 'flow')
-  const first = await measured(() => requestState())
-  const second = await measured(() => requestState())
+test('快照函数：一次调用内同一路径的生命周期 realpath ≤1 次，且每次调用新建 memo', async () => {
+  const snapshotOf = () => buildSnapshot({ root: ROOT, realRoot: ROOT, entry: { path: ROOT, name: 'memo-fixture' }, hostWarnings: [] })
 
-  assert.equal(first.counts.get(flowDir), 1, '第一次请求应 realpath 一次 store 目录')
-  // 若存在进程级缓存，第二次请求会是 0 次——这正是「挂载状态会变」不允许的。
-  assert.equal(second.counts.get(flowDir), 1, '第二次请求必须重新 realpath（不得跨请求复用）')
-  assert.equal(totalOf(second.counts), totalOf(first.counts), '两次请求的调用规模应一致')
-  assert.deepEqual(repeatedOf(first.counts), [])
+  const first = await measured(snapshotOf)
+  assert.equal(first.value.ok, true)
+  assert.deepEqual(repeatedOf(first.counts), [], `同一快照内重复 realpath：${JSON.stringify([...first.counts])}`)
+  assert.ok(first.counts.size >= 5, `期望 ≥5 个不同路径被校验，实际 ${first.counts.size}`)
+  // 被请求 root 由 canonicalRoot 得到并预置进 memo：本函数内不再 realpath 一次。
+  assert.equal(first.counts.get(ROOT) ?? 0, 0)
+
+  // 第二次调用必须重新 realpath（memo 是每调用/每请求的，不是进程级缓存）。
+  const second = await measured(snapshotOf)
+  const repeatedPaths = [...first.counts.keys()].filter((key) => (second.counts.get(key) ?? 0) > 0)
+  assert.ok(repeatedPaths.length >= 5, `第二次调用应重新解析同一批路径：${JSON.stringify([...second.counts])}`)
   assert.deepEqual(repeatedOf(second.counts), [])
 })
 
-test('并发隔离：两个同时在途的请求各自解析一次，互不共享 memo', async () => {
-  const flowDir = path.join(ROOT, '.dsh', 'flow')
-  // 两个 handler 在同一事件循环上交错执行（每个 await 都让出）：各自的 Map 互不可见。
-  const { counts: seen } = await measured(() => Promise.all([requestState(), requestState()]))
+test('快照函数并发隔离：两个同时在途的调用各解析一次，互不共享 memo', async () => {
+  const snapshotOf = () => buildSnapshot({ root: ROOT, realRoot: ROOT, entry: { path: ROOT, name: 'memo-fixture' }, hostWarnings: [] })
+  const { counts: seen } = await measured(() => Promise.all([snapshotOf(), snapshotOf()]))
 
-  // 若共享了进程级/请求间缓存，第二次会出现 1 次而不是 2 次；
-  // 若同一请求内重复解析，则会 >2 次。
-  assert.equal(seen.get(flowDir), 2, `两个并发请求应各 realpath 一次 store 目录，实际 ${seen.get(flowDir) ?? 0}`)
-  assert.ok(totalOf(seen) >= seen.size)
+  const flowDir = path.join(ROOT, '.dsh', 'flow')
+  assert.equal(seen.get(flowDir), 2, `两个并发快照应各 realpath 一次 store 目录，实际 ${seen.get(flowDir) ?? 0}`)
   const overTwo = [...seen].filter(([, n]) => n > 2)
-  assert.deepEqual(overTwo, [], `同一路径被解析超过 2 次，说明请求内未去重：${overTwo.map(([p, n]) => `${n}x ${p}`).join(', ')}`)
+  assert.deepEqual(overTwo, [], `同一路径被解析超过 2 次，说明调用内未去重：${JSON.stringify(overTwo)}`)
 })
 
 test('core 对外同步 API 向后兼容：不传 memo 时仍逐次 realpath，结果与带 memo 完全一致', async () => {
@@ -240,14 +253,26 @@ test('core 对外同步 API 向后兼容：不传 memo 时仍逐次 realpath，�
   const withoutMemo = await measured(async () => core.readStoreState(ROOT, loaded.contract))
   const withMemo = await measured(async () => core.readStoreState(ROOT, loaded.contract, { pathMemo: new Map() }))
 
-  // 旧行为保留：CLI/工具共用路径没有 memo，仍按次 realpath（这里 store 目录被多次校验）。
+  // 旧行为保留：CLI/工具共用路径没有 memo，仍按次 realpath（store 目录被多次校验）。
   const flowDir = path.join(ROOT, '.dsh', 'flow')
   assert.ok(
     (withoutMemo.counts.get(flowDir) ?? 0) >= 2,
     `无 memo 时应保持旧的逐次 realpath，实际 ${withoutMemo.counts.get(flowDir) ?? 0} 次`,
   )
-  // 带 memo 时同一次调用内每路径 ≤1。
   assert.deepEqual(repeatedOf(withMemo.counts), [])
   // 结果不因 memo 改变（containment 判定、store 路径、错误码都不变）。
   assert.deepEqual(withMemo.value, withoutMemo.value)
+})
+
+// 清理：关掉 worker 池（其子进程随 IPC 断开退出）、恢复 fs 内置、删除一次性 fixture。
+after(() => {
+  restoreProbe()
+  for (const dispose of disposers) {
+    try {
+      dispose()
+    } catch {
+      // ignore
+    }
+  }
+  fs.rmSync(FIXTURE, { recursive: true, force: true })
 })

@@ -25,16 +25,39 @@
 // never with a filesystem call: a registered workspace on a missing mount must
 // not cost a request anything. Root resolution in this module is asynchronous
 // (`realpath`/`stat`/`readFile` from node:fs/promises), so a slow root blocks
-// its own request rather than the host event loop. Two synchronous reads remain
-// on purpose and only ever touch the requested root: the `realpath`/`lstat`
-// guard in `containedPath` (a path the requested manifest echoes must not escape
-// through a symlink) and the store reads inside lib/core.mjs.
+// its own request rather than the host event loop.
+//
+// The store read itself — core's synchronous readers, the git subprocess and the
+// `containedPath` realpath guard — runs in a forked worker (lib/state-snapshot.mjs)
+// with an 1800ms deadline, so even a root parked in a syscall only costs that one
+// request. The host assembles no payload and performs no store filesystem call.
 
-import { execFile } from 'node:child_process'
-import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { readFile, realpath, stat } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fork } from 'node:child_process'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { realpath, stat } from 'node:fs/promises'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  brief,
+  buildSnapshot,
+  clip,
+  coreAvailable,
+  coreModule,
+  coreUnavailableMessage,
+  decisionCountsOf,
+  decisionRemindMax,
+  emptyDecisionCounts,
+  isPlainObject,
+  isoLocal,
+  pickInteger,
+  readManifestName,
+  requireCore,
+  storeContractPath,
+  takeCoreWarnings,
+  taskCountsOf,
+  timeValue,
+  toPosix,
+} from './lib/state-snapshot.mjs'
 export const inject = ['webServer']
 
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
@@ -47,50 +70,10 @@ const MAX_INIT_WARNINGS = 20
 const HEARTBEAT_GATE_TOOLS = new Set(['edit', 'write'])
 const HEARTBEAT_SESSION_MAX = 80
 const HEARTBEAT_SESSION_PATTERN = /^[A-Za-z0-9._:-]+$/
-const GIT_TIMEOUT_MS = 4000
-const GIT_MAX_BUFFER = 16 * 1024 * 1024
-const MAX_STRING = 400
-const MAX_PAYLOAD_BYTES = 900 * 1000
-const MAX_STORE_ITEMS = 400
-const MAX_DRAFT_TASKS = 50
-/** Task rows per panel group; the panel itself renders at most 25 per list. */
-const MAX_TASK_ROWS = 50
-/** One bounded detail entry (file claim, acceptance command, commit sha). */
-const MAX_TASK_ITEM = 200
-/** Detail list length per task (`scope.allow`/`scope.deny`/`acceptance`/`commits`). */
-const MAX_TASK_LIST = 10
 const MAX_TOOL_ITEMS = 200
 const WRITE_TIMEOUT_MS = 30_000
-const STORE_CONTRACT = join('.dsh', 'flow', 'flow.json')
-
-// --------------------------------------------------------------- core module
-//
-// The store writer lives in lib/core.mjs and is shared with bin/flow.mjs. It is
-// optional: a broken or absent module makes the state endpoint report an empty
-// store payload with a `core-unavailable` warning and the tools report an
-// actionable error, instead of failing the whole plugin load.
-
-let core = null
-let coreFailure = ''
-try {
-  core = await import(pathToFileURL(join(PACKAGE_ROOT, 'lib', 'core.mjs')).href)
-} catch (error) {
-  coreFailure = brief(error, 200)
-}
-
 /** Non-fatal problems detected while mounting; surfaced in every payload's warnings. */
 const mountWarnings = []
-
-/** Drain core's global diagnostic log (never throws; keeps only usable strings). */
-function takeCoreWarnings() {
-  if (coreAvailable() === false || typeof core.drainWarnings !== 'function') return []
-  try {
-    const items = core.drainWarnings()
-    return Array.isArray(items) ? items.filter((item) => typeof item === 'string' && item !== '') : []
-  } catch {
-    return []
-  }
-}
 
 /** One warning per distinct mount problem: apply may run more than once per process. */
 function warnMount(message, ctx) {
@@ -105,235 +88,12 @@ function warnMount(message, ctx) {
   }
 }
 
-/** The single message for an unloadable core; both `apply` and the payload add it. */
-function coreUnavailableMessage() {
-  return `core-unavailable: lib/core.mjs could not be loaded (${coreFailure || 'unknown error'}); the store, flow_* tools and skills are unavailable`
-}
-
-function coreAvailable() {
-  return core !== null && typeof core === 'object'
-}
-
-function requireCore() {
-  if (coreAvailable() === false) {
-    throw new Error(
-      'project flow core is not installed (lib/core.mjs could not be loaded); reinstall the project-flow plugin or use the CLI: node bin/flow.mjs',
-    )
-  }
-  return core
-}
 
 const SUBAGENT_ORIGIN = 'subagent'
-
-// ---------------------------------------------------------------- primitives
-
-/** Locale-shaped ISO-8601 timestamp with the host offset, e.g. 2026-10-28T11:30:00+08:00. */
-export function isoLocal(date) {
-  const pad = (n) => String(n).padStart(2, '0')
-  const offset = -date.getTimezoneOffset()
-  const sign = offset >= 0 ? '+' : '-'
-  const hours = pad(Math.floor(Math.abs(offset) / 60))
-  const minutes = pad(Math.abs(offset) % 60)
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}` +
-    `${sign}${hours}:${minutes}`
-  )
-}
-
-/** Truncate a value to at most `max` characters without throwing on non-strings. */
-function clip(value, max = MAX_STRING) {
-  if (typeof value !== 'string') return ''
-  return value.length > max ? value.slice(0, max) : value
-}
-
-function errorText(error) {
-  if (error === undefined || error === null) return 'unknown error'
-  if (typeof error === 'string') return error
-  if (typeof error.message === 'string' && error.message.length > 0) return error.message
-  return String(error)
-}
-
-/** One-line, bounded error text suitable for a warnings entry. */
-function brief(error, max = 200) {
-  return clip(errorText(error).replace(/\s+/g, ' ').trim(), max)
-}
-
-function isPlainObject(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-/** Split into lines, dropping only a trailing empty line, keeping indentation. */
-function splitLines(text) {
-  const lines = String(text).split('\n')
-  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  return lines
-}
-
-function toPosix(path) {
-  return sep === '/' ? path : path.split(sep).join('/')
-}
-
-// --------------------------------------------------------- path containment
-//
-// Local mirror of `containedPath` in lib/core.mjs, used by the state payload to
-// re-validate a root-relative path echoed by the store reader (`tasks.current`):
-// absolute input is rejected, `..` escapes are rejected, and existing/ancestor
-// targets are re-checked through realpath so a symlink cannot lead outside the
-// project root. Unsafe values never throw: the caller hides the value and one
-// warning names the key and raw value (never file content).
-
-function rejectManifestPath(warnings, label, value, reason) {
-  const preview = clip(String(value ?? '').replace(/\s+/g, ' ').trim(), 200)
-  warnings.push(`manifest-path-rejected: ${label}: ${preview}: ${reason}`)
-}
-
-function pathWithin(parent, child) {
-  const fold = (value) => (process.platform === 'win32' ? value.toLowerCase() : value)
-  const base = fold(parent)
-  const target = fold(child)
-  if (target === base) return true
-  return target.startsWith(base.endsWith(sep) ? base : base + sep)
-}
-
-/**
- * `realpathSync` through an optional per-request memo.
- *
- * The memo is a plain `Map` created by the request entry (`collectPanelState`)
- * and passed down explicitly — never a module-level cache, because a mount can
- * appear or disappear between requests. Failures are memoized too (the error is
- * rethrown): within one read-only request the same missing path is walked once,
- * and only request entries that cannot create directories pass a memo.
- */
-function memoizedRealpath(path, pathMemo) {
-  if (pathMemo === undefined) return realpathSync(path)
-  const cached = pathMemo.get(path)
-  if (cached instanceof Error) throw cached
-  if (cached !== undefined) return cached
-  try {
-    const real = realpathSync(path)
-    pathMemo.set(path, real)
-    return real
-  } catch (error) {
-    const stored = error instanceof Error ? error : Object.assign(new Error(String(error)), { code: error?.code })
-    pathMemo.set(path, stored)
-    throw stored
-  }
-}
-
-/**
- * Containment check for one path. `options.realRoot` is the already-canonical
- * root (`canonicalRoot` output): passing it removes the per-check root realpath,
- * exactly what `realpathSync(absRoot)` would have returned. `options.pathMemo`
- * shares target resolutions across the whole request (and with lib/core.mjs).
- */
-function realPathStaysInside(absRoot, target, options = {}) {
-  const pathMemo = options !== null && typeof options === 'object' && options.pathMemo instanceof Map ? options.pathMemo : undefined
-  const provided = options !== null && typeof options === 'object' ? options.realRoot : undefined
-  let realRoot
-  if (typeof provided === 'string' && provided.length > 0) {
-    realRoot = provided
-  } else {
-    try {
-      realRoot = memoizedRealpath(absRoot, pathMemo)
-    } catch {
-      // The project root does not exist yet: only the lexical check is meaningful.
-      return pathWithin(absRoot, target)
-    }
-  }
-  let current = target
-  for (;;) {
-    try {
-      return pathWithin(realRoot, memoizedRealpath(current, pathMemo))
-    } catch (error) {
-      const code = error !== null && error !== undefined ? error.code : undefined
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') return false
-      try {
-        if (lstatSync(current).isSymbolicLink()) return false
-      } catch {
-        // The component is absent: keep walking up toward the root.
-      }
-      const parent = dirname(current)
-      if (parent === current) return false
-      current = parent
-    }
-  }
-}
-
-/**
- * Absolute in-root path for one manifest value, or `undefined` after pushing a
- * warning when the value is absolute (unless `options.allowAbsolute`), escapes
- * the root lexically, or resolves outside it through a symlink.
- */
-function containedPath(root, value, label, warnings, options = {}) {
-  const absRoot = resolve(root)
-  const allowAbsolute = options !== null && typeof options === 'object' && options.allowAbsolute === true
-  if (typeof value !== 'string' || value.trim() === '') return undefined
-  const raw = value.trim()
-  const target = isAbsolute(raw) ? resolve(raw) : resolve(absRoot, raw)
-  if (isAbsolute(raw) && allowAbsolute !== true) {
-    rejectManifestPath(warnings, label, raw, 'absolute paths are not allowed')
-    return undefined
-  }
-  if (pathWithin(absRoot, target) !== true && realPathStaysInside(absRoot, target, options) !== true) {
-    rejectManifestPath(warnings, label, raw, 'escapes the project root')
-    return undefined
-  }
-  if (realPathStaysInside(absRoot, target, options) !== true) {
-    rejectManifestPath(warnings, label, raw, 'a symlink resolves outside the project root')
-    return undefined
-  }
-  return target
-}
-
-/** Run git with a hard timeout. Never rejects: failures are reported in the result. */
-function git(cwd, args, timeout = GIT_TIMEOUT_MS) {
-  return new Promise((settle) => {
-    try {
-      execFile(
-        'git',
-        ['-C', cwd, ...args],
-        { timeout, maxBuffer: GIT_MAX_BUFFER, windowsHide: true, encoding: 'utf8' },
-        (error, stdout) => {
-          if (error) settle({ ok: false, stdout: String(stdout ?? ''), error })
-          else settle({ ok: true, stdout: String(stdout ?? '') })
-        },
-      )
-    } catch (error) {
-      settle({ ok: false, stdout: '', error })
-    }
-  })
-}
-
-// ------------------------------------------------------------------ contract
-
-function pickInteger(value, fallback, min, max) {
-  if (typeof value !== 'number' || Number.isFinite(value) === false) return fallback
-  const rounded = Math.trunc(value)
-  if (rounded < min) return min
-  if (rounded > max) return max
-  return rounded
-}
 
 
 // ------------------------------------------------------- workspace inspection
 
-/** Manifest display name; async so a slow root cannot block the request loop. */
-async function readManifestName(root) {
-  try {
-    const parsed = JSON.parse(await readFile(storeContractPath(root), 'utf8'))
-    if (isPlainObject(parsed) && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
-      return parsed.name.trim()
-    }
-  } catch {
-    // Fall through to the directory name.
-  }
-  return basename(root)
-}
-
-function storeContractPath(root) {
-  return join(root, STORE_CONTRACT)
-}
 
 /** Whether the root owns a `.dsh/flow/flow.json` store contract. */
 function hasStore(root) {
@@ -479,514 +239,6 @@ async function rootName(root, workspaces) {
   return basename(root)
 }
 
-// ----------------------------------------------------------------------- head
-
-async function readHead(root, warnings) {
-  const head = { sha: null, subject: null, branch: null, dirty: null }
-  const failures = []
-
-  const sha = await git(root, ['rev-parse', '--short', 'HEAD'])
-  if (sha.ok) {
-    const value = sha.stdout.trim()
-    if (value.length > 0) head.sha = value
-  } else {
-    failures.push(['rev-parse', sha.error])
-  }
-
-  const subject = await git(root, ['log', '-1', '--pretty=%s'])
-  if (subject.ok) {
-    head.subject = subject.stdout.replace(/\n$/, '')
-  } else {
-    failures.push(['log -1', subject.error])
-  }
-
-  const branch = await git(root, ['branch', '--show-current'])
-  if (branch.ok) {
-    const value = branch.stdout.trim()
-    head.branch = value.length > 0 ? value : null
-  } else {
-    failures.push(['branch', branch.error])
-  }
-
-  const status = await git(root, ['status', '--porcelain=v1'])
-  if (status.ok) {
-    head.dirty = splitLines(status.stdout).length
-  } else {
-    failures.push(['status', status.error])
-  }
-
-  if (failures.length === 4) {
-    // Not a git checkout: expected for non-git projects, reported once.
-    warnings.push(`not a git repository: ${brief(failures[0][1])}`)
-  } else {
-    for (const [command, error] of failures) {
-      warnings.push(`git ${command} failed: ${brief(error)}`)
-    }
-  }
-  return head
-}
-
-// ---------------------------------------------------------------------- tasks
-
-
-function timeValue(value) {
-  const stamp = Date.parse(typeof value === 'string' ? value : '')
-  return Number.isFinite(stamp) ? stamp : Number.NEGATIVE_INFINITY
-}
-
-function lastCheckpointGate(task) {
-  const checkpoints = Array.isArray(task.checkpoints) ? task.checkpoints : []
-  if (checkpoints.length === 0) return null
-  const last = checkpoints[checkpoints.length - 1]
-  if (!isPlainObject(last)) return null
-  return typeof last.gate === 'string' ? last.gate : null
-}
-
-/** Bounded string list for one task row: entries are clipped, non-strings dropped. */
-function clipTaskList(value, limit = MAX_TASK_LIST) {
-  if (Array.isArray(value) === false) return []
-  const out = []
-  for (const entry of value) {
-    if (typeof entry !== 'string') continue
-    const text = clip(entry, MAX_TASK_ITEM)
-    if (text !== '') out.push(text)
-    if (out.length >= limit) break
-  }
-  return out
-}
-
-/**
- * Acceptance entries are strings or legacy `{cmd, expect}` objects. The panel
- * renders one bounded line per entry, so both shapes flatten to text here.
- */
-function clipTaskAcceptance(value) {
-  if (Array.isArray(value) === false) return []
-  const out = []
-  for (const entry of value) {
-    let text = ''
-    if (typeof entry === 'string') text = clip(entry, MAX_TASK_ITEM)
-    else if (isPlainObject(entry)) {
-      const cmd = typeof entry.cmd === 'string' ? entry.cmd.trim() : ''
-      const expect = typeof entry.expect === 'string' ? entry.expect.trim() : ''
-      text = clip(cmd !== '' && expect !== '' ? `${cmd} => ${expect}` : cmd || expect, MAX_TASK_ITEM)
-    }
-    if (text !== '') out.push(text)
-    if (out.length >= MAX_TASK_LIST) break
-  }
-  return out
-}
-
-/** `scope` is `{allow, deny}`; both lists are bounded and never carried raw. */
-function clipTaskScope(value) {
-  const scope = isPlainObject(value) ? value : {}
-  return { allow: clipTaskList(scope.allow), deny: clipTaskList(scope.deny) }
-}
-
-/**
- * One task row for the panel. Title and goal drive the two visible lines; the
- * remaining fields feed the expanded detail block, so every value stays bounded
- * (single strings clipped, arrays limited) regardless of what the store holds.
- */
-function panelTaskRow(record, status) {
-  return {
-    id: clip(record.id),
-    title: clip(record.title),
-    status,
-    owner: clip(record.owner),
-    goal: clip(record.goal),
-    notes: clip(record.notes),
-    scope: clipTaskScope(record.scope),
-    acceptance: clipTaskAcceptance(record.acceptance),
-    commits: clipTaskList(record.commits),
-    created_at: clip(record.created_at),
-    updated_at: clip(record.updated_at),
-  }
-}
-
-
-
-// ----------------------------------------------------------------- heartbeats
-
-
-/**
- * Project one rich heartbeat item (`{file, title?, session, goal, status,
- * last_action, …}`) onto the row the panel renders. The panel reads `title` and
- * `statusLine`; the richer core projection carries `goal` and the unsplit
- * `status` / `last_action`, so those are derived here instead of leaving the row
- * blank. Unknown fields pass through untouched.
- */
-function panelHeartbeat(item) {
-  if (!isPlainObject(item)) return null
-  const file = typeof item.file === 'string' ? item.file : ''
-  const status = typeof item.status === 'string' ? item.status.trim() : ''
-  const action = typeof item.last_action === 'string' ? item.last_action.trim() : ''
-  const statusLine =
-    typeof item.statusLine === 'string' && item.statusLine.trim().length > 0
-      ? item.statusLine.trim()
-      : [status, action].filter((part) => part.length > 0).join(' · ')
-  const goal = typeof item.goal === 'string' ? item.goal.trim() : ''
-  const session = typeof item.session === 'string' ? item.session.trim() : ''
-  const title =
-    typeof item.title === 'string' && item.title.trim().length > 0
-      ? item.title.trim()
-      : goal.length > 0
-        ? goal
-        : session.length > 0
-          ? session
-          : file.replace(/\.[^.]+$/, '')
-  return { ...item, title: clip(title, 160), statusLine: clip(statusLine, 200) }
-}
-
-/** Panel rows from the richer core section; empty when the section is unusable. */
-function panelHeartbeats(section) {
-  const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
-  const rows = []
-  for (const item of items) {
-    const row = panelHeartbeat(item)
-    if (row !== null) rows.push(row)
-  }
-  return rows
-}
-
-
-// ----------------------------------------------------------------- decisions
-//
-// The decisions section is shared cross-domain: index.js, client.js and both
-// self-tests carry the same literal key list, so the projection below is built
-// from it and never grows a field by accident.
-
-/** Key set and order of one panel decision row (cross-domain literal). */
-const DECISION_ITEM_KEYS = [
-  'id',
-  'kind',
-  'status',
-  'question',
-  'blocks',
-  'options',
-  'recommendation',
-  'default',
-  'escalated',
-  'ageSeconds',
-  'asked_at',
-]
-
-/** One decision option: only the three display fields, bounded. */
-function panelDecisionOption(option) {
-  if (isPlainObject(option) === false) return null
-  return { id: clip(option.id, 40), label: clip(option.label, 80), impact: clip(option.impact, 120) }
-}
-
-/**
- * Project one open decision onto the row the panel renders. The row is built
- * from DECISION_ITEM_KEYS, so fields that must not reach the browser (`turnAge`,
- * `rationale`, `affects`, `fingerprint`) are dropped rather than filtered later.
- */
-function panelDecision(item) {
-  if (isPlainObject(item) === false) return null
-  const options = []
-  if (Array.isArray(item.options)) {
-    for (const option of item.options) {
-      const row = panelDecisionOption(option)
-      if (row !== null) options.push(row)
-    }
-  }
-  const blocks = Array.isArray(item.blocks)
-    ? item.blocks.filter((id) => typeof id === 'string' && id !== '').map((id) => clip(id, 40))
-    : []
-  const values = {
-    id: clip(item.id, 40),
-    kind: clip(item.kind, 20),
-    status: clip(item.status, 20),
-    question: clip(item.question, 200),
-    blocks,
-    options,
-    recommendation: clip(item.recommendation, 60),
-    default: clip(item.default, 60),
-    escalated: item.escalated === true,
-    ageSeconds:
-      typeof item.ageSeconds === 'number' && Number.isFinite(item.ageSeconds)
-        ? Math.max(0, Math.trunc(item.ageSeconds))
-        : null,
-    asked_at: clip(item.asked_at, 64),
-  }
-  const row = {}
-  for (const key of DECISION_ITEM_KEYS) row[key] = values[key]
-  return row
-}
-
-/**
- * Panel decisions section: bounded rows plus the seven counts. A missing or
- * unusable section degrades to the empty one instead of failing the payload.
- */
-function panelDecisions(section, limit = decisionRemindMax()) {
-  const items = isPlainObject(section) && Array.isArray(section.items) ? section.items : []
-  const rows = []
-  for (const item of items) {
-    if (rows.length >= limit) break
-    const row = panelDecision(item)
-    if (row !== null) rows.push(row)
-  }
-  return { items: rows, counts: decisionCountsOf(isPlainObject(section) ? section.counts : null) }
-}
-
-/**
- * The decisions section of one store payload. A newer lib/core.mjs already
- * returns it from `readStoreState`; otherwise the same projection is rebuilt with
- * `summarizeDecisions`, so the payload shape does not depend on which side of the
- * Host/core split landed first.
- */
-function decisionSection(state, root, contract) {
-  const supplied = isPlainObject(state) ? state.decisions : undefined
-  if (isPlainObject(supplied)) return supplied
-  const c = requireCore()
-  if (typeof c.summarizeDecisions !== 'function') return null
-  return c.summarizeDecisions(root, contract, { limit: decisionRemindMax() })
-}
-
-
-// -------------------------------------------------------------------- payload
-
-/** Drop tree nodes whose id is no longer in `items`, recursively. */
-function pruneTree(nodes, ids) {
-  if (Array.isArray(nodes) === false) return []
-  const kept = []
-  for (const node of nodes) {
-    if (node === null || typeof node !== 'object') continue
-    if (typeof node.id === 'string' && ids.has(node.id) === false) continue
-    kept.push({ ...node, children: pruneTree(node.children, ids) })
-  }
-  return kept
-}
-
-/** Keep the response well under 1 MB without throwing: drop the least important tail first. */
-function capPayload(payload) {
-  let body = JSON.stringify(payload)
-  if (Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) return body
-
-  payload.warnings.push('payload-truncated')
-
-  const items = Array.isArray(payload.experiments.items) ? payload.experiments.items : []
-  let truncated = false
-  while (items.length > 0) {
-    items.pop()
-    truncated = true
-    const ids = new Set(items.map((item) => (isPlainObject(item) ? item.id : undefined)))
-    payload.experiments.tree = pruneTree(payload.experiments.tree, ids)
-    body = JSON.stringify(payload)
-    if (Buffer.byteLength(body) <= MAX_PAYLOAD_BYTES) return body
-  }
-  if (truncated) payload.warnings.push('items-truncated')
-
-  payload.warnings = payload.warnings.slice(0, 20)
-  return JSON.stringify(payload)
-}
-
-function taskCountsOf(records) {
-  const counts = { draft: 0, active: 0, done: 0, archived: 0, other: 0 }
-  for (const record of records) {
-    const status = isPlainObject(record) && typeof record.status === 'string' ? record.status : ''
-    if (Object.hasOwn(counts, status) && status !== 'other') counts[status] += 1
-    else counts.other += 1
-  }
-  return counts
-}
-
-function activeTasksOf(records, limit = MAX_TASK_ROWS) {
-  return records
-    .filter((record) => isPlainObject(record) && record.status === 'active')
-    .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-    .slice(0, limit)
-    .map((record) => panelTaskRow(record, 'active'))
-}
-
-/**
- * Newest draft tasks, projected for the panel's 待办 block.
- *
- * A non-array `records` or a non-object record degrades to "no row" rather than
- * throwing, and every projected field is bounded, so an odd `owner`/`updated_at`
- * type becomes an empty string.
- */
-function draftTasksOf(records, limit = MAX_DRAFT_TASKS) {
-  if (Array.isArray(records) === false) return []
-  const drafts = []
-  for (const record of records) {
-    if (isPlainObject(record) === false) continue
-    if (record.status !== 'draft') continue
-    drafts.push(record)
-  }
-  drafts.sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-  return drafts.slice(0, limit).map((record) => panelTaskRow(record, 'draft'))
-}
-
-function recentDoneOf(records, limit) {
-  return records
-    .filter((record) => isPlainObject(record) && record.status === 'done')
-    .sort((a, b) => timeValue(b.updated_at) - timeValue(a.updated_at))
-    .slice(0, limit)
-    .map((record) => ({ ...panelTaskRow(record, 'done'), gate: lastCheckpointGate(record) }))
-}
-
-/** Panel payload with no readable store: every section empty. */
-async function emptyStoreState(root, entry, now, warnings) {
-  entry.name = await readManifestName(root)
-  return {
-    ok: true,
-    generatedAt: isoLocal(new Date(now)),
-    contract: { source: 'defaults', schema: 2, name: entry.name },
-    roots: [],
-    root,
-    head: await readHead(root, warnings),
-    experiments: {
-      source: 'store',
-      total: 0,
-      counts: { total: 0, open: 0, confirmed: 0, refuted: 0, abandoned: 0 },
-      items: [],
-      tree: [],
-      groups: [],
-    },
-    tasks: {
-      total: 0,
-      counts: { draft: 0, active: 0, done: 0, archived: 0, other: 0 },
-      current: null,
-      active: [],
-      recentDone: [],
-      draft: [],
-    },
-    gates: [],
-    heartbeats: [],
-    decisions: { items: [], counts: emptyDecisionCounts() },
-    warnings,
-  }
-}
-
-/**
- * Store payload: contract + collections read through lib/core.mjs.
- *
- * `options.realRoot` / `options.pathMemo` are the request-scoped containment
- * context built by `collectPanelState`: the root is already canonical and every
- * `realpath` shared with lib/core.mjs is resolved once per request.
- */
-async function buildStoreState(root, entry, now, warnings, options = {}) {
-  const c = requireCore()
-  const pathMemo = options !== null && typeof options === 'object' && options.pathMemo instanceof Map ? options.pathMemo : undefined
-  let loaded
-  try {
-    loaded = c.loadContract(root)
-  } catch (error) {
-    warnings.push(`store contract unreadable: ${brief(error)}`)
-    return emptyStoreState(root, entry, now, warnings)
-  }
-  for (const warning of Array.isArray(loaded.warnings) ? loaded.warnings : []) {
-    warnings.push(`contract: ${warning}`)
-  }
-  const contract = loaded.contract
-  entry.name = contract.name
-
-  let state
-  try {
-    state = c.readStoreState(root, contract, { pathMemo })
-  } catch (error) {
-    warnings.push(`store unreadable: ${brief(error)}`)
-    return emptyStoreState(root, entry, now, warnings)
-  }
-
-  const head = await readHead(root, warnings)
-
-  const records = Array.isArray(state.experiments.items) ? state.experiments.items : []
-  let items = records
-  if (records.length > MAX_STORE_ITEMS) {
-    items = records.slice(0, MAX_STORE_ITEMS)
-    warnings.push(`items-truncated: ${records.length - MAX_STORE_ITEMS} experiments beyond ${MAX_STORE_ITEMS}`)
-  }
-  let tree = []
-  try {
-    tree = c.experimentTree(items)
-  } catch (error) {
-    warnings.push(`experiment tree unbuildable: ${brief(error)}`)
-  }
-
-  const counts = isPlainObject(state.experiments.counts) ? { ...state.experiments.counts } : {}
-  counts.total = records.length
-  for (const status of ['open', 'confirmed', 'refuted', 'abandoned']) {
-    if (typeof counts[status] !== 'number') counts[status] = records.filter((item) => item.status === status).length
-  }
-
-  const taskRecords = Array.isArray(state.tasks.items) ? state.tasks.items : []
-  const taskCounts = taskCountsOf(taskRecords)
-  const recentLimit = pickInteger(contract.tasks && contract.tasks.recentLimit, 6, 0, 500)
-  // `tasks.current` is a manifest-declared path even though the store reader
-  // only echoes it; an unsafe value is hidden and warned about like everywhere else.
-  const currentValue = typeof contract.tasks.current === 'string' ? contract.tasks.current : null
-  const currentSafe =
-    currentValue !== null &&
-    containedPath(root, currentValue, 'tasks.current', warnings, { realRoot: options.realRoot, pathMemo }) !== undefined
-  const tasks = {
-    total: taskRecords.length,
-    counts: taskCounts,
-    current: currentSafe ? currentValue : null,
-    active: activeTasksOf(taskRecords),
-    recentDone: recentDoneOf(taskRecords, recentLimit),
-    draft: draftTasksOf(taskRecords),
-  }
-  const activeTotal = taskRecords.filter((record) => isPlainObject(record) && record.status === 'active').length
-  if (activeTotal > MAX_TASK_ROWS) {
-    warnings.push(`active-tasks-truncated: ${activeTotal - MAX_TASK_ROWS} active tasks beyond ${MAX_TASK_ROWS}`)
-  }
-
-  const gates = (Array.isArray(state.gates.items) ? state.gates.items : []).map((gate) => ({
-    ...gate,
-    lastRun: gate.lastRun === undefined ? null : gate.lastRun,
-  }))
-
-  let heartbeats = []
-  try {
-    const section = c.readHeartbeatSection(root, contract, { pathMemo })
-    // The section reads the project main worktree; a degraded resolution names
-    // the reason once so the panel shows why the ledger is local to the cwd.
-    if (isPlainObject(section) && section.degraded === true) {
-      warnings.push(`heartbeat-root-degraded: ${typeof section.reason === 'string' && section.reason !== '' ? section.reason : root}`)
-    }
-    heartbeats = panelHeartbeats(section)
-  } catch (error) {
-    warnings.push(`heartbeats unreadable: ${brief(error)}`)
-  }
-
-  let decisions
-  try {
-    decisions = panelDecisions(decisionSection(state, root, contract))
-  } catch (error) {
-    warnings.push(`decisions unreadable: ${brief(error)}`)
-    decisions = panelDecisions(null)
-  }
-
-  return {
-    ok: true,
-    generatedAt: isoLocal(new Date(now)),
-    contract: { source: loaded.source, schema: contract.schema, name: contract.name },
-    roots: [],
-    root,
-    head,
-    experiments: { source: 'store', total: records.length, counts, items, tree, groups: [] },
-    tasks,
-    gates,
-    heartbeats,
-    decisions,
-    warnings,
-  }
-}
-
-async function buildState(root, entry, now, options = {}) {
-  // The panel polls every ~2.5s and core's warning log is a module singleton:
-  // draining here (and dropping) keeps poll-driven reads from stealing the
-  // diagnostics the next tool call should surface. The panel computes its own
-  // diagnostics locally, so nothing visible is lost.
-  takeCoreWarnings()
-  const warnings = mountWarnings.slice()
-  if (coreAvailable()) return buildStoreState(root, entry, now, warnings, options)
-  const message = coreUnavailableMessage()
-  if (warnings.includes(message) === false) warnings.push(message)
-  return emptyStoreState(root, entry, now, warnings)
-}
 
 // ----------------------------------------------------------------------- HTTP
 
@@ -1039,6 +291,394 @@ function originAllowed(ctx, request) {
   }
   if (typeof expected !== 'string' || expected.length === 0) return false
   return origin === expected
+}
+
+// ------------------------------------------------------- state read isolation
+//
+// The blocking part of a state request is the store read: core's readers are
+// synchronous, `resolveHeartbeatWorkspace` shells out to git, and a root on a hung
+// mount can park a thread in a syscall for seconds. That work therefore runs in a
+// forked child, never on the host event loop.
+//
+// `child_process.fork` (not `worker_threads`): a worker's `terminate()` cannot
+// interrupt a blocked syscall (measured >3s on a FIFO), while fork + SIGKILL
+// reclaims the process in ~3ms. The deadline is the host's only hard guarantee.
+//
+// The pool is per `apply()` (a WeakMap keyed by ctx), so a re-apply disposes the
+// previous children instead of leaking them. A child is referenced only while a
+// fork is warming or a request is in flight (so the host stays alive until the
+// answer lands) and unref'd while idle (so an idle pool never keeps a test
+// process alive). Children exit on IPC disconnect and never write to
+// stdout/stderr (stdio: ignore).
+
+const STATE_DEADLINE_MS = 1800
+const STATE_READY_MS = 4000
+const STATE_MAX_IDLE = 1
+const STATE_MAX_CHILDREN = 8
+const STATE_WORKER_DEFAULT_SCRIPT = fileURLToPath(new URL('./lib/state-snapshot.mjs', import.meta.url))
+
+/**
+ * Test seam: pointing the pool at another worker script requires an explicit
+ * opt-in env pair, so a production host can never be redirected by a stray
+ * `PF_STATE_WORKER_SCRIPT` in its environment.
+ */
+function stateWorkerScript() {
+  const allowed = process.env.PF_STATE_WORKER_SCRIPT_ALLOW === '1'
+  const override =
+    allowed && typeof process.env.PF_STATE_WORKER_SCRIPT === 'string' ? process.env.PF_STATE_WORKER_SCRIPT.trim() : ''
+  return override === '' ? STATE_WORKER_DEFAULT_SCRIPT : override
+}
+
+/**
+ * Environment one read worker needs: git resolution, the temp directory, the
+ * locale and the clock. Nothing else is inherited — the child only reads the
+ * store and has no use for the host's credentials or session variables.
+ */
+function stateWorkerEnv() {
+  const env = { PF_STATE_WORKER: '1' }
+  const passthrough = [
+    'PATH',
+    'HOME',
+    'USERPROFILE',
+    'TMPDIR',
+    'TEMP',
+    'TMP',
+    'LANG',
+    'LC_ALL',
+    'TZ',
+    'SystemRoot',
+    'SYSTEMROOT',
+    'APPDATA',
+    'LOCALAPPDATA',
+  ]
+  for (const name of passthrough) {
+    const value = process.env[name]
+    if (typeof value === 'string' && value !== '') env[name] = value
+  }
+  return env
+}
+
+const STATE_POOLS = new WeakMap()
+
+/** The pool of the ctx that ran `apply`; undefined for a bare test double. */
+function statePoolOf(ctx) {
+  try {
+    return STATE_POOLS.get(ctx)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * One fork()ed read worker: JSON in, JSON out over the IPC channel.
+ *
+ * A slot is `{ child, ready, busy }`; a request owns exactly one child until it
+ * settles (reply, deadline, crash), so two requests never interleave inside one
+ * child and a hung read cannot poison its neighbour.
+ */
+class StateWorkerPool {
+  constructor() {
+    this.children = new Set()
+    this.pending = new Map()
+    this.seq = 0
+    this.disposed = false
+    /** In-flight warm-up fork; a second request must await it instead of forking again. */
+    this.starting = undefined
+  }
+
+  /** How many children are ready and unclaimed. */
+  idleCount() {
+    let count = 0
+    for (const slot of this.children) {
+      if (slot.ready === true && slot.busy === false) count += 1
+    }
+    return count
+  }
+
+  /**
+   * Claim one ready, idle child atomically: it is marked busy (and referenced)
+   * before it is handed out, so two concurrent requests can never share a child.
+   */
+  takeIdle() {
+    for (const slot of this.children) {
+      if (slot.ready === true && slot.busy === false) {
+        slot.busy = true
+        this.refSlot(slot)
+        return slot
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Obtain a slot for one request.
+   *
+   * An idle child is claimed atomically. When the pool is cold, the warm-up in
+   * flight is awaited and its result is claimed — never handed out blind: a
+   * second concurrent request that loses the race spawns its own child instead
+   * of reusing the first request's busy one (the bug where a hung read took a
+   * normal read down with it). At the child cap the request is refused rather
+   * than forking a K-th ~59MB child.
+   *
+   * @returns {Promise<object|undefined>} a claimed slot, or undefined
+   */
+  async acquire() {
+    if (this.disposed) return undefined
+    const claimed = this.takeIdle()
+    if (claimed !== undefined) return claimed
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (this.disposed) return undefined
+      if (this.starting === undefined) {
+        if (this.children.size >= STATE_MAX_CHILDREN) return undefined
+        this.ensureWarm()
+        if (this.starting === undefined) return undefined
+      }
+      const starting = this.starting
+      try {
+        await starting
+      } catch {
+        return undefined
+      }
+      const slot = this.takeIdle()
+      if (slot !== undefined) return slot
+    }
+    return undefined
+  }
+
+  /** Keep one spare warm so the next poll does not pay the fork cost. */
+  ensureWarm() {
+    if (this.disposed) return
+    if (this.idleCount() >= STATE_MAX_IDLE) return
+    if (this.starting !== undefined) return
+    if (this.children.size >= STATE_MAX_CHILDREN) return
+    const starting = this.spawn()
+    this.starting = starting
+    starting.then(
+      () => {
+        if (this.starting === starting) this.starting = undefined
+      },
+      () => {
+        if (this.starting === starting) this.starting = undefined
+      },
+    )
+  }
+
+  /** Fork one child and resolve the slot once it reports ready. */
+  spawn() {
+    if (this.disposed) return Promise.reject(new Error('state worker pool is disposed'))
+    let child
+    try {
+      child = fork(stateWorkerScript(), [], {
+        cwd: PACKAGE_ROOT,
+        // No pipes to drain: stdout/stderr are discarded, only IPC remains.
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        serialization: 'json',
+        env: stateWorkerEnv(),
+        execArgv: [],
+      })
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    const slot = { child, ready: false, busy: false }
+    this.children.add(slot)
+    // Referenced until ready (an awaiting request must keep the host alive), then
+    // unreferenced for the idle life of the pool.
+    this.refSlot(slot)
+    const ready = new Promise((settle, fail) => {
+      const timer = setTimeout(() => {
+        this.kill(slot)
+        fail(new Error(`state worker did not report ready within ${STATE_READY_MS}ms`))
+      }, STATE_READY_MS)
+      if (typeof timer.unref === 'function') timer.unref()
+      slot.onReady = () => {
+        clearTimeout(timer)
+        settle(slot)
+      }
+      slot.onStartFail = (error) => {
+        clearTimeout(timer)
+        fail(error)
+      }
+    })
+    child.on('message', (message) => this.onMessage(slot, message))
+    child.on('error', (error) => this.onChildFailure(slot, error))
+    child.on('exit', (code, signal) => this.onChildExit(slot, code, signal))
+    return ready
+  }
+
+  /** A pending request must keep the host alive; an idle pool must never do so. */
+  refSlot(slot) {
+    try {
+      if (typeof slot.child.ref === 'function') slot.child.ref()
+      if (slot.child.channel !== null && slot.child.channel !== undefined && typeof slot.child.channel.ref === 'function') {
+        slot.child.channel.ref()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  unrefSlot(slot) {
+    try {
+      if (typeof slot.child.unref === 'function') slot.child.unref()
+      if (slot.child.channel !== null && slot.child.channel !== undefined && typeof slot.child.channel.unref === 'function') {
+        slot.child.channel.unref()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  onMessage(slot, message) {
+    if (message === null || typeof message !== 'object') return
+    if (message.type === 'ready') {
+      slot.ready = true
+      this.unrefSlot(slot)
+      const onReady = slot.onReady
+      slot.onReady = null
+      if (typeof onReady === 'function') onReady()
+      return
+    }
+    const pending = this.pending.get(message.id)
+    if (pending === undefined || pending.slot !== slot) return
+    if (message.ok === true) {
+      pending.finish({ ok: true, payload: message.payload })
+      return
+    }
+    const error = message.error !== null && typeof message.error === 'object' ? message.error : {}
+    pending.finish({
+      ok: false,
+      code: typeof error.code === 'string' && error.code !== '' ? error.code : 'state-internal',
+      message: typeof error.message === 'string' && error.message !== '' ? error.message : 'state snapshot failed',
+    })
+  }
+
+  onChildFailure(slot, error) {
+    const onStartFail = slot.onStartFail
+    slot.onStartFail = null
+    if (typeof onStartFail === 'function') onStartFail(error)
+    this.retire(slot, { ok: false, code: 'state-worker-crashed', message: brief(error, 300) })
+  }
+
+  onChildExit(slot, code, signal) {
+    const onStartFail = slot.onStartFail
+    slot.onStartFail = null
+    if (typeof onStartFail === 'function') {
+      onStartFail(new Error(`state worker exited before ready (code ${String(code)}, signal ${String(signal)})`))
+    }
+    this.retire(slot, {
+      ok: false,
+      code: 'state-worker-crashed',
+      message: `state worker exited (code ${String(code)}, signal ${String(signal)})`,
+    })
+  }
+
+  /** Drop one slot and settle everything that still waited on it. */
+  retire(slot, failure) {
+    const wasReady = slot.ready === true
+    slot.ready = false
+    this.children.delete(slot)
+    for (const [id, pending] of this.pending) {
+      if (pending.slot !== slot) continue
+      this.pending.delete(id)
+      pending.finish(failure)
+    }
+    // A crashed worker must not take the endpoint down: the next request rebuilds.
+    if (this.disposed === false && wasReady === true) this.ensureWarm()
+  }
+
+  kill(slot) {
+    slot.ready = false
+    try {
+      slot.child.kill('SIGKILL')
+    } catch {
+      // already gone
+    }
+  }
+
+  /** Drain one snapshot request with the deadline as the only hard stop. */
+  call(slot, request) {
+    return new Promise((resolve) => {
+      const id = ++this.seq
+      let settled = false
+      const finish = (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.pending.delete(id)
+        slot.busy = false
+        this.unrefSlot(slot)
+        if (this.disposed === false) this.ensureWarm()
+        resolve(value)
+      }
+      const timer = setTimeout(() => {
+        this.kill(slot)
+        finish({
+          ok: false,
+          code: 'state-timeout',
+          message: `store read exceeded ${STATE_DEADLINE_MS}ms`,
+        })
+      }, STATE_DEADLINE_MS)
+      this.pending.set(id, { slot, finish })
+      try {
+        slot.child.send({ id, type: 'snapshot', ...request }, (error) => {
+          if (error === null || error === undefined) return
+          finish({ ok: false, code: 'state-worker-crashed', message: brief(error, 300) })
+        })
+      } catch (error) {
+        finish({ ok: false, code: 'state-worker-crashed', message: brief(error, 300) })
+      }
+    })
+  }
+
+  /** The public one-request call: claim a child, then enforce the deadline. */
+  async snapshot(request) {
+    if (this.disposed) return { ok: false, code: 'state-worker-unavailable', message: 'state worker pool is disposed' }
+    this.ensureWarm()
+    const slot = await this.acquire()
+    if (slot === undefined) {
+      return {
+        ok: false,
+        code: 'state-worker-unavailable',
+        message: this.disposed
+          ? 'state worker pool is disposed'
+          : `state worker pool is unavailable (at most ${STATE_MAX_CHILDREN} read children)`,
+      }
+    }
+    return await this.call(slot, request)
+  }
+
+  /** Kill every child and settle pending requests (apply disposal). */
+  dispose() {
+    if (this.disposed) return
+    this.disposed = true
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id)
+      pending.finish({ ok: false, code: 'state-worker-unavailable', message: 'state worker pool disposed' })
+    }
+    for (const slot of this.children) {
+      this.kill(slot)
+      try {
+        if (typeof slot.child.disconnect === 'function') slot.child.disconnect()
+      } catch {
+        // ignore
+      }
+    }
+    this.children.clear()
+  }
+}
+
+/**
+ * One snapshot for the requested root: through the ctx's worker pool when the
+ * host ran `apply`, in-process otherwise (a bare unit-test double).
+ */
+async function requestStateSnapshot(ctx, request) {
+  const pool = statePoolOf(ctx)
+  if (pool !== undefined) return await pool.snapshot(request)
+  try {
+    return { ok: true, payload: await buildSnapshot(request) }
+  } catch (error) {
+    return { ok: false, code: 'state-worker-unavailable', message: brief(error, 300) }
+  }
 }
 
 async function handleState(host, request, response) {
@@ -1129,18 +769,17 @@ async function handleState(host, request, response) {
  * same request. `ctx` is accepted for symmetry with the other handlers and is
  * not consulted for workspace discovery.
  *
- * `root` is the canonical root, so the request-scoped realpath memo starts
- * pre-seeded with it: the root is never resolved a second time, and every
- * target path the payload validates is resolved at most once per request (the
- * memo is created here, so two concurrent requests never share one).
+ * The store read itself runs in the ctx's forked worker (`requestStateSnapshot`).
+ * The host only resolves the root asynchronously, computes the display name and
+ * applies the deadline, so a slow or hung root costs this request alone. A timed
+ * out / crashed / unavailable worker becomes `ok:false` with a stable error code;
+ * the endpoint still answers 200, exactly like `not-initialized`.
  */
 async function collectPanelState(ctx, root, workspaces) {
   if (!Array.isArray(workspaces)) {
     throw new TypeError('collectPanelState requires the caller to enumerate the workspace registry')
   }
   const now = Date.now()
-  const pathMemo = new Map([[root, root]])
-  const options = { realRoot: root, pathMemo }
   const entry = { path: root, name: await rootName(root, workspaces) }
 
   if ((await hasStoreAsync(root)) === false) {
@@ -1153,20 +792,35 @@ async function collectPanelState(ctx, root, workspaces) {
     }
   }
 
-  try {
-    const payload = await buildState(root, entry, now, options)
+  // Warning channel across the fork boundary: the child's own core warnings travel
+  // inside the payload (built from its core instance), while this process's core
+  // warning buffer is drained and dropped — a 2.5s poll must never leave
+  // diagnostics behind for the next tool call to copy into its result, which is
+  // exactly the contract the in-process projection used to provide.
+  takeCoreWarnings()
+  const result = await requestStateSnapshot(ctx, {
+    root,
+    realRoot: root,
+    entry: { path: entry.path, name: entry.name },
+    hostWarnings: mountWarnings.slice(),
+    now,
+  })
+  if (result.ok === true && result.payload !== null && typeof result.payload === 'object') {
+    const payload = result.payload
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
-    // Cap by serializing once, then hand back the exact object the client sees.
-    return JSON.parse(capPayload(payload))
-  } catch (error) {
-    return {
-      ok: false,
-      generatedAt: isoLocal(new Date(now)),
-      roots: [{ path: entry.path, name: entry.name }],
-      root,
-      error: { code: 'internal', message: brief(error, 400) },
-    }
+    return payload
+  }
+  return {
+    ok: false,
+    generatedAt: isoLocal(new Date(now)),
+    root,
+    roots: [{ path: entry.path, name: entry.name }],
+    warnings: mountWarnings.slice(),
+    error: {
+      code: typeof result.code === 'string' && result.code !== '' ? result.code : 'state-worker-unavailable',
+      message: typeof result.message === 'string' && result.message !== '' ? result.message : 'state read failed',
+    },
   }
 }
 
@@ -1584,12 +1238,13 @@ function agentRoot(ctx, agent) {
 function heartbeatWorking(root, session) {
   if (typeof root !== 'string' || root.length === 0) return null
   if (hasStore(root) === false) return null
-  if (coreAvailable() === false || typeof core.heartbeatStatus !== 'function') return null
+  const c = coreModule()
+  if (c === null || typeof c.heartbeatStatus !== 'function') return null
   const id = usableSessionId(session)
   if (id === '') return null
   try {
-    const loaded = core.loadContract(root)
-    const status = core.heartbeatStatus(root, loaded.contract, id)
+    const loaded = c.loadContract(root)
+    const status = c.heartbeatStatus(root, loaded.contract, id)
     return status !== null && typeof status === 'object' && status.active === true && status.record?.status === 'working'
   } catch {
     return null
@@ -1667,8 +1322,9 @@ const ROOT_SESSION_DECISION_ONLY =
 /** Resolve the heartbeat ledger root (the project main worktree); degrade to the workspace root. */
 function heartbeatRootOf(root) {
   try {
-    if (coreAvailable() && typeof core.resolveHeartbeatWorkspace === 'function') {
-      const resolved = core.resolveHeartbeatWorkspace(root)
+    const c = coreModule()
+    if (c !== null && typeof c.resolveHeartbeatWorkspace === 'function') {
+      const resolved = c.resolveHeartbeatWorkspace(root)
       if (isPlainObject(resolved) && typeof resolved.root === 'string' && resolved.root.length > 0) {
         return {
           root: resolved.root,
@@ -1775,11 +1431,6 @@ function reminderMessage(session, turn, step, text) {
   }
 }
 
-/** Open-decision rows the reminder and the panel carry: core's DECISION_REMIND_MAX. */
-function decisionRemindMax() {
-  const value = coreAvailable() ? core.DECISION_REMIND_MAX : undefined
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 3
-}
 
 /** The store contract of one root, or null when it cannot be loaded. */
 function decisionContractOf(root) {
@@ -1947,24 +1598,6 @@ function heartbeatGuardReason(ctx, execution) {
 // the model-side writer; bin/flow.mjs drives the same lib/core.mjs API, and the
 // per-turn reminder only reads it.
 
-/** Count keys of one decisions section; the tool, the panel and both self-tests share them. */
-const DECISION_COUNT_KEYS = ['open', 'blocking', 'escalated', 'answered', 'withdrawn', 'superseded', 'total']
-
-/** Project arbitrary counts onto the seven fixed keys; missing or broken values become 0. */
-function decisionCountsOf(counts) {
-  const source = isPlainObject(counts) ? counts : {}
-  const out = {}
-  for (const key of DECISION_COUNT_KEYS) {
-    const value = source[key]
-    out[key] = typeof value === 'number' && Number.isFinite(value) ? value : 0
-  }
-  return out
-}
-
-/** Every count zero, in the canonical key order. */
-function emptyDecisionCounts() {
-  return decisionCountsOf(null)
-}
 
 /** The turn of this session's heartbeat record; `null` when it cannot be read. */
 function decisionTurnOf(c, root, contract, session) {
@@ -2901,8 +2534,31 @@ export function apply(ctx, config) {
   // previous mount so a successful re-apply never reports stale failures. A
   // still-broken core re-adds its message every time.
   mountWarnings.length = 0
-  if (core === null) warnMount(coreUnavailableMessage(), ctx)
+  if (coreAvailable() === false) warnMount(coreUnavailableMessage(), ctx)
   const settings = { heartbeatGate: heartbeatGateEnabled(config) }
+
+  // The state read pool: one per apply, disposed with the effect that owns it.
+  // A re-apply therefore kills the previous children instead of leaking them,
+  // and the first poll finds a pre-warmed child (~fork cost off the request).
+  const previousPool = statePoolOf(ctx)
+  const pool = new StateWorkerPool()
+  STATE_POOLS.set(ctx, pool)
+  try {
+    if (previousPool !== undefined) previousPool.dispose()
+  } catch {
+    // A broken previous pool must not block the new mount.
+  }
+  try {
+    ctx.effect(() => {
+      pool.ensureWarm()
+      return () => {
+        pool.dispose()
+        if (statePoolOf(ctx) === pool) STATE_POOLS.delete(ctx)
+      }
+    }, 'project-flow: state worker')
+  } catch (error) {
+    warnMount(`state worker: registration failed: ${brief(error)}`, ctx)
+  }
 
   mountJsonRoute(ctx, ROUTE_PATH, 'state route', handleState)
   mountJsonRoute(ctx, INIT_ROUTE_PATH, 'init route', handleInit)
