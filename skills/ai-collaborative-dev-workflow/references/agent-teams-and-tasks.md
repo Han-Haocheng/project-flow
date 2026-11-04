@@ -41,7 +41,7 @@
 | `wait_agent` | 等下一次成员状态/邮箱/共享任务变化 | **Lead 默认不用，仅排障**（确认还有谁在跑）；**只观察调用之后的变化**，**从不唤醒**任何人；没有其他成员在跑时立刻返回 `noProgress`；超时后应 `list_agents` 重列而不是轮询 |
 | `list_agents` | 花名册与可用性 | `inactive` = **没在跑**，不等于失败/完成/等待；`provisioning` / `failed` 才是创建态 |
 | `interrupt_agent` | Lead 专用中断某队友当前轮，**保留 pending inbox** | 中断 ≠ 取消任务；唤醒不保证恢复原状 |
-| `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒；**板随 Lead 会话消失，映射与回收见 §3.1**；`description` 的 `role:` / `domain:` 标注见 `SKILL.md` §10.4 |
+| `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒；**`completed` 的 blocker 也不会自动移出 `blocked_by`**（卡停在 `ready:false` 时按 §3.3 用 `set_dependencies` 清）；**板随 Lead 会话消失，映射与回收见 §3.1**；`description` 的 `role:` / `domain:` 标注见 `SKILL.md` §10.4 |
 
 **派工检查单**：任务书路径 / base（branch + commit）/ **角色标注（`description` 第二行 `role:`，实现者第三行 `domain:`）** / 允许写域（与其他在跑成员尽量不相交，`write_scopes` 与 `domain:` 一致）/ 交付格式（只给结论 + 指针，≤6–8KB）/ **仅在自己分支提交 + 按模板提评审申请/审查结论，不合并、不 push**（见 `contribution-flow.md`）/ 停止条件 / 验证命令。
 
@@ -109,6 +109,8 @@
 | **依赖未建卡**（缺口） | `pending` 为空、或全部 `pending` 都在 `ready: true` 名单里（没人等依赖，槽却空着）⇒ backlog 枯竭 | 当场拆卡 / 补只读卡；Lead 不下场侦察或实现 |
 
 **上游卡被删**：`blocked_by` 指向的卡已不在板上 ⇒ 用 `team_task_update action=set_dependencies` 修依赖；修完仍无卡可开工的槽，归「依赖未建卡」，**不算合法空转**。
+
+**blocker 全部 completed 但看板仍 `ready:false`（2026-11-04 T-12 task-100 实测）**：`blocked_by` 里的卡都 `completed` 了，readiness **不会自动刷新**，卡仍停在 `ready:false`、claim 被拒。处理：由 **owner**（或中心）先 `team_task_get` 取**最新 revision**，再 `team_task_update action=set_dependencies` **只清掉已 `completed` 的 blocker**（未完成的保留）→ 之后 `claim` 即成功。**不要为此重建卡、不要绕开依赖**（重建会丢 history 与 `flow:` 映射；绕开会让审查/关键路径判据失真）。
 
 **派工前三问**（判一张卡现在就该派）：① `blocked_by` 空（在 `ready: true` 名单里）？② owner 空？③ 有未完成后继（∃Y，Y.status≠completed ∧ Y.`blocked_by` ∋ X.id ⇒ 关键路径）？**皆 yes ⇒ 立刻派**；否则给等待者派只读预审卡，并把该槽归到上表某一行。
 
