@@ -897,6 +897,15 @@ check('TasksCard: estimatedFrom boundaries — from covers the window, to marks 
   assert.equal(collect(after, 'project-flow-trendApprox').length, 0, 'a future approximation must not mark this window');
 });
 
+check('TasksCard: estimatedFrom exactly one day past the tail stays unmarked (index === days)', () => {
+  /* The off-by-one cell: `index >= days` must not silently become `> days`. */
+  const edge = mountTasks(trendTasks({ estimatedFrom: '2026-11-05' }));
+  const opacities = collect(edge, 'project-flow-trendDay').map((day) => day.props.opacity);
+  assert.deepEqual(opacities, new Array(14).fill(1), 'index === days must not fade any bar');
+  assert.equal(collect(edge, 'project-flow-trendApprox').length, 0, 'index === days must not add the ≈ marker');
+  assert.ok(!textOf(edge).includes('≈'), 'index === days must not print ≈ in the summary');
+});
+
 check('normalize: trend numbers are coerced on purpose, but the shape stays strict', () => {
   // Numeric strings are accepted (documented tolerance — payload is our own snapshot).
   const loose = probe.normalize({
