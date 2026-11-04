@@ -1205,60 +1205,6 @@ function pickFields(args, names) {
   return picked
 }
 
-/** status → review branch (`success|uncertain|failure|pivot`, CONTRACT §5.1). */
-const REVIEW_BRANCH = {
-  confirmed: 'success',
-  refuted: 'failure',
-  pivoted: 'pivot',
-  open: 'uncertain',
-  inconclusive: 'uncertain',
-  abandoned: 'uncertain',
-}
-
-/**
- * Read-only verdict for one experiment: the same rules `flow check experiments`
- * enforces (schema2 completeness + per-status closure), expressed as `missing`.
- *
- * ⚠ 同源副本：`bin/flow.mjs` (`reviewExperimentRecord`) 有一份相同逻辑，**勿单独修改**。
- * 已知极限：本副本只做「数组非空/整数下限」判断，而 core 的 `schema2FieldProblems`
- * 还会拒绝空串 guardrail 项与 `windowDays > 3650`（task-118 复核反例）。抽成 core
- * 单一导出后删除两份副本。
- */
-function reviewExperimentRecord(record, { hasSuccessor }) {
-  if (record === null || typeof record !== 'object' || record.schema !== 2) {
-    return {
-      id: record !== null && typeof record === 'object' ? record.id : null,
-      verdict: 'incomplete',
-      branch: 'uncertain',
-      missing: ['schema2 (legacy record is read-only)'],
-    }
-  }
-  const missing = []
-  const text = (key) => (typeof record[key] === 'string' ? record[key].trim() : '')
-  for (const key of ['direction', 'expected', 'primaryMetric', 'falsify', 'stopLoss']) {
-    if (text(key) === '') missing.push(key)
-  }
-  if (Array.isArray(record.guardrails) === false || record.guardrails.length === 0) missing.push('guardrails')
-  if (Number.isInteger(record.windowDays) === false || record.windowDays < 1) missing.push('windowDays')
-  if (record.status === 'confirmed' && (typeof record.productizedAt !== 'string' || record.productizedAt === '')) {
-    missing.push('productizedAt')
-  }
-  if (record.status === 'refuted') {
-    if (text('learned') === '') missing.push('learned')
-    if (typeof record.cleanupAt !== 'string' || record.cleanupAt === '') missing.push('cleanupAt')
-  }
-  if (record.status === 'pivoted') {
-    if (text('learned') === '') missing.push('learned')
-    if (hasSuccessor(record.id) !== true) missing.push('successor')
-  }
-  return {
-    id: record.id,
-    verdict: missing.length === 0 ? 'complete' : 'incomplete',
-    branch: REVIEW_BRANCH[record.status] ?? 'uncertain',
-    missing,
-  }
-}
-
 // --------------------------------------------------------------- heartbeats
 //
 // A heartbeat is the per-session registration that tells the panel and the
@@ -1998,7 +1944,7 @@ function buildToolDefinitions(ctx) {
           const records = c.listExperiments(root, contract)
           const hasSuccessor = (experimentId) =>
             records.some((item) => item.id !== experimentId && item.parent === experimentId)
-          return { root, review: reviewExperimentRecord(record, { hasSuccessor }) }
+          return { root, review: c.reviewExperimentRecord(record, { hasSuccessor }) }
         }
         if (action === 'productize') {
           const id = requireId('flow_exp', action, args.id)

@@ -836,57 +836,6 @@ function experimentSeven(flags, ctx, { required }) {
   return fields
 }
 
-/** status → review branch (`success|uncertain|failure|pivot`, CONTRACT §5.1). */
-const REVIEW_BRANCH = {
-  confirmed: 'success',
-  refuted: 'failure',
-  pivoted: 'pivot',
-  open: 'uncertain',
-  inconclusive: 'uncertain',
-  abandoned: 'uncertain',
-}
-
-/**
- * Read-only verdict for one experiment: the same rules `flow check experiments`
- * enforces (schema2 completeness + per-status closure), expressed as `missing`.
- * Keep in sync with the copy in `index.js` (`flow_exp review`); the tool and CLI
- * must report identical verdicts for the same record.
- */
-function reviewExperimentRecord(record, { hasSuccessor }) {
-  if (record === null || typeof record !== 'object' || record.schema !== 2) {
-    return {
-      id: record !== null && typeof record === 'object' ? record.id : null,
-      verdict: 'incomplete',
-      branch: 'uncertain',
-      missing: ['schema2 (legacy record is read-only)'],
-    }
-  }
-  const missing = []
-  const text = (key) => (typeof record[key] === 'string' ? record[key].trim() : '')
-  for (const key of ['direction', 'expected', 'primaryMetric', 'falsify', 'stopLoss']) {
-    if (text(key) === '') missing.push(key)
-  }
-  if (Array.isArray(record.guardrails) === false || record.guardrails.length === 0) missing.push('guardrails')
-  if (Number.isInteger(record.windowDays) === false || record.windowDays < 1) missing.push('windowDays')
-  if (record.status === 'confirmed' && (typeof record.productizedAt !== 'string' || record.productizedAt === '')) {
-    missing.push('productizedAt')
-  }
-  if (record.status === 'refuted') {
-    if (text('learned') === '') missing.push('learned')
-    if (typeof record.cleanupAt !== 'string' || record.cleanupAt === '') missing.push('cleanupAt')
-  }
-  if (record.status === 'pivoted') {
-    if (text('learned') === '') missing.push('learned')
-    if (hasSuccessor(record.id) !== true) missing.push('successor')
-  }
-  return {
-    id: record.id,
-    verdict: missing.length === 0 ? 'complete' : 'incomplete',
-    branch: REVIEW_BRANCH[record.status] ?? 'uncertain',
-    missing,
-  }
-}
-
 async function cmdExp(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow exp <list|show|tree|add|update|rm>')
@@ -982,7 +931,7 @@ async function cmdExp(ctx, sub) {
     const records = await core.listExperiments(ctx.root, contract)
     const hasSuccessor = (experimentId) =>
       records.some((item) => item.id !== experimentId && item.parent === experimentId)
-    const review = reviewExperimentRecord(record, { hasSuccessor })
+    const review = core.reviewExperimentRecord(record, { hasSuccessor })
     if (!ctx.json) {
       out(`${review.id}  verdict ${review.verdict} · branch ${review.branch}`)
       out(review.missing.length === 0 ? '  missing: （无）' : `  missing: ${review.missing.join(', ')}`)

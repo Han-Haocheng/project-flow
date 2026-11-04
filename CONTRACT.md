@@ -989,7 +989,7 @@ renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
                                      // add/update 只写 schema2；legacy（schema!==2）读写规则见 §3.1
 experimentTree(records)              // 由记录数组组装 parent 谱系（未知 parent/成环按根）
-reviewExperiment?                    // 不新增 core API：review 是 bin/index 的只读派生
+reviewExperimentRecord(record,{hasSuccessor})  // core 单一导出：bin/index 只调用，规则与 checkExperiments 同源
                                      // {verdict,branch,missing[]}，恒 exit 0（见 §5.1）
 productizeExperiment(root, contract, id, {gateId?='release', now?})
                                      // 要求 confirmed + release 最近 ok 的 finished_at
