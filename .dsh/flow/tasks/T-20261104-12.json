@@ -1,0 +1,32 @@
+{
+  "title": "feat: 实验树可选化与假设规范/结果分流",
+  "goal": "按用户 2026-11-04 20:2x 要求：把实验树从核心功能剥离为可选开启功能（实验是任务的外围）；实验类项目的流程：识别问题→提出假设（方向+验证目标）→创建任务→设计实现→（隔离分支）→实现→审查实现→完成任务→测试并判断结果；假设必须严格规范主指标、护栏指标、证伪条件、观测周期、止损线；结果分流：成功→过产品化门禁后合并/上线，不确定→继续验证/调整假设，失败→停止丢弃但记录学习并清理开关/代码/数据，转向→保留部分资产换假设继续。先由分析员盘点现状与设计任务书，再实施。",
+  "scope": {
+    "allow": [
+      "lib/",
+      "index.js",
+      "client.js",
+      "tui-panel.js",
+      "locale/",
+      "bin/",
+      "CONTRACT.md",
+      "README.md",
+      "skills/",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-12",
+  "status": "active",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "team: task-64(分析/卡A 实验树可选化) task-65(分析/卡B schema+假设规范+结果分流)。D-20261104-10 用户采纳 4 项：schema2 新实验必填 direction/expected/primaryMetric/guardrails/falsify/windowDays/stopLoss（缺则拒）；EXPERIMENT_STATUS 新增 inconclusive/pivoted（加法，旧四态兼容，旧记录 legacy 不迁移）；产品化复用 release phase + `flow exp productize`（gate ok 才写 productizedAt）；refuted 必须 learned+cleanup、pivoted 必须 learned，`flow check experiments` 进 release gate。卡A：`flow.json.experiments.enabled` 默认 false，关闭时只留 counts 骨架/面板单列/CLI 工具仍可用。实施拆卡：B1 core schema → B2 CLI+工具 / B3 面板+TUI（依赖卡A、与 state-snapshot/client 同域需串行）/ B4 文档+check。待 T-05/T-08/T-10 收尾后开工。",
+  "created_at": "2026-11-04T20:22:38+08:00",
+  "updated_at": "2026-11-04T20:32:15+08:00"
+}

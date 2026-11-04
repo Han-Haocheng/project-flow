@@ -1,0 +1,27 @@
+{
+  "title": "feat: 任务进度随时间趋势视图",
+  "goal": "用户希望看见任务进度随时间的趋势（例如每日 active/done/archived 数量、完成速率）。当前台账只存现状、无历史序列；需分析数据来源（提交时间、任务 updated_at、门禁日志、心跳、决策记录）与最小成本方案（面板端按 updated_at/commits 重建近似趋势，或新增轻量历史快照），并给任务书。",
+  "scope": {
+    "allow": [
+      "client.js",
+      "index.js",
+      "lib/",
+      "locale/",
+      "CONTRACT.md",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-09",
+  "status": "draft",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-04T19:59:12+08:00",
+  "updated_at": "2026-11-04T19:59:12+08:00"
+}

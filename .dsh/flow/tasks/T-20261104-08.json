@@ -1,0 +1,28 @@
+{
+  "title": "feat: 面板任务区队列视图（分组/折叠/排序，解决堆叠难翻找）",
+  "goal": "用户反馈：侧栏任务进度栏太长、不好翻找；旧任务堆在一起显得过时。期望把待办任务「挂到队列」而不是全堆在一起。分析面板任务区的信息架构（active/draft/recentDone/归档、排序依据、折叠与分页、与 T-07 自动归档的关系）并给任务书。",
+  "scope": {
+    "allow": [
+      "client.js",
+      "index.js",
+      "lib/",
+      "locale/",
+      "CONTRACT.md",
+      "test/",
+      ".selftest/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-08",
+  "status": "draft",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-04T19:59:12+08:00",
+  "updated_at": "2026-11-04T19:59:12+08:00"
+}

@@ -1,0 +1,24 @@
+{
+  "title": "chore: 技能文档 N1-N4 措辞收敛",
+  "goal": "task-55 第三轮复审 accept 时留的 4 条非阻塞措辞：N1 三分表指向改「三分法（表见 references §3.3）」；N2 补「I > 余数(maxMembers) 时按 maxMembers 建队并把写域合并/串行或拆项目任务，不得超 maxMembers」；N3 references:107 第 2 行补 limit:100 一致；N4 满编六条#6 归因码与 §3.3 三分类命名对齐。",
+  "scope": {
+    "allow": [
+      "skills/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-11",
+  "status": "done",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "2fd7f9b"
+  ],
+  "notes": "team: task-57(实施/措辞收敛)。已合并 2fd7f9b。N1 三分法指向、N2 I>maxMembers 兜底、N3 limit:100、N4 归因码与三分类同名（dep-wait/parallel-unassigned/no-card）+ 3 处术语同步；smoke ALL PASS、doc_check 基线一致。",
+  "created_at": "2026-11-04T20:09:43+08:00",
+  "updated_at": "2026-11-04T20:11:28+08:00"
+}

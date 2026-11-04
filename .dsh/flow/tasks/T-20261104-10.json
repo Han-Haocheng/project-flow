@@ -1,0 +1,28 @@
+{
+  "title": "fix: 心跳不检查会话存活（陈旧心跳误显示为活跃）",
+  "goal": "用户反馈：插件心跳功能不会检查会话是否还存在——即陈旧心跳（会话已结束/被 kill）仍显示为活跃。需分析现有心跳判定（lib/core.mjs readHeartbeatSection 的 status/active/stale 规则、心跳记录的 pid/session 字段、index.js 面板投影、tools 的 heartbeat 门禁），确定如何检查会话存活（宿主 agents 服务 roots/list？心跳文件 mtime + session 存在性？pid？），并给任务书（误判风险：多宿主/重启后 pid 复用、跨机器工作树）。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "index.js",
+      "tui-panel.js",
+      "client.js",
+      "locale/",
+      "CONTRACT.md",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-10",
+  "status": "active",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "team: task-47(分析/任务书+实测复现) task-50(实施/卡A core liveness) task-51(实施/卡B 消费面，blocked_by 50)。分析结论：用户反馈成立——真实 .agents/heartbeat 有 3 条 status=working 且 4.4–5 天未更新仍算 active；heartbeat status --require-active 对死会话 exit 0，session-open 种子门禁假绿。方案：A 宿主 agents 正向证据（index.js 已在用 service(ctx,'agents')，无需改 inject；但 CLI/门禁是子进程拿不到）+ B 记录 host/boot_id/pid/pid_start（唯一给 CLI 的证据；CLI 不得写 pid；跨机只 foreign 不判死）+ 6h 年龄兜底；liveness 放投影不新增文件 status。关键陷阱：heartbeatWorking 是编辑/写硬门禁，必须把 agents 命中作为正向证据，否则活跃但 >6h 未续写会被拦死。",
+  "created_at": "2026-11-04T19:59:22+08:00",
+  "updated_at": "2026-11-04T20:04:26+08:00"
+}

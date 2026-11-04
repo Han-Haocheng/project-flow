@@ -1,0 +1,26 @@
+{
+  "title": "feat: 团队派工规范（命名/配比/满编调度/生命周期）",
+  "status": "done",
+  "goal": "按用户 2026-11-04 19:22 的优化要求，把智能体团队派工纪律写进插件技能：①队友命名=职责+处理范围，默认配比 分析25%/审查37.5%/执行37.5%；②任务命名=类型(feat/fix/chore)+简短描述；③任务生命周期 创建→分析→等待→实现→审查→完成→归档（审查不通过回分析阶段）；④调度尽量满编，只有关键路径任务可允许空转。产出由分析员补全的任务书后实施。",
+  "scope": {
+    "allow": [
+      "skills/",
+      "CONTRACT.md",
+      "README.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-06",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "4241672"
+  ],
+  "notes": "team: task-16(分析/任务书) task-20(利用率审计) task-21(预研) task-22(实施) task-23(审查 reject) task-29(审查 reject) task-31(自动调度可行性) task-35(修正 P/F) task-41(复审 reject) task-42(复审 reject) task-43(修正 B1/B2/S) task-54(修正 R1-R11) task-55(第三轮复审 accept)。已合并 4241672。三轮 reject→修正后 accept；smoke_test ALL PASS、doc_check 与 HEAD 基线一致。遗留 4 条非阻塞措辞（三分表指向、I>余数(maxMembers) 边界、§3.3 limit:100、归因码命名）转入 T-20261104-11 chore。",
+  "created_at": "2026-11-04T19:22:31+08:00",
+  "updated_at": "2026-11-04T20:09:43+08:00"
+}

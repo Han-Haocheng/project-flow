@@ -20,11 +20,13 @@
   ],
   "schema": 1,
   "id": "T-20261104-05",
-  "status": "draft",
+  "status": "done",
   "owner": "",
   "checkpoints": [],
-  "commits": [],
-  "notes": "",
+  "commits": [
+    "0e289be"
+  ],
+  "notes": "team: task-33(预研 fork) task-36(实施/卡A) task-38(分析/卡B stale) task-39(实施/卡B TUI last-good) task-40(CONTRACT 草案) task-58(审查 accept) task-61(审查 accept) task-63(修正 M1-M5)。已合并 0e289be。fork+SIGKILL 隔离、1800ms 期限、state-timeout/crashed/unavailable、stale 归读端、TUI last-good 已实现；209/209 低负载绿；冷池串号已根治（takeIdle 原子占用）。已知非阻塞 F1：≥3 路冷池同时到达时仅 2 路被服务且错误文案误导（acquirer 补员走 ensureWarm 被 MAX_IDLE=1 限制），待小卡修。F2（无池 in-process 无期限）已写入 CONTRACT 边界；F3（59MB/子进程、crash-loop 无退避）只登记。",
   "created_at": "2026-11-04T19:08:09+08:00",
-  "updated_at": "2026-11-04T19:08:09+08:00"
+  "updated_at": "2026-11-04T20:35:41+08:00"
 }
