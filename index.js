@@ -196,18 +196,55 @@ function pathWithin(parent, child) {
   return target.startsWith(base.endsWith(sep) ? base : base + sep)
 }
 
-function realPathStaysInside(absRoot, target) {
-  let realRoot
+/**
+ * `realpathSync` through an optional per-request memo.
+ *
+ * The memo is a plain `Map` created by the request entry (`collectPanelState`)
+ * and passed down explicitly — never a module-level cache, because a mount can
+ * appear or disappear between requests. Failures are memoized too (the error is
+ * rethrown): within one read-only request the same missing path is walked once,
+ * and only request entries that cannot create directories pass a memo.
+ */
+function memoizedRealpath(path, pathMemo) {
+  if (pathMemo === undefined) return realpathSync(path)
+  const cached = pathMemo.get(path)
+  if (cached instanceof Error) throw cached
+  if (cached !== undefined) return cached
   try {
-    realRoot = realpathSync(absRoot)
-  } catch {
-    // The project root does not exist yet: only the lexical check is meaningful.
-    return pathWithin(absRoot, target)
+    const real = realpathSync(path)
+    pathMemo.set(path, real)
+    return real
+  } catch (error) {
+    const stored = error instanceof Error ? error : Object.assign(new Error(String(error)), { code: error?.code })
+    pathMemo.set(path, stored)
+    throw stored
+  }
+}
+
+/**
+ * Containment check for one path. `options.realRoot` is the already-canonical
+ * root (`canonicalRoot` output): passing it removes the per-check root realpath,
+ * exactly what `realpathSync(absRoot)` would have returned. `options.pathMemo`
+ * shares target resolutions across the whole request (and with lib/core.mjs).
+ */
+function realPathStaysInside(absRoot, target, options = {}) {
+  const pathMemo = options !== null && typeof options === 'object' && options.pathMemo instanceof Map ? options.pathMemo : undefined
+  const provided = options !== null && typeof options === 'object' ? options.realRoot : undefined
+  let realRoot
+  if (typeof provided === 'string' && provided.length > 0) {
+    realRoot = provided
+  } else {
+    try {
+      realRoot = memoizedRealpath(absRoot, pathMemo)
+    } catch {
+      // The project root does not exist yet: only the lexical check is meaningful.
+      return pathWithin(absRoot, target)
+    }
   }
   let current = target
   for (;;) {
     try {
-      return pathWithin(realRoot, realpathSync(current))
+      return pathWithin(realRoot, memoizedRealpath(current, pathMemo))
     } catch (error) {
       const code = error !== null && error !== undefined ? error.code : undefined
       if (code !== 'ENOENT' && code !== 'ENOTDIR') return false
@@ -238,11 +275,11 @@ function containedPath(root, value, label, warnings, options = {}) {
     rejectManifestPath(warnings, label, raw, 'absolute paths are not allowed')
     return undefined
   }
-  if (pathWithin(absRoot, target) !== true && realPathStaysInside(absRoot, target) !== true) {
+  if (pathWithin(absRoot, target) !== true && realPathStaysInside(absRoot, target, options) !== true) {
     rejectManifestPath(warnings, label, raw, 'escapes the project root')
     return undefined
   }
-  if (realPathStaysInside(absRoot, target) !== true) {
+  if (realPathStaysInside(absRoot, target, options) !== true) {
     rejectManifestPath(warnings, label, raw, 'a symlink resolves outside the project root')
     return undefined
   }
@@ -822,9 +859,16 @@ async function emptyStoreState(root, entry, now, warnings) {
   }
 }
 
-/** Store payload: contract + collections read through lib/core.mjs. */
-async function buildStoreState(root, entry, now, warnings) {
+/**
+ * Store payload: contract + collections read through lib/core.mjs.
+ *
+ * `options.realRoot` / `options.pathMemo` are the request-scoped containment
+ * context built by `collectPanelState`: the root is already canonical and every
+ * `realpath` shared with lib/core.mjs is resolved once per request.
+ */
+async function buildStoreState(root, entry, now, warnings, options = {}) {
   const c = requireCore()
+  const pathMemo = options !== null && typeof options === 'object' && options.pathMemo instanceof Map ? options.pathMemo : undefined
   let loaded
   try {
     loaded = c.loadContract(root)
@@ -840,7 +884,7 @@ async function buildStoreState(root, entry, now, warnings) {
 
   let state
   try {
-    state = c.readStoreState(root, contract)
+    state = c.readStoreState(root, contract, { pathMemo })
   } catch (error) {
     warnings.push(`store unreadable: ${brief(error)}`)
     return emptyStoreState(root, entry, now, warnings)
@@ -874,7 +918,8 @@ async function buildStoreState(root, entry, now, warnings) {
   // only echoes it; an unsafe value is hidden and warned about like everywhere else.
   const currentValue = typeof contract.tasks.current === 'string' ? contract.tasks.current : null
   const currentSafe =
-    currentValue !== null && containedPath(root, currentValue, 'tasks.current', warnings) !== undefined
+    currentValue !== null &&
+    containedPath(root, currentValue, 'tasks.current', warnings, { realRoot: options.realRoot, pathMemo }) !== undefined
   const tasks = {
     total: taskRecords.length,
     counts: taskCounts,
@@ -895,7 +940,7 @@ async function buildStoreState(root, entry, now, warnings) {
 
   let heartbeats = []
   try {
-    const section = c.readHeartbeatSection(root, contract)
+    const section = c.readHeartbeatSection(root, contract, { pathMemo })
     // The section reads the project main worktree; a degraded resolution names
     // the reason once so the panel shows why the ledger is local to the cwd.
     if (isPlainObject(section) && section.degraded === true) {
@@ -930,14 +975,14 @@ async function buildStoreState(root, entry, now, warnings) {
   }
 }
 
-async function buildState(root, entry, now) {
+async function buildState(root, entry, now, options = {}) {
   // The panel polls every ~2.5s and core's warning log is a module singleton:
   // draining here (and dropping) keeps poll-driven reads from stealing the
   // diagnostics the next tool call should surface. The panel computes its own
   // diagnostics locally, so nothing visible is lost.
   takeCoreWarnings()
   const warnings = mountWarnings.slice()
-  if (coreAvailable()) return buildStoreState(root, entry, now, warnings)
+  if (coreAvailable()) return buildStoreState(root, entry, now, warnings, options)
   const message = coreUnavailableMessage()
   if (warnings.includes(message) === false) warnings.push(message)
   return emptyStoreState(root, entry, now, warnings)
@@ -1083,12 +1128,19 @@ async function handleState(host, request, response) {
  * passes the rows in, so no projection ever re-reads the registry inside the
  * same request. `ctx` is accepted for symmetry with the other handlers and is
  * not consulted for workspace discovery.
+ *
+ * `root` is the canonical root, so the request-scoped realpath memo starts
+ * pre-seeded with it: the root is never resolved a second time, and every
+ * target path the payload validates is resolved at most once per request (the
+ * memo is created here, so two concurrent requests never share one).
  */
 async function collectPanelState(ctx, root, workspaces) {
   if (!Array.isArray(workspaces)) {
     throw new TypeError('collectPanelState requires the caller to enumerate the workspace registry')
   }
   const now = Date.now()
+  const pathMemo = new Map([[root, root]])
+  const options = { realRoot: root, pathMemo }
   const entry = { path: root, name: await rootName(root, workspaces) }
 
   if ((await hasStoreAsync(root)) === false) {
@@ -1102,7 +1154,7 @@ async function collectPanelState(ctx, root, workspaces) {
   }
 
   try {
-    const payload = await buildState(root, entry, now)
+    const payload = await buildState(root, entry, now, options)
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
     // Cap by serializing once, then hand back the exact object the client sees.

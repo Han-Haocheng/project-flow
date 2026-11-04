@@ -872,6 +872,9 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   `realpathSync`/`statSync`/`readFileSync`；剩余的同步调用只作用于「已被异步 `stat` 确认
   存在」的那个 root 内部（`containedPath()` 的 containment 校验、core 的 store 读取）。
   新增读路径代码默认只准用 `node:fs/promises`，引入同步 fs 必须在评审里给出理由。
+  同一请求内同一路径的同步 `realpath` 至多 1 次：请求入口把 `canonicalRoot()` 已算出的真实
+  路径与一个**请求级** `Map` 传给 core 的读聚合入口（`pathMemo`）；memo 随请求回收，禁止
+  进程级缓存（挂载状态会变），未传 memo 的 CLI/工具路径保持逐次 realpath 的旧行为。
 - **验收值（失联挂载）**：注册表里存在一个不可访问的工作区行（例如未挂载的 `/mnt/g/...`
   automount）时，单次 `GET state` 的响应**< 100 ms**，且该请求进行期间其它端点（含同一
   路由的并发请求）的延迟**< 50 ms**——事件循环不被独占，坏盘只让本请求自己变慢。注册表
