@@ -448,7 +448,7 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 
 ## 十二、实验型项目：假设 → 任务 → 结果分流（2026-11-04）
 
-> **定位**：实验是**任务的外围功能**——任务仍是唯一执行单元，门禁、命名、配比、满编、自动归档全部照旧（§二 / §十）；实验只多两件事：**开工前把假设写死**，**收尾时把结果分流**。面板/CLI 的实验区可选开启（`flow.json` 的 `experiments.enabled`，默认关闭。**关闭 = 面板隐藏实验区 + `flow check experiments` 直接 exit 0 跳过**；`flow exp` / 工具 / 写路径照常。缺键补 `false`，**契约层不记 warning**（只有类型错才回退并记 `manifest-invalid`）；旧项目已有实验时给**一次性引导 warning**，**不自动开启**）。
+> **定位**：实验是**任务的外围功能**——任务仍是唯一执行单元，门禁、命名、配比、满编、自动归档全部照旧（§二 / §十）；实验只多两件事：**开工前把假设写死**，**收尾时把结果分流**。面板/CLI 的实验区可选开启（`flow.json` 的 `experiments.enabled`，默认关闭。**关闭 = 面板隐藏实验区 + `flow check experiments` 直接 exit 0 跳过**；`flow exp` / 工具 / 写路径照常。缺键补 `false`，**契约层不记 warning**（只有类型错才回退并记 `manifest-invalid`）；旧项目已有实验时给**一次性引导 warning**，**不自动开启**。关闭时 `GET state` 的 `experiments` 节只含 `{enabled:false, total, counts}`（**无** items/tree））。
 
 > **落地状态**：**均已落地**——core（`schema:2` 七字段 + 软/硬分离、`task.experiment` 校验、`checkExperiments`、`productizeExperiment` / `cleanupExperiment`）随 **B1（`5a2ae37`）**；CLI 与 `check` 路由（`flow exp review|productize|cleanup`、七字段 flag、`flow check experiments`、`task --experiment`）随 **B2（`b4bf113`）**。退出码：`exp review` **恒 0**（**无 `--result`**，结论看 `--json`）；`exp productize` 不满足 confirmed / 门禁基准 → **2**（`invalid`）；`check experiments` **0 通过 / 1 判定失败**（`check` 家族词汇与 CLI 退出码表一致：0 成功 / 1 用法·检查失败 / 2 校验·配置 / 3 未找到 / 4 IO）。
 
@@ -469,25 +469,25 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 | `direction` | 方向（措辞，自由文本 ≤120 字符，不设枚举） | 空或缺；>120 字符 |
 | `expected` | 验证目标（一句可判真假、含阈值） | 空 |
 | `primaryMetric` | **主指标**：单个字符串（唯一；多指标放 `guardrails[]`） | 缺；空 |
-| `guardrails[]` | **护栏指标**（不可退化的约束，≥1 条） | 缺；空数组 |
+| `guardrails[]` | **护栏指标**（不可退化的约束，≥1 条且**每项非空 string**） | 缺；空数组；任一项为空 |
 | `falsify` | 证伪条件（什么观测结果说明假设错） | 缺 |
-| `windowDays` | 观测周期（正整数天；**起算点 = `created_at`**） | 缺；≤0；非整数 |
+| `windowDays` | 观测周期（正整数天，**1..3650**；**起算点 = `created_at`**） | 缺；≤0；**>3650**；非整数 |
 | `stopLoss` | 止损线（到什么程度立即停并回滚） | 缺 |
 
 - 中心**派实验任务前**核对 7 项；缺一项 ⇒ 不建实验、不建实现卡，退回分析者补全。
 - **`title` / `hypothesis` 沿用旧必填**（非空），七字段是在此之上的追加硬规范。
-- **机器只校验**：存在 / 非空 / `guardrails` ≥1 / `windowDays` 正整数 / `primaryMetric` 为单个非空 string / `direction` ≤120 字符；**`falsify` 与 `expected` 同义、`stopLoss` 是否可判定、`expected` 是否真可证伪**属语义判断，**由审查者把关，不依赖机器校验**。
+- **机器只校验**：存在 / 非空 / `guardrails` ≥1 项且**每项非空 string** / `windowDays` 正整数且 **≤3650** / `primaryMetric` 为单个非空 string / `direction` ≤120 字符；**`falsify` 与 `expected` 同义、`stopLoss` 是否可判定、`expected` 是否真可证伪**属语义判断，**由审查者把关，不依赖机器校验**。
 - 只对**新实验**硬拒；**legacy**：旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准，不是通用值）。
-- **CLI flag（B2）**：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`；`exp update` 同名可选。
+- **CLI flag（B2）**：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`；`exp update` 同名可选。`exp add` **不支持** `--id`（id 由 core 自动生成）。
 - 七字段落在实验记录（`experiments/E-*.json`）与实验简报（[assets/experiment-brief-template.md](assets/experiment-brief-template.md)）两处；插件侧校验以 `flow check experiments`（并入 release gate）兜底，落地前由中心与审查者把关。
 
 ### 12.3 结果分流（四分支，写死）
 
 | 判定 | 条件 | 必做动作 |
 |---|---|---|
-| **成功** | 主指标达 `expected`，护栏全绿 | 实验置 `confirmed` → `flow exp productize`（要求 `release` 最近一次 `ok` 运行的 `finished_at` **≥** 实验进入 `confirmed` 的 `updated_at`，早于则拒，**不满足退出码 2**）写 `productizedAt` / `productizeGate` → 合并 / 上线 |
+| **成功** | 主指标达 `expected`，护栏全绿 | 实验置 `confirmed`（**硬前置**：写 `--measured` 非空 + `--metrics` ≥1 项，写路径硬拦；`check experiments` 只拦未产品化）→ `flow exp productize`（要求 `release` 最近一次 `ok` 运行的 `finished_at` **≥** 实验进入 `confirmed` 的 `updated_at`，早于则拒，**不满足退出码 2**）写 `productizedAt` / `productizeGate` → 合并 / 上线 |
 | **不确定** | 窗口内主指标无定论、护栏未破 | 实验置 **`inconclusive`**（`learned` **建议写**，`check experiments` 不硬拦；`open` 只表示进行中未判定）→ 延长 `windowDays` 继续观测，或**调整假设**派生 `parent` 子实验；**不得直接产品化** |
-| **失败** | 命中 `falsify`，或触 `stopLoss` | **停止并丢弃**：实验置 `refuted` + `learned`；`flow exp cleanup <id> --flag/--code/--data` 写 `cleanup{flags[], code[], data[]}`（开关 / 代码 / 数据，各 ≤20 项）与 `cleanupAt`；notes 记清理证据，不留死开关。**`exp update --status refuted` 不拦（清理是异步动作），收口靠 `cleanupAt` + `check experiments` 硬拦** |
+| **失败** | 命中 `falsify`，或触 `stopLoss` | **停止并丢弃**：实验置 `refuted` + `learned`（**建议；写路径只 warning，`check experiments` 硬拦**）；`flow exp cleanup <id> --flag/--code/--data` 写 `cleanup{flags[], code[], data[]}`（开关 / 代码 / 数据，各 ≤20 项）与 `cleanupAt`；notes 记清理证据，不留死开关。**`exp update --status refuted` 不拦（清理是异步动作），收口靠 `cleanupAt` + `check experiments` 硬拦** |
 | **转向** | 部分资产值得保留、假设要换 | 实验置 `pivoted` + `learned`；保留可复用资产（模块 / 测试 / 数据），**新假设另建子实验**（新实验 `parent` 指向原实验，单向），不改写原结论 |
 
 - 四分支动作都在**任务回收之前**完成（§10.7 逐卡检查），结论进项目任务 `notes`；`refuted` / `pivoted` 缺 `learned`（`refuted` 另缺 `cleanupAt`）视为实验未收尾；`inconclusive` 的 `learned` 只提示、不计未收尾。

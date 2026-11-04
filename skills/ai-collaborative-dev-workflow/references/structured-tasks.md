@@ -37,7 +37,7 @@
 
 ## 2.1 实验记录字段（`experiments/E-*.json`，schema 2 约定）
 
-> 实验是任务的外围功能（`SKILL.md` §十二）。下表为新实验的字段约定；**新实验缺 `direction` / `expected` / `primaryMetric` / `guardrails` / `falsify` / `windowDays` / `stopLoss` 任一即拒**。旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准）。机器只校验存在/非空/`guardrails`≥1/`windowDays` 正整数/`primaryMetric` 为单个非空 string（唯一主指标；多指标放 `guardrails`）/`direction` ≤120；同义、可判定性等语义项由审查者把关。CLI（B2）：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`，`exp update` 同名可选。落盘以 core 实现与 `flow check experiments` 为准。
+> 实验是任务的外围功能（`SKILL.md` §十二）。下表为新实验的字段约定；**新实验缺 `direction` / `expected` / `primaryMetric` / `guardrails` / `falsify` / `windowDays` / `stopLoss` 任一即拒**。旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准）。机器只校验存在/非空/`guardrails`≥1 且**每项非空 string**/`windowDays` 正整数且 **≤3650**/`primaryMetric` 为单个非空 string（唯一主指标；多指标放 `guardrails`）/`direction` ≤120；同义、可判定性等语义项由审查者把关。CLI（B2）：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`，`exp update` 同名可选。落盘以 core 实现与 `flow check experiments` 为准。
 
 | 字段 | 必填 | 规则 |
 |---|---|---|
@@ -47,9 +47,9 @@
 | `direction` | 是* | 方向（措辞，自由文本 ≤120 字符，不设枚举） |
 | `expected` | 是* | 验证目标，可判真假 |
 | `primaryMetric` | 是* | 主指标，**单个 string**（唯一；多指标放 `guardrails`） |
-| `guardrails` | 是* | 护栏指标数组，≥1 条 |
+| `guardrails` | 是* | 护栏指标数组，≥1 条且**每项非空 string** |
 | `falsify` | 是* | 证伪条件（与 `expected` 同义由审查把关） |
-| `windowDays` | 是* | 正整数天；**起算点 = `created_at`**（`check experiments` 据此判超期） |
+| `windowDays` | 是* | 正整数天 **1..3650**；**起算点 = `created_at`**（`check experiments` 据此判超期） |
 | `stopLoss` | 是* | 止损线（可判定性由审查把关） |
 | `status` | 是 | `open` / `confirmed` / `refuted` / `abandoned` / `inconclusive` / `pivoted`（后两态为加法，旧四态兼容） |
 | `parent` | 否 | 父实验 id 或 `null`；环安全，不得自指 |
