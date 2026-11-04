@@ -702,9 +702,10 @@ async function cmdStatus(ctx) {
       ])
       lines.push(['待决策', `${decisions.counts.open}（阻塞 ${decisions.counts.blocking}）`])
       const hiddenBeats = Number(heartbeats.counts.hidden) || 0
+      const deadBeats = Number(heartbeats.counts.dead) || 0
       lines.push([
         '心跳',
-        `${heartbeats.counts.total}（可能已停 ${heartbeats.counts.stale}${hiddenBeats > 0 ? ` · 旧子会话隐藏 ${hiddenBeats}` : ''}）`,
+        `${heartbeats.counts.total}（可能已停 ${heartbeats.counts.stale}${deadBeats > 0 ? ` · 已结束 ${deadBeats}` : ''}${hiddenBeats > 0 ? ` · 旧子会话隐藏 ${hiddenBeats}` : ''}）`,
       ])
     }
     const labelWidth = Math.max(...lines.map(([label]) => textWidth(label)))
@@ -1157,10 +1158,11 @@ function printHeartbeat(record) {
 
 function printHeartbeatList(section) {
   const items = Array.isArray(section?.items) ? section.items : []
-  const counts = section?.counts ?? { total: 0, active: 0, stale: 0 }
+  const counts = section?.counts ?? { total: 0, active: 0, stale: 0, dead: 0 }
   const hidden = Number(counts.hidden) || 0
+  const dead = items.filter((item) => item.liveness === 'dead').length
   out(
-    `心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale}${hidden > 0 ? ` · 旧子会话隐藏 ${hidden}` : ''}）  目录 ${section?.dir ?? '-'}`,
+    `心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale} · dead ${Number(counts.dead) || dead}${hidden > 0 ? ` · 旧子会话隐藏 ${hidden}` : ''}）  目录 ${section?.dir ?? '-'}`,
   )
   if (hidden > 0) out('提示：agent=subagent 的旧心跳已隐藏；flow heartbeat gc 可清理。')
   if (items.length === 0) {
@@ -1170,11 +1172,12 @@ function printHeartbeatList(section) {
   out('')
   out(
     table(
-      ['session', 'agent', 'status', '年龄', 'task', 'claims', 'goal'],
+      ['session', 'agent', 'status', '存活', '年龄', 'task', 'claims', 'goal'],
       items.map((item) => [
         shortSession(item.session),
         clip(item.agent || '-', 12),
         item.status || '-',
+        item.liveness || '-',
         fmtAge(item.ageSeconds),
         item.task || '-',
         clip(fmtClaims(item.claims), 36),
@@ -1182,7 +1185,9 @@ function printHeartbeatList(section) {
       ]),
     ),
   )
-  const stale = items.filter((item) => item.stale === true)
+  const deadItems = items.filter((item) => item.liveness === 'dead')
+  if (deadItems.length > 0) out(`已结束（dead）：${deadItems.map((item) => item.file).join(', ')}`)
+  const stale = items.filter((item) => item.stale === true && item.liveness !== 'dead')
   if (stale.length > 0) out(`可能已停：${stale.map((item) => item.file).join(', ')}`)
 }
 
@@ -1201,7 +1206,7 @@ async function cmdHeartbeat(ctx, sub) {
 
   if (sub === 'start') {
     assertMainSessionHeartbeat('start')
-    const options = {}
+    const options = { writer: 'cli' }
     if (sessionFlag !== undefined) options.session = sessionFlag
     for (const [key, option] of [['agent', 'agent'], ['goal', 'goal'], ['task', 'task']]) {
       const value = readString(flags, key)
@@ -1234,7 +1239,7 @@ async function cmdHeartbeat(ctx, sub) {
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'heartbeat update 至少需要一个字段参数（如 --status idle / --note T）')
     }
-    const record = await core.updateHeartbeat(root, contract, sessionFlag, patch)
+    const record = await core.updateHeartbeat(root, contract, sessionFlag, patch, { writer: 'cli' })
     if (!ctx.json) {
       out('已更新心跳')
       printHeartbeat(record)
@@ -1244,7 +1249,7 @@ async function cmdHeartbeat(ctx, sub) {
 
   if (sub === 'end') {
     assertMainSessionHeartbeat('end')
-    const options = {}
+    const options = { writer: 'cli' }
     if (sessionFlag !== undefined) options.session = sessionFlag
     const status = readString(flags, 'status')
     if (status !== undefined) {
@@ -1275,9 +1280,16 @@ async function cmdHeartbeat(ctx, sub) {
       } else {
         printHeartbeat(result.record)
       }
+      const verdict =
+        typeof result.liveness === 'string' && result.liveness !== '' ? result.liveness : 'unknown'
+      out(`存活  ${verdict}${typeof result.reason === 'string' && result.reason !== '' ? `（${result.reason}）` : ''}`)
     }
     if (requireActive && result.active !== true) {
-      const detail = result.record === null ? '没有心跳文件' : `心跳状态为 ${result.record.status || '未知'}`
+      const verdict =
+        typeof result.liveness === 'string' && result.liveness !== ''
+          ? `，存活 ${result.liveness}${typeof result.reason === 'string' && result.reason !== '' ? `（${result.reason}）` : ''}`
+          : ''
+      const detail = result.record === null ? '没有心跳文件' : `心跳状态为 ${result.record.status || '未知'}${verdict}`
       throw new CliError('usage', `没有 active 心跳（${detail}）；先运行 flow heartbeat start`)
     }
     return result

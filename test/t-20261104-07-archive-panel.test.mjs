@@ -179,7 +179,9 @@ test('archived 不进 active/draft/recentDone，行形状与 client 期望一致
   assert.equal(typeof payload.generatedAt, 'string')
   assert.equal(payload.root, fs.realpathSync(root), 'payload.root 应是 canonical root')
   assert.equal(payload.roots[0].path, payload.root)
-  assert.equal(payload.tasks.current, null)
+  // T-20261104-08 A+（D-20261104-09）：manifest 未声明 current 时由面板投影派生为
+  // 队列头（最老 active 的 id），不再恒为 null。
+  assert.equal(payload.tasks.current, active.id)
   assert.ok(Array.isArray(payload.gates), 'gates 应是数组')
   assert.ok(payload.decisions !== undefined, 'decisions section 应存在')
   assert.ok(payload.heartbeats !== undefined, 'heartbeats section 应存在')

@@ -402,7 +402,13 @@ check(
   alpha.json?.tasks?.recentDone?.length === 1 && alpha.json.tasks.recentDone[0].id === 'T-20261028-01',
   JSON.stringify(alpha.json?.tasks?.recentDone),
 )
-check('alpha: tasks.current is null', alpha.json?.tasks?.current === null, alpha.json?.tasks?.current)
+/* T-20261104-08 A+（D-20261104-09）: with no manifest-declared tasks.current, the
+   payload derives the queue head — here alpha's only active task. */
+check(
+  'alpha: tasks.current is the queue head',
+  alpha.json?.tasks?.current === 'T-20261028-02',
+  alpha.json?.tasks?.current,
+)
 check(
   'alpha: gates list one definition',
   alpha.json?.gates?.length === 1 && alpha.json.gates[0].id === 'smoke',

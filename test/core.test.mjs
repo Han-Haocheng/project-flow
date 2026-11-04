@@ -43,6 +43,7 @@ import {
   listDecisions,
   listGates,
   listTasks,
+  livenessOf,
   loadContract,
   readHeartbeatSection,
   readHeartbeats,
@@ -929,7 +930,7 @@ test('readStoreState 心跳：目录缺失为空集且不产生 warning', () => 
   const state = readStoreState(root, contract)
   assert.equal(state.heartbeats.dir, '.agents/heartbeat')
   assert.deepEqual(state.heartbeats.items, [])
-  assert.deepEqual(state.heartbeats.counts, { total: 0, active: 0, stale: 0, hidden: 0 })
+  assert.deepEqual(state.heartbeats.counts, { total: 0, active: 0, stale: 0, dead: 0, hidden: 0 })
   assert.deepEqual(drainWarnings(), [])
 })
 
@@ -1187,7 +1188,7 @@ const SESSION = 'session-79c1c4e6-ecf5-40a9-98c2-fd7a373a2a85'
 const HEARTBEAT_KEYS = [
   'file', 'session', 'agent', 'legacy', 'hidden', 'goal', 'task', 'claims', 'status',
   'last_action', 'started_at', 'updated_at', 'ended_at', 'ageSeconds', 'stale', 'turn',
-  'stats', 'mtime',
+  'stats', 'mtime', 'liveness', 'reason',
 ]
 
 function heartbeatPath(root, session = SESSION) {
@@ -1222,10 +1223,22 @@ test('heartbeat start：显式任务下标 goal 取任务标题、claims 取 sco
   assert.equal(stored.schema, 1)
   assert.equal(stored.task, task.id)
   assert.equal(stored.createdTask, undefined, 'createdTask 只是 API 附加信息，不落盘')
-  assert.deepEqual(new Set(Object.keys(stored)), new Set([
+  const baseKeys = [
     'schema', 'session', 'agent', 'goal', 'task', 'claims', 'status', 'turn',
     'last_action', 'started_at', 'updated_at', 'ended_at', 'stats',
-  ]))
+  ]
+  const evidenceKeys = ['host', 'boot_id', 'pid', 'pid_start']
+  for (const key of baseKeys) assert.ok(Object.hasOwn(stored, key), `缺字段 ${key}`)
+  for (const key of Object.keys(stored)) {
+    assert.ok(baseKeys.includes(key) || evidenceKeys.includes(key), `多余的落盘字段 ${key}`)
+  }
+  // 宿主进程（非 CLI）写入自己的存活证据：host 必有，Linux 还应有 pid/pid_start。
+  assert.equal(stored.host, `${os.hostname()}|${process.platform}`)
+  if (process.platform === 'linux') {
+    assert.equal(stored.pid, process.pid, '宿主进程写自己的 pid')
+    assert.ok(Number.isInteger(stored.pid_start) && stored.pid_start > 0, 'Linux 写 /proc stat 的 pid_start')
+    assert.ok(typeof stored.boot_id === 'string' && stored.boot_id.length > 0, 'Linux 写 boot_id')
+  }
 })
 
 test('heartbeat start：没有任务时自动建 draft 任务并回填 task；createTask:false 不建', () => {
@@ -1380,12 +1393,12 @@ test('readHeartbeatSection：只读 json 心跳，source 任意非 none 值均�
   const stale = readHeartbeatSection(root, contract)
   assert.equal(stale.items.find((item) => item.file === `${SESSION}.json`).stale, true)
   assert.equal(stale.counts.stale, 1)
-  assert.equal(stale.counts.active, 1, 'stale 也算 active')
+  assert.equal(stale.counts.active, 1, 'pid 证活 ⇒ active，不受 6h 门槛（T-10 F3）；stale 标记仍成立')
 
   // source:none 关闭整个小节
   const none = readHeartbeatSection(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } })
   assert.deepEqual(none.items, [])
-  assert.deepEqual(none.counts, { total: 0, active: 0, stale: 0, hidden: 0 })
+  assert.deepEqual(none.counts, { total: 0, active: 0, stale: 0, dead: 0, hidden: 0 })
   assert.deepEqual(readHeartbeats(root, { ...contract, heartbeats: { ...contract.heartbeats, source: 'none' } }), [])
 })
 
@@ -1509,7 +1522,285 @@ test('heartbeat 未 init：写入抛 usage，读取不抛', () => {
   expectFlowError(() => updateHeartbeat(root, contract, SESSION, { status: 'idle' }), 'usage')
   expectFlowError(() => endHeartbeat(root, contract, { session: SESSION }), 'usage')
   assert.equal(heartbeatStatus(root, contract, SESSION).active, false)
-  assert.deepEqual(readHeartbeatSection(root, contract).counts, { total: 0, active: 0, stale: 0, hidden: 0 })
+  assert.deepEqual(readHeartbeatSection(root, contract).counts, { total: 0, active: 0, stale: 0, dead: 0, hidden: 0 })
+})
+
+// ------------------------------------------------------ 心跳存活语义（T-10）
+
+test('livenessOf：live / pid-gone / pid-reused / foreign / boot-changed / 无证据判定表', () => {
+  const { root, contract } = freshProject('hb-liveness')
+  const record = startHeartbeat(root, contract, { session: SESSION, createTask: false, goal: '存活' })
+
+  assert.equal(livenessOf(record).liveness, 'live')
+  assert.equal(livenessOf(record).reason, 'pid-alive')
+  assert.equal(livenessOf(null).liveness, 'unknown')
+  assert.equal(livenessOf(null).reason, 'no-record')
+
+  const foreign = livenessOf({ ...record, host: 'other-machine|linux' })
+  assert.equal(foreign.liveness, 'foreign', '跨机器只判 foreign，不判死')
+  assert.equal(foreign.reason, 'other-host')
+
+  if (typeof record.boot_id === 'string' && record.boot_id !== '') {
+    const rebooted = livenessOf({ ...record, boot_id: 'boot-before-reboot' })
+    assert.equal(rebooted.liveness, 'dead', '同机不同 boot = 宿主已重启')
+    assert.equal(rebooted.reason, 'boot-changed')
+  }
+  if (Number.isInteger(record.pid_start)) {
+    const reused = livenessOf({ ...record, pid_start: record.pid_start + 1 })
+    assert.equal(reused.liveness, 'dead', 'pid 活但启动时间不匹配 = pid 复用')
+    assert.equal(reused.reason, 'pid-reused')
+  }
+  const gone = livenessOf({ ...record, pid: deadPid() })
+  assert.equal(gone.liveness, 'dead')
+  assert.equal(gone.reason, 'pid-gone')
+
+  const freshNoEvidence = { session: 'legacy', status: 'working', updated_at: new Date().toISOString() }
+  assert.equal(livenessOf(freshNoEvidence).liveness, 'unknown', '无证据但新鲜')
+  const oldNoEvidence = {
+    ...freshNoEvidence,
+    updated_at: new Date(Date.now() - (HEARTBEAT_STALE_SECONDS + 60) * 1000).toISOString(),
+  }
+  assert.equal(livenessOf(oldNoEvidence).liveness, 'stale', '无证据且超 6h')
+  assert.equal(livenessOf(oldNoEvidence).reason, 'no-liveness-evidence')
+
+  // 注入时钟/身份：同一记录在「另一个 boot」视角是 dead，在「更晚的 now」视角是 stale。
+  assert.equal(livenessOf(record, { bootId: 'another-boot' }).liveness, 'dead')
+  assert.equal(livenessOf(freshNoEvidence, { now: Date.now() + (HEARTBEAT_STALE_SECONDS + 60) * 1000 }).liveness, 'stale')
+})
+
+test('心跳存活：3 天前的 work 会话不计 active 并标 dead；counts.dead 投影；跨机 foreign 不算 active', () => {
+  const { root, contract } = freshProject('hb-dead-counts')
+  const live = startHeartbeat(root, contract, { session: 'live', createTask: false, goal: '活' })
+  const stamp = (ageSeconds) => new Date(Date.now() - ageSeconds * 1000).toISOString()
+
+  // 死会话：同机同 boot + 已消失的 pid，3 天前最后心跳（用户报告的 4.4–5 天形态）。
+  writeHeartbeat(root, 'dead.json', JSON.stringify({
+    ...live, session: 'dead', pid: deadPid(), updated_at: stamp(3 * 86400),
+  }), 3 * 86400)
+  // 旧记录（无任何存活字段），3 天前。
+  writeHeartbeat(root, 'legacy.json', JSON.stringify({
+    session: 'legacy', status: 'working', updated_at: stamp(3 * 86400),
+  }), 3 * 86400)
+  // 跨机器，新鲜。
+  writeHeartbeat(root, 'foreign.json', JSON.stringify({
+    ...live, session: 'foreign', host: 'other-machine|linux',
+  }), 0)
+
+  const liveStatus = heartbeatStatus(root, contract, 'live')
+  assert.equal(liveStatus.active, true)
+  assert.equal(liveStatus.liveness, 'live')
+  assert.ok(liveStatus.ageSeconds <= 5, '5 秒内的活心跳仍 active')
+
+  const deadStatus = heartbeatStatus(root, contract, 'dead')
+  assert.equal(deadStatus.active, false, '死会话不得 active（--require-active 修复点）')
+  assert.equal(deadStatus.liveness, 'dead')
+  assert.equal(deadStatus.reason, 'pid-gone')
+  assert.ok(deadStatus.ageSeconds >= 3 * 86400 - 5)
+
+  const foreignStatus = heartbeatStatus(root, contract, 'foreign')
+  assert.equal(foreignStatus.active, false, '跨机器不判死、也不算 active')
+  assert.equal(foreignStatus.liveness, 'foreign')
+
+  const legacyStatus = heartbeatStatus(root, contract, 'legacy')
+  assert.equal(legacyStatus.active, false, '无证据且超 6h 不再 active')
+  assert.equal(legacyStatus.liveness, 'stale')
+
+  const section = readHeartbeatSection(root, contract)
+  assert.equal(section.counts.total, 4)
+  assert.equal(section.counts.active, 1, '只有本机新鲜活心跳算 active')
+  assert.equal(section.counts.dead, 1)
+  assert.equal(section.counts.stale, 2, 'dead(3d) 与 legacy(3d) 都超 6h')
+  const byFile = Object.fromEntries(section.items.map((item) => [item.file, item]))
+  assert.equal(byFile['live.json'].liveness, 'live')
+  assert.equal(byFile['dead.json'].liveness, 'dead')
+  assert.equal(byFile['dead.json'].reason, 'pid-gone')
+  assert.equal(byFile['legacy.json'].liveness, 'stale')
+  assert.equal(byFile['foreign.json'].liveness, 'foreign')
+  assert.ok(section.items.every((item) => typeof item.reason === 'string' && item.reason.length > 0))
+})
+
+test('旧心跳（无存活字段）保持今日行为：新鲜仍 active，>6h 不计 active', () => {
+  const { root, contract } = freshProject('hb-legacy-compat')
+  writeHeartbeat(root, 'fresh-legacy.json', JSON.stringify({
+    session: 'fresh-legacy', status: 'working', updated_at: new Date().toISOString(),
+  }), 0)
+  writeHeartbeat(root, 'old-legacy.json', JSON.stringify({
+    session: 'old-legacy', status: 'working',
+    updated_at: new Date(Date.now() - (HEARTBEAT_STALE_SECONDS + 60) * 1000).toISOString(),
+  }), HEARTBEAT_STALE_SECONDS + 60)
+
+  const fresh = heartbeatStatus(root, contract, 'fresh-legacy')
+  assert.equal(fresh.active, true, '无证据但新鲜：兼容旧记录')
+  assert.equal(fresh.liveness, 'unknown')
+  const old = heartbeatStatus(root, contract, 'old-legacy')
+  assert.equal(old.active, false, '无证据且超 6h：兜底不再 active')
+  assert.equal(old.liveness, 'stale')
+
+  const section = readHeartbeatSection(root, contract)
+  assert.equal(section.counts.active, 1)
+  assert.equal(section.counts.dead, 0)
+})
+
+test('GET state 读路径零写入：存活判定只读心跳文件', () => {
+  const { root, contract } = freshProject('hb-readonly')
+  startHeartbeat(root, contract, { session: SESSION, createTask: false, goal: '只读' })
+  const dir = path.join(root, '.agents/heartbeat')
+  const snapshot = () =>
+    fs.readdirSync(dir).sort().map((name) => {
+      const file = path.join(dir, name)
+      const stats = fs.statSync(file)
+      return [name, stats.size, stats.mtimeMs, fs.readFileSync(file, 'utf8')]
+    })
+
+  const before = snapshot()
+  const state = readStoreState(root, contract)
+  assert.equal(state.heartbeats.counts.active, 1)
+  assert.equal(readHeartbeatSection(root, contract).items[0].liveness, 'live')
+  assert.deepEqual(snapshot(), before, '读路径不得改写心跳文件或 mtime')
+})
+
+test('CLI 心跳只写 host（不写 pid/pid_start/boot_id）；死会话 --require-active 退出 1', () => {
+  const { root } = freshProject('hb-cli-evidence')
+  // 子会话（本测试进程本身可能带 DSH_SESSION_ID）里 CLI heartbeat start 会被拒绝，
+  // 和现有 CLI 心跳用例一样先清掉这个环境变量再 spawn。
+  const saved = process.env.DSH_SESSION_ID
+  delete process.env.DSH_SESSION_ID
+  try {
+    const started = runCli(root, ['heartbeat', 'start', '--session', 'cli-session', '--goal', 'CLI 会话', '--json'])
+    assert.equal(started.code, 0, started.stderr)
+
+    const stored = readJson(heartbeatPath(root, 'cli-session'))
+    assert.equal(stored.host, `${os.hostname()}|${process.platform}`)
+    for (const key of ['pid', 'pid_start', 'boot_id']) {
+      assert.equal(Object.hasOwn(stored, key), false, `CLI 不得写 ${key}（短命子进程会污染存活证据）`)
+    }
+
+    // 把这条宿主形态记录改成「死会话」：pid 已消失，仍是 fresh updated_at。
+    writeHeartbeat(root, 'cli-dead.json', JSON.stringify({
+      ...stored, session: 'cli-dead', pid: deadPid(), updated_at: new Date().toISOString(),
+    }), 0)
+    const status = runCli(root, ['heartbeat', 'status', '--session', 'cli-dead', '--require-active', '--json'])
+    assert.equal(status.code, 1, status.stdout)
+    assert.equal(status.json.ok, false)
+    assert.equal(status.json.error.code, 'usage')
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
+})
+
+// ------------------------------------ T-10A 审查修正（F1/F2/F3）
+
+test('F1：CLI 写心跳不覆盖跨机/pid 证据（host 仅空时补，pid/boot_id/pid_start 保留）', () => {
+  const { root, contract } = freshProject('hb-f1')
+  const foreignPid = deadPid()
+  const foreign = {
+    schema: 1,
+    session: 'foreign-session',
+    status: 'working',
+    goal: '另一台机器',
+    updated_at: new Date().toISOString(),
+    host: 'other-machine|linux',
+    boot_id: 'other-boot',
+    pid: foreignPid,
+    pid_start: 1,
+  }
+  writeHeartbeat(root, 'foreign-session.json', JSON.stringify(foreign))
+
+  const updated = updateHeartbeat(root, contract, 'foreign-session', { status: 'idle' }, { writer: 'cli' })
+  assert.equal(updated.host, 'other-machine|linux', 'CLI 不得覆盖已有 host')
+  assert.equal(updated.boot_id, 'other-boot')
+  assert.equal(updated.pid, foreignPid)
+  assert.equal(updated.pid_start, 1)
+  assert.equal(livenessOf(updated).liveness, 'foreign', '跨机仍 foreign，不得被误判 dead')
+
+  // 真实 CLI 进程：update 后 host 仍 foreign、pid 不变
+  const cliUpdate = runCli(
+    root,
+    ['heartbeat', 'update', '--session', 'foreign-session', '--status', 'working', '--json'],
+    { DSH_SESSION_ID: '' },
+  )
+  assert.equal(cliUpdate.code, 0, cliUpdate.stderr)
+  const afterUpdate = readJson(heartbeatPath(root, 'foreign-session'))
+  assert.equal(afterUpdate.host, 'other-machine|linux')
+  assert.equal(afterUpdate.boot_id, 'other-boot')
+  assert.equal(afterUpdate.pid, foreignPid)
+  assert.equal(afterUpdate.pid_start, 1)
+
+  // CLI start 同样保留已有证据（不把 foreign 记录改成本机）
+  const cliStart = runCli(root, ['heartbeat', 'start', '--session', 'foreign-session', '--json'], { DSH_SESSION_ID: '' })
+  assert.equal(cliStart.code, 0, cliStart.stderr)
+  const afterStart = readJson(heartbeatPath(root, 'foreign-session'))
+  assert.equal(afterStart.host, 'other-machine|linux')
+  assert.equal(afterStart.pid, foreignPid)
+  assert.equal(livenessOf(afterStart).liveness, 'foreign')
+
+  // 记录原本没有 host 时，CLI 补上本机 host
+  writeHeartbeat(root, 'bare-session.json', JSON.stringify({
+    session: 'bare-session', status: 'working', updated_at: new Date().toISOString(),
+  }))
+  const bare = updateHeartbeat(root, contract, 'bare-session', { status: 'idle' }, { writer: 'cli' })
+  assert.equal(bare.host, `${os.hostname()}|${process.platform}`)
+  assert.equal(Object.hasOwn(bare, 'pid'), false, 'CLI 不写自己的 pid')
+
+  // 宿主进程写入则刷新为本机证据（对照）
+  const hostUpdated = updateHeartbeat(root, contract, 'foreign-session', { status: 'idle' })
+  assert.equal(hostUpdated.host, `${os.hostname()}|${process.platform}`)
+  assert.equal(hostUpdated.pid, process.pid)
+  assert.equal(livenessOf(hostUpdated).liveness, 'live')
+})
+
+test('F2：updated_at 非法时 liveness/ageSeconds 回退文件 mtime（不误判 stale）', () => {
+  const { root, contract } = freshProject('hb-f2')
+  writeHeartbeat(root, 'bad-stamp.json', JSON.stringify({
+    session: 'bad-stamp', status: 'working', updated_at: 'not-a-date',
+  }), 10)
+
+  const status = heartbeatStatus(root, contract, 'bad-stamp')
+  assert.equal(status.liveness, 'unknown', '新鲜 mtime ⇒ unknown，而不是 stale')
+  assert.equal(status.active, true)
+  assert.ok(status.ageSeconds <= 30, `ageSeconds 应来自 mtime，实际 ${status.ageSeconds}`)
+
+  const section = readHeartbeatSection(root, contract)
+  const item = section.items.find((entry) => entry.file === 'bad-stamp.json')
+  assert.ok(item.ageSeconds <= 30)
+  assert.equal(item.liveness, 'unknown')
+
+  // livenessOf 显式 mtime 注入：新鲜 unknown / 7h stale
+  assert.equal(livenessOf({ updated_at: 'not-a-date' }, { mtime: Date.now() - 10_000 }).liveness, 'unknown')
+  assert.equal(livenessOf({ updated_at: 'not-a-date' }, { mtime: Date.now() - 7 * 3_600_000 }).liveness, 'stale')
+})
+
+test('F3：liveness=live 豁免 6h 门槛；unknown 仍按 6h；{live:true} 覆盖', () => {
+  const { root, contract } = freshProject('hb-f3')
+  const live = startHeartbeat(root, contract, { session: 'live-hb', createTask: false, goal: '活' })
+  const sevenHoursAgo = new Date(Date.now() - 7 * 3_600_000).toISOString()
+  writeHeartbeat(root, 'live-hb.json', JSON.stringify({ ...live, updated_at: sevenHoursAgo }))
+  writeHeartbeat(root, 'unknown-hb.json', JSON.stringify({
+    session: 'unknown-hb', status: 'working', updated_at: sevenHoursAgo,
+  }))
+
+  const liveStatus = heartbeatStatus(root, contract, 'live-hb')
+  assert.equal(liveStatus.liveness, 'live')
+  assert.equal(liveStatus.active, true, 'pid 证活 ⇒ active，不受 6h 门槛')
+  assert.ok(liveStatus.ageSeconds >= 7 * 3600 - 5)
+
+  const unknownStatus = heartbeatStatus(root, contract, 'unknown-hb')
+  assert.equal(unknownStatus.liveness, 'stale')
+  assert.equal(unknownStatus.active, false, 'unknown 仍按 6h')
+
+  const overridden = heartbeatStatus(root, contract, 'unknown-hb', { live: true })
+  assert.equal(overridden.active, true, 'agents 正向证据（{live:true}）可覆盖年龄')
+  assert.equal(overridden.liveness, 'live')
+  assert.equal(overridden.reason, 'agent-live')
+
+  const section = readHeartbeatSection(root, contract)
+  const byFile = Object.fromEntries(section.items.map((item) => [item.file, item]))
+  assert.equal(byFile['live-hb.json'].liveness, 'live')
+  assert.equal(byFile['unknown-hb.json'].liveness, 'stale')
+  assert.equal(section.counts.active, 1, '只有 live 那条豁免年龄')
+  assert.equal(section.counts.stale, 2, '两条都超过 6h，stale 标记仍各自成立')
+  assert.equal(section.counts.dead, 0)
 })
 
 // ------------------------------------------------------------ 门禁开关生效
@@ -2556,26 +2847,29 @@ test('heartbeat start：他人名下的 active 任务不被抢占，改为新建
   assert.equal(listTasks(root, contract).length, 2, '原任务保留 + 新建一张')
 })
 
-test('heartbeat start：多条 active 时取 updated_at 最新的一条', () => {
-  const { root, contract } = freshProject('hb-reuse-newest')
-  addTask(root, contract, {
+test('heartbeat start：多条 active 时按 created_at 取最老的一条（FIFO，不看 updated_at）', () => {
+  const { root, contract } = freshProject('hb-reuse-oldest')
+  // 队列按 created_at 升序：旧卡即使最近被 patch（updated_at 最新）也仍在队首。
+  const oldest = addTask(root, contract, {
     id: `T-${stamp()}-01`,
     title: '旧任务',
     status: 'active',
     owner: '',
-    updated_at: '2026-01-01T09:00:00+08:00',
+    created_at: '2026-01-01T09:00:00+08:00',
+    updated_at: '2026-03-15T09:00:00+08:00',
   })
-  const newer = addTask(root, contract, {
+  addTask(root, contract, {
     id: `T-${stamp()}-02`,
     title: '新任务',
     status: 'active',
     owner: '',
+    created_at: '2026-02-01T09:00:00+08:00',
     updated_at: '2026-02-01T09:00:00+08:00',
   })
 
   const record = startHeartbeat(root, contract, { session: 'session-pick', agent: 'lead' })
   assert.equal(record.createdTask, null, '多条 active 也只复用，不新建')
-  assert.equal(record.task, newer.id, '取 updated_at 最新的一条')
-  assert.equal(record.goal, '新任务')
+  assert.equal(record.task, oldest.id, '按 created_at 取最老的一条')
+  assert.equal(record.goal, '旧任务')
   assert.equal(listTasks(root, contract).length, 2)
 })

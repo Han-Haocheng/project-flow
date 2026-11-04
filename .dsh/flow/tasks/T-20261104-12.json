@@ -26,7 +26,7 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "team: task-64(分析/卡A 实验树可选化) task-65(分析/卡B schema+假设规范+结果分流)。D-20261104-10 用户采纳 4 项：schema2 新实验必填 direction/expected/primaryMetric/guardrails/falsify/windowDays/stopLoss（缺则拒）；EXPERIMENT_STATUS 新增 inconclusive/pivoted（加法，旧四态兼容，旧记录 legacy 不迁移）；产品化复用 release phase + `flow exp productize`（gate ok 才写 productizedAt）；refuted 必须 learned+cleanup、pivoted 必须 learned，`flow check experiments` 进 release gate。卡A：`flow.json.experiments.enabled` 默认 false，关闭时只留 counts 骨架/面板单列/CLI 工具仍可用。实施拆卡：B1 core schema → B2 CLI+工具 / B3 面板+TUI（依赖卡A、与 state-snapshot/client 同域需串行）/ B4 文档+check。待 T-05/T-08/T-10 收尾后开工。",
+  "notes": "team: task-64/65(分析) task-71(技能侧，待改) task-72(交叉核对) task-74(契约草稿 v2 543行) task-75(client布局分析) task-76(FoldHeader+openItems key，已完成) task-78(草稿vs技能核对，已完成) task-82(技能10条修正) task-84(B1 core落点分析)。D-20261104-10 采纳 4 项；Lead 裁决 8 条技术细节（direction 自由文本/cleanup{flags,code,data}/pivoted 单向 parent/review 恒0/task.experiment 不存在 warning/超期 open 只 warning/产品化基准 gate finished_at≥实验 updated_at/面板落 §9.1.3）。D-20261104-12 采纳：关闭时 check experiments skip exit 0；缺 enabled 的旧项目默认关闭 + 一次性引导 warning（不自动开启，Myai 22 条需手动开）。实施顺序 B1 core → B2 CLI+工具 / B3 面板+TUI（可并行）→ B4 文档+check。",
   "created_at": "2026-11-04T20:22:38+08:00",
-  "updated_at": "2026-11-04T20:32:15+08:00"
+  "updated_at": "2026-11-04T20:46:00+08:00"
 }

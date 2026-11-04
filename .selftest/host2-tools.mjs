@@ -89,15 +89,23 @@ function taskRowOk(row, { gate = false } = {}) {
   return gate ? row.gate === null || typeof row.gate === 'string' : true
 }
 
-/** Newest-first order; an unparseable stamp sorts last (as the Host does). */
-function draftRowsDesc(rows) {
+/**
+ * FIFO order (`T-20261104-08` A+): oldest `created_at` first, the id breaks ties,
+ * and a row without a parseable `created_at` sorts last (as the Host does).
+ */
+function draftRowsAsc(rows) {
   if (Array.isArray(rows) === false) return false
-  let previous = Number.POSITIVE_INFINITY
-  for (const row of rows) {
-    const stamp = Date.parse(row.updated_at)
-    const value = Number.isFinite(stamp) ? stamp : Number.NEGATIVE_INFINITY
-    if (value > previous) return false
-    previous = value
+  const createdAt = (row) => {
+    const stamp = Date.parse(row?.created_at)
+    return Number.isFinite(stamp) ? stamp : Number.POSITIVE_INFINITY
+  }
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1]
+    const current = rows[index]
+    const left = createdAt(previous)
+    const right = createdAt(current)
+    if (left > right) return false
+    if (left === right && String(previous?.id ?? '').localeCompare(String(current?.id ?? '')) > 0) return false
   }
   return true
 }
@@ -769,9 +777,9 @@ if (skillFiles.length < SKILL_NAMES.length) {
 
 // -------------------------------------------------------- HTTP store payload
 
-// Two drafts with fixed on-disk timestamps: the payload must surface them
-// newest-first, fill a missing owner with an empty string and carry the whole
-// (bounded) detail set of the newer one.
+// Two drafts with fixed on-disk timestamps: the payload must surface them in FIFO
+// order (oldest `created_at` first), fill a missing owner with an empty string and
+// carry the whole (bounded) detail set of the newer one.
 const olderDraft = await taskTool.execute({ action: 'add', title: '草稿旧', status: 'draft', owner: 'alice' }, exec)
 const newerDraft = await taskTool.execute({ action: 'add', title: '草稿新', status: 'draft' }, exec)
 const newerDraftDetail = await taskTool.execute(
@@ -813,7 +821,11 @@ eq('store payload: tasks total', store.tasks?.total, 4)
 eq('store payload: tasks counts active', store.tasks?.counts?.active, 1)
 eq('store payload: tasks counts done', store.tasks?.counts?.done, 1)
 eq('store payload: tasks counts draft', store.tasks?.counts?.draft, 2)
-check('store payload: tasks current null', store.tasks?.current === null)
+check(
+  'store payload: tasks current is the queue head',
+  store.tasks?.current === activeDetailId,
+  JSON.stringify(store.tasks?.current),
+)
 check('store payload: tasks active array', Array.isArray(store.tasks?.active) && store.tasks.active.length === 1)
 check('store payload: tasks recentDone array', Array.isArray(store.tasks?.recentDone) && store.tasks.recentDone[0]?.id === taskId)
 check(
@@ -821,12 +833,14 @@ check(
   Array.isArray(store.tasks?.draft) && store.tasks.draft.length === 2,
   JSON.stringify(store.tasks?.draft),
 )
-check('store payload: tasks draft newest first', draftRowsDesc(store.tasks?.draft), JSON.stringify(store.tasks?.draft))
-eq('store payload: tasks draft[0] is newest', store.tasks?.draft?.[0]?.id, newerDraft.task?.id)
-eq('store payload: tasks draft[1] is older', store.tasks?.draft?.[1]?.id, olderDraft.task?.id)
-eq('store payload: tasks draft missing owner empty', store.tasks?.draft?.[0]?.owner, '')
-eq('store payload: tasks draft owner kept', store.tasks?.draft?.[1]?.owner, 'alice')
-eq('store payload: tasks draft updated_at kept', store.tasks?.draft?.[1]?.updated_at, '2026-10-28T09:00:00+08:00')
+check('store payload: tasks draft FIFO order', draftRowsAsc(store.tasks?.draft), JSON.stringify(store.tasks?.draft))
+eq('store payload: tasks draft[0] is oldest', store.tasks?.draft?.[0]?.id, olderDraft.task?.id)
+eq('store payload: tasks draft[1] is newest', store.tasks?.draft?.[1]?.id, newerDraft.task?.id)
+const olderDraftRow = store.tasks?.draft?.find((row) => row.id === olderDraft.task?.id) ?? {}
+const newerDraftRow = store.tasks?.draft?.find((row) => row.id === newerDraft.task?.id) ?? {}
+eq('store payload: tasks draft missing owner empty', newerDraftRow.owner, '')
+eq('store payload: tasks draft owner kept', olderDraftRow.owner, 'alice')
+eq('store payload: tasks draft updated_at kept', olderDraftRow.updated_at, '2026-10-28T09:00:00+08:00')
 
 // ---- three row groups carry goal + bounded detail fields -------------------
 check(
@@ -872,7 +886,7 @@ check('store payload: done created_at projected', typeof doneRow.created_at === 
 check('store payload: done gate null without checkpoints', doneRow.gate === null)
 
 // The newer draft is long on purpose: the row must stay bounded.
-const detailedDraft = store.tasks?.draft?.[0] ?? {}
+const detailedDraft = store.tasks?.draft?.find((row) => row.id === newerDraft.task?.id) ?? {}
 eq('store payload: draft goal clipped', detailedDraft.goal?.length, 400)
 check('store payload: draft goal is the clipped prefix', detailedDraft.goal === '草稿目标'.repeat(100))
 eq('store payload: draft notes clipped', detailedDraft.notes?.length, 400)
@@ -887,7 +901,7 @@ eq('store payload: draft commits capped', detailedDraft.commits?.length, 10)
 check('store payload: draft created_at projected', typeof detailedDraft.created_at === 'string' && detailedDraft.created_at.length > 0)
 
 // Empty detail fields degrade to '' / [] instead of disappearing.
-const emptyDraft = store.tasks?.draft?.[1] ?? {}
+const emptyDraft = store.tasks?.draft?.find((row) => row.id === olderDraft.task?.id) ?? {}
 eq('store payload: bare draft goal empty', emptyDraft.goal, '')
 eq('store payload: bare draft notes empty', emptyDraft.notes, '')
 check(
@@ -929,7 +943,8 @@ check(
 
 // -------------------------------------------------- draft cap (MAX_DRAFT_TASKS)
 
-// 55 drafts must project to the newest 50, never the whole ledger.
+// 55 drafts are a FIFO queue: the payload keeps the oldest 50 (queue head first)
+// and drops the 5 newest, never the whole ledger.
 const capRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-cap-'))
 core.initProject(capRoot, { name: 'CapTest', noGates: true })
 const capContract = core.loadContract(capRoot).contract
@@ -949,8 +964,13 @@ check(
   Array.isArray(capState.tasks?.draft) && capState.tasks.draft.length === 50,
   JSON.stringify(capState.tasks?.draft?.length),
 )
-eq('draft cap: newest kept first', capState.tasks?.draft?.[0]?.id, capIds[54])
-eq('draft cap: oldest kept last', capState.tasks?.draft?.[49]?.id, capIds[5])
+eq('draft cap: oldest kept first', capState.tasks?.draft?.[0]?.id, capIds[0])
+eq('draft cap: kept through the 50th oldest', capState.tasks?.draft?.[49]?.id, capIds[49])
+check(
+  'draft cap: the five newest drafts are dropped',
+  capIds.slice(50).every((id) => capState.tasks.draft.some((row) => row.id === id) === false),
+  JSON.stringify(capState.tasks?.draft?.map((row) => row.id).slice(-3)),
+)
 eq('draft cap: total still counts every task', capState.tasks?.total, 55)
 
 // ----------------------------------------- malicious manifest: containment

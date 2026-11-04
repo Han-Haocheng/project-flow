@@ -1,0 +1,49 @@
+{
+  "question": "T-07 任务按时间自动归档：`tasks.archiveAfterDays` 默认值取 30 天（默认启用）还是 0（默认关闭、需显式开启）？",
+  "kind": "choice",
+  "rationale": "任务书已定方案（flow task archive + precommit 门禁步），但默认值决定「无需人工」是否对老项目/新项目默认成立，影响所有现有台账的行为，需你定。",
+  "options": [
+    {
+      "id": "default-30",
+      "label": "默认 30 天启用（推荐）",
+      "impact": "新项目 init 写入 30；done 超过 30 天的任务在下次 precommit 时自动归档（archived 只变更 status，可改回 done）；老项目缺键按默认 30 生效。符合你说的「无需人工」。"
+    },
+    {
+      "id": "default-0",
+      "label": "默认 0（关闭）",
+      "impact": "需写 archiveAfterDays=N 才启用；升级后现有项目行为完全不变，但归档不是默认自动。"
+    },
+    {
+      "id": "default-30-old-0",
+      "label": "新项目 30、老项目缺键按 0",
+      "impact": "init 写 30；老项目（flow.json 无该键）视为关闭，避免静默改历史行为；代价是多一条分支与文档说明。"
+    }
+  ],
+  "recommendation": "default-30",
+  "affects": [
+    ".dsh/flow/flow.json",
+    "lib/core.mjs",
+    "CONTRACT.md"
+  ],
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 1,
+  "schema": 1,
+  "id": "D-20261104-07",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "default-30",
+    "note": "用户答复「7天」：默认启用，但阈值取 7 天（覆盖选项里的 30 天）；0=关闭语义不变。实施按 7 天。",
+    "at": "2026-11-04T19:32:52+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T19:32:52+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "fbd1c0aaf566dcd6",
+  "asked_at": "2026-11-04T19:28:16+08:00",
+  "created_at": "2026-11-04T19:28:16+08:00",
+  "updated_at": "2026-11-04T19:32:52+08:00"
+}

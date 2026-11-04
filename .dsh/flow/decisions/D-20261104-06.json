@@ -1,0 +1,45 @@
+{
+  "question": "T-20261104-01~03 已提交（33a9b4d / 2731605 / 040c5c4 / af7303c），但宿主进程 17:49 启动、加载的仍是旧 index.js，要重启才生效。现在重启还是等 T-04 做完一起？",
+  "kind": "choice",
+  "rationale": "重启会中断本会话与正在跑的队友；T-04（realpath 去重）即将派工。选项影响你什么时候能看到面板恢复，以及要不要重启两次。",
+  "options": [
+    {
+      "id": "now-user",
+      "label": "你现在就重启（推荐）",
+      "impact": "你在 GUI 用 Plugin Manager「Restart now」或手动重启 dsh web，然后刷新页面；我停在这里，重启后你 resume 本会话继续派 T-04。"
+    },
+    {
+      "id": "after-t04",
+      "label": "等 T-04 提交后一次重启",
+      "impact": "我现在派 T-04（server-audit 实施 + reviewer-server 审查），完成后你一次重启，两笔修复一起生效；面板在这期间继续用旧码。"
+    },
+    {
+      "id": "agent-restart",
+      "label": "由我触发重启",
+      "impact": "我需要调 /api/plugin-manager/restart（无浏览器 token 会 401）或重启 dsh web 进程；会立即结束会话与队友，不推荐。"
+    }
+  ],
+  "recommendation": "after-t04",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 1,
+  "schema": 1,
+  "id": "D-20261104-06",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "after-t04",
+    "note": "用户选「等 T-04 完成后一次重启」，届时一次重启让 T-01 与 T-04 同时生效",
+    "at": "2026-11-04T19:15:19+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T19:15:19+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "ac37449c1f404d84",
+  "asked_at": "2026-11-04T19:14:51+08:00",
+  "created_at": "2026-11-04T19:14:51+08:00",
+  "updated_at": "2026-11-04T19:15:19+08:00"
+}

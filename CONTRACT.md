@@ -106,6 +106,10 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   `manifest-path-rejected: <key>: <原值>: <原因>`（只回显原值，不回显文件内容）。
 - 唯一例外：`store.root` 写成绝对路径时，若 `realpath` 后仍在项目根内则照常使用
   （兼容旧 manifest）；否则回退 `.dsh/flow` 并 warning。
+- **面板 `tasks.current` 的派生**：manifest 声明了合法相对路径时原样作为 `current` 回显；
+  未声明（`null`）时，Host 的面板投影把它派生为**队列头**——`active` 里 `created_at` 最老的
+  一条任务的 `id`（只读投影，不回写 `flow.json`，manifest 仍是 `null`）；没有 `active` 时为
+  `null`。
 
 合法相对路径的解析结果与旧行为完全一致。
 
@@ -585,8 +589,9 @@ flow check decisions
 - `heartbeat start/update/end` 的 session 缺省取 `DSH_SESSION_ID`（`--session` 覆盖）。
   `--claim` 可重复，是「本会话独占写入的文件域」，缺省取所属任务的 `scope.allow`。
   `start` 省略 `--task` 时按优先级认领任务：① `owner === session`；② `owner === --agent`
-  （或上次心跳的 agent）；③ 最新的**无主**（`owner` 为空）`active`；④ 最新的**无主** `draft`
-  （③④ 多条取 `updated_at` 最新）。**他人名下的任务不会被抢**——并行主会话各建各的卡，
+  （或上次心跳的 agent）；③ **最老的**无主（`owner` 为空）`active`；④ **最老的**无主 `draft`
+  （③④ 按 `created_at` **升序**取最老，即 FIFO 队列；`updated_at` 不再参与认领排序；
+  `created_at` 缺失或不可解析的记录排在最后）。**他人名下的任务不会被抢**——并行主会话各建各的卡，
   `claims` 才不会串味。都不命中才新建一条 `draft` 任务（标题取 `--goal`，缺省
   「未命名任务」，owner 为 session）并回填 `task`。显式 `--task` 始终优先，不存在则 `not-found`。
   重复 `start` 保留首次 `started_at`，`turn` +1（core 的 `startHeartbeat` 也接受显式 `turn`），
@@ -667,7 +672,9 @@ question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、
 归档只改计数分布、不改总数：一个 `done` 任务归档后 `done` 减 1、`archived` 加 1，`total`
 不变；`counts.tasks` 一直是全量（含 `archived`）。`recent.tasks` 取全量按 `updated_at`
 倒序的前 3 条，因此仍可能列出 `archived` 任务；面板的行数组（active / 最近完成 / draft）
-默认不渲染 archived 行。
+默认不渲染 archived 行。行顺序：`active` 与 `draft` 按 `created_at` **升序**（最老在前，即
+FIFO 队列；patch 刷新 `updated_at` 不会改变队列位次），最近完成按 `updated_at` **倒序**
+（回顾性质）。
 
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：

@@ -5,8 +5,15 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { panelModel, registerProjectFlowPanel } from '../tui-panel.js'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.resolve(HERE, '..')
 
 const NOW = Date.parse('2026-10-31T18:30:00+08:00')
 
@@ -184,4 +191,363 @@ test('registration degrades to undefined when the service is absent or rejects',
   assert.equal(registerProjectFlowPanel({ get() { throw new Error('no service') } }, {}), undefined)
   assert.equal(registerProjectFlowPanel({ get() { return { register() { throw new Error('denied') } } } }, {}), undefined)
   assert.equal(registerProjectFlowPanel({}, {}), undefined)
+})
+
+// ------------------------------------------- last-good / stale（T-20261104-05）
+//
+// 组件本身要靠宿主 React 才能跑；这里用最小 hook 模拟器驱动真实的读链
+// （useState/useRef/useEffect），断言「失败保留 last-good、只加一行 stale」。
+
+/** 最小 React：按 hook 顺序保存槽位，state setter 标脏后重渲染。 */
+function fakeReact() {
+  const slots = []
+  let cursor = 0
+  let dirty = false
+  const React = {
+    useState(initial) {
+      const index = cursor++
+      if (!slots[index]) slots[index] = { value: typeof initial === 'function' ? initial() : initial }
+      const slot = slots[index]
+      return [
+        slot.value,
+        (next) => {
+          slot.value = typeof next === 'function' ? next(slot.value) : next
+          dirty = true
+        },
+      ]
+    },
+    useRef(initial) {
+      const index = cursor++
+      if (!slots[index]) slots[index] = { ref: { current: initial } }
+      return slots[index].ref
+    },
+    useEffect(fn, deps) {
+      const index = cursor++
+      const slot = slots[index] || (slots[index] = {})
+      const nextDeps = Array.isArray(deps) ? deps : []
+      slot.fn = fn
+      slot.nextDeps = nextDeps
+      slot.changed =
+        slot.deps === undefined ||
+        nextDeps.length !== slot.deps.length ||
+        nextDeps.some((dep, position) => !Object.is(dep, slot.deps[position]))
+    },
+    createElement(type, props, ...children) {
+      return { type, props: { ...(props || {}), children: children.length <= 1 ? children[0] : children } }
+    },
+  }
+  return {
+    React,
+    render(component, props) {
+      cursor = 0
+      dirty = false
+      return component(props)
+    },
+    runEffects() {
+      for (const slot of slots) {
+        if (!slot || typeof slot.fn !== 'function' || slot.changed !== true) continue
+        if (typeof slot.cleanup === 'function') slot.cleanup()
+        const cleanup = slot.fn()
+        slot.cleanup = typeof cleanup === 'function' ? cleanup : null
+        slot.deps = slot.nextDeps
+        slot.changed = false
+      }
+    },
+    isDirty: () => dirty === true,
+  }
+}
+
+function mountPanel(options = {}) {
+  const hostState = { cwd: options.cwd || '/ws/one' }
+  let tick = 0
+  const ui = {
+    useAnimationTime: () => tick,
+    Box: function Box() {},
+    Text: function Text() {},
+    Divider: function Divider() {},
+  }
+  const engine = fakeReact()
+  let descriptor = null
+  const ctx = {
+    get() {
+      return {
+        register(value) {
+          descriptor = value
+          return () => {}
+        },
+      }
+    },
+  }
+  registerProjectFlowPanel(ctx, {
+    readState: options.readState,
+    refreshMs: options.refreshMs === undefined ? 3000 : options.refreshMs,
+    log: options.log,
+  })
+  const props = {
+    React: engine.React,
+    ui,
+    host: { snapshot: () => ({ cwd: hostState.cwd }) },
+    visible: true,
+    focused: false,
+    width: 60,
+    height: 40,
+  }
+  let tree = null
+  async function settle() {
+    for (let round = 0; round < 20; round += 1) {
+      tree = engine.render(descriptor.component, props)
+      engine.runEffects()
+      // 让 readState 的 promise 链落地；setState 会再次标脏。
+      await new Promise((resolve) => setImmediate(resolve))
+      if (engine.isDirty() === false) break
+    }
+    return tree
+  }
+  return {
+    descriptor,
+    settle,
+    async tick(steps = 1) {
+      tick += steps
+      return settle()
+    },
+    setCwd(next) {
+      hostState.cwd = next
+    },
+    tree: () => tree,
+  }
+}
+
+/** 依次返回值；数组用尽后重复最后一项。Error 实例按 reject 处理。 */
+function sequenceReader(sequence) {
+  const calls = []
+  return {
+    calls,
+    async readState(dir) {
+      calls.push(dir)
+      const value = sequence[Math.min(calls.length - 1, sequence.length - 1)]
+      if (value instanceof Error) throw value
+      if (typeof value === 'function') return value(dir)
+      return value
+    },
+  }
+}
+
+function panelTexts(tree) {
+  const found = []
+  const walk = (node) => {
+    if (node === null || node === undefined) return
+    if (typeof node === 'string' || typeof node === 'number') return
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child)
+      return
+    }
+    if (typeof node !== 'object') return
+    if (typeof node.type === 'function' && node.type.name === 'Text') {
+      const children = node.props.children
+      found.push({ text: typeof children === 'string' ? children : String(children ?? ''), color: node.props.color })
+      return
+    }
+    if (typeof node.type === 'function' && node.type.name === 'Divider') return
+    walk(node.props.children)
+  }
+  walk(tree)
+  return found
+}
+
+const TIMEOUT = { ok: false, error: { code: 'state-timeout', message: 'state read timed out after 1800ms' } }
+const NO_LEDGER = {
+  ok: false,
+  root: '/tmp/plain',
+  error: { code: 'not-initialized', message: 'no flow store in /tmp/plain' },
+}
+
+function staleLines(lines) {
+  return lines.filter((line) => line.text.startsWith('数据过期：'))
+}
+
+test('TUI last-good：ok:false 超时保留 good，只在 meta 后加一行 stale', async () => {
+  const reader = sequenceReader([fixture(), TIMEOUT])
+  const panel = mountPanel({ readState: reader.readState })
+  await panel.settle()
+  let lines = panelTexts(panel.tree())
+  assert.ok(lines.some((line) => line.text.includes('任务 3')), '首读应显示 good 数据')
+  assert.equal(staleLines(lines).length, 0)
+
+  await panel.tick()
+  lines = panelTexts(panel.tree())
+  const stale = staleLines(lines)
+  assert.equal(stale.length, 1, 'stale 必须只有一行：' + lines.map((line) => line.text).join(' | '))
+  assert.match(stale[0].text, /^数据过期：state read timed out after 1800ms（上次成功 /)
+  assert.equal(stale[0].color, 'yellow', 'stale 行 tone 必须是 warning')
+  assert.ok(lines.some((line) => line.text.includes('任务 3')), 'last-good 数据仍在')
+  assert.equal(lines.filter((line) => line.text.startsWith('读取失败：')).length, 0, '有 good 时不得显示错误卡')
+  const texts = lines.map((line) => line.text)
+  const metaIndex = texts.findIndex((text) => text.startsWith('main ·'))
+  const staleIndex = texts.findIndex((text) => text.startsWith('数据过期：'))
+  assert.equal(staleIndex, metaIndex + 1, 'stale 行紧跟 meta')
+  assert.equal(reader.calls.length, 2)
+})
+
+test('连续多次超时：stale 不堆叠、画面不抖动，恢复成功后 stale 消失并刷新数据', async () => {
+  const recovered = fixture()
+  recovered.contract.name = 'recovered'
+  recovered.tasks.total = 5
+  recovered.tasks.counts = { draft: 0, active: 0, done: 5, archived: 0, other: 0 }
+  recovered.tasks.active = []
+  recovered.tasks.draft = []
+  const reader = sequenceReader([fixture(), TIMEOUT, TIMEOUT, TIMEOUT, recovered])
+  const panel = mountPanel({ readState: reader.readState })
+  await panel.settle()
+  const goodTexts = panelTexts(panel.tree()).map((line) => line.text)
+  assert.equal(staleLines(panelTexts(panel.tree())).length, 0)
+
+  await panel.tick()
+  const firstStale = panelTexts(panel.tree())
+  const snapshot = firstStale.map((line) => line.text)
+  assert.equal(staleLines(firstStale).length, 1)
+  await panel.tick()
+  await panel.tick()
+  const lines = panelTexts(panel.tree())
+  assert.equal(staleLines(lines).length, 1, '连续超时只保留一行 stale')
+  assert.deepEqual(lines.map((line) => line.text), snapshot, '连续超时不得堆叠或抖动')
+  assert.deepEqual(
+    snapshot.filter((text) => !text.startsWith('数据过期：')),
+    goodTexts,
+    '数据行保持首读快照',
+  )
+
+  await panel.tick()
+  const afterRecovery = panelTexts(panel.tree())
+  assert.equal(staleLines(afterRecovery).length, 0, '恢复成功后 stale 必须消失')
+  assert.ok(
+    afterRecovery.some((line) => line.text.includes('任务 5')),
+    '恢复后应显示新数据：' + afterRecovery.map((line) => line.text).join(' | '),
+  )
+})
+
+test('抛异常与 ok:false 同一条路径：都保留 good、只记一次日志', async () => {
+  for (const failure of [TIMEOUT, new Error('state read timed out after 1800ms')]) {
+    const logs = []
+    const reader = sequenceReader([fixture(), failure])
+    const panel = mountPanel({ readState: reader.readState, log: (message) => logs.push(message) })
+    await panel.settle()
+    await panel.tick()
+    const lines = panelTexts(panel.tree())
+    assert.ok(lines.some((line) => line.text.includes('任务 3')), '两种失败都必须保留 last-good')
+    assert.equal(staleLines(lines).length, 1, '两种失败都必须只加一行 stale')
+    assert.equal(lines.filter((line) => line.text.startsWith('读取失败：')).length, 0, '有 good 时不显示错误卡')
+    await panel.tick()
+    assert.equal(logs.length, 1, '同一失败只 log 一次，不随每次轮询重复')
+    assert.match(logs[0], /^panel read failed: state read timed out after 1800ms$/)
+  }
+})
+
+test('cwd 切换清空 last-good 与 stale：新工作区首读失败只显示错误卡', async () => {
+  const calls = []
+  let aReads = 0
+  const readState = async (dir) => {
+    calls.push(dir)
+    if (dir === '/ws/a') {
+      aReads += 1
+      return aReads === 1 ? fixture() : TIMEOUT
+    }
+    return TIMEOUT
+  }
+  const panel = mountPanel({ cwd: '/ws/a', readState })
+  await panel.settle()
+  assert.ok(panelTexts(panel.tree()).some((line) => line.text.includes('任务 3')))
+  await panel.tick()
+  assert.equal(staleLines(panelTexts(panel.tree())).length, 1, '同一工作区超时应标 stale')
+
+  panel.setCwd('/ws/b')
+  await panel.tick()
+  const lines = panelTexts(panel.tree())
+  assert.deepEqual(calls, ['/ws/a', '/ws/a', '/ws/b'])
+  assert.equal(staleLines(lines).length, 0, '不得把 /ws/a 的 stale 带到 /ws/b')
+  assert.equal(lines.filter((line) => line.text.includes('任务 3')).length, 0, '不得显示 /ws/a 的 last-good')
+  assert.ok(
+    lines.some((line) => line.text.startsWith('读取失败：')),
+    '/ws/b 首读失败应显示错误卡：' + lines.map((line) => line.text).join(' | '),
+  )
+})
+
+test('首读失败才显示错误卡；not-initialized 仍是正常空态（不标 stale）', async () => {
+  const timeoutFirst = mountPanel({ readState: sequenceReader([TIMEOUT]).readState })
+  await timeoutFirst.settle()
+  let lines = panelTexts(timeoutFirst.tree())
+  assert.ok(lines.some((line) => line.text.startsWith('读取失败：')))
+  assert.equal(staleLines(lines).length, 0)
+
+  const throwFirst = mountPanel({ readState: sequenceReader([new Error('宿主张量失败')]).readState })
+  await throwFirst.settle()
+  lines = panelTexts(throwFirst.tree())
+  assert.ok(lines.some((line) => line.text.startsWith('读取失败：宿主张量失败')))
+
+  const uninitialized = mountPanel({ readState: sequenceReader([NO_LEDGER]).readState })
+  await uninitialized.settle()
+  lines = panelTexts(uninitialized.tree())
+  assert.ok(lines.some((line) => line.text.includes('未初始化')), 'not-initialized 应渲染空态卡')
+  assert.equal(lines.filter((line) => line.text.startsWith('读取失败：')).length, 0)
+  assert.equal(staleLines(lines).length, 0)
+})
+
+test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 字段', () => {
+  const single = panelModel(fixture())
+  // 与 T-05 之前（HEAD 版 tui-panel.js）的输出逐字节一致。
+  const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
+  assert.equal(digest, '1cdd504bd3654c7286016ba84af78a7aded0831e0babe70b2fd749f313bd9ddf')
+  assert.equal(Object.hasOwn(single, 'staleNote'), false)
+
+  const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })
+  const withNote = panelModel(fixture(), {
+    width: 60,
+    height: 40,
+    now: NOW,
+    staleNote: { message: 'timed out', at: NOW - 60_000 },
+  })
+  assert.equal(withNote.staleNote, '数据过期：timed out（上次成功 1m 前）')
+  const { staleNote, ...rest } = withNote
+  assert.deepEqual(rest, plain, 'staleNote 不得改变其它字段')
+  assert.equal(staleNote, '数据过期：timed out（上次成功 1m 前）')
+
+  const clipped = panelModel(fixture(), {
+    width: 20,
+    height: 40,
+    now: NOW,
+    staleNote: { message: 'state read timed out after 1800ms', at: NOW },
+  })
+  assert.ok(Array.from(clipped.staleNote).length <= 20, 'staleNote 也必须按宽度裁剪')
+  assert.ok(clipped.staleNote.startsWith('数据过期：'))
+})
+
+test('TUI 与 web 用同一 Host fixture 对照：store 与 not-initialized 同形', () => {
+  const storeFixture = JSON.parse(fs.readFileSync(path.join(ROOT, '.selftest', 'state-store.json'), 'utf8'))
+  const storeModel = panelModel(storeFixture, { width: 80, height: 40, now: NOW })
+  assert.match(storeModel.header, new RegExp(storeFixture.contract.name))
+  assert.ok(
+    storeModel.counters.join(' ').includes('任务 ' + storeFixture.tasks.total),
+    'TUI 计数必须与 Host/web 同一 fixture 的 tasks.total 一致',
+  )
+  assert.deepEqual(
+    storeModel.sections.map((section) => section.title).slice(0, 3),
+    ['任务', '实验', '门禁'],
+    'TUI section 顺序与 web 面板一致',
+  )
+  assert.equal(Object.hasOwn(storeModel, 'staleNote'), false)
+
+  const noLedger = JSON.parse(fs.readFileSync(path.join(ROOT, '.selftest', 'state-not-initialized.json'), 'utf8'))
+  const noLedgerModel = panelModel(noLedger, { width: 80, height: 40, now: NOW })
+  assert.match(noLedgerModel.header, /未初始化/)
+  assert.match(noLedgerModel.footer, /flow init/)
+  assert.deepEqual(noLedgerModel.sections, [])
+})
+
+test('web 零回归：client.js 的 stale/错误面未被 TUI 改动波及', () => {
+  const webSource = fs.readFileSync(path.join(ROOT, 'client.js'), 'utf8')
+  // web 端自己的快照 + stale 机制仍在。
+  assert.ok(webSource.includes('setErrorInfo'), 'web 面板仍用 errorInfo 保留快照')
+  assert.ok(webSource.includes("'stale.text'"), 'web 的 stale 文案仍在')
+  assert.ok(webSource.includes('setLastOkAt'), 'web 仍记录上次成功时间')
+  // TUI 的 stale 只在客户端：不得把 TUI 概念/模块塞进 web 源码。
+  assert.equal(/tui-panel|staleNote/.test(webSource), false, 'TUI stale 概念不得泄漏到 web client')
 })

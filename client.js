@@ -88,6 +88,10 @@ window.__ModuleLoader__.load({
     const MAX_GATE_TAIL_LINES = 8;
     const MAX_WARNINGS = 10;
     const MAX_LIST_ROWS = 25;
+    /* First-screen budget for the task card: the active group opens on this many
+       rows so a 50-task ledger still fits the sidebar. Everything beyond it stays
+       behind the group toggle and is always announced by the "N more" line. */
+    const TASK_PREVIEW_ROWS = 6;
     const STALE_AFTER_SECONDS = 6 * 60 * 60;
 
     /** The seven tallies the Host reports for the decision section. */
@@ -134,6 +138,7 @@ window.__ModuleLoader__.load({
       'error.badRoot': '项目路径无效。',
       'error.generic': '未知错误。',
       'exp.title': '实验树',
+      'exp.tree': '实验树',
       'exp.total': '总数',
       'exp.empty': '还没有实验记录。',
       'exp.emptyHint': '运行 flow exp add … 或使用 flow_exp 工具添加第一条实验。',
@@ -162,6 +167,8 @@ window.__ModuleLoader__.load({
       'tasks.currentNone': '无',
       'tasks.draft': '待办（草稿）',
       'tasks.more': '还有 {n} 条未显示',
+      'tasks.queueHead': '队列头',
+      'tasks.queueEmpty': '暂无进行中任务',
       'tasks.active': '进行中',
       'tasks.activeEmpty': '任务台账里没有进行中的任务。',
       'tasks.recent': '最近完成',
@@ -203,7 +210,8 @@ window.__ModuleLoader__.load({
       'hb.status.idle': '空闲',
       'hb.status.done': '已完成',
       'hb.status.missed': '已错过',
-      'hb.counts': '活跃 {active} / 共 {total}',
+      'hb.status.dead': '已结束',
+      'hb.counts': '活跃 {active} · 已结束 {dead} / 共 {total}',
       'hb.current': '本会话',
       'hb.task': '任务',
       'hb.goal': '目标',
@@ -229,6 +237,7 @@ window.__ModuleLoader__.load({
       'decisions.more': '还有 {n} 条',
       'decisions.empty': '没有待决策',
       'misc.dash': '—',
+      'misc.count': '{n} 条',
     };
 
     const en = {
@@ -260,6 +269,7 @@ window.__ModuleLoader__.load({
       'error.badRoot': 'The project path is invalid.',
       'error.generic': 'Unexpected error.',
       'exp.title': 'Experiment tree',
+      'exp.tree': 'Experiment tree',
       'exp.total': 'total',
       'exp.empty': 'No experiments recorded yet.',
       'exp.emptyHint': 'Run flow exp add … or add the first one with the flow_exp tool.',
@@ -288,6 +298,8 @@ window.__ModuleLoader__.load({
       'tasks.currentNone': 'none',
       'tasks.draft': 'Todo (drafts)',
       'tasks.more': '{n} more not shown',
+      'tasks.queueHead': 'Queue head',
+      'tasks.queueEmpty': 'Nothing in progress',
       'tasks.active': 'In progress',
       'tasks.activeEmpty': 'No task in the ledger is in progress.',
       'tasks.recent': 'Recently completed',
@@ -329,7 +341,8 @@ window.__ModuleLoader__.load({
       'hb.status.idle': 'idle',
       'hb.status.done': 'done',
       'hb.status.missed': 'missed',
-      'hb.counts': '{active} active / {total}',
+      'hb.status.dead': 'dead',
+      'hb.counts': '{active} active · {dead} dead / {total}',
       'hb.current': 'current',
       'hb.task': 'Task',
       'hb.goal': 'Goal',
@@ -355,6 +368,7 @@ window.__ModuleLoader__.load({
       'decisions.more': '{n} more',
       'decisions.empty': 'No pending decisions',
       'misc.dash': '—',
+      'misc.count': '{n}',
     };
     // #endregion
 
@@ -586,6 +600,9 @@ window.__ModuleLoader__.load({
       const updatedAt = asText(entry.updated_at);
       const ageSeconds = asNumber(entry.ageSeconds, null);
       const status = asText(entry.status).toLowerCase();
+      const liveness = asText(entry.liveness);
+      const reason = asText(entry.reason);
+      const dead = liveness === 'dead';
       const stale =
         entry.stale === true ||
         (entry.stale !== false && Number.isFinite(ageSeconds) && ageSeconds > STALE_AFTER_SECONDS);
@@ -604,6 +621,10 @@ window.__ModuleLoader__.load({
           .map((claim) => asText(claim).trim())
           .filter(Boolean),
         status,
+        /* T-10: host liveness verdict; a dead session must not render "working". */
+        liveness,
+        reason,
+        dead,
         lastAction: asText(entry.last_action),
         startedAt: asText(entry.started_at),
         endedAt: asText(entry.ended_at),
@@ -624,15 +645,22 @@ window.__ModuleLoader__.load({
         .filter((entry) => entry && typeof entry === 'object' && !Array.isArray(entry))
         .map(normalizeHeartbeat);
       const countsSrc = asObject(section && section.counts);
-      const derivedActive = items.filter((beat) =>
-        beat.status ? beat.status === 'working' || beat.status === 'idle' : beat.stale !== true
-      ).length;
+      /* Same active rule as core: `live` is exempt from the 6 h fallback, a dead
+         session never counts, and unknown/stale still needs freshness. */
+      const derivedActive = items.filter((beat) => {
+        const statusActive = beat.status === 'working' || beat.status === 'idle';
+        if (!statusActive) return false;
+        if (beat.liveness === 'live') return true;
+        if (beat.liveness === 'dead' || beat.liveness === 'foreign' || beat.liveness === 'stale') return false;
+        return beat.stale !== true;
+      }).length;
       return {
         items,
         counts: {
           total: asNumber(countsSrc.total, items.length),
           active: asNumber(countsSrc.active, derivedActive),
           stale: asNumber(countsSrc.stale, items.filter((beat) => beat.stale).length),
+          dead: asNumber(countsSrc.dead, items.filter((beat) => beat.dead).length),
         },
       };
     }
@@ -1174,6 +1202,50 @@ window.__ModuleLoader__.load({
       return out;
     }
 
+    // #region shared fold header
+    /**
+     * One fold header: a real <button> (keyboard reachable, `aria-expanded` /
+     * `aria-controls`) carrying a chevron, an already-translated label and a
+     * count chip.
+     *
+     * Shared by the task card's groups and the experiment tree so both render the
+     * same DOM and reuse the `.project-flow-groupToggle` styling. `countText`
+     * overrides the default "<n>" template when a section wants other copy.
+     */
+    function FoldHeader(props) {
+      const t = props.t;
+      const expanded = props.expanded === true;
+      const label = asText(props.label);
+      const countText =
+        typeof props.countText === 'string' && props.countText !== ''
+          ? props.countText
+          : t('misc.count', { n: asNumber(props.count, 0) });
+      return React.createElement(
+        'div',
+        { className: 'project-flow-groupHead' },
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'project-flow-groupToggle',
+            'aria-expanded': expanded,
+            'aria-controls': props.controlsId,
+            onClick: () => {
+              if (typeof props.onToggle === 'function') props.onToggle();
+            },
+          },
+          React.createElement(
+            'span',
+            { className: 'project-flow-groupChevron', 'aria-hidden': 'true' },
+            expanded ? '\u25BE' : '\u25B8'
+          ),
+          React.createElement('span', null, label),
+          React.createElement('span', { className: 'project-flow-groupCount' }, countText)
+        )
+      );
+    }
+    // #endregion
+
     function ExperimentTree(props) {
       const exp = props.exp || {};
       const t = props.t;
@@ -1208,7 +1280,11 @@ window.__ModuleLoader__.load({
         }
         budget -= 1;
         const item = row.item || {};
-        const key = 'tree-' + index + '-' + (item.id || '');
+        /* Expansion is keyed by the experiment id, so a reordered refresh (new
+           item, changed sort) keeps the same row open. Rows without an id fall
+           back to their render index. */
+        const itemId = asText(item.id);
+        const key = itemId !== '' ? itemId : 'tree-' + index;
         const expanded = openItems[key] === true;
         const verdict = verdictOf(item.status);
         const label = asText(item.title) || asText(item.hypothesis);
@@ -1319,19 +1395,54 @@ window.__ModuleLoader__.load({
       /* Drafts are optional: an older Host payload has no `draft` array, so the
          block renders only when there are rows (counts still appear as chips). */
       const draftTasks = asArray(tasks.draft);
-      const draftRows = draftTasks.slice(0, MAX_LIST_ROWS);
-      const hiddenDrafts = draftTasks.length - draftRows.length;
+
+      /* Groups fold independently, and the fold amount is keyed by GROUP NAME —
+         never by row index — so a 2.5 s poll that reorders rows keeps the state.
+         Defaults keep the first screen short: the queue head (active) opens on a
+         preview, the backlog and the recent completions start folded. */
+      const [groupLimits, setGroupLimits] = useState(() => ({
+        active: TASK_PREVIEW_ROWS,
+        draft: 0,
+        recentDone: 0,
+      }));
+      const groupLimit = (key) => {
+        const table = asObject(groupLimits) || {};
+        const value = asNumber(table[key], 0);
+        return value > 0 ? Math.min(value, MAX_LIST_ROWS) : 0;
+      };
+      const toggleGroup = (key) => {
+        setGroupLimits((current) => {
+          const table = asObject(current) || {};
+          const shown = asNumber(table[key], 0);
+          const next = Object.assign({}, table);
+          /* Preview -> full cap -> folded -> full cap: a folded or previewed
+             group always opens completely first, so one click never hides rows. */
+          next[key] = shown >= MAX_LIST_ROWS ? 0 : MAX_LIST_ROWS;
+          return next;
+        });
+      };
 
       const statusOrder = ['draft', 'active', 'done', 'archived'];
       /* Projects whose ledger is markdown/absent may only report `other`. */
       const otherCount = asNumber(counts.other, 0);
       const statusRows = otherCount > 0 ? statusOrder.concat(['other']) : statusOrder;
 
+      /* Queue head = the first row of the active group. A+ moves the real order
+         into the Host payload; until then this is a pure front-end pick, so the
+         payload shape is untouched. */
+      const queueHead = activeTasks.length > 0 ? activeTasks[0] : null;
+      const queueHeadId = queueHead ? asText(queueHead.id) : '';
+      const queueHeadTitle = queueHead ? asText(queueHead.title) : '';
+
       /** Rows of one group; business ids are the React keys, never row indexes. */
       const renderRows = (kind, rows) =>
         React.createElement(
           'ul',
-          { className: 'project-flow-list project-flow-taskList' },
+          {
+            className: 'project-flow-list project-flow-taskList',
+            id: 'project-flow-group-' + kind,
+            hidden: groupLimit(kind) > 0 ? undefined : true,
+          },
           rows.map((task, index) => {
             const id = asText(task.id);
             return React.createElement(TaskRow, {
@@ -1344,6 +1455,42 @@ window.__ModuleLoader__.load({
             });
           })
         );
+
+      /* One foldable group: a real <button> (keyboard + aria-expanded/controls),
+         its visible rows, and a "N more" line whenever rows are held back — the
+         active and recent groups used to truncate at 25 rows silently. */
+      const renderGroup = (group) => {
+        const rows = group.rows;
+        const limit = groupLimit(group.key);
+        const shown = rows.slice(0, limit);
+        const hidden = rows.length - shown.length;
+        return React.createElement(
+          'div',
+          { className: 'project-flow-group', key: group.key },
+          React.createElement(FoldHeader, {
+            t,
+            label: t(group.label),
+            count: rows.length,
+            expanded: limit > 0,
+            controlsId: 'project-flow-group-' + group.key,
+            onToggle: () => toggleGroup(group.key),
+          }),
+          /* Always render the list element, even for an empty group: the toggle's
+             aria-controls must point at an element that exists, and "nothing in
+             progress / nothing completed yet" are common everyday states. */
+          renderRows(group.key, shown),
+          rows.length === 0 && group.empty
+            ? React.createElement(EmptyLine, null, t(group.empty))
+            : null,
+          hidden > 0
+            ? React.createElement(
+                'p',
+                { className: 'project-flow-muted project-flow-more' },
+                t('tasks.more', { n: hidden })
+              )
+            : null
+        );
+      };
 
       return React.createElement(
         'section',
@@ -1372,25 +1519,21 @@ window.__ModuleLoader__.load({
           React.createElement('span', { className: 'project-flow-currentId' }, currentId),
           currentTitle ? React.createElement('span', { className: 'project-flow-currentTitle', title: currentTitle }, currentTitle) : null
         ),
+        React.createElement(
+          'div',
+          { className: 'project-flow-queueHead' },
+          React.createElement('span', { className: 'project-flow-muted' }, t('tasks.queueHead') + '\uff1a'),
+          queueHead ? React.createElement('span', { className: 'project-flow-queueId' }, queueHeadId) : null,
+          queueHead && queueHeadTitle
+            ? React.createElement('span', { className: 'project-flow-queueTitle', title: queueHeadTitle }, queueHeadTitle)
+            : null,
+          queueHead ? null : React.createElement('span', { className: 'project-flow-muted' }, t('tasks.queueEmpty'))
+        ),
+        renderGroup({ key: 'active', label: 'tasks.active', rows: activeTasks, empty: 'tasks.activeEmpty' }),
         draftTasks.length === 0
           ? null
-          : React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.draft')),
-        draftTasks.length === 0 ? null : renderRows('draft', draftRows),
-        hiddenDrafts > 0
-          ? React.createElement(
-              'p',
-              { className: 'project-flow-muted project-flow-more' },
-              t('tasks.more', { n: hiddenDrafts })
-            )
-          : null,
-        React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.active')),
-        activeTasks.length === 0
-          ? React.createElement(EmptyLine, null, t('tasks.activeEmpty'))
-          : renderRows('active', activeTasks.slice(0, MAX_LIST_ROWS)),
-        React.createElement('h3', { className: 'project-flow-subTitle' }, t('tasks.recent')),
-        recentTasks.length === 0
-          ? React.createElement(EmptyLine, null, t('tasks.recentEmpty'))
-          : renderRows('done', recentTasks.slice(0, MAX_LIST_ROWS))
+          : renderGroup({ key: 'draft', label: 'tasks.draft', rows: draftTasks, empty: null }),
+        renderGroup({ key: 'recentDone', label: 'tasks.recent', rows: recentTasks, empty: 'tasks.recentEmpty' })
       );
     }
 
@@ -1832,6 +1975,8 @@ window.__ModuleLoader__.load({
         heartbeats.filter((beat) => beat.status === 'working' || beat.status === 'idle').length
       );
       const hbTotal = asNumber(heartbeatCounts.total, heartbeats.length);
+      /* T-10: a provably dead session is not "active", but the count is shown. */
+      const hbDead = asNumber(heartbeatCounts.dead, heartbeats.filter((beat) => beat.dead === true).length);
 
       return React.createElement(
         'section',
@@ -1843,7 +1988,7 @@ window.__ModuleLoader__.load({
             title: t('signals.heartbeat'),
             open: !closed.heartbeat,
             onToggle: () => toggleSection('heartbeat'),
-            countText: t('hb.counts', { active: hbActive, total: hbTotal }),
+            countText: t('hb.counts', { active: hbActive, dead: hbDead, total: hbTotal }),
           },
           heartbeats.length === 0
             ? React.createElement(EmptyLine, null, t('signals.heartbeat.empty'))
@@ -1863,18 +2008,20 @@ window.__ModuleLoader__.load({
                   );
                   const sessionKey = beatSessionKey(beat);
                   const current = sameSession(sessionKey, sessionId);
+                  const dead = beat.dead === true || beat.liveness === 'dead';
                   const key = 'beat-' + index + '-' + (beat.file || sessionKey);
                   const currentChip = current
                     ? React.createElement(Chip, { tone: 'brand' }, t('hb.current'))
                     : null;
-                  const staleChip = stale
+                  /* A dead session is stronger evidence than staleness: one mark, no yellow. */
+                  const staleChip = stale && !dead
                     ? React.createElement(
                         'span',
                         { className: 'project-flow-chip project-flow-chip--warn' },
                         t('signals.heartbeat.stale')
                       )
                     : null;
-                  const status = heartbeatStatusOf(beat.status, t);
+                  const status = dead ? null : heartbeatStatusOf(beat.status, t);
                   const displayName =
                     beat.agent || shortSession(beat.session) || beat.title || basename(beat.file) || t('misc.dash');
                   const note = beat.lastAction || beat.statusLine;
@@ -1899,13 +2046,15 @@ window.__ModuleLoader__.load({
                             shortSession(beat.session)
                           )
                         : null,
-                      status
-                        ? React.createElement(
-                            Chip,
-                            { tone: status.cls === 'unknown' ? null : 'hb-' + status.cls },
-                            status.text
-                          )
-                        : null,
+                      dead
+                        ? React.createElement(Chip, { tone: 'hb-dead' }, t('hb.status.dead'))
+                        : status
+                          ? React.createElement(
+                              Chip,
+                              { tone: status.cls === 'unknown' ? null : 'hb-' + status.cls },
+                              status.text
+                            )
+                          : null,
                       beat.task
                         ? React.createElement('span', { className: 'project-flow-beatTask', title: t('hb.task') }, beat.task)
                         : null,
@@ -2690,6 +2839,7 @@ window.__ModuleLoader__.load({
 .project-flow-chip--hb-idle{color:var(--dsw-alias-state-warn-primary);}
 .project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);opacity:.8;}
 .project-flow-chip--hb-missed{color:var(--dsw-alias-state-error-primary);}
+.project-flow-chip--hb-dead{color:var(--dsw-alias-label-secondary);opacity:.65;text-decoration:line-through;}
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}
@@ -2703,6 +2853,16 @@ window.__ModuleLoader__.load({
 .project-flow-current{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px;margin-top:8px;padding:5px 7px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);font-size:11.5px;min-width:0;}
 .project-flow-currentId{font-family:${MONO};font-weight:600;}
 .project-flow-currentTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);}
+.project-flow-group{display:flex;flex-direction:column;min-width:0;}
+.project-flow-groupHead{display:flex;align-items:center;gap:6px;margin:10px 0 4px;}
+.project-flow-groupToggle{display:inline-flex;align-items:center;gap:6px;padding:2px 5px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-secondary);font:inherit;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;}
+.project-flow-groupToggle:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-groupToggle:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
+.project-flow-groupChevron{display:inline-block;width:8px;font-size:9px;line-height:1;text-align:center;}
+.project-flow-groupCount{font-weight:400;letter-spacing:0;text-transform:none;opacity:.75;}
+.project-flow-queueHead{display:flex;align-items:baseline;flex-wrap:wrap;gap:5px;margin-top:6px;padding:5px 7px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);font-size:11.5px;min-width:0;}
+.project-flow-queueId{font-family:${MONO};font-weight:600;}
+.project-flow-queueTitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);}
 .project-flow-list{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
 .project-flow-taskList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
 .project-flow-taskRow{display:flex;flex-direction:column;min-width:0;border-radius:6px;}

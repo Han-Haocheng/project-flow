@@ -809,7 +809,8 @@ async function collectPanelState(ctx, root, workspaces) {
     const payload = result.payload
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
-    return payload
+    // Host agents 正向证据：live 会话打 liveness:'live'/reason:'agent-live'（dead 不覆盖）。
+    return applyAgentLiveness(ctx, payload)
   }
   return {
     ok: false,
@@ -1221,6 +1222,70 @@ function requireSession(exec) {
   return session
 }
 
+/**
+ * Session ids the optional host `agents` service reports as live: roots plus
+ * every live agent. `null` when the host does not expose the service, so callers
+ * can tell "no evidence" from "evidence says nobody is live".
+ */
+function liveSessionIds(ctx) {
+  const agents = service(ctx, 'agents')
+  if (agents === undefined || agents === null) return null
+  const ids = new Set()
+  const add = (value) => {
+    const id = usableSessionId(isPlainObject(value) ? value.id : value)
+    if (id !== '') ids.add(id)
+  }
+  for (const method of ['roots', 'list']) {
+    try {
+      if (typeof agents[method] !== 'function') continue
+      const value = agents[method]()
+      if (Array.isArray(value)) {
+        for (const agent of value) add(agent)
+      }
+    } catch {
+      // An unavailable registry is "no evidence", never a hard failure.
+    }
+  }
+  return ids
+}
+
+/** Whether the host agent registry reports this session as live right now. */
+function sessionIsLive(ctx, session) {
+  const id = usableSessionId(session)
+  if (id === '') return false
+  const agents = service(ctx, 'agents')
+  if (agents === undefined || agents === null) return false
+  try {
+    if (typeof agents.get === 'function' && agents.get(id) !== undefined && agents.get(id) !== null) return true
+  } catch {
+    // Fall through to the list projection.
+  }
+  const ids = liveSessionIds(ctx)
+  return ids !== null && ids.has(id)
+}
+
+/**
+ * Apply the host's positive evidence to the state payload's heartbeat rows: a
+ * session the `agents` service reports live becomes `liveness: 'live'` /
+ * `reason: 'agent-live'` — a busy session that has not refreshed its heartbeat
+ * for >6 h is alive, not dead. A row the core judged `dead` is never overwritten
+ * (pid evidence is stronger). The state payload projects heartbeats as a plain
+ * row array (the panel derives its own counts), so only rows are touched.
+ */
+function applyAgentLiveness(ctx, payload) {
+  if (isPlainObject(payload) === false || Array.isArray(payload.heartbeats) === false) return payload
+  const live = liveSessionIds(ctx)
+  if (live === null) return payload
+  for (const item of payload.heartbeats) {
+    if (isPlainObject(item) === false || item.liveness === 'dead') continue
+    const session = usableSessionId(item.session)
+    if (session === '' || live.has(session) === false) continue
+    item.liveness = 'live'
+    item.reason = 'agent-live'
+  }
+  return payload
+}
+
 /** Project root of one live agent, using the same resolution as the tools. */
 function agentRoot(ctx, agent) {
   try {
@@ -1234,8 +1299,13 @@ function agentRoot(ctx, agent) {
  * Whether the session's heartbeat is `working`: `true` / `false`, or `null`
  * when it cannot be decided (no store, no core, unsafe session id, broken
  * record). Hooks treat `null` as "do not interfere".
+ *
+ * `live` is the host `agents` positive evidence: a live session whose heartbeat
+ * is merely stale (>6 h without a refresh) still counts as working — core's
+ * `heartbeatStatus(..., {live:true})` applies that override. A record core judges
+ * `dead` is never revived.
  */
-function heartbeatWorking(root, session) {
+function heartbeatWorking(root, session, live) {
   if (typeof root !== 'string' || root.length === 0) return null
   if (hasStore(root) === false) return null
   const c = coreModule()
@@ -1245,7 +1315,15 @@ function heartbeatWorking(root, session) {
   try {
     const loaded = c.loadContract(root)
     const status = c.heartbeatStatus(root, loaded.contract, id)
-    return status !== null && typeof status === 'object' && status.active === true && status.record?.status === 'working'
+    if (status === null || typeof status !== 'object') return null
+    const working = status.record?.status === 'working'
+    if (working !== true) return false
+    if (status.active === true) return true
+    if (live === true && status.liveness !== 'dead') {
+      const revived = c.heartbeatStatus(root, loaded.contract, id, { live: true })
+      return revived !== null && typeof revived === 'object' && revived.active === true
+    }
+    return false
   } catch {
     return null
   }
@@ -1535,7 +1613,8 @@ function registerHeartbeatReminder(ctx) {
           if (root === undefined) return decision
           const turn = Number.isInteger(payload.turn) ? payload.turn : null
           const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
-          const heartbeatText = heartbeatWorking(root, session) === false ? HEARTBEAT_REMINDER_TEXT : ''
+          const heartbeatText =
+            heartbeatWorking(root, session, sessionIsLive(ctx, session)) === false ? HEARTBEAT_REMINDER_TEXT : ''
           const text = [decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
           if (text === '') return decision
           const messages = Array.isArray(decision.messages) ? decision.messages.slice() : []
@@ -1585,7 +1664,7 @@ function heartbeatGuardReason(ctx, execution) {
     if (session === '') return undefined
     const root = agentRoot(ctx, agent)
     if (root === undefined) return undefined
-    if (heartbeatWorking(root, session) !== false) return undefined
+    if (heartbeatWorking(root, session, sessionIsLive(ctx, session)) !== false) return undefined
     return '先调用 flow_heartbeat start 登记本轮目标与独占文件域'
   } catch {
     return undefined

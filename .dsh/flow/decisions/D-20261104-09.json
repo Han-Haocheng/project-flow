@@ -1,0 +1,55 @@
+{
+  "question": "T-08 分析发现「任务不是从之前的开始」有实现层根因：面板按 updated_at 倒序、心跳认领也是 LIFO（最新无主优先），最老任务永远轮不到。队列语义怎么定？",
+  "kind": "choice",
+  "rationale": "队列顺序与自动认领顺序是用户可见行为，且 A+ 要同批改 heartbeat 认领（lib/core.mjs + CONTRACT），需要你定；B 显式队列字段属 core schema 变更，是否要做也在这里定。",
+  "options": [
+    {
+      "id": "fifo-both",
+      "label": "队列与认领都改 FIFO（推荐）",
+      "impact": "面板按 created_at 升序（最老在前），heartbeat start 无 --task 时也优先认领最老的无主任务；patch 不再把旧任务顶到队首。A+ 一并改 core + CONTRACT。"
+    },
+    {
+      "id": "fifo-display",
+      "label": "只改面板展示，认领保持 LIFO",
+      "impact": "面板看起来是队列，但自动认领仍取最新；改动最小（只 state-snapshot），但两套顺序可能让人困惑。"
+    },
+    {
+      "id": "keep-lifo",
+      "label": "保持现状（LIFO），只做折叠",
+      "impact": "只做卡 A（面板折叠/队列头按现有顺序）；不解决「最老任务轮不到」。"
+    },
+    {
+      "id": "explicit-queue",
+      "label": "要显式队列字段（order/priority + flow task move）",
+      "impact": "单开 core schema 任务（L 量级）；先做 A/A+，B 另立项。"
+    }
+  ],
+  "recommendation": "fifo-both",
+  "affects": [
+    "lib/state-snapshot.mjs",
+    "lib/core.mjs",
+    "client.js",
+    "CONTRACT.md"
+  ],
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 1,
+  "schema": 1,
+  "id": "D-20261104-09",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "fifo-both",
+    "note": "用户选「队列与认领都改 FIFO」：面板按 created_at 升序、heartbeat start 无 --task 时优先最老无主任务；A+ 一并改 core/state-snapshot/CONTRACT",
+    "at": "2026-11-04T20:02:55+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T20:02:55+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "823098b6f5c8ebe1",
+  "asked_at": "2026-11-04T20:02:26+08:00",
+  "created_at": "2026-11-04T20:02:26+08:00",
+  "updated_at": "2026-11-04T20:02:55+08:00"
+}

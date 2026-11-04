@@ -1,0 +1,45 @@
+{
+  "question": "T-12 实验 schema 的 4 项口径（必填强度/结果枚举/产品化门禁/强制门槛）是否按推荐全部采纳？",
+  "kind": "choice",
+  "rationale": "四项都改变实验 schema、枚举与门禁，影响存量 22 条实验与所有实验项目写路径；实施后再改代价高。",
+  "options": [
+    {
+      "id": "adopt",
+      "label": "4 项全部按推荐采纳",
+      "impact": "新实验 schema2 缺 7 个规范字段直接拒；新增 inconclusive/pivoted（加法）；产品化复用 release phase + flow exp productize；refuted 必须 learned+cleanup、pivoted 必须 learned，check experiments 进 release gate；旧记录 legacy 不迁移。"
+    },
+    {
+      "id": "custom",
+      "label": "我要逐项调整",
+      "impact": "回复里逐项写明你的选择（如新实验只 warning、不加新枚举、要 rollout phase、不硬阻断），我改任务书后开工。"
+    },
+    {
+      "id": "defer",
+      "label": "暂不拍板，T-12 缓做",
+      "impact": "任务书留存，T-12 停在分析阶段；先把 T-05/T-08/T-10 收尾。"
+    }
+  ],
+  "recommendation": "adopt",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 2,
+  "schema": 1,
+  "id": "D-20261104-10",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "adopt",
+    "note": "用户选「4 项全部按推荐采纳」：新实验 schema2 必填 7 字段；新增 inconclusive/pivoted；产品化复用 release + exp productize；refuted 必须 learned+cleanup、check experiments 进 release gate；旧 22 条 legacy 不迁移",
+    "at": "2026-11-04T20:32:14+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T20:32:14+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "181a20a851d1b1e9",
+  "asked_at": "2026-11-04T20:31:11+08:00",
+  "created_at": "2026-11-04T20:31:11+08:00",
+  "updated_at": "2026-11-04T20:32:14+08:00"
+}

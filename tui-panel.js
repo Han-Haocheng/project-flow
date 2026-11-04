@@ -189,19 +189,26 @@ function buildGateRows(gates, now) {
 
 function buildHeartbeatRows(heartbeats) {
   const list = asArray(heartbeats).filter(isObject)
-  const working = list.filter((beat) => asText(beat.status) === 'working')
-  const rows = [
-    row(list.length === 0 ? '没有心跳文件' : 'working ' + working.length + ' / 共 ' + list.length, working.length > 0 ? 'normal' : 'dim'),
-  ]
-  const ordered = working.concat(list.filter((beat) => asText(beat.status) !== 'working'))
+  /* T-10：宿主已判定 dead 的会话不再算 working，行上给「已结束」标记。 */
+  /* 与 web 面板同判据：既认 `liveness === 'dead'`，也认宿主只投影的布尔 `dead: true`。 */
+  const dead = (beat) => beat.dead === true || asText(beat.liveness) === 'dead'
+  const working = list.filter((beat) => asText(beat.status) === 'working' && dead(beat) === false)
+  const deadCount = list.filter(dead).length
+  const header =
+    list.length === 0
+      ? '没有心跳文件'
+      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + list.length
+  const rows = [row(header, working.length > 0 ? 'normal' : 'dim')]
+  const ordered = working.concat(list.filter((beat) => asText(beat.status) !== 'working' || dead(beat)))
   for (const beat of ordered.slice(0, MAX_BEAT_ROWS)) {
     const status = asText(beat.status)
     const goal = asText(beat.goal) || asText(beat.title) || asText(beat.statusLine) || asText(beat.session)
     if (goal === '') continue
     const age = shortAgo(beat.ageSeconds)
-    const glyph = status === 'working' ? '▶' : status === 'done' ? '✓' : '·'
-    const tone = beat.stale === true ? 'warning' : status === 'working' ? 'accent' : 'dim'
-    rows.push(row(glyph + ' ' + goal + (age === '' ? '' : ' · ' + age), tone))
+    const isDead = dead(beat) === true
+    const glyph = isDead ? '×' : status === 'working' ? '▶' : status === 'done' ? '✓' : '·'
+    const tone = isDead ? 'error' : beat.stale === true ? 'warning' : status === 'working' ? 'accent' : 'dim'
+    rows.push(row(glyph + ' ' + goal + (isDead ? ' · 已结束' : '') + (age === '' ? '' : ' · ' + age), tone))
   }
   const hidden = list.length - Math.min(list.length, MAX_BEAT_ROWS)
   if (hidden > 0) rows.push(row('…另有 ' + hidden + ' 条心跳', 'dim'))
@@ -306,9 +313,29 @@ function errorModel(message) {
   }
 }
 
+/**
+ * Classify one read result for the panel's last-good chain.
+ *
+ * Returns null when the value is a displayable state (a ready payload, or the
+ * legitimate "no ledger yet" shapes `not-initialized` / `no-project`). Returns
+ * `{code, message}` for a real read failure: a host `state-timeout` / worker
+ * error, any unexpected `ok:false`, or a missing result. `not-initialized` is
+ * deliberately *not* a failure — it is a first-run state, not a fault.
+ */
+function readFailure(value) {
+  const state = asObject(value)
+  if (state === null) return { code: '', message: '没有状态数据' }
+  if (state.ok !== false) return null
+  const error = state.error
+  const code = asText(isObject(error) ? error.code : '')
+  if (code === 'not-initialized' || code === 'no-project') return null
+  const message = isObject(error) ? asText(error.message) || asText(error.code) : asText(error)
+  return { code, message: message || '读取状态失败' }
+}
+
 /** Apply the width budget once, so no renderer path can overflow the panel. */
 function finish(model, width) {
-  return {
+  const finished = {
     header: clip(model.header, width),
     meta: clip(model.meta, width),
     counters: model.counters.map((counter) => clip(counter, width)),
@@ -318,14 +345,38 @@ function finish(model, width) {
     })),
     footer: model.footer.split('\n').map((line) => clip(line, width)).join('\n'),
   }
+  // Optional: only present on a stale model, so a single-argument call stays
+  // byte-identical to the pre-stale projection.
+  if (typeof model.staleNote === 'string' && model.staleNote !== '') {
+    finished.staleNote = clip(model.staleNote, width)
+  }
+  return finished
+}
+
+/**
+ * Human-readable stale marker for a failed read that kept the last good
+ * payload. Chinese is hard-coded on purpose (the TUI panel has no i18n layer);
+ * `at` is the last successful read time and is rendered relatively.
+ */
+function staleNoteText(value, now) {
+  if (typeof value === 'string') return value.trim()
+  const note = asObject(value)
+  if (note === null) return ''
+  const message = asText(note.message) || '读取失败'
+  const at = asNumber(note.at, 0)
+  const time = at > 0 ? shortTime(at, now) : ''
+  return '数据过期：' + message + '（上次成功 ' + (time || '未知') + '）'
 }
 
 /**
  * Pure payload -> display model for the TUI panel.
  *
- * options: { width, height, now }. Payload is the /api/project-flow/state JSON;
- * a host error object (ok:false) and the uninitialized shape both degrade to an
- * empty section list instead of throwing.
+ * options: { width, height, now, staleNote }. Payload is the
+ * /api/project-flow/state JSON; a host error object (ok:false) and the
+ * uninitialized shape both degrade to an empty section list instead of
+ * throwing. `staleNote` ({message, at} or a preformatted string) adds the
+ * one-line "数据过期" marker after `meta`; omitting it leaves the projection
+ * byte-identical to the pre-stale model.
  */
 export function panelModel(payload, options = {}) {
   const settings = asObject(options) || {}
@@ -348,6 +399,8 @@ export function panelModel(payload, options = {}) {
     model = readyModel(state, now)
   }
 
+  const staleNote = staleNoteText(settings.staleNote, now)
+  if (staleNote !== '') model.staleNote = staleNote
   return finish(model, width)
 }
 
@@ -355,6 +408,9 @@ export function panelModel(payload, options = {}) {
 function panelLines(model) {
   const lines = [{ text: model.header, tone: 'normal', bold: true }]
   if (model.meta !== '') lines.push({ text: model.meta, tone: 'dim' })
+  if (typeof model.staleNote === 'string' && model.staleNote !== '') {
+    lines.push({ text: model.staleNote, tone: 'warning' })
+  }
   for (const counter of model.counters) lines.push({ text: counter, tone: 'normal' })
   for (const item of model.sections) {
     lines.push({ kind: 'divider' })
@@ -397,10 +453,13 @@ function createPanelComponent(options) {
     const host = props.host
     const [payload, setPayload] = React.useState(null)
     const [phase, setPhase] = React.useState('loading')
+    const [stale, setStale] = React.useState(null)
     const [offset, setOffset] = React.useState(0)
     const [reloadSeq, setReloadSeq] = React.useState(0)
     const offsetLimit = React.useRef(0)
     const lastError = React.useRef('')
+    const lastCwd = React.useRef('')
+    const hasGood = React.useRef(false)
 
     let snapshot = {}
     try {
@@ -424,28 +483,58 @@ function createPanelComponent(options) {
         setPhase('error')
         return () => { cancelled = true }
       }
+      // 工作区切换：last-good 与 stale 只属于一个项目，绝不跨项目沿用。
+      if (lastCwd.current !== cwd) {
+        lastCwd.current = cwd
+        hasGood.current = false
+        lastError.current = ''
+        setPayload(null)
+        setPhase('loading')
+        setStale(null)
+      }
+
+      const logOnce = (message) => {
+        if (log === null || lastError.current === message) return
+        lastError.current = message
+        try {
+          log('panel read failed: ' + message)
+        } catch {
+          // logging must never break the panel
+        }
+      }
+
+      /* 首读失败才显示错误卡；已有 good 时只标 stale（payload/phase 不动）。 */
+      const settleFailure = (code, message) => {
+        if (hasGood.current) {
+          setStale({ message, at: Date.now() })
+        } else {
+          setPayload({ ok: false, error: { code, message } })
+          setPhase('error')
+          setStale(null)
+        }
+        logOnce(message)
+      }
+
       Promise.resolve()
         .then(() => readState(cwd))
         .then((raw) => {
           if (cancelled) return
           const value = typeof raw === 'string' ? JSON.parse(raw) : raw
-          setPayload(value === undefined ? null : value)
-          setPhase('ready')
-          lastError.current = ''
+          const failure = readFailure(value)
+          if (failure === null) {
+            hasGood.current = true
+            lastError.current = ''
+            setPayload(value === undefined ? null : value)
+            setPhase('ready')
+            setStale(null)
+            return
+          }
+          settleFailure(failure.code, failure.message)
         })
         .catch((error) => {
           if (cancelled) return
-          const message = error instanceof Error ? error.message : String(error)
-          setPayload({ ok: false, error: message })
-          setPhase('error')
-          if (log !== null && lastError.current !== message) {
-            lastError.current = message
-            try {
-              log('panel read failed: ' + message)
-            } catch {
-              // logging must never break the panel
-            }
-          }
+          // 抛异常与 ok:false 同一条路径：保留 good、只标 stale、只记一次日志。
+          settleFailure('', error instanceof Error ? error.message : String(error))
         })
       return () => { cancelled = true }
     }, [cwd, tick, reloadSeq])
@@ -478,7 +567,8 @@ function createPanelComponent(options) {
 
     const panelWidth = asNumber(props.width, 0) > 0 ? Math.floor(props.width) : 40
     const panelHeight = asNumber(props.height, 0) > 0 ? Math.floor(props.height) : 24
-    const model = panelModel(payload, { width: panelWidth, height: panelHeight, now: Date.now() })
+    const staleNote = stale === null ? undefined : { message: stale.message, at: stale.at }
+    const model = panelModel(payload, { width: panelWidth, height: panelHeight, now: Date.now(), staleNote })
     const lines = panelLines(model)
 
     if (phase === 'loading' && payload === null) {

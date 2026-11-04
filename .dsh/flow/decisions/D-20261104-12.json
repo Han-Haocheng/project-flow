@@ -1,0 +1,50 @@
+{
+  "question": "T-12 两个口径：关闭实验功能时 check experiments 是否跳过？旧项目缺 enabled 但已有实验时怎么处理？",
+  "kind": "choice",
+  "rationale": "两处都没有既有口径，且会影响 Myai（22 条实验）与既有 CI：关闭后门禁是跳过还是照样阻断、老项目缺键时实验树是隐藏还是自动开启，都需要你定。",
+  "options": [
+    {
+      "id": "skip-offwarn",
+      "label": "关闭时跳过 + 缺键默认关闭（推荐）",
+      "impact": "关闭时 check experiments 直接 exit 0 跳过；老项目缺 enabled 且已有实验（如 Myai 22 条）保持隐藏并给一次性引导 warning，不自动开启。"
+    },
+    {
+      "id": "skip-auto",
+      "label": "关闭时跳过 + 有实验自动开启",
+      "impact": "关闭时跳过；但旧项目若已有实验记录则自动视为开启（避免 Myai 突然看不到实验树），缺键且无实验才关闭。"
+    },
+    {
+      "id": "block-offwarn",
+      "label": "关闭时仍阻断 + 缺键默认关闭",
+      "impact": "关闭时 check experiments 仍阻断（门禁行为不随开关变）；缺键默认关闭 + 引导 warning。"
+    },
+    {
+      "id": "other",
+      "label": "我要其它组合",
+      "impact": "回复里写明你的一组合（例如 U1 选什么、U2 选什么）。"
+    }
+  ],
+  "recommendation": "skip-offwarn",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 2,
+  "schema": 1,
+  "id": "D-20261104-12",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "skip-offwarn",
+    "note": "用户选「关闭时跳过 + 缺键默认关闭」：experiments.enabled=false 时 check experiments exit 0 skip；旧项目缺 enabled 时默认关闭并给一次性引导 warning，不自动开启（Myai 22 条需手动开）",
+    "at": "2026-11-04T20:46:00+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T20:46:00+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "602c99a30b3bc317",
+  "asked_at": "2026-11-04T20:44:01+08:00",
+  "created_at": "2026-11-04T20:44:01+08:00",
+  "updated_at": "2026-11-04T20:46:00+08:00"
+}
