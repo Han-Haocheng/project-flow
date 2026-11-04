@@ -21,12 +21,21 @@
   },
   "schema": 1,
   "id": "T-20261104-12",
-  "status": "active",
+  "status": "done",
   "owner": "",
   "acceptance": [],
   "checkpoints": [],
-  "commits": [],
-  "notes": "team: 分析 task-64/65/72/75/84/89/95；实施 task-71(技能，§十二)、82(技能10条修正)、76(FoldHeader/openItems)、94(B1 core，进行中)、88(TUI/i18n)；文档 task-74(草稿 v2 543行)、86(CONTRACT 五条漂移)；审查 task-78/87/90。裁决：D-10 四项 + Lead 8 条技术细节 + D-12（关闭时 check skip、缺 enabled 默认关+一次性 warning）。B2 形态最终定：`flow exp review <id>` 只读自查（verdict/branch/missing、无 --result、恒 0），状态走 `exp update --status` + `exp cleanup` + `exp productize`（confirmed + release finished_at ≥ 实验 updated_at、幂等）；七字段 CLI：--direction/--expected/--primary-metric/--guardrail(可重复)/--falsify/--window-days/--stop-loss；check experiments 走 bin 内置（不进 lib/checks.mjs）；legacy 判定 `record.schema !== 2`。顺序 B1(task-94) → B2(blocked 94+86) / B3(blocked B1+88+95) → B4(草稿落盘)。",
+  "commits": [
+    "5a2ae37",
+    "b4bf113",
+    "9992a22",
+    "1893093",
+    "af292e7",
+    "c98fffa",
+    "c431f89",
+    "6e25e54"
+  ],
+  "notes": "team: 分析 task-64/65/72/75/84/89/95；实施 task-71/82/96/103/115/119/124（技能侧）、task-76(FoldHeader/openItems)、task-94(B1 core)、task-98(B2 CLI)+task-121(工具 counts)、task-99(B3 面板)、task-100(B4 文档)、task-125(review 规则收归 core)、task-131(技能字段口径)；文档 task-74(草稿)/86/116/104/107/111/130；审查 task-78/87/90/97/105/113/118/123/129/132。已合并 5a2ae37(b1) b4bf113+af292e7(b2) 9992a22(b3) 1893093+6e25e54(b4) c98fffa c431f89 等。D-10 采纳 4 项；D-12 采纳关闭 skip + 缺键默认关一次性 warning。Lead 裁决：direction 自由文本/cleanup{flags,code,data}/pivoted 单向 parent/review 恒 0 无 --result/task.experiment 不存在 warning/超期 open 只 warning/产品化基准 gate finished_at≥实验 updated_at/面板 §9.1.3/counts 8 键含 unreadable/task.experiment 宽松 REF_ID 以兼容 Myai legacy id。最终 258/258、selftest 全绿、task-132 accept：T-12 可关闭。",
   "created_at": "2026-11-04T20:22:38+08:00",
-  "updated_at": "2026-11-04T20:49:35+08:00"
+  "updated_at": "2026-11-04T21:32:29+08:00"
 }
