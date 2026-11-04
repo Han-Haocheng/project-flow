@@ -1,10 +1,10 @@
 # project-flow
 
 项目流程台账 + 只读面板：实验（含 `parent` 谱系）、任务、门禁定义与运行记录都写在
-**项目自己的 `.dsh/flow/`** 下；面板是它的只读视图，写入只走 `bin/flow.mjs`（CLI）或
-agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个核心 `lib/core.mjs`。
-唯一例外：未初始化工作区的空态上有个「初始化」按钮，会 POST `/api/project-flow/init`
-调用同一个 core 写入者建台账。
+**项目自己的 `.dsh/flow/`** 下；面板是它的只读视图，写入口只有 `bin/flow.mjs`（CLI）与
+agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `lib/core.mjs`）；面板自身
+有两个写例外：未初始化空态的「初始化」`POST /api/project-flow/init`，与门禁开关
+`POST /api/project-flow/gate`（均经 core 校验与原子写，见 `CONTRACT.md` §9.1 三端点表）。
 
 | 入口 | 用途 |
 |---|---|
@@ -17,7 +17,8 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`），两者共用同一个
 契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。前两个技能是单文件
 （`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发
 （`skills/ai-collaborative-dev-workflow/`，含 `references/`、`assets/`、`scripts/`，
-注册时带 `resourceBase` 目录），它的机械检查同时可由 `flow check staged|release-baseline|state|doc` 触发。
+注册时带 `resourceBase` 目录），它的机械检查同时可由
+`flow check staged|release-baseline|state|doc|decisions` 触发（T-12 上线后再加 `experiments`）。
 
 ## 初始化一个项目
 
@@ -81,8 +82,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 
 ## 边界
 
-- **面板只读（一个例外）**：面板唯一的写操作是「初始化」——`POST /api/project-flow/init`，
-  同样经过 `lib/core.mjs` 的校验与原子写；其余写入口只有 CLI 与 agent 工具。
+- **面板只读（两个例外）**：面板仅有的写操作是「初始化」`POST /api/project-flow/init` 与门禁
+  开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
+  CLI 与 agent 工具。
 - **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
 - **任务自动归档**：`precommit` 的第 3 步 `flow task archive` 把 `tasks.archiveAfterDays`
   （默认 **7** 天；`0` 关闭）**已满** N 天（按 `updated_at` 计，边界含端点）的任务改成
@@ -94,20 +96,28 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   下一次在上一次落定（settle，成功或失败）后 2500 ms 再排，不是固定墙钟间隔；慢于 2500 ms 的响应
   不会被后继请求取消。页面隐藏时不发请求但链保持，回到可见立即补拉；`abort` 只用于卸载、工作区切换、
   手动刷新。面板只展示该工作区的台账，不切换或汇总其它项目；该工作区没有 `.dsh/flow` 台账时显示
-  「未初始化」空状态。无 watcher，每次请求现算。
-- 实验只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
+  「未初始化」空状态。无 watcher，每次请求现算。state 读在 fork 出的子进程里完成、有
+  **1800 ms** 期限：超时 / 子进程崩溃 / 池满返回 200 `ok:false`（`state-timeout` /
+  `state-worker-crashed` / `state-worker-unavailable`）；面板保留最后一次好数据并标「数据
+  过期」，不显示半成品（见 `CONTRACT.md` §9.1.1）。
+- **心跳存活**：心跳按 `liveness` 分 `live` / `dead` / `stale` / `foreign` / `unknown`——宿主
+  重启或 pid 消失记 **dead**（可证明已死），跨机记 **foreign**（只在别处活跃），
+  `ageSeconds > 6h` 记 **stale**（可能已停，可与 dead 重叠）。`flow heartbeat list` 有「存活」
+  列；`flow heartbeat status --require-active` 对 dead/stale/foreign 退出 1（见 `CONTRACT.md` §3.5）。
+- 实验（可选功能，默认关闭）只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
 
 ## 自测
 
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：79 用例
+node --test test/                        # core + CLI + check：227 用例（14 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
-node .selftest/host2-tools.mjs           # Host store 模式、4 工具、3 技能
+node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
 node .selftest/client-render.mjs         # Client 渲染 + 真实 payload 回放
 node .selftest/client-poll.mjs           # Client 轮询 / 取消 / 可见性
+node .selftest/root-explicit.mjs         # 显式 --root 的 Host 读路径
 ```
 
 `.selftest/state-*.json` 是 Host 自测生成的快照，`client-render.mjs` 直接回放。
