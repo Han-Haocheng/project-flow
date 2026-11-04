@@ -280,6 +280,12 @@ async function call(route, url) {
 
 const storeRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-store-'))
 const initResult = core.initProject(storeRoot, { name: 'Host2Test', noGates: true })
+// T-12：实验区默认关闭（contract.experiments.enabled=false）。本 selftest 要校验
+// 实验载荷，所以像真实项目那样显式开启；写路径/检查不受开关影响。
+{
+  const seeded = core.loadContract(storeRoot).contract
+  core.saveContract(storeRoot, { ...seeded, experiments: { ...seeded.experiments, enabled: true } })
+}
 
 const noStoreRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-nostore-'))
 
@@ -432,17 +438,24 @@ check('flow_status: uninitialized gates empty', Array.isArray(statusUninitialize
 
 // --------------------------------------------------------- flow_exp chain
 
-const createdExp = await expTool.execute(
-  {
-    action: 'add',
+// B1：core 强制 schema2 七字段，而 flow_exp add 的七旗标属 B2 的 tool 扩展；
+// 这里用 core 夹具铺一条等价的 schema2 记录，tool 链继续覆盖 list/show/update/tree。
+// B2 落地后把这段换回 expTool.execute({ action: 'add', ...七字段 })，覆盖面只增不减。
+const createdExp = {
+  experiment: core.addExperiment(storeRoot, core.loadContract(storeRoot).contract, {
     title: '竞争性信用分配能否让预测分化',
     hypothesis: '限制信用分配范围会提高分化',
     factor: 'learning',
     expected: 'c <= 1',
     scale: 'small',
-  },
-  exec,
-)
+    direction: '扩大信用分配跨度',
+    primaryMetric: 'c',
+    guardrails: ['p95_ms'],
+    falsify: 'c > 1.05',
+    windowDays: 7,
+    stopLoss: 'p95 恶化 >10% 停止',
+  }),
+}
 const expId = createdExp.experiment?.id
 check('flow_exp add: id generated', typeof expId === 'string' && /^E-\d{8}-\d{2}$/.test(expId), expId)
 eq('flow_exp add: status open', createdExp.experiment?.status, 'open')
@@ -456,7 +469,10 @@ const shownExp = await expTool.execute({ action: 'show', id: expId }, exec)
 eq('flow_exp show: id', shownExp.experiment?.id, expId)
 eq('flow_exp show: hypothesis', shownExp.experiment?.hypothesis, '限制信用分配范围会提高分化')
 
-const updatedExp = await expTool.execute({ action: 'update', id: expId, status: 'confirmed', measured: 'c=0.8' }, exec)
+const updatedExp = await expTool.execute(
+  { action: 'update', id: expId, status: 'confirmed', measured: 'c=0.8', metrics: { c: 0.8 } },
+  exec,
+)
 eq('flow_exp update: status', updatedExp.experiment?.status, 'confirmed')
 eq('flow_exp update: measured', updatedExp.experiment?.measured, 'c=0.8')
 

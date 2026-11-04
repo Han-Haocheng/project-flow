@@ -203,7 +203,9 @@ function writeStoreManifest(root, { name }) {
         schema: 2,
         name,
         store: { root: '.dsh/flow' },
-        experiments: { source: 'store', dir: '.dsh/flow/experiments' },
+        /* T-12 B3: the panel hides experiments by default (`enabled: false`); these
+           fixtures assert experiment projections, so turn the section on explicitly. */
+        experiments: { source: 'store', dir: '.dsh/flow/experiments', enabled: true },
         tasks: { source: 'json', dir: '.dsh/flow/tasks', current: null, recentLimit: 6 },
         gates: { dir: '.dsh/flow/gates', logs: '.dsh/flow/logs' },
         heartbeats: { source: 'json', dir: '.agents/heartbeat', max: 20 },
@@ -288,7 +290,28 @@ writeStoreRecord(
 )
 writeStoreRecord(ALPHA, 'experiments', storeExperiment('E-20261028-02', { title: '子实验', parent: 'E-20261028-01' }))
 writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-01', { title: '已完成任务', status: 'done' }))
-writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-02', { title: '进行中任务', status: 'active' }))
+writeStoreRecord(
+  ALPHA,
+  'tasks',
+  /* FIFO 探针：A 的 created 最老且 updated 最旧；B 的 created 较新、updated 最新。
+     created_at 升序取 A，updated_at 倒序会取 B —— 两条顺序相反才能钉住排序键。 */
+  storeTask('T-20261028-02', {
+    title: '进行中任务 A',
+    status: 'active',
+    created_at: '2026-10-28T10:00:00+08:00',
+    updated_at: '2026-10-28T10:00:00+08:00',
+  }),
+)
+writeStoreRecord(
+  ALPHA,
+  'tasks',
+  storeTask('T-20261028-04', {
+    title: '进行中任务 B',
+    status: 'active',
+    created_at: '2026-10-28T11:00:00+08:00',
+    updated_at: '2026-10-28T19:00:00+08:00',
+  }),
+)
 writeStoreRecord(ALPHA, 'tasks', storeTask('T-20261028-03', { title: '草稿任务' }))
 writeStoreRecord(ALPHA, 'gates', {
   schema: 1,
@@ -389,10 +412,10 @@ check(
   JSON.stringify(alpha.json?.experiments?.tree ?? []).includes('E-20261028-02'),
   JSON.stringify(alpha.json?.experiments?.tree),
 )
-check('alpha: tasks.total == 3', alpha.json?.tasks?.total === 3, alpha.json?.tasks?.total)
+check('alpha: tasks.total == 4', alpha.json?.tasks?.total === 4, alpha.json?.tasks?.total)
 check(
   'alpha: task status counts',
-  alpha.json?.tasks?.counts?.active === 1 &&
+  alpha.json?.tasks?.counts?.active === 2 &&
     alpha.json?.tasks?.counts?.done === 1 &&
     alpha.json?.tasks?.counts?.draft === 1,
   JSON.stringify(alpha.json?.tasks?.counts),
@@ -408,6 +431,12 @@ check(
   'alpha: tasks.current is the queue head',
   alpha.json?.tasks?.current === 'T-20261028-02',
   alpha.json?.tasks?.current,
+)
+check(
+  'alpha: tasks.active FIFO order (oldest created first)',
+  alpha.json?.tasks?.active?.[0]?.id === 'T-20261028-02' &&
+    alpha.json?.tasks?.active?.[1]?.id === 'T-20261028-04',
+  JSON.stringify(alpha.json?.tasks?.active?.map((row) => row.id)),
 )
 check(
   'alpha: gates list one definition',
