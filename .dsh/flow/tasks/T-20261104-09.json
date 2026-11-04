@@ -16,12 +16,14 @@
   },
   "schema": 1,
   "id": "T-20261104-09",
-  "status": "draft",
+  "status": "active",
   "owner": "",
   "acceptance": [],
   "checkpoints": [],
-  "commits": [],
-  "notes": "",
+  "commits": [
+    "2ddb5e4"
+  ],
+  "notes": "team: task-46(分析/任务书矩阵) task-48 task-52(实施/卡A deriveTrend，进行中) task-53(实施/卡B1 done_at+archived_at，已合 2ddb5e4) task-95(B3 断言设计)。结论：现有台账只能精确「每日新增」+ 近似「每日完成/归档」，补 done_at/archived_at 后精确、并修 T-07 归档抹完成日的错位。卡A（trend 派生+payload）由 client-audit 实施，卡C（client 渲染 SVG 日柱）随后。",
   "created_at": "2026-11-04T19:59:12+08:00",
-  "updated_at": "2026-11-04T19:59:12+08:00"
+  "updated_at": "2026-11-04T21:15:14+08:00"
 }

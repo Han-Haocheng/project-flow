@@ -35,7 +35,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   "schema": 2,
   "name": "<basename(root)>",
   "store": { "root": ".dsh/flow" },
-  "experiments": { "source": "store", "dir": ".dsh/flow/experiments" },
+  "experiments": { "source": "store", "dir": ".dsh/flow/experiments", "enabled": false },
   "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6,
              "archiveAfterDays": 7 },
   "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
@@ -59,7 +59,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `name` | 非空 string | `<basename(root)>` |
 | `schema` | number | 归一化为 2（文案见上） |
 | `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.dsh/flow` |
-| `experiments` | object：`source` / `dir` 为 string | 逐字段回退 |
+| `experiments` | object：`source` / `dir` string、`enabled` boolean | 逐字段回退 |
+| `experiments.enabled` | boolean（**默认 false**：面板隐藏实验区、`check experiments` skip） | 非 boolean → 回退 `false` 并记 `manifest-invalid: experiments.enabled: expected boolean, got <type>` |
 | `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` / `archiveAfterDays` number | 逐字段回退 |
 | `tasks.archiveAfterDays` | 有限 number（manifest **只校验类型**，不校验范围；`0` = 关闭自动归档） | 非 number / 非有限 → 回退默认值 7 并记 `manifest-invalid`；负数与越界不在 loadContract 报错，运行期降级（见下） |
 | `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
@@ -74,6 +75,15 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 负数 / `NaN` / 非有限值按 `0`（关闭）处理，`> 3650` 截到 `3650`，两种情况各记一次
 `tasks-archive-days-invalid` warning，命令仍退出 0。取整后为 `0`（例如配置 `0.5`）即关闭
 归档，且**不**记 warning。
+
+`experiments.enabled` 是**实验面板开关**，默认 `false`（`flow init` 写入 `false`；缺键补
+`false` 且**不**记 warning，只有类型不对才回退 + `manifest-invalid`）。关闭时 `GET state` 的
+`experiments` 节只返回 `{enabled:false, total, counts}`（**无** items/tree，见 §9.1.3），
+面板不渲染实验区、任务区单列；`check experiments` **直接 exit 0 跳过**（不阻断 CI）。它**只
+影响展示与该门禁步**——`flow exp …`、`flow_exp` 工具与写路径照常可用。旧项目缺 `enabled`
+且目录里已有实验记录时**仍按关闭处理**，并记一次性引导 warning
+`experiments-disabled-legacy: N experiment(s) are hidden…`（提示设为 `true`），**绝不自动
+开启**。开启就是把 `flow.json` 的 `experiments.enabled` 改成 `true`，下一次面板请求即生效。
 
 `normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
 否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
@@ -118,34 +128,67 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 
 ### 3.1 实验 `experiments/E-YYYYMMDD-NN.json`
 
+新实验写 `schema: 2`（假设必须可判定）；`schema: 1` 的存量记录**只读兼容**，不迁移、不补字段。
+
 ```jsonc
 {
-  "schema": 1,
-  "id": "E-20261028-01",
-  "title": "短标题",                    // 必填，非空字符串
-  "hypothesis": "可证伪的假设",
-  "factor": "focus/normalize",          // 分组键，可为空
-  "parent": null,                       // 另一实验 id 或 null
-  "expected": "tie_mean<=1.0",
+  "schema": 2,
+  "id": "E-20261104-01",
+  "title": "短标题",                       // 必填，非空字符串
+  "hypothesis": "可证伪的假设",             // 可选，默认空串
+  "direction": "降低 tie 率",              // 必填：自由文本 ≤120 字符（方向是措辞，不设枚举）
+  "expected": "tie_mean<=1.0",             // 必填：可判定的期望结果（含阈值）
+  "primaryMetric": "tie_mean",             // 必填：唯一主指标名
+  "guardrails": ["p95_ms", "error_rate"],  // 必填：护栏指标名，至少 1 项
+  "falsify": "tie_mean>1.05 或任一护栏恶化 >5%", // 必填：证伪条件
+  "windowDays": 7,                         // 必填：观测周期（正整数，≤3650 天）
+  "stopLoss": "p95 恶化 >10% 立即停止",     // 必填：止损线
+  "status": "open",                        // open|confirmed|refuted|abandoned|inconclusive|pivoted
+  "learned": "",                           // 终态结论（refuted/pivoted 硬性；inconclusive 建议）
+  "cleanup": { "flags": [], "code": [], "data": [] },
+                                           // 清理对象：开关/代码/数据，每类 ≤20 项；空数组=无
+  "cleanupAt": null,                       // 只由 `flow exp cleanup` 写（ISO）；refuted 必填
+  "productizedAt": null,                   // 只由 `flow exp productize` 写（ISO）
+  "productizeGate": null,                  // { id, runAt, log }；只由 productize 写
+  "factor": "",                            // 分组键，可为空
+  "parent": null,                          // 另一实验 id 或 null（转向=新实验指向旧实验）
   "scale": "small",
-  "status": "open",                     // open | confirmed | refuted | abandoned
   "measured": "",
-  "metrics": {},                        // JSON 对象
-  "commits": [],                        // 字符串数组（短 sha / 提交信息）
+  "metrics": {},
+  "commits": [],
   "notes": "",
-  "created_at": "2026-10-28T15:00:00+08:00",
-  "updated_at": "2026-10-28T15:00:00+08:00"
+  "created_at": "...",
+  "updated_at": "..."
 }
 ```
 
+- **七字段必填（仅 schema2）**：`direction`（≤120 字符）/ `expected` / `primaryMetric` /
+  `guardrails`（至少 1 项）/ `falsify` / `windowDays`（正整数，≤3650）/ `stopLoss`。缺任一或
+  空值 → `FlowError('invalid')`，消息点名缺哪个键；**不再**降级为 warning。
 - id：自动 `E-YYYYMMDD-NN`（本地日期，两位序号，遍历现有 id 递增）；显式指定必须匹配
   `^[A-Z]+-\d{8}-\d{2}$`，已存在 → `FlowError('conflict')`。
-- `parent` 必须指向已存在实验或为 `null`/空串；指向不存在 → `FlowError('invalid')`；
-  指向自己 → `invalid`。历史坏数据在 `experimentTree` 里按根处理（未知 parent、成环、
-  自引用都不会丢记录）。
-- `created_at` 不可改；更新自动刷新 `updated_at`；`id`/`schema`/`created_at` 出现在
-  patch 里 → `invalid`。
-- 未知字段保留。
+- `parent` 必须指向已存在实验或为 `null`/空串；指向不存在 → `FlowError('invalid')`；指向自己
+  → `invalid`。历史坏数据在 `experimentTree` 里按根处理（未知 parent、成环、自引用都不会丢
+  记录）。
+- `created_at` 不可改；更新自动刷新 `updated_at`；`id`/`schema`/`created_at` 出现在 patch 里
+  → `invalid`。`cleanup`/`cleanupAt`/`productizedAt`/`productizeGate` 是**系统维护字段**，
+  只由 `cleanupExperiment`/`productizeExperiment` 写，直接 patch → `invalid`。
+- **legacy schema1 只读**：读路径（list/show/tree/面板投影）同时接受 `schema: 1` 与 `2`，旧
+  四态照旧显示；写路径（`updateExperiment`/`cleanupExperiment`/`productizeExperiment`）对
+  `schema: 1` 记录抛 `invalid`（消息建议新建 schema2 实验并用 `parent` 指向它）。`parent` 可以
+  指向 schema1 记录，谱系保持完整；未知字段保留。
+- **终态规则（仅 schema2）**：`confirmed` 必须 `measured` 非空且 `metrics` 至少一项（硬）；
+  `pivoted` 必须 `learned` 非空且存在 `parent` 指向它的**后继实验**（硬）；`inconclusive` /
+  `refuted` 的 `learned`（以及 `refuted` 的 `cleanupAt`）在写路径只记 warning，由
+  `flow exp cleanup` + `check experiments` 收口。
+- **结果分流（四分支）**：
+  | 判定 | 状态 | 必做动作 | 之后 |
+  |---|---|---|---|
+  | 成功（主指标达标、护栏未破） | `confirmed` | 写 `--measured`/`--metrics`；过 `release` 门禁（`finished_at ≥` 该实验 `updated_at`）后 `flow exp productize` | 合并/上线，`productizedAt`/`productizeGate` 已记录 |
+  | 不确定（窗口内证据不足） | `inconclusive` | `--learned` 记结论（建议，不阻断） | 继续验证或调整假设；新实验可 `--parent` 指向它 |
+  | 失败（证伪条件命中） | `refuted` | `--learned`，再 `flow exp cleanup …` 写 `cleanup` + `cleanupAt` | 停止并丢弃实现，保留学习与清理记录 |
+  | 转向（保留部分资产换假设） | `pivoted` | `--learned`，新建后继实验 `--parent` 指向旧实验 | 旧实验不再更新，后继沿用资产 |
+  `abandoned` = 主动放弃且不判定（`learned` 建议不强制；`check experiments` 只 warning）。
 
 ### 3.2 任务 `tasks/T-YYYYMMDD-NN.json`（兼容既有台账格式）
 
@@ -157,6 +200,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "status": "draft",                    // draft | active | done | archived
   "owner": "",
   "goal": "",
+  "experiment": null,                    // 可选：关联实验 id（E-YYYYMMDD-NN）
   "scope": { "allow": [], "deny": [] },  // 数组元素必须为字符串
   "acceptance": [],                      // 字符串数组
   "checkpoints": [],                     // 对象或字符串数组
@@ -172,6 +216,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
+- **`experiment`（可选）**：关联一条实验 id。写路径（`task add|update --experiment`）先做
+  **格式**校验：非空且不匹配 `^[A-Z]+-\d{8}-\d{2}$` → `FlowError('invalid')`；格式合法但现存
+  实验里没有 → 只记一次 `task-experiment-missing` warning，**照常写入**（实验可能已被删除或
+  尚未开启，引用不阻断任务）。`null`/空串表示解除关联；引用是**单向**的（任务→实验），实验
+  记录不回写任务 id。
 - **归档 = `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），记录文件
   不移动、不删除；随时可 `task update <id> --status done|active` 反向恢复。归档改 `status`、
   刷新 `updated_at`、写 `archived_at = now`，并**保留原 `done_at`**（T-09 起完成日不再被
@@ -246,7 +295,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` + `"<包内绝对路径>/bin/flow.mjs" task archive` | 提交前暂存区检查（含阻塞决策与到期任务归档） |
 | `tests` | commit | false | `node --test test/` | 单元测试（默认关闭，按项目自填命令） |
 | `staged-files` | commit | false | `"<包内绝对路径>/bin/flow.mjs" check staged --allow src` | 暂存文件归属检查（占位） |
-| `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` | 发布基线检查（占位） |
+| `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` + `"<包内绝对路径>/bin/flow.mjs" check experiments` | 发布基线检查（占位）+ 实验结果/产品化检查 |
 
 引用本插件 CLI 的两个步骤用 `import.meta.url` 在运行时解析出的**包内绝对路径**
 （`PLUGIN_BIN`），因为门禁的 cwd 是项目根，不能假设根下存在 `bin/flow.mjs`。
@@ -258,6 +307,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 需要手动
 `flow gate update precommit --step '<原步骤>' --step 'decisions=…>>exit 0' --step 'tasks-archive=…>>exit 0'`
 （`--step` 是整体替换，必须带上原步骤）。
+
+`release` 的第二步 `check experiments` 同样是内置检查（见 §6.1.2）：`experiments.enabled`
+为 `false` 时它**直接 exit 0 跳过**，为 `true` 时拦住「schema2 缺七字段 / `refuted` 缺
+`learned`+`cleanupAt` / `pivoted` 缺 `learned` 或后继 / `confirmed` 未产品化」，`open` 超期
+只是 warning。注意 `release` 种子**默认 `enabled: false`**，须项目执行
+`flow gate enable release` 才生效；已有项目缺这一步时手动
+`flow gate update release --step '<原步骤>' --step 'experiments=…>>exit 0'`。
 
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
 
@@ -543,19 +599,26 @@ flow init [--name X] [--force] [--no-gates]
 flow status
 
 flow exp list | show <id> | tree
-flow exp add    --title T [--hypothesis H] [--factor F] [--parent ID]
-                [--expected E] [--scale S] [--notes N]
-flow exp update <id> [--title T] [--status open|confirmed|refuted|abandoned]
-                [--hypothesis H] [--factor F] [--parent ID] [--expected E]
+flow exp add    --title T --hypothesis H --direction TEXT --expected E
+                --primary-metric M --guardrail G [--guardrail G]...
+                --falsify F --window-days N --stop-loss S
+                [--factor F] [--parent ID] [--scale S] [--notes N]
+flow exp update <id> [--title T] [--status open|confirmed|refuted|abandoned|inconclusive|pivoted]
+                [--direction TEXT] [--expected E] [--primary-metric M]
+                [--guardrail G]... [--falsify F] [--window-days N] [--stop-loss S]
+                [--learned L] [--hypothesis H] [--factor F] [--parent ID]
                 [--scale S] [--measured M] [--metrics JSON]
                 [--commits a,b] [--notes N]
+flow exp review <id>
+flow exp productize <id> [--gate release]
+flow exp cleanup <id> [--flag F]... [--code C]... [--data D]...
 flow exp rm <id> [--yes]
 
 flow task list | show <id>
 flow task add    --title T [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N]
+                 [--owner O] [--goal G] [--notes N] [--experiment E-id]
 flow task update <id> [--title T] [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N]
+                 [--owner O] [--goal G] [--notes N] [--experiment E-id]
 flow task rm <id> [--yes]
 flow task archive [--older-than N] [--dry-run]
 
@@ -596,6 +659,7 @@ flow check release-baseline --marker <text> [--threshold <N>]
 flow check state [--file <path>]
 flow check doc --file <path> --type task|design|incident|release
 flow check decisions
+flow check experiments
 ```
 
 - `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
@@ -631,10 +695,29 @@ flow check decisions
   `--note` 可省略（落盘为空串）。`decision withdraw` 的 `--reason` 必填。
 - `decision gc` 默认保留 90 天内与全部 open；`--days N` 覆盖保留天数，`--dry-run` 只报告
   不删除；只删 `answered`/`withdrawn`/`superseded` 且关闭超过保留期的记录。
-- `flow check decisions` 是唯一内置检查（bin 特判路由 core，见 §6.1.1），语义与退出码按检查
-  词汇归一。
+- `flow check decisions` 是内置检查（bin 特判路由 core，见 §6.1.1），语义与退出码按检查
+  词汇归一；`flow check experiments` 是第二个内置检查（见 §6.1.2）：`experiments.enabled`
+  为 `false` 时 **exit 0 跳过**并打印原因，失败 exit 1（`failed[]`），warnings 不阻断。
 - `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
+- `exp add` 的七个规范字段（`--direction`/`--expected`/`--primary-metric`/`--guardrail`/
+  `--falsify`/`--window-days`/`--stop-loss`）对新记录**必填**，缺一个即 `invalid`（见 §3.1）；
+  `--guardrail` 可重复、至少一次；`--window-days` 必须是正整数。
+- `exp update` 对 `schema: 1` 旧记录抛 `invalid`（legacy 只读，见 §3.1）。`--status refuted`
+  在缺 `learned`/`cleanupAt` 时只记 warning（清理是异步动作），由 `flow exp cleanup` 收口、
+  `check experiments` 硬拦。
+- `exp review <id>`：**只读**自查，输出 `{id, verdict, branch, missing[]}`（`verdict` 取
+  `complete|incomplete`，`branch` 取 `success|uncertain|failure|pivot`），**恒退出 0**；不改
+  任何记录，门槛由 `productize`/`check experiments` 拦。
+- `exp productize <id> [--gate release]`：仅对 `status === 'confirmed'` 生效；要求 `release`
+  门禁最近一次 `ok:true` 运行的 `finished_at` **≥** 该实验的 `updated_at`（进入 `confirmed`
+  的时刻），早于则 `invalid`（退出 2）。通过后原子写 `productizedAt` 与
+  `productizeGate: {id, runAt, log}`；已产品化再次调用**幂等**（`already:true`，退出 0）。
+- `exp cleanup <id> [--flag F]... [--code C]... [--data D]...`：写 `cleanup` 的三类数组
+  （开关/代码/数据，各 ≤20 项；类内可空=无）并写 `cleanupAt`（ISO）；对 `schema: 1` 记录 →
+  `invalid`。
+- `task add|update --experiment E-id`：格式非法 → `invalid`（退出 2）；格式合法但实验不存在
+  → `task-experiment-missing` warning，仍写入（见 §3.2）。
 - `exp update` 的 `--metrics` 必须是 JSON 对象，如 `'{"tie":0.4}'`；`--commits` 逗号分隔。
 - `flow task list` 保持 `updated_at` **倒序**（CLI 的历史视角，最近更新在前），与面板
   `active`/`draft` 的 FIFO 顺序（`created_at` 升序，见 §5.3）**不同**；两者各自稳定，不要
@@ -674,7 +757,10 @@ flow check decisions
 （用法语义，专门给 `session-open` 门禁当开关）；`runGate` 遇到 disabled 门禁且无
 `--force` 时抛 `usage`（退出 1）；`task archive` 的锁冲突是**例外**——跳过本次 + 记
 `archive-locked` warning + 退出 **0**（`--json` 带 `locked:true`），不按 `conflict` → 2
-处理（见 §3.2/§5.1）。
+处理（见 §3.2/§5.1）。`exp review` **恒退出 0**（只读报告，结论在 `--json` 的
+`ok`/`verdict`）；`exp productize` 未过硬门禁 → 2（`invalid`），`exp cleanup` 对 legacy →
+2；`check experiments` 判定失败 → 1（与 `check` 家族一致，见 §6.2），`enabled=false` 时
+跳过并退出 0。
 
 ### 5.3 `flow status`
 
@@ -689,6 +775,8 @@ question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、
 存在不可读记录时，人类输出的实验/任务/门禁计数追加 ` · +N 无法读取`；
 `--json` 的 `counts.{experiments,tasks,gates}` 各带并列 `unreadable`（`total` 不变）。
 坏记录本身的 `unreadable:` 诊断走统一的 warnings 通道（见 §5.1）。
+实验计数按**六态**报：`open / confirmed / refuted / abandoned / inconclusive / pivoted`
+（`experiments.enabled=false` 时计数照常，数据仍在，只是面板不展示实验区）。
 
 归档只改计数分布、不改总数：一个 `done` 任务归档后 `done` 减 1、`archived` 加 1，`total`
 不变；`counts.tasks` 一直是全量（含 `archived`）。`recent.tasks` 取全量按 `updated_at`
@@ -729,16 +817,20 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 `<pkg>/skills/ai-collaborative-dev-workflow/scripts/`），与 `--root` 指向的项目无关；
 解释器固定为 `bash`（`.sh`）与 `python3`（`doc_check.py`）。
 
-**唯一内置例外**：`flow check decisions` 不来自脚本目录，而由 `bin/flow.mjs` 特判路由到
-`core.checkDecisions()`（只读，复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
+**内置例外（两个）**：`flow check decisions` 与 `flow check experiments` 不来自脚本目录，
+而由 `bin/flow.mjs` 特判路由到 `core.checkDecisions()` / `core.checkExperiments()`（只读，
+复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
 保持**不 import core、不读写 `.dsh/flow`** 的纪律：内置项由 bin 侧追加，不进
-`checks.CHECKS`/`listChecks()`。所以 **`check list` 共五项** = 四项脚本检查
-（`staged`/`release-baseline`/`state`/`doc`）+ 内置项 `decisions`：
+`checks.CHECKS`/`listChecks()`。所以 **`check list` 共六项** = 四项脚本检查
+（`staged`/`release-baseline`/`state`/`doc`）+ 两个内置项 `decisions` / `experiments`：
 
 ```json
 {"name":"decisions","interpreter":"core","script":"lib/core.mjs#checkDecisions",
  "description":"阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）",
  "args":"（无额外参数）"}
+{"name":"experiments","interpreter":"core","script":"lib/core.mjs#checkExperiments",
+ "description":"实验分流未闭环（schema2 缺字段/confirmed 未产品化/refuted·pivoted 缺 learned·cleanup）时失败（内置检查，只读）",
+ "args":"（无额外参数；experiments.enabled=false 时跳过）"}
 ```
 
 `interpreter: "core"` 是唯一非 `bash`/`python3` 的合法值，`script` 是包根相对的 POSIX 路径
@@ -756,6 +848,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 | `state` | `flow check state [--file <path>]` | `bash check_state.sh <file>` |
 | `doc` | `flow check doc --file <path> --type task\|design\|incident\|release` | `python3 doc_check.py <file> --type <type> --root <项目根>` |
 | `decisions` | `flow check decisions [--json]` | **不 spawn**：bin 特判路由 `core.checkDecisions()`（只读内置项，见 §6.1.1） |
+| `experiments` | `flow check experiments [--json]` | **不 spawn**：bin 特判路由 `core.checkExperiments()`（只读内置项，见 §6.1.2） |
 
 - 所有子命令都吃全局 `--root <dir>`（默认 cwd）与 `--json`。脚本以 `--root` 为 cwd 执行，
   所以脚本里的 `git diff --cached` / `git log` / `git rev-list` 落在项目根。
@@ -790,6 +883,26 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
   `✗ <id> 阻塞 <T-id>：affects 命中 <path>`，末行提示可复制的 `flow decision answer` 命令。
 - 警告：决策目录里的坏记录同样产生 `unreadable:`，走 §5.1 的 warnings 通道（`--json`
   时放在信封顶层，`data`/`error` 形状不变）。
+
+### 6.1.2 `check experiments`（实验门禁）
+
+只读、不写 store、不取锁。`experiments.enabled` 为 `false` 时**直接退出 0 跳过**（不阻断、
+CI 保持绿；人类输出「实验功能未开启…跳过」），不读实验目录；缺 `enabled` 且目录里已有实验
+记录的老项目同样按关闭处理（`experiments-disabled-legacy` 一次性引导 warning，**不自动
+开启**）。开启时逐条检查 `schema: 2` 记录（`schema: 1` 历史记录跳过、只计入 `legacy` 计数）。
+
+失败（退出 1，`--json` 给 `failed[]`，每项 `{id, rule, message}`）：
+1. 七个规范字段任一缺失/为空（`direction`/`expected`/`primaryMetric`/`guardrails`/
+   `falsify`/`windowDays`/`stopLoss`）；
+2. `status === 'refuted'` 且（`learned` 为空 或 `cleanupAt` 为空）；
+3. `status === 'pivoted'` 且（`learned` 为空 或 没有任何实验的 `parent` 指向它）；
+4. `status === 'confirmed'` 且 `productizedAt` 为空（release 阶段不允许「已确认未产品化」）。
+
+warning（不影响退出码，`--json` 给 `warnings[]`）：`status === 'open'` 且
+`now > created_at + windowDays×86400e3` → `experiment-window-elapsed`（**不自动判失败**，
+结果由人判定）；`inconclusive`/`abandoned` 缺 `learned`；`task.experiment` 指向不存在实验
+（`task-experiment-missing`）。退出码沿用 §6.2：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
+4 IO。
 
 ### 6.2 退出码
 
@@ -874,6 +987,20 @@ renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
                                      // 共 4 次），最终抛 FlowError('io')（非契约 API，仅供测试注入）
 
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
+                                     // add/update 只写 schema2；legacy（schema!==2）读写规则见 §3.1
+experimentTree(records)              // 由记录数组组装 parent 谱系（未知 parent/成环按根）
+reviewExperiment?                    // 不新增 core API：review 是 bin/index 的只读派生
+                                     // {verdict,branch,missing[]}，恒 exit 0（见 §5.1）
+productizeExperiment(root, contract, id, {gateId?='release', now?})
+                                     // 要求 confirmed + release 最近 ok 的 finished_at
+                                     // ≥ 实验 updated_at；幂等（already:true）
+                                     // {id, productizedAt, productizeGate, already}
+cleanupExperiment(root, contract, id, {flags?, code?, data?, now?})
+                                     // 写 cleanup{flags,code,data}（各 ≤20）+ cleanupAt
+                                     // {id, cleanup, cleanupAt, changed}；legacy → invalid
+checkExperiments(root, contract, {now?})
+                                     // {ok, checked, legacy, failed[], warnings[]}
+                                     // enabled=false → {ok:true, checked:0}（不读目录）
 listTasks       / getTask       / addTask       / updateTask       / removeTask
 listGates       / getGate       / addGate       / updateGate       / removeGate
                                      // list* 第三个可选参数 {unreadable?: string[]}
@@ -1083,6 +1210,22 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   stale 状态与「已有 good」标记立即清空、回到 loading 再读——禁止把 A 项目的陈旧数据标注
   后挂在 B 项目下。web 侧等价于工作区切换即重启整条链（abort + 清空 + 立即首拉）。
 - 整条链只发 `GET state`，不发写请求；写操作只有用户点击触发的 init/gate 两个 POST。
+
+#### 9.1.3 实验节（`GET state` 的 `experiments`）
+
+- **关闭（默认，`experiments.enabled: false`）**：`data.experiments` 只保留
+  `{ enabled: false, total, counts }`——`counts` 是**七键**（`total` + 六态）的真实计数，
+  `total` 是记录条数；**没有** `source`/`items`/`tree`/`groups`。web 面板不渲染实验区、
+  任务区**单列**占满；TUI 面板同样不显示「实验 N」与实验区段。宿主仍照常读实验目录以给出
+  真实计数（不改写、不隐藏数据），旧项目缺 `enabled` 时另有一次性
+  `experiments-disabled-legacy` warning（见 §2）。
+- **开启（`enabled: true`）**：`data.experiments` 恢复完整节——
+  `{ enabled: true, source: 'store', total, counts, items, tree, groups: [] }`；web 面板恢复
+  两列、实验卡在左列首位，**实验树默认折叠**（展开状态只留在浏览器会话，不回写 store）；
+  TUI 恢复实验区计数。
+- `counts` 两种模式都是**七键**，面板缺键按空节兜底（与 §9.4 决策节同一纪律）；`items` 截断
+  与 `tree` 组装沿用 §9.1.1 的一次枚举/投影纪律。面板仍**只读**：开关只改 `flow.json`，
+  没有开关 POST，实验写操作只走 CLI / `flow_exp`。
 
 ### 9.2 心跳作用域：只面向主会话
 

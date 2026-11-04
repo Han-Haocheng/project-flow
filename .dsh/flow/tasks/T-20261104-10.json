@@ -17,12 +17,15 @@
   },
   "schema": 1,
   "id": "T-20261104-10",
-  "status": "active",
+  "status": "done",
   "owner": "",
   "acceptance": [],
   "checkpoints": [],
-  "commits": [],
-  "notes": "team: task-47(分析/任务书+实测复现) task-50(实施/卡A core liveness) task-51(实施/卡B 消费面，blocked_by 50)。分析结论：用户反馈成立——真实 .agents/heartbeat 有 3 条 status=working 且 4.4–5 天未更新仍算 active；heartbeat status --require-active 对死会话 exit 0，session-open 种子门禁假绿。方案：A 宿主 agents 正向证据（index.js 已在用 service(ctx,'agents')，无需改 inject；但 CLI/门禁是子进程拿不到）+ B 记录 host/boot_id/pid/pid_start（唯一给 CLI 的证据；CLI 不得写 pid；跨机只 foreign 不判死）+ 6h 年龄兜底；liveness 放投影不新增文件 status。关键陷阱：heartbeatWorking 是编辑/写硬门禁，必须把 agents 命中作为正向证据，否则活跃但 >6h 未续写会被拦死。",
+  "commits": [
+    "01aa672",
+    "bd2ba1a"
+  ],
+  "notes": "team: task-46 task-47(分析+实测复现) task-50(实施/卡A core liveness) task-60(审查 reject) task-66(修正 F1/F2/F3) task-68(复审 reject 软链遗留) task-51(实施/卡B agents 接线+bin writer) task-80(复审 accept) task-67(重启后 live 验证) task-83/88(字典/TUI/i18n) task-93(审查 accept) task-101(exp.tree) task-105(漂移扫描) task-113 等。已合并 01aa672 + bd2ba1a。心跳五态 liveness、counts 五键、dead/foreign/stale 语义、agents 正向证据、死会话 session-open 不再假绿；「陈旧心跳误显示活跃」已闭环。",
   "created_at": "2026-11-04T19:59:22+08:00",
-  "updated_at": "2026-11-04T20:04:26+08:00"
+  "updated_at": "2026-11-04T21:10:18+08:00"
 }

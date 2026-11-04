@@ -41,9 +41,11 @@ node bin/flow.mjs --root <项目根> init [--name 名称]
 
 ```text
 flow status                     # 项目名/契约/计数/最近记录
-flow exp list|show <id>|tree    # 实验列表、详情、谱系树
-flow exp add --title T [--hypothesis H --factor F --parent ID --expected E]
-flow exp update <id> --status confirmed --measured '...' --commits abc1234
+flow exp list|show <id>|tree    # 实验列表、详情、谱系树（可选功能，默认关闭）
+flow exp add --title T --direction '降低 tie 率' --expected E --primary-metric M \
+             --guardrail G --falsify F --window-days 7 --stop-loss S
+flow exp review <id>            # 只读自查分流还缺什么（恒 exit 0）
+flow exp productize <id>        # 门禁通过后写产品化；失败实验用 flow exp cleanup <id> --flag …
 flow task add --title T [--status draft|active|done|archived]
 flow task archive [--older-than N]   # 归档到期任务（默认 tasks.archiveAfterDays=7，0 关闭）
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
@@ -53,6 +55,43 @@ flow gate logs smoke            # 最近运行记录
 
 所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法 /
 2 校验 / 3 未找到 / 4 IO。
+
+## 实验（可选）
+
+实验是任务的**外围**，默认关闭：`flow.json` 的 `experiments` 节 `enabled` 缺省为 `false`
+（`flow init` 写入 `false`）。关闭时 web/TUI 面板不渲染实验区、任务区单列；`flow exp …` 与
+`flow_exp` 工具照常可用——数据始终在 `.dsh/flow/experiments/`，只是不展示。开启后实验树在
+面板里**默认折叠**，展开状态只留在当前会话。
+
+**开启**：在 `.dsh/flow/flow.json` 里把 `experiments` 写成 `{ "enabled": true, … }`（保留
+`source`/`dir`），下一次面板刷新即生效，不需要重新 `flow init`。旧项目缺 `enabled` 且已有
+实验记录时**仍按关闭处理**并给一次性引导 warning（不自动开启）；本仓库当前 **0 条**，其它
+项目数量以 `ls .dsh/flow/experiments | wc -l` 实测为准。
+
+实验项目的七步：**识别问题** → **提出假设**（七字段：`direction` 方向、`expected` 期望、
+`primaryMetric` 主指标、`guardrails` 护栏指标、`falsify` 证伪条件、`windowDays` 观测周期、
+`stopLoss` 止损线）→ **建任务**（`flow task add --experiment E-…`）→ **设计实现**（隔离分支）
+→ **实现** → **审查实现** → **完成任务并按测试判定分流**。
+
+```text
+flow exp add --title T --direction '降低 tie 率' --expected 'tie_mean<=1.0' \
+             --primary-metric tie_mean --guardrail p95_ms --falsify 'tie_mean>1.05' \
+             --window-days 7 --stop-loss 'p95 恶化 >10% 立即停止'
+flow exp review <id>            # 自查分流还缺什么（只读，恒 exit 0）
+flow exp productize <id>        # 门禁通过后写产品化；失败实验用 flow exp cleanup <id> --flag …
+```
+
+| 结果 | 状态 | 必做动作 | 之后 |
+|---|---|---|---|
+| 成功（主指标达标、护栏未破） | `confirmed` | 写 `--measured`/`--metrics`；过 `release` 门禁后 `flow exp productize <id>` | 合并/上线，`productizedAt` 已记录 |
+| 不确定（窗口内证据不足） | `inconclusive` | `--learned` 记结论（建议） | 继续验证或调整假设（新实验 `--parent` 指向它） |
+| 失败（证伪条件命中） | `refuted` | `--learned`，再 `flow exp cleanup <id> --flag/--code/--data` | 停止丢弃，保留学习与清理记录 |
+| 转向（保留部分资产换假设） | `pivoted` | `--learned`，新建后继实验 `--parent` 指向旧实验 | 沿用资产继续，旧实验不再更新 |
+
+**门禁**：`release` 阶段可跑 `flow check experiments`（实验关闭时**直接 exit 0 跳过**，不
+阻断）；硬拦只有四类：schema2 缺七字段、`refuted` 缺学习/清理、`pivoted` 缺学习或后继、
+`confirmed` 未产品化；`open` 超过观测周期只 warning（`experiment-window-elapsed`），结果仍
+由人判定。
 
 ## 安装（本机 DSH）
 
@@ -90,6 +129,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   （默认 **7** 天；`0` 关闭）**已满** N 天（按 `updated_at` 计，边界含端点）的任务改成
   `archived`——纯状态位、可逆、幂等。归档只由显式命令与门禁步骤触发，面板与读端点从不写；
   旧项目**缺哪步补哪步**（`decisions` 与 `tasks-archive` 两步，见 `CONTRACT.md` §3.3.1）。
+- **实验面板默认关闭**：`experiments.enabled` 默认 `false`，只影响面板展示与 `check experiments`
+  （关闭时该检查直接 exit 0 跳过）；CLI、`flow_exp` 与写路径不受影响。旧项目缺键默认关闭、需
+  手动开启（见「实验（可选）」）。
 - **零依赖**：只用 node 内置模块；不联网。
 - **锁只防同机并发**；门禁步骤会以 `shell` 执行，命令来自项目自己的 `gates/*.json`，请只放可信命令。
 - **单飞轮询**：面板对 `GET /api/project-flow/state?root=<当前工作区目录>` 任一时刻至多一个在途请求，
@@ -104,7 +146,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   重启或 pid 消失记 **dead**（可证明已死），跨机记 **foreign**（只在别处活跃），
   `ageSeconds > 6h` 记 **stale**（可能已停，可与 dead 重叠）。`flow heartbeat list` 有「存活」
   列；`flow heartbeat status --require-active` 对 dead/stale/foreign 退出 1（见 `CONTRACT.md` §3.5）。
-- 实验（可选功能，默认关闭）只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
+- 实验默认关闭（见「实验（可选）」）；开启后只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
 
 ## 自测
 

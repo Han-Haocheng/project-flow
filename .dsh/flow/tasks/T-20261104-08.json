@@ -17,12 +17,16 @@
   },
   "schema": 1,
   "id": "T-20261104-08",
-  "status": "draft",
+  "status": "done",
   "owner": "",
   "acceptance": [],
   "checkpoints": [],
-  "commits": [],
-  "notes": "",
+  "commits": [
+    "01aa672",
+    "74088cb",
+    "65f1a21"
+  ],
+  "notes": "team: task-45(分析/任务书) task-48(实施/卡A 折叠+队列头) task-56(审查 reject) task-62(修正 aria/PROBE-A) task-69(复审 accept) task-49(实施/卡A+ FIFO 排序+认领+queueHead) task-73(影响清单) task-81(审查 accept) task-91(钉死 claim/current 夹具，变异 1/3 红) task-106(审查 accept) task-110(标题修正) task-79(selftest 夹具同步) task-92(审查 accept) task-112(harness 补第二条 active) task-114(审查 accept)。已合并 01aa672 + 74088cb + 65f1a21。面板 active/draft 按 created_at 升序、tasks.current 未声明派生队首、heartbeat 认领 FIFO；T-08 需求（任务从更早的开始 = 队列）闭环。",
   "created_at": "2026-11-04T19:59:12+08:00",
-  "updated_at": "2026-11-04T19:59:12+08:00"
+  "updated_at": "2026-11-04T21:10:17+08:00"
 }
