@@ -81,9 +81,10 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `experiments` 节只返回 `{enabled:false, total, counts}`（**无** items/tree，见 §9.1.3），
 面板不渲染实验区、任务区单列；`check experiments` **直接 exit 0 跳过**（不阻断 CI）。它**只
 影响展示与该门禁步**——`flow exp …`、`flow_exp` 工具与写路径照常可用。旧项目缺 `enabled`
-且目录里已有实验记录时**仍按关闭处理**，并记一次性引导 warning
-`experiments-disabled-legacy: N experiment(s) are hidden…`（提示设为 `true`），**绝不自动
-开启**。开启就是把 `flow.json` 的 `experiments.enabled` 改成 `true`，下一次面板请求即生效。
+且目录里已有实验记录时**仍按关闭处理**：由**面板读路径**（`state-snapshot.mjs`，`GET state`
+投影时）记一次性引导 warning `experiments-disabled-legacy: N experiment(s) are hidden…`
+（提示设为 `true`），`check experiments` 不读目录、为此**不**发该 warning；**绝不自动开启**。
+开启就是把 `flow.json` 的 `experiments.enabled` 改成 `true`，下一次面板请求即生效。
 
 `normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
 否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
@@ -139,7 +140,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "direction": "降低 tie 率",              // 必填：自由文本 ≤120 字符（方向是措辞，不设枚举）
   "expected": "tie_mean<=1.0",             // 必填：可判定的期望结果（含阈值）
   "primaryMetric": "tie_mean",             // 必填：唯一主指标名
-  "guardrails": ["p95_ms", "error_rate"],  // 必填：护栏指标名，至少 1 项
+  "guardrails": ["p95_ms", "error_rate"],  // 必填：护栏指标名，至少 1 项、每项非空 string
   "falsify": "tie_mean>1.05 或任一护栏恶化 >5%", // 必填：证伪条件
   "windowDays": 7,                         // 必填：观测周期（正整数，≤3650 天）
   "stopLoss": "p95 恶化 >10% 立即停止",     // 必填：止损线
@@ -163,7 +164,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 ```
 
 - **七字段必填（仅 schema2）**：`direction`（≤120 字符）/ `expected` / `primaryMetric` /
-  `guardrails`（至少 1 项）/ `falsify` / `windowDays`（正整数，≤3650）/ `stopLoss`。缺任一或
+  `guardrails`（数组，**至少 1 项，每项均为非空 string**；当前无独立条数上限，`cleanup` 的
+  三数组才各 ≤20 项）/ `falsify` / `windowDays`（正整数，≤3650）/ `stopLoss`。缺任一或
   空值 → `FlowError('invalid')`，消息点名缺哪个键；**不再**降级为 warning。
 - id：自动 `E-YYYYMMDD-NN`（本地日期，两位序号，遍历现有 id 递增）；显式指定必须匹配
   `^[A-Z]+-\d{8}-\d{2}$`，已存在 → `FlowError('conflict')`。
@@ -200,7 +202,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "status": "draft",                    // draft | active | done | archived
   "owner": "",
   "goal": "",
-  "experiment": null,                    // 可选：关联实验 id（E-YYYYMMDD-NN）
+  "experiment": null,                    // 可选：关联实验 id（可省略，新建任务默认不写该键）
   "scope": { "allow": [], "deny": [] },  // 数组元素必须为字符串
   "acceptance": [],                      // 字符串数组
   "checkpoints": [],                     // 对象或字符串数组
@@ -216,11 +218,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
-- **`experiment`（可选）**：关联一条实验 id。写路径（`task add|update --experiment`）先做
-  **格式**校验：非空且不匹配 `^[A-Z]+-\d{8}-\d{2}$` → `FlowError('invalid')`；格式合法但现存
-  实验里没有 → 只记一次 `task-experiment-missing` warning，**照常写入**（实验可能已被删除或
-  尚未开启，引用不阻断任务）。`null`/空串表示解除关联；引用是**单向**的（任务→实验），实验
-  记录不回写任务 id。
+- **`experiment`（可选）**：关联一条实验 id。写路径（`task add|update --experiment`）用**宽松
+  引用格式**校验：字母开头、长度 2..61、只允许字母/数字/`_`/`.`/`-`
+  （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`，与 `parent` 引用同一宽松规则）——这样 Myai 等项目的
+  legacy 实验 id（如 `H-normalize`、`H1-baseline`）也能被任务链上。空串 / 超长 / 含其它字符
+  → `FlowError('invalid')`；格式合法但现存实验里没有 → 只记一次 `task-experiment-missing`
+  warning，**照常写入**（实验可能已被删除或尚未开启，引用不阻断任务）。`null`/空串表示解除
+  关联；引用是**单向**的（任务→实验），实验记录不回写任务 id。
 - **归档 = `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），记录文件
   不移动、不删除；随时可 `task update <id> --status done|active` 反向恢复。归档改 `status`、
   刷新 `updated_at`、写 `archived_at = now`，并**保留原 `done_at`**（T-09 起完成日不再被
@@ -716,8 +720,9 @@ flow check experiments
 - `exp cleanup <id> [--flag F]... [--code C]... [--data D]...`：写 `cleanup` 的三类数组
   （开关/代码/数据，各 ≤20 项；类内可空=无）并写 `cleanupAt`（ISO）；对 `schema: 1` 记录 →
   `invalid`。
-- `task add|update --experiment E-id`：格式非法 → `invalid`（退出 2）；格式合法但实验不存在
-  → `task-experiment-missing` warning，仍写入（见 §3.2）。
+- `task add|update --experiment E-id`：宽松引用格式（字母开头、2..61、允许 `_.-`），空/超长/
+  非法字符 → `invalid`（退出 2）；格式合法但实验不存在 → `task-experiment-missing` warning，
+  仍写入（见 §3.2）。
 - `exp update` 的 `--metrics` 必须是 JSON 对象，如 `'{"tie":0.4}'`；`--commits` 逗号分隔。
 - `flow task list` 保持 `updated_at` **倒序**（CLI 的历史视角，最近更新在前），与面板
   `active`/`draft` 的 FIFO 顺序（`created_at` 升序，见 §5.3）**不同**；两者各自稳定，不要
@@ -887,9 +892,10 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 ### 6.1.2 `check experiments`（实验门禁）
 
 只读、不写 store、不取锁。`experiments.enabled` 为 `false` 时**直接退出 0 跳过**（不阻断、
-CI 保持绿；人类输出「实验功能未开启…跳过」），不读实验目录；缺 `enabled` 且目录里已有实验
-记录的老项目同样按关闭处理（`experiments-disabled-legacy` 一次性引导 warning，**不自动
-开启**）。开启时逐条检查 `schema: 2` 记录（`schema: 1` 历史记录跳过、只计入 `legacy` 计数）。
+CI 保持绿；人类输出「实验功能未开启…跳过」），**不读实验目录**；缺 `enabled` 且目录里已有
+实验记录的老项目同样按关闭处理——但该检查不读目录，所以**不**发引导 warning；一次性
+`experiments-disabled-legacy` 由**面板读路径**发出（见 §2/§9.1.3，`state-snapshot.mjs`）。
+开启时逐条检查 `schema: 2` 记录（`schema: 1` 历史记录跳过、只计入 `legacy` 计数）。
 
 失败（退出 1，`--json` 给 `failed[]`，每项 `{id, rule, message}`）：
 1. 七个规范字段任一缺失/为空（`direction`/`expected`/`primaryMetric`/`guardrails`/
@@ -1214,8 +1220,10 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 #### 9.1.3 实验节（`GET state` 的 `experiments`）
 
 - **关闭（默认，`experiments.enabled: false`）**：`data.experiments` 只保留
-  `{ enabled: false, total, counts }`——`counts` 是**七键**（`total` + 六态）的真实计数，
-  `total` 是记录条数；**没有** `source`/`items`/`tree`/`groups`。web 面板不渲染实验区、
+  `{ enabled: false, total, counts }`——`counts` 是 **8 键**：`total` + 六态
+  （`open`/`confirmed`/`refuted`/`abandoned`/`inconclusive`/`pivoted`）另带 `unreadable`
+  （坏记录诊断计数），都是真实计数；`total` 是记录条数；**没有** `source`/`items`/`tree`/
+  `groups`。web 面板不渲染实验区、
   任务区**单列**占满；TUI 面板同样不显示「实验 N」与实验区段。宿主仍照常读实验目录以给出
   真实计数（不改写、不隐藏数据），旧项目缺 `enabled` 时另有一次性
   `experiments-disabled-legacy` warning（见 §2）。
@@ -1223,9 +1231,10 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   `{ enabled: true, source: 'store', total, counts, items, tree, groups: [] }`；web 面板恢复
   两列、实验卡在左列首位，**实验树默认折叠**（展开状态只留在浏览器会话，不回写 store）；
   TUI 恢复实验区计数。
-- `counts` 两种模式都是**七键**，面板缺键按空节兜底（与 §9.4 决策节同一纪律）；`items` 截断
-  与 `tree` 组装沿用 §9.1.1 的一次枚举/投影纪律。面板仍**只读**：开关只改 `flow.json`，
-  没有开关 POST，实验写操作只走 CLI / `flow_exp`。
+- `counts` 两种模式都是**同一 8 键**（`total` + 六态 + `unreadable`），面板对多余/缺失键
+  容忍、按空节兜底（与 §9.4 决策节同一纪律）；`items` 截断与 `tree` 组装沿用 §9.1.1 的
+  一次枚举/投影纪律。面板仍**只读**：开关只改 `flow.json`，没有开关 POST，实验写操作只走
+  CLI / `flow_exp`。
 
 ### 9.2 心跳作用域：只面向主会话
 

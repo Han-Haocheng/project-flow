@@ -16,14 +16,17 @@
   },
   "schema": 1,
   "id": "T-20261104-09",
-  "status": "active",
+  "status": "done",
   "owner": "",
   "acceptance": [],
   "checkpoints": [],
   "commits": [
-    "2ddb5e4"
+    "2ddb5e4",
+    "c10e46f",
+    "dd61366",
+    "c00e91d"
   ],
-  "notes": "team: task-46(分析/任务书矩阵) task-48 task-52(实施/卡A deriveTrend，进行中) task-53(实施/卡B1 done_at+archived_at，已合 2ddb5e4) task-95(B3 断言设计)。结论：现有台账只能精确「每日新增」+ 近似「每日完成/归档」，补 done_at/archived_at 后精确、并修 T-07 归档抹完成日的错位。卡A（trend 派生+payload）由 client-audit 实施，卡C（client 渲染 SVG 日柱）随后。",
+  "notes": "team: task-46(分析/数据能力矩阵) task-52(实施/卡A deriveTrend) task-53(实施/卡B1 done_at+archived_at) task-95(卡C 断言设计) task-120(实施/卡C SVG 日柱) task-126(审查 accept) task-127(边界断言+近似段 bug 修正+days 容错口径)。已合并 2ddb5e4 + c10e46f + dd61366 + c00e91d。趋势：本地日历日分桶（DST 安全）、created 精确 / done·archived 优先 done_at·archived_at 否则 updated_at 并标 ≈、estimatedFrom 边界（早于窗口=整窗近似）、14 天 207B/60 天 504B、400 任务 0.2ms；面板 26px SVG 日柱 + 摘要 + 首尾日期 + a11y。T-07 归档抹完成日的错位同时修复。",
   "created_at": "2026-11-04T19:59:12+08:00",
-  "updated_at": "2026-11-04T21:15:14+08:00"
+  "updated_at": "2026-11-04T21:27:14+08:00"
 }
