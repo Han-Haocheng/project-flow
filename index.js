@@ -1205,6 +1205,57 @@ function pickFields(args, names) {
   return picked
 }
 
+/** status → review branch (`success|uncertain|failure|pivot`, CONTRACT §5.1). */
+const REVIEW_BRANCH = {
+  confirmed: 'success',
+  refuted: 'failure',
+  pivoted: 'pivot',
+  open: 'uncertain',
+  inconclusive: 'uncertain',
+  abandoned: 'uncertain',
+}
+
+/**
+ * Read-only verdict for one experiment: the same rules `flow check experiments`
+ * enforces (schema2 completeness + per-status closure), expressed as `missing`.
+ * Keep in sync with the copy in `bin/flow.mjs`; the tool and CLI must report
+ * identical verdicts for the same record.
+ */
+function reviewExperimentRecord(record, { hasSuccessor }) {
+  if (record === null || typeof record !== 'object' || record.schema !== 2) {
+    return {
+      id: record !== null && typeof record === 'object' ? record.id : null,
+      verdict: 'incomplete',
+      branch: 'uncertain',
+      missing: ['schema2 (legacy record is read-only)'],
+    }
+  }
+  const missing = []
+  const text = (key) => (typeof record[key] === 'string' ? record[key].trim() : '')
+  for (const key of ['direction', 'expected', 'primaryMetric', 'falsify', 'stopLoss']) {
+    if (text(key) === '') missing.push(key)
+  }
+  if (Array.isArray(record.guardrails) === false || record.guardrails.length === 0) missing.push('guardrails')
+  if (Number.isInteger(record.windowDays) === false || record.windowDays < 1) missing.push('windowDays')
+  if (record.status === 'confirmed' && (typeof record.productizedAt !== 'string' || record.productizedAt === '')) {
+    missing.push('productizedAt')
+  }
+  if (record.status === 'refuted') {
+    if (text('learned') === '') missing.push('learned')
+    if (typeof record.cleanupAt !== 'string' || record.cleanupAt === '') missing.push('cleanupAt')
+  }
+  if (record.status === 'pivoted') {
+    if (text('learned') === '') missing.push('learned')
+    if (hasSuccessor(record.id) !== true) missing.push('successor')
+  }
+  return {
+    id: record.id,
+    verdict: missing.length === 0 ? 'complete' : 'incomplete',
+    branch: REVIEW_BRANCH[record.status] ?? 'uncertain',
+    missing,
+  }
+}
+
 // --------------------------------------------------------------- heartbeats
 //
 // A heartbeat is the per-session registration that tells the panel and the
@@ -1792,11 +1843,14 @@ function buildToolDefinitions(ctx) {
     {
       name: 'flow_exp',
       description:
-        'List, inspect, add, update or remove project-flow experiments (id, hypothesis, factor, expected, measured, status, parent lineage). All actions require the .dsh/flow store. `tree` returns the parent/child forest.',
+        'List, inspect, add, update, review, productize, clean up or remove project-flow experiments. New experiments are schema 2 and require the seven judging fields (direction, expected, primaryMetric, guardrails, falsify, windowDays, stopLoss). `review` is a read-only self-check returning verdict/branch/missing; `productize` marks a confirmed experiment after a passing release gate run; `cleanup` records the flags/code/data removed for a refuted one. `tree` returns the parent/child forest.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['list', 'show', 'tree', 'add', 'update', 'remove'] },
+          action: {
+            type: 'string',
+            enum: ['list', 'show', 'tree', 'add', 'update', 'review', 'productize', 'cleanup', 'remove'],
+          },
           root: ROOT_PROPERTY,
           id: ID_PROPERTY,
           title: { type: 'string' },
@@ -1805,7 +1859,25 @@ function buildToolDefinitions(ctx) {
           parent: { type: 'string', description: 'Parent experiment id, or empty for a root experiment.' },
           expected: { type: 'string' },
           scale: { type: 'string' },
-          status: { type: 'string', enum: ['open', 'confirmed', 'refuted', 'abandoned'] },
+          status: {
+            type: 'string',
+            enum: ['open', 'confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted'],
+          },
+          direction: { type: 'string', description: 'Direction of the change (free text, at most 120 characters).' },
+          primaryMetric: { type: 'string', description: 'The single primary metric the hypothesis is judged on.' },
+          guardrails: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Guardrail metric names (at least one).',
+          },
+          falsify: { type: 'string', description: 'Falsification condition: the hypothesis is refuted when it holds.' },
+          windowDays: { type: 'integer', description: 'Observation window in days (positive integer; core validates).' },
+          stopLoss: { type: 'string', description: 'Stop-loss line; crossing it ends the experiment.' },
+          learned: { type: 'string', description: 'What was learned (required to close refuted/pivoted).' },
+          gate: { type: 'string', description: 'Gate id used by `productize` (default "release").' },
+          flags: { type: 'array', items: { type: 'string' }, description: 'Cleanup: feature flags removed by `cleanup`.' },
+          code: { type: 'array', items: { type: 'string' }, description: 'Cleanup: code paths removed by `cleanup`.' },
+          data: { type: 'array', items: { type: 'string' }, description: 'Cleanup: data artifacts removed by `cleanup`.' },
           measured: { type: 'string' },
           metrics: { type: 'object', description: 'Free-form measured metrics.' },
           commits: { type: 'array', items: { type: 'string' }, description: 'Short commit shas.' },
@@ -1866,6 +1938,13 @@ function buildToolDefinitions(ctx) {
             'metrics',
             'commits',
             'notes',
+            'direction',
+            'primaryMetric',
+            'guardrails',
+            'falsify',
+            'windowDays',
+            'stopLoss',
+            'learned',
           ])
           return { root, experiment: c.addExperiment(root, contract, input) }
         }
@@ -1883,9 +1962,42 @@ function buildToolDefinitions(ctx) {
             'metrics',
             'commits',
             'notes',
+            'direction',
+            'primaryMetric',
+            'guardrails',
+            'falsify',
+            'windowDays',
+            'stopLoss',
+            'learned',
           ])
           if (Object.keys(patch).length === 0) throw new Error('flow_exp update requires at least one field to change')
           return { root, experiment: c.updateExperiment(root, contract, id, patch) }
+        }
+        if (action === 'review') {
+          const id = requireId('flow_exp', action, args.id)
+          const record = c.getExperiment(root, contract, id)
+          const records = c.listExperiments(root, contract)
+          const hasSuccessor = (experimentId) =>
+            records.some((item) => item.id !== experimentId && item.parent === experimentId)
+          return { root, review: reviewExperimentRecord(record, { hasSuccessor }) }
+        }
+        if (action === 'productize') {
+          const id = requireId('flow_exp', action, args.id)
+          const options = typeof args.gate === 'string' && args.gate.trim() !== '' ? { gateId: args.gate.trim() } : {}
+          return { root, ...c.productizeExperiment(root, contract, id, options) }
+        }
+        if (action === 'cleanup') {
+          const id = requireId('flow_exp', action, args.id)
+          const list = (value) =>
+            Array.isArray(value) ? value.filter((entry) => typeof entry === 'string' && entry.trim() !== '') : []
+          return {
+            root,
+            ...c.cleanupExperiment(root, contract, id, {
+              flags: list(args.flags),
+              code: list(args.code),
+              data: list(args.data),
+            }),
+          }
         }
         if (action === 'remove') {
           const id = requireId('flow_exp', action, args.id)
@@ -1909,6 +2021,10 @@ function buildToolDefinitions(ctx) {
           owner: { type: 'string' },
           goal: { type: 'string' },
           notes: { type: 'string' },
+          experiment: {
+            type: 'string',
+            description: 'Linked experiment id (optional; an unknown id only warns, a malformed one is invalid).',
+          },
           commits: { type: 'array', items: { type: 'string' }, description: 'Short commit shas.' },
           scope: {
             type: 'object',
@@ -1962,12 +2078,33 @@ function buildToolDefinitions(ctx) {
           return { root, task: c.getTask(root, contract, requireId('flow_task', action, args.id)) }
         }
         if (action === 'add') {
-          const input = pickFields(args, ['id', 'title', 'status', 'owner', 'goal', 'notes', 'commits', 'scope', 'acceptance'])
+          const input = pickFields(args, [
+            'id',
+            'title',
+            'status',
+            'owner',
+            'goal',
+            'notes',
+            'commits',
+            'scope',
+            'acceptance',
+            'experiment',
+          ])
           return { root, task: c.addTask(root, contract, input) }
         }
         if (action === 'update') {
           const id = requireId('flow_task', action, args.id)
-          const patch = pickFields(args, ['title', 'status', 'owner', 'goal', 'notes', 'commits', 'scope', 'acceptance'])
+          const patch = pickFields(args, [
+            'title',
+            'status',
+            'owner',
+            'goal',
+            'notes',
+            'commits',
+            'scope',
+            'acceptance',
+            'experiment',
+          ])
           if (Object.keys(patch).length === 0) throw new Error('flow_task update requires at least one field to change')
           return { root, task: c.updateTask(root, contract, id, patch) }
         }

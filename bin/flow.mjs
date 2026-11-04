@@ -31,18 +31,25 @@ const USAGE = `project-flow CLI（schema 2）
   status    项目名、契约源、实验/任务/门禁/决策计数与最近记录
 
   exp list | show <id> | tree
-  exp add --title T [--hypothesis H] [--factor F] [--parent ID]
-          [--expected E] [--scale S] [--notes N]
-  exp update <id> [--title T] [--status open|confirmed|refuted|abandoned]
-          [--hypothesis H] [--factor F] [--parent ID] [--expected E] [--scale S]
+  exp add --title T --hypothesis H --direction TEXT --expected E
+          --primary-metric M --guardrail G [--guardrail G]...
+          --falsify F --window-days N --stop-loss S
+          [--factor F] [--parent ID] [--scale S] [--notes N]
+  exp update <id> [--title T] [--status open|confirmed|refuted|abandoned|inconclusive|pivoted]
+          [--direction TEXT] [--expected E] [--primary-metric M] [--guardrail G]...
+          [--falsify F] [--window-days N] [--stop-loss S] [--learned L]
+          [--hypothesis H] [--factor F] [--parent ID] [--scale S]
           [--measured M] [--metrics JSON] [--commits a,b] [--notes N]
+  exp review <id>               只读自查：verdict/branch/missing（恒退出 0）
+  exp productize <id> [--gate release]
+  exp cleanup <id> [--flag F]... [--code C]... [--data D]...
   exp rm <id> [--yes]
 
   task list | show <id>
   task add --title T [--status draft|active|done|archived] [--owner O]
-           [--goal G] [--notes N]
+           [--goal G] [--notes N] [--experiment E-id]
   task update <id> [--title T] [--status draft|active|done|archived]
-           [--owner O] [--goal G] [--notes N]
+           [--owner O] [--goal G] [--notes N] [--experiment E-id]
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
   task rm <id> [--yes]
@@ -78,6 +85,7 @@ const USAGE = `project-flow CLI（schema 2）
   check list
   check staged --allow <path> [--allow <path> ...]
   check release-baseline --marker <text> [--threshold <N>]
+  check decisions | check experiments
   check state [--file <path>]
   check doc --file <path> --type task|design|incident|release
   check decisions                内置检查：阻塞决策命中暂存文件时失败（core 实现）
@@ -105,7 +113,9 @@ const USAGE = `project-flow CLI（schema 2）
   0 成功 · 1 用法错误 · 2 校验失败 · 3 未找到 · 4 IO/环境错误
   注意：gate run 的门禁失败以 data.ok=false 表达，命令本身成功时仍退出 0。
   check 复用同一组数字：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
-  3 脚本或解释器缺失 · 4 启动/IO 失败（含超时）。`
+  3 脚本或解释器缺失 · 4 启动/IO 失败（含超时）。
+  实验相关：exp review 恒 0（只读自查）；exp productize 未过门禁 → 2；
+  check experiments 失败 → 1（warnings 不阻断）。`
 
 const EXIT = { usage: 1, invalid: 2, notFound: 3, io: 4 }
 const EXIT_BY_CODE = { usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4 }
@@ -135,8 +145,15 @@ const VALUE_FLAGS = new Set([
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
   'older-than',
+  // T-12 B2（schema2 七字段 / 分流 / 关联）
+  'direction', 'primary-metric', 'guardrail', 'falsify', 'window-days', 'stop-loss',
+  'learned', 'experiment', 'gate', 'flag', 'code', 'data',
 ])
-const REPEAT_FLAGS = new Set(['step', 'allow', 'claim', 'option', 'blocks', 'affects'])
+const REPEAT_FLAGS = new Set([
+  'step', 'allow', 'claim', 'option', 'blocks', 'affects',
+  // T-12 B2：可重复的七字段/清理清单
+  'guardrail', 'flag', 'code', 'data',
+])
 
 class CliError extends Error {
   constructor(code, message) {
@@ -217,6 +234,10 @@ function parseArgv(argv) {
     decisionOptions: repeated.option || [],
     blocks: repeated.blocks || [],
     affects: repeated.affects || [],
+    guardrails: repeated.guardrail || [],
+    cleanupFlags: repeated.flag || [],
+    cleanupCodes: repeated.code || [],
+    cleanupData: repeated.data || [],
     positional,
     errors,
   }
@@ -652,7 +673,7 @@ async function cmdStatus(ctx) {
     }
   }
 
-  const expCounts = countsOf(experiments, ['open', 'confirmed', 'refuted', 'abandoned'])
+  const expCounts = countsOf(experiments, ['open', 'confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted'])
   const taskCounts = countsOf(tasks, ['draft', 'active', 'done', 'archived'])
   const gateEnabled = gates.filter((gate) => gate.enabled !== false).length
 
@@ -690,7 +711,7 @@ async function cmdStatus(ctx) {
       lines.push(['存储', store || contract?.store?.root || '.dsh/flow'])
       lines.push([
         '实验',
-        `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned}${unreadableTail(unreadable.experiments)}）`,
+        `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned} · inconclusive ${expCounts.inconclusive} · pivoted ${expCounts.pivoted}${unreadableTail(unreadable.experiments)}）`,
       ])
       lines.push([
         '任务',
@@ -770,6 +791,102 @@ async function cmdStatus(ctx) {
   return data
 }
 
+// ------------------------------------------------- T-12 B2：实验字段与自查
+
+/** Split repeatable/comma flags into trimmed, non-empty entries. */
+function splitEntries(values) {
+  return (Array.isArray(values) ? values : [])
+    .flatMap((entry) => String(entry ?? '').split(','))
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+}
+
+/**
+ * Collect the schema-2 seven judging fields from CLI flags. Missing required
+ * fields are named in one `invalid` error (exit 2, CONTRACT §5.1).
+ */
+function experimentSeven(flags, ctx, { required }) {
+  const fields = {}
+  const text = (key, flag) => {
+    const value = readString(flags, flag)
+    if (value !== undefined && value.trim() !== '') fields[key] = value.trim()
+  }
+  text('direction', 'direction')
+  text('expected', 'expected')
+  text('primaryMetric', 'primary-metric')
+  text('falsify', 'falsify')
+  text('stopLoss', 'stop-loss')
+  const guardrails = splitEntries(ctx.guardrails)
+  if (guardrails.length > 0) fields.guardrails = guardrails
+  const windowRaw = readString(flags, 'window-days')
+  if (windowRaw !== undefined && windowRaw.trim() !== '') {
+    const days = Number(windowRaw)
+    if (!Number.isInteger(days) || days < 1) {
+      throw new CliError('invalid', '--window-days 必须是正整数（观测周期，天）')
+    }
+    fields.windowDays = days
+  }
+  if (required) {
+    const missing = ['direction', 'expected', 'primaryMetric', 'guardrails', 'falsify', 'windowDays', 'stopLoss']
+      .filter((key) => fields[key] === undefined)
+    if (missing.length > 0) {
+      throw new CliError('invalid', `exp add 缺少 schema-2 必填字段：${missing.join(', ')}`)
+    }
+  }
+  return fields
+}
+
+/** status → review branch (`success|uncertain|failure|pivot`, CONTRACT §5.1). */
+const REVIEW_BRANCH = {
+  confirmed: 'success',
+  refuted: 'failure',
+  pivoted: 'pivot',
+  open: 'uncertain',
+  inconclusive: 'uncertain',
+  abandoned: 'uncertain',
+}
+
+/**
+ * Read-only verdict for one experiment: the same rules `flow check experiments`
+ * enforces (schema2 completeness + per-status closure), expressed as `missing`.
+ * Keep in sync with the copy in `index.js` (`flow_exp review`); the tool and CLI
+ * must report identical verdicts for the same record.
+ */
+function reviewExperimentRecord(record, { hasSuccessor }) {
+  if (record === null || typeof record !== 'object' || record.schema !== 2) {
+    return {
+      id: record !== null && typeof record === 'object' ? record.id : null,
+      verdict: 'incomplete',
+      branch: 'uncertain',
+      missing: ['schema2 (legacy record is read-only)'],
+    }
+  }
+  const missing = []
+  const text = (key) => (typeof record[key] === 'string' ? record[key].trim() : '')
+  for (const key of ['direction', 'expected', 'primaryMetric', 'falsify', 'stopLoss']) {
+    if (text(key) === '') missing.push(key)
+  }
+  if (Array.isArray(record.guardrails) === false || record.guardrails.length === 0) missing.push('guardrails')
+  if (Number.isInteger(record.windowDays) === false || record.windowDays < 1) missing.push('windowDays')
+  if (record.status === 'confirmed' && (typeof record.productizedAt !== 'string' || record.productizedAt === '')) {
+    missing.push('productizedAt')
+  }
+  if (record.status === 'refuted') {
+    if (text('learned') === '') missing.push('learned')
+    if (typeof record.cleanupAt !== 'string' || record.cleanupAt === '') missing.push('cleanupAt')
+  }
+  if (record.status === 'pivoted') {
+    if (text('learned') === '') missing.push('learned')
+    if (hasSuccessor(record.id) !== true) missing.push('successor')
+  }
+  return {
+    id: record.id,
+    verdict: missing.length === 0 ? 'complete' : 'incomplete',
+    branch: REVIEW_BRANCH[record.status] ?? 'uncertain',
+    missing,
+  }
+}
+
 async function cmdExp(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow exp <list|show|tree|add|update|rm>')
@@ -816,13 +933,18 @@ async function cmdExp(ctx, sub) {
 
   if (sub === 'add') {
     const input = {}
-    for (const key of ['title', 'hypothesis', 'factor', 'expected', 'scale', 'notes']) {
+    for (const key of ['title', 'hypothesis', 'factor', 'scale', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) input[key] = value
     }
+    // 未初始化是用法错误（退出 1），先于 schema2 字段校验；与 task archive 一致。
+    if (existsSync(path.join(ctx.root, '.dsh', 'flow', 'flow.json')) === false) {
+      throw new CliError('usage', '未初始化（未找到 .dsh/flow/flow.json）；先运行 flow init')
+    }
+    if (!input.title) throw new CliError('usage', '用法: flow exp add --title T [...]')
+    Object.assign(input, experimentSeven(flags, ctx, { required: true }))
     const parent = readString(flags, 'parent')
     if (parent !== undefined) input.parent = parent === '' || parent === 'null' ? null : parent
-    if (!input.title) throw new CliError('usage', '用法: flow exp add --title T [...]')
     const record = await core.addExperiment(ctx.root, contract, input)
     if (!ctx.json) out(`已创建实验 ${record.id}  ${record.title}`)
     return record
@@ -831,10 +953,13 @@ async function cmdExp(ctx, sub) {
   if (sub === 'update') {
     const id = requireString(flags, 'id', '用法: flow exp update <id> [...]')
     const patch = {}
-    for (const key of ['title', 'hypothesis', 'factor', 'expected', 'scale', 'measured', 'notes']) {
+    for (const key of ['title', 'hypothesis', 'factor', 'scale', 'measured', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) patch[key] = value
     }
+    Object.assign(patch, experimentSeven(flags, ctx, { required: false }))
+    const learned = readString(flags, 'learned')
+    if (learned !== undefined) patch.learned = learned
     const parent = readString(flags, 'parent')
     if (parent !== undefined) patch.parent = parent === '' || parent === 'null' ? null : parent
     const status = readString(flags, 'status')
@@ -851,6 +976,45 @@ async function cmdExp(ctx, sub) {
     return record
   }
 
+  if (sub === 'review') {
+    const id = requireString(flags, 'id', '用法: flow exp review <id>')
+    const record = await core.getExperiment(ctx.root, contract, id)
+    const records = await core.listExperiments(ctx.root, contract)
+    const hasSuccessor = (experimentId) =>
+      records.some((item) => item.id !== experimentId && item.parent === experimentId)
+    const review = reviewExperimentRecord(record, { hasSuccessor })
+    if (!ctx.json) {
+      out(`${review.id}  verdict ${review.verdict} · branch ${review.branch}`)
+      out(review.missing.length === 0 ? '  missing: （无）' : `  missing: ${review.missing.join(', ')}`)
+    }
+    return review
+  }
+
+  if (sub === 'productize') {
+    const id = requireString(flags, 'id', '用法: flow exp productize <id> [--gate release]')
+    const gateId = readString(flags, 'gate')
+    const result = await core.productizeExperiment(ctx.root, contract, id, gateId === undefined ? {} : { gateId })
+    if (!ctx.json) {
+      if (result.already) out(`已产品化（already）：${result.id} @ ${result.productizedAt}`)
+      else out(`已产品化 ${result.id}（gate ${result.productizeGate?.id ?? 'release'} @ ${result.productizeGate?.runAt ?? '-'}）`)
+    }
+    return result
+  }
+
+  if (sub === 'cleanup') {
+    const id = requireString(flags, 'id', '用法: flow exp cleanup <id> [--flag F]... [--code C]... [--data D]...')
+    const result = await core.cleanupExperiment(ctx.root, contract, id, {
+      flags: splitEntries(ctx.cleanupFlags),
+      code: splitEntries(ctx.cleanupCodes),
+      data: splitEntries(ctx.cleanupData),
+    })
+    if (!ctx.json) {
+      out(`${result.changed ? '已记录清理' : '清理未变化'}：${result.id} @ ${result.cleanupAt}`)
+      out(`  flags ${result.cleanup.flags.length} · code ${result.cleanup.code.length} · data ${result.cleanup.data.length}`)
+    }
+    return result
+  }
+
   if (sub === 'rm') {
     const id = requireString(flags, 'id', '用法: flow exp rm <id> [--yes]')
     await confirmDelete(ctx, `实验 ${id}`)
@@ -859,7 +1023,7 @@ async function cmdExp(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 exp ${sub}（可用 list|show|tree|add|update|rm）`)
+  throw new CliError('usage', `未知子命令 exp ${sub}（可用 list|show|tree|add|update|review|productize|cleanup|rm）`)
 }
 
 /** 文本模式的归档结果（core 返回 {archived, candidates, days, cutoff, dryRun, locked}）。 */
@@ -926,6 +1090,8 @@ async function cmdTask(ctx, sub) {
       const value = readString(flags, key)
       if (value !== undefined) input[key] = value
     }
+    const experiment = readString(flags, 'experiment')
+    if (experiment !== undefined) input.experiment = experiment.trim() === '' ? null : experiment
     if (!input.title) throw new CliError('usage', '用法: flow task add --title T [...]')
     const record = await core.addTask(ctx.root, contract, input)
     if (!ctx.json) out(`已创建任务 ${record.id}  ${record.title}`)
@@ -939,6 +1105,8 @@ async function cmdTask(ctx, sub) {
       const value = readString(flags, key)
       if (value !== undefined) patch[key] = value
     }
+    const experiment = readString(flags, 'experiment')
+    if (experiment !== undefined) patch.experiment = experiment.trim() === '' ? null : experiment
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'task update 至少需要一个字段参数（如 --status）')
     }
@@ -1340,11 +1508,20 @@ const BUILTIN_CHECKS = Object.freeze([
     description: '阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）',
     args: '（无额外参数）',
   }),
+  Object.freeze({
+    name: 'experiments',
+    interpreter: 'core',
+    script: 'lib/core.mjs#checkExperiments',
+    description: '实验分流未闭环（schema2 缺字段/confirmed 未产品化/refuted·pivoted 缺 learned·cleanup）时失败（内置检查，只读）',
+    args: '（无额外参数；experiments.enabled=false 时跳过）',
+  }),
 ])
 
 async function cmdCheck(ctx, sub) {
-  // `decisions` 是唯一内置检查：bin 特判路由到 core，不经过 scripts/ 目录。
+  // 内置检查（bin 特判路由到 core，不经过 scripts/ 目录）：
+  // `decisions` 与 T-12 的 `experiments`。
   if (sub === 'decisions') return runCheckDecisions(ctx)
+  if (sub === 'experiments') return runCheckExperiments(ctx)
   const checks = await loadChecks()
   const names = checks.CHECKS.map((entry) => entry.name)
   // usage 与未知检查提示共用完整目录（脚本检查 + 内置检查），不再漏列内置项。
@@ -1614,6 +1791,65 @@ function runCheckDecisions(ctx) {
   throw error
 }
 
+/**
+ * `flow check experiments`: read-only; `experiments.enabled=false` skips (exit 0)
+ * and prints why. Failures exit 1 with `failed[]`; advisory warnings never block.
+ */
+function runCheckExperiments(ctx) {
+  const { core } = ctx
+  const loaded = core.loadContract(ctx.root)
+  collectWarnings(loaded.warnings)
+  const started = Date.now()
+  const enabled = loaded.contract?.experiments?.enabled === true
+  const result = core.checkExperiments(ctx.root, loaded.contract)
+  const durationMs = Date.now() - started
+  const lines = []
+  if (enabled === false) {
+    lines.push('✓ experiments：实验功能未开启（experiments.enabled=false），跳过')
+  } else if (result.failed.length === 0) {
+    lines.push(`✓ experiments：checked ${result.checked} · legacy ${result.legacy}`)
+  } else {
+    for (const item of result.failed) lines.push(`✗ ${item.id} ${item.rule}：${item.message}`)
+  }
+  for (const warning of Array.isArray(result.warnings) ? result.warnings : []) {
+    lines.push(`! ${warning.id} ${warning.rule}：${warning.message}`)
+  }
+  const stdout = lines.join('\n')
+  if (!ctx.json) {
+    for (const line of lines) out(line)
+  }
+  if (enabled === false || result.failed.length === 0) {
+    return {
+      check: 'experiments',
+      exitCode: 0,
+      stdout,
+      stderr: '',
+      durationMs,
+      enabled,
+      checked: result.checked,
+      legacy: result.legacy,
+      failed: [],
+      warnings: result.warnings,
+    }
+  }
+  const error = new Error('检查未通过：experiments（实验分流未闭环）')
+  error.code = 'check-failed'
+  error.silent = true
+  error.payload = {
+    check: 'experiments',
+    exitCode: 1,
+    stdout,
+    stderr: '',
+    durationMs,
+    enabled,
+    checked: result.checked,
+    legacy: result.legacy,
+    failed: result.failed,
+    warnings: result.warnings,
+  }
+  throw error
+}
+
 // ---------------------------------------------------------------- 展示辅助
 
 function printRecord(record) {
@@ -1805,6 +2041,10 @@ async function main() {
     decisionOptions: parsed.decisionOptions,
     blocks: parsed.blocks,
     affects: parsed.affects,
+    guardrails: parsed.guardrails,
+    cleanupFlags: parsed.cleanupFlags,
+    cleanupCodes: parsed.cleanupCodes,
+    cleanupData: parsed.cleanupData,
     json: jsonMode,
     contract: null,
     contractRoot: null,
@@ -1817,7 +2057,11 @@ async function main() {
   }
   if (
     ['exp', 'task', 'gate', 'decision'].includes(command) &&
-    ['show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw'].includes(action) &&
+    [
+      'show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw',
+      // T-12 B2：exp 的三个新子命令同样允许 `flow exp review E-xxx`
+      'review', 'productize', 'cleanup',
+    ].includes(action) &&
     // `gate run --phase X` takes no id.
     !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined)
   ) {

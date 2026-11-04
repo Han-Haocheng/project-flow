@@ -121,7 +121,7 @@ const STATE_VALID = [
 
 // -------------------------------------------------------------------- list
 
-test('check list --json 暴露五项检查：四项脚本检查 + 内置 decisions', () => {
+test('check list --json 暴露六项检查：四项脚本检查 + 内置 decisions/experiments', () => {
   const root = tempRoot('list')
   const result = runCli(root, ['check', 'list', '--json'])
   assert.equal(result.code, 0)
@@ -129,7 +129,7 @@ test('check list --json 暴露五项检查：四项脚本检查 + 内置 decisio
   const checks = result.json.data.checks
   assert.deepEqual(
     checks.map((item) => item.name),
-    ['staged', 'release-baseline', 'state', 'doc', 'decisions'],
+    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments'],
   )
   // 第 1-4 项是随包脚本检查：断言一条不减，解释器只允许 bash/python3、脚本必须带 skills/ 前缀。
   const scriptChecks = checks.slice(0, 4)
