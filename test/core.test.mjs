@@ -21,6 +21,10 @@ import {
   TASK_ARCHIVE_AFTER_DAYS,
   addDecision,
   addExperiment,
+  cleanupExperiment,
+  checkExperiments,
+  EXPERIMENT_SCHEMA,
+  isLegacyExperiment,
   addGate,
   addTask,
   answerDecision,
@@ -39,6 +43,7 @@ import {
   heartbeatStatus,
   initProject,
   listExperiments,
+  productizeExperiment,
   listGateRuns,
   listDecisions,
   listGates,
@@ -68,6 +73,60 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+
+/** T-12 schema2 的七必填字段；既有实验夹具只需在 inputs 上铺这一层（不放松断言）。 */
+const EXPERIMENT_REQUIRED = Object.freeze({
+  direction: '降低 tie 率',
+  expected: 'tie_mean<=1.0',
+  primaryMetric: 'tie_mean',
+  guardrails: ['p95_ms', 'error_rate'],
+  falsify: 'tie_mean>1.05',
+  windowDays: 7,
+  stopLoss: 'p95 恶化>10% 停止',
+})
+
+function experimentInput(extra = {}) {
+  return { ...EXPERIMENT_REQUIRED, ...extra }
+}
+
+/** 直接落一条实验 JSON（legacy/schema2 夹具用，绕过写路径校验）。 */
+function writeExperimentFile(root, record) {
+  const dir = path.join(root, '.dsh/flow/experiments')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, `${record.id}.json`)
+  fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`)
+  return record
+}
+
+function legacyExperiment(id, extra = {}) {
+  const now = new Date().toISOString()
+  return {
+    schema: 1,
+    id,
+    title: `legacy ${id}`,
+    hypothesis: 'old hypothesis',
+    factor: '',
+    parent: null,
+    expected: '',
+    scale: '',
+    status: 'open',
+    measured: '',
+    metrics: {},
+    commits: [],
+    notes: '',
+    created_at: now,
+    updated_at: now,
+    ...extra,
+  }
+}
+
+/** 写一条 gate run（productize 只读 gates.logs/<id>）。 */
+function writeGateRunFixture(root, gateId, run) {
+  const dir = path.join(root, '.dsh/flow/logs', gateId)
+  fs.mkdirSync(dir, { recursive: true })
+  const name = String(run.started_at ?? new Date().toISOString()).replace(/[:.]/g, '-')
+  fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(run, null, 2))
+}
 
 const TEMP_ROOTS = []
 
@@ -379,7 +438,7 @@ test('manifest containment：合法相对路径与根内绝对 store.root 行为
   assert.equal(paths.experiments, path.join(path.resolve(root), 'data/experiments'))
   assert.equal(paths.tasks, path.join(path.resolve(root), '.dsh/flow/tasks'))
 
-  const created = addExperiment(root, custom, { title: 'still works' })
+  const created = addExperiment(root, custom, experimentInput({ title: 'still works' }))
   assert.equal(created.title, 'still works')
   const listed = listExperiments(root, custom)
   assert.equal(listed.length, 1)
@@ -391,9 +450,9 @@ test('manifest containment：合法相对路径与根内绝对 store.root 行为
 
 test('experiment CRUD：自动 id、默认值、更新刷新 updated_at、删除后 not-found', () => {
   const { root, contract } = freshProject('exp-crud')
-  const created = addExperiment(root, contract, { title: 'baseline', factor: 'focus/normalize' })
+  const created = addExperiment(root, contract, experimentInput({ title: 'baseline', factor: 'focus/normalize' }))
 
-  assert.equal(created.schema, 1)
+  assert.equal(created.schema, 2, 'B1：新记录写 schema:2')
   assert.equal(created.id, `E-${stamp()}-01`)
   assert.equal(created.status, 'open')
   assert.equal(created.parent, null)
@@ -402,7 +461,7 @@ test('experiment CRUD：自动 id、默认值、更新刷新 updated_at、删除
   assert.equal(created.title, 'baseline')
   assert.match(created.created_at, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
 
-  const second = addExperiment(root, contract, { title: 'second' })
+  const second = addExperiment(root, contract, experimentInput({ title: 'second' }))
   assert.equal(second.id, `E-${stamp()}-02`)
 
   const listed = listExperiments(root, contract)
@@ -412,9 +471,9 @@ test('experiment CRUD：自动 id、默认值、更新刷新 updated_at、删除
   const fetched = getExperiment(root, contract, created.id)
   assert.equal(fetched.title, 'baseline')
 
-  const updated = updateExperiment(root, contract, created.id, { status: 'confirmed', measured: 'tie=0.4' })
+  const updated = updateExperiment(root, contract, created.id, { status: 'confirmed', measured: 'tie=0.4', metrics: { tie_mean: 0.4 } })
   assert.equal(updated.id, created.id)
-  assert.equal(updated.schema, 1)
+  assert.equal(updated.schema, 2, 'B1：patch 保留 schema:2')
   assert.equal(updated.created_at, created.created_at)
   assert.equal(updated.status, 'confirmed')
   assert.equal(updated.measured, 'tie=0.4')
@@ -433,15 +492,15 @@ test('experiment CRUD：自动 id、默认值、更新刷新 updated_at、删除
 
 test('experiment id：显式指定、格式校验、重复冲突、非法路径段', () => {
   const { root, contract } = freshProject('exp-id')
-  const explicit = addExperiment(root, contract, { id: `E-${stamp()}-07`, title: 'explicit' })
+  const explicit = addExperiment(root, contract, experimentInput({ id: `E-${stamp()}-07`, title: 'explicit' }))
   assert.equal(explicit.id, `E-${stamp()}-07`)
 
-  expectFlowError(() => addExperiment(root, contract, { id: `E-${stamp()}-07`, title: 'dup' }), 'conflict', /already exists/)
-  expectFlowError(() => addExperiment(root, contract, { id: 'E-2026-01', title: 'bad' }), 'invalid', /invalid format/)
-  expectFlowError(() => addExperiment(root, contract, { id: '../escape', title: 'bad' }), 'invalid')
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ id: `E-${stamp()}-07`, title: 'dup' })), 'conflict', /already exists/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ id: 'E-2026-01', title: 'bad' })), 'invalid', /invalid format/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ id: '../escape', title: 'bad' })), 'invalid')
 
   // 自动 id 跳过已占用的号段
-  const next = addExperiment(root, contract, { title: 'next' })
+  const next = addExperiment(root, contract, experimentInput({ title: 'next' }))
   assert.equal(next.id, `E-${stamp()}-08`)
 
   expectFlowError(() => getExperiment(root, contract, '../flow'), 'invalid', /not a safe path segment/)
@@ -449,23 +508,23 @@ test('experiment id：显式指定、格式校验、重复冲突、非法路径�
 
 test('experiment parent：必须指向已存在实验，禁止自引用', () => {
   const { root, contract } = freshProject('exp-parent')
-  const parent = addExperiment(root, contract, { title: 'root' })
-  const child = addExperiment(root, contract, { title: 'child', parent: parent.id })
+  const parent = addExperiment(root, contract, experimentInput({ title: 'root' }))
+  const child = addExperiment(root, contract, experimentInput({ title: 'child', parent: parent.id }))
   assert.equal(child.parent, parent.id)
 
   expectFlowError(
-    () => addExperiment(root, contract, { title: 'orphan', parent: 'E-20000101-01' }),
+    () => addExperiment(root, contract, experimentInput({ title: 'orphan', parent: 'E-20000101-01' })),
     'invalid',
     /parent experiment does not exist/,
   )
   expectFlowError(
-    () => addExperiment(root, contract, { id: `E-${stamp()}-03`, title: 'self', parent: `E-${stamp()}-03` }),
+    () => addExperiment(root, contract, experimentInput({ id: `E-${stamp()}-03`, title: 'self', parent: `E-${stamp()}-03` })),
     'invalid',
     /parent cannot reference itself/,
   )
   // 旧台账 id（如 H1-baseline）允许作为 parent，但必须存在；格式非法的仍拒绝。
-  expectFlowError(() => addExperiment(root, contract, { title: 'bad', parent: 'not-an-id' }), 'invalid', /parent experiment does not exist/)
-  expectFlowError(() => addExperiment(root, contract, { title: 'bad', parent: 'bad id!' }), 'invalid', /not a valid experiment id/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'bad', parent: 'not-an-id' })), 'invalid', /parent experiment does not exist/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'bad', parent: 'bad id!' })), 'invalid', /not a valid experiment id/)
 })
 
 test('experimentTree：按 parent 嵌套，未知 parent 与成环数据降级为根', () => {
@@ -496,7 +555,7 @@ test('experimentTree：按 parent 嵌套，未知 parent 与成环数据降级�
 
 test('原子写：目标为目录时抛 io 且不残留临时文件，修复后同一 id 可重试', () => {
   const { root, contract } = freshProject('atomic')
-  const first = addExperiment(root, contract, { title: 'first' })
+  const first = addExperiment(root, contract, experimentInput({ title: 'first' }))
   const expDir = path.join(root, '.dsh/flow/experiments')
   assert.ok(fs.existsSync(path.join(expDir, `${first.id}.json`)))
 
@@ -504,14 +563,14 @@ test('原子写：目标为目录时抛 io 且不残留临时文件，修复后�
   const blockedPath = path.join(expDir, `${blockedId}.json`)
   fs.mkdirSync(blockedPath)
 
-  expectFlowError(() => addExperiment(root, contract, { title: 'blocked' }), 'io', /cannot write/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'blocked' })), 'io', /cannot write/)
 
   const leftovers = fs.readdirSync(expDir).filter((name) => name.includes('.tmp-'))
   assert.deepEqual(leftovers, [], '失败后不应残留 .tmp- 临时文件')
   assert.ok(fs.statSync(blockedPath).isDirectory(), '失败不应替换目标')
 
   fs.rmdirSync(blockedPath)
-  const retried = addExperiment(root, contract, { title: 'retried' })
+  const retried = addExperiment(root, contract, experimentInput({ title: 'retried' }))
   assert.equal(retried.id, blockedId)
   assert.deepEqual(readJson(path.join(expDir, `${blockedId}.json`)).title, 'retried')
 })
@@ -530,7 +589,7 @@ test('写锁：新鲜锁拒绝写入，过期锁经 CAS 接管并记 warning', (
   }
 
   fs.writeFileSync(lockPath, JSON.stringify(fresh))
-  expectFlowError(() => addExperiment(root, contract, { title: 'blocked' }), 'conflict', /locked by another writer/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'blocked' })), 'conflict', /locked by another writer/)
   assert.ok(fs.existsSync(lockPath), '冲突时不应擅自删掉他人锁')
   assert.equal(readJson(lockPath).token, 'fresh-owner', '新鲜锁必须原样保留（token 不变）')
 
@@ -539,7 +598,7 @@ test('写锁：新鲜锁拒绝写入，过期锁经 CAS 接管并记 warning', (
     JSON.stringify({ ...fresh, at: new Date(Date.now() - 60_000).toISOString(), pid: deadPid(), token: 'stale-owner' }),
   )
   drainWarnings()
-  const created = addExperiment(root, contract, { title: 'taken over' })
+  const created = addExperiment(root, contract, experimentInput({ title: 'taken over' }))
   assert.equal(created.title, 'taken over')
   assert.ok(drainWarnings().some((item) => item.startsWith('lock-stale:')), '接管过期锁应留下 warning')
   assert.equal(fs.existsSync(lockPath), false, '写操作结束应释放锁')
@@ -548,7 +607,7 @@ test('写锁：新鲜锁拒绝写入，过期锁经 CAS 接管并记 warning', (
 test('未初始化时写操作抛 usage，读操作返回空列表', () => {
   const root = tempRoot('usage')
   const { contract } = loadContract(root)
-  expectFlowError(() => addExperiment(root, contract, { title: 'x' }), 'usage', /run flow init first/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x' })), 'usage', /run flow init first/)
   expectFlowError(() => addTask(root, contract, { title: 'x' }), 'usage', /run flow init first/)
   expectFlowError(() => addGate(root, contract, { id: 'g1', title: 'x', phase: 'manual' }), 'usage')
   assert.deepEqual(listExperiments(root, contract), [])
@@ -876,8 +935,8 @@ test('runGate 未知 expect 记 warning 并按 exit 0 处理', async () => {
 
 test('listGateRuns 新→旧排序并可 limit；readStoreState 附 lastRun 与计数', async () => {
   const { root, contract } = freshProject('state')
-  addExperiment(root, contract, { title: 'e1' })
-  addExperiment(root, contract, { title: 'e2', status: 'confirmed' })
+  addExperiment(root, contract, experimentInput({ title: 'e1' }))
+  addExperiment(root, contract, experimentInput({ title: 'e2', status: 'confirmed', measured: 'tie=0.5', metrics: { tie_mean: 0.5 } }))
   addTask(root, contract, { title: 't1', status: 'active' })
   addGate(root, contract, { id: 'state-gate', title: 'state gate', phase: 'manual', steps: [{ id: 'ok', run: 'true' }] })
   await runGate(root, contract, 'state-gate')
@@ -1008,7 +1067,7 @@ test('心跳坏文件：非法 JSON 与非对象只记 warning 并跳过', () =>
 
 test('坏记录只警告不阻塞列表读取', () => {
   const { root, contract } = freshProject('bad-record')
-  addExperiment(root, contract, { title: 'good' })
+  addExperiment(root, contract, experimentInput({ title: 'good' }))
   fs.writeFileSync(path.join(root, '.dsh/flow/experiments/E-20260101-01.json'), '{ broken')
   drainWarnings()
   const items = listExperiments(root, contract)
@@ -1036,12 +1095,12 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   assert.equal(init.json.ok, true)
   assert.ok(init.json.data.created.includes('.dsh/flow/flow.json'))
 
-  const added = runCli(root, ['exp', 'add', '--title', 'CLI 实验', '--factor', 'cli', '--json'])
-  assert.equal(added.code, 0)
-  const expId = added.json.data.id
+  // B1 的七必填落地后，bin 的七旗标属 B2；此处先用 core 夹具铺实验，CLI 侧继续覆盖
+  // update/list/tree（B2 补旗标后会恢复 exp add 的 CLI 覆盖，断言不放松）。
+  const expId = addExperiment(root, loadContract(root).contract, experimentInput({ title: 'CLI 实验', factor: 'cli' })).id
   assert.match(expId, /^E-\d{8}-\d{2}$/)
 
-  const updated = runCli(root, ['exp', 'update', expId, '--status', 'confirmed', '--measured', 'ok', '--json'])
+  const updated = runCli(root, ['exp', 'update', expId, '--status', 'confirmed', '--measured', 'ok', '--metrics', '{"tie_mean":0.5}', '--json'])
   assert.equal(updated.code, 0)
   assert.equal(updated.json.data.status, 'confirmed')
 
@@ -1150,10 +1209,9 @@ test('CLI 退出码与错误 JSON：1 用法 / 2 校验 / 3 未找到', () => {
   assert.equal(invalid.code, 2)
   assert.equal(invalid.json.error.code, 'invalid')
 
-  // CLI 的 exp add 不接受 --id（自动生成），因此用 update 走校验路径。
-  const created = runCli(root, ['exp', 'add', '--title', '待删除', '--json'])
-  assert.equal(created.code, 0)
-  const createdId = created.json.data.id
+  // CLI 的 exp add 不接受 --id（自动生成）；七旗标属 B2，这里用 core 夹具铺记录，
+  // 继续覆盖 CLI update/rm 的错误路径与删除门禁。
+  const createdId = addExperiment(root, loadContract(root).contract, experimentInput({ title: '待删除' })).id
   const badStatus = runCli(root, ['exp', 'update', createdId, '--status', 'bogus', '--json'])
   assert.equal(badStatus.code, 2)
   assert.equal(badStatus.json.error.code, 'invalid')
@@ -2872,4 +2930,290 @@ test('heartbeat start：多条 active 时按 created_at 取最老的一条（FIF
   assert.equal(record.task, oldest.id, '按 created_at 取最老的一条')
   assert.equal(record.goal, '旧任务')
   assert.equal(listTasks(root, contract).length, 2)
+})
+
+// ============================================================ T-12 B1 schema2
+//
+// 六态 / 七必填 / legacy 白名单 / task.experiment / enabled 契约 / checkExperiments。
+
+test('B1 addExperiment：七字段逐项必填，缺键 invalid 点名，空值与长度也拒绝', () => {
+  const { root, contract } = freshProject('b1-required')
+  const created = addExperiment(root, contract, experimentInput({ title: 'ok' }))
+  assert.equal(created.schema, EXPERIMENT_SCHEMA)
+  assert.equal(created.status, 'open')
+  assert.deepEqual(created.cleanup, { flags: [], code: [], data: [] })
+  assert.equal(created.cleanupAt, null)
+  assert.equal(created.productizedAt, null)
+
+  for (const key of Object.keys(EXPERIMENT_REQUIRED)) {
+    const input = experimentInput({ title: `missing ${key}` })
+    delete input[key]
+    expectFlowError(() => addExperiment(root, contract, input), 'invalid', new RegExp(key))
+  }
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x', direction: '   ' })), 'invalid', /direction/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x', direction: 'a'.repeat(121) })), 'invalid', /at most 120/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x', guardrails: [] })), 'invalid', /at least one/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x', windowDays: 0 })), 'invalid', /positive integer/)
+  expectFlowError(() => addExperiment(root, contract, experimentInput({ title: 'x', windowDays: 1.5 })), 'invalid', /positive integer/)
+})
+
+test('B1 legacy schema1/缺 schema：只读可列可删，update invalid，schema2 混排树完整', () => {
+  const { root, contract } = freshProject('b1-legacy')
+  const schema1 = writeExperimentFile(root, legacyExperiment('E-20260101-01'))
+  const missing = legacyExperiment('E-20260101-02')
+  delete missing.schema
+  writeExperimentFile(root, missing)
+  const modern = addExperiment(root, contract, experimentInput({ title: 'modern', parent: schema1.id }))
+
+  assert.equal(isLegacyExperiment(schema1), true)
+  assert.equal(isLegacyExperiment(missing), true, '缺失 schema 归 legacy')
+  assert.equal(isLegacyExperiment(modern), false)
+  assert.equal(listExperiments(root, contract).length, 3)
+  const tree = experimentTree(listExperiments(root, contract))
+  assert.equal(tree.length, 2, 'legacy 根 + 缺 schema 根；modern 挂在 schema1 下')
+  const legacyRoot = tree.find((node) => node.id === schema1.id)
+  assert.deepEqual(legacyRoot.children.map((node) => node.id), [modern.id])
+
+  expectFlowError(() => updateExperiment(root, contract, schema1.id, { notes: 'x' }), 'invalid', /read-only/)
+  expectFlowError(() => updateExperiment(root, contract, missing.id, { notes: 'x' }), 'invalid', /read-only/)
+  assert.deepEqual(removeExperiment(root, contract, missing.id), { id: missing.id, removed: true })
+})
+
+test('B1 Myai 22 条 legacy fixture：list/check 不误伤，update 仍拒绝', () => {
+  const { root, contract } = freshProject('b1-myai')
+  for (let index = 1; index <= 22; index += 1) {
+    const id = `E-20260101-${String(index).padStart(2, '0')}`
+    const record = legacyExperiment(id)
+    if (index % 2 === 0) delete record.schema // 一半是缺 schema 的更老记录
+    writeExperimentFile(root, record)
+  }
+  assert.equal(listExperiments(root, contract).length, 22)
+  const enabled = { ...contract, experiments: { ...contract.experiments, enabled: true } }
+  const result = checkExperiments(root, enabled)
+  assert.deepEqual(result, { ok: true, checked: 0, legacy: 22, failed: [], warnings: [] })
+  expectFlowError(() => updateExperiment(root, contract, 'E-20260101-01', { notes: 'x' }), 'invalid', /read-only/)
+})
+
+test('B1 updateExperiment：保留 schema2/未知字段，系统字段拒绝，终态软/硬边界生效', () => {
+  const { root, contract } = freshProject('b1-final')
+  const enabled = { ...contract, experiments: { ...contract.experiments, enabled: true } }
+  const base = addExperiment(root, contract, experimentInput({ title: '终态' }))
+
+  // confirmed 仍是硬校验（判定即写结果）。
+  expectFlowError(() => updateExperiment(root, contract, base.id, { status: 'confirmed', metrics: { a: 1 } }), 'invalid', /measured/)
+  expectFlowError(() => updateExperiment(root, contract, base.id, { status: 'confirmed', measured: 'x' }), 'invalid', /metrics/)
+
+  // inconclusive：learned 只建议，update 成功并记 warning；check 只 warning。
+  drainWarnings()
+  const inconclusive = updateExperiment(root, contract, base.id, { status: 'inconclusive' })
+  assert.equal(inconclusive.status, 'inconclusive')
+  assert.ok(
+    drainWarnings().some((item) => item.startsWith('experiment-inconclusive-no-learned:')),
+    'update 记 warning，不拒绝',
+  )
+  const afterInconclusive = checkExperiments(root, enabled)
+  assert.equal(afterInconclusive.ok, true, 'inconclusive 缺 learned 不硬拦')
+  assert.deepEqual(afterInconclusive.failed, [])
+  assert.ok(
+    afterInconclusive.warnings.some((item) => item.id === base.id && item.rule === 'experiment-inconclusive-no-learned'),
+    'check 只出 warning',
+  )
+
+  // refuted：update 不拦（清理异步），只记 warning；硬拦在 check，cleanup 后收口。
+  drainWarnings()
+  const refutedNoCleanup = updateExperiment(root, contract, base.id, { status: 'refuted', learned: '证伪条件命中' })
+  assert.equal(refutedNoCleanup.status, 'refuted')
+  assert.ok(
+    drainWarnings().some((item) => item.startsWith('experiment-refuted-no-cleanup:')),
+    'refuted 缺 cleanupAt update 只 warning',
+  )
+  const checkBefore = checkExperiments(root, enabled)
+  assert.equal(checkBefore.ok, false, 'check 才是硬拦')
+  assert.ok(checkBefore.failed.some((item) => item.id === base.id && item.rule === 'experiment-cleanup'))
+
+  const cleaned = cleanupExperiment(root, contract, base.id, { flags: ['feature-x'], code: ['src/x.mjs'], data: ['db.t'] })
+  assert.equal(cleaned.changed, true)
+  assert.deepEqual(cleaned.cleanup, { flags: ['feature-x'], code: ['src/x.mjs'], data: ['db.t'] })
+  drainWarnings()
+  const refuted = updateExperiment(root, contract, base.id, { status: 'refuted', learned: '证伪条件命中' })
+  assert.equal(refuted.schema, EXPERIMENT_SCHEMA, 'patch 保留 schema')
+  assert.equal(refuted.cleanupAt, cleaned.cleanupAt)
+  assert.deepEqual(
+    drainWarnings().filter((item) => item.startsWith('experiment-refuted-')),
+    [],
+    '收口后 update 无 refuted warning',
+  )
+
+  // pivoted：learned + 后继仍是硬校验。
+  const pivot = addExperiment(root, contract, experimentInput({ title: '转向' }))
+  expectFlowError(
+    () => updateExperiment(root, contract, pivot.id, { status: 'pivoted', learned: '换假设' }),
+    'invalid',
+    /successor/,
+  )
+  const successor = addExperiment(root, contract, experimentInput({ title: '后继', parent: pivot.id }))
+  const pivoted = updateExperiment(root, contract, pivot.id, { status: 'pivoted', learned: '换假设' })
+  assert.equal(pivoted.status, 'pivoted')
+  assert.equal(successor.parent, pivot.id)
+  const pivot2 = addExperiment(root, contract, experimentInput({ title: '转向2' }))
+  addExperiment(root, contract, experimentInput({ title: '后继2', parent: pivot2.id }))
+  expectFlowError(() => updateExperiment(root, contract, pivot2.id, { status: 'pivoted' }), 'invalid', /learned/)
+
+  for (const key of ['cleanup', 'cleanupAt', 'productizedAt', 'productizeGate']) {
+    expectFlowError(() => updateExperiment(root, contract, base.id, { [key]: null }), 'invalid', /system field/)
+  }
+  const withUnknown = updateExperiment(root, contract, base.id, { custom_flag: 'keep' })
+  assert.equal(withUnknown.custom_flag, 'keep', '未知字段保留')
+  expectFlowError(
+    () => cleanupExperiment(root, contract, base.id, { flags: ['x'], code: Array(21).fill('c') }),
+    'invalid',
+    /at most 20/,
+  )
+})
+
+test('B1 productizeExperiment：仅 confirmed、release gate 通过且晚于判定，重复调用幂等', () => {
+  const { root, contract } = freshProject('b1-productize')
+  const record = addExperiment(root, contract, experimentInput({ title: '产品化' }))
+  expectFlowError(() => productizeExperiment(root, contract, record.id), 'invalid', /confirmed/)
+  const confirmed = updateExperiment(root, contract, record.id, {
+    status: 'confirmed',
+    measured: 'tie_mean=0.4',
+    metrics: { tie_mean: 0.4 },
+  })
+  expectFlowError(() => productizeExperiment(root, contract, record.id), 'invalid', /no passing run/)
+  const judged = Date.parse(confirmed.updated_at)
+  writeGateRunFixture(root, 'release', {
+    gate: 'release',
+    title: 'release',
+    started_at: new Date(judged + 1000).toISOString(),
+    finished_at: new Date(judged + 2000).toISOString(),
+    durationMs: 1000,
+    ok: true,
+    steps: [],
+  })
+  const result = productizeExperiment(root, contract, record.id)
+  assert.equal(result.already, false)
+  assert.match(result.productizedAt, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(result.productizeGate.id, 'release')
+  assert.equal(getExperiment(root, contract, record.id).productizedAt, result.productizedAt)
+  const again = productizeExperiment(root, contract, record.id)
+  assert.equal(again.already, true)
+  const enabled = { ...contract, experiments: { ...contract.experiments, enabled: true } }
+  assert.equal(checkExperiments(root, enabled).ok, true, '产品化后 check 通过')
+})
+
+test('B1 checkExperiments：关闭不读目录；开启后七必填/终态失败、legacy 计数、窗口与 task 只 warning', () => {
+  const { root, contract } = freshProject('b1-check')
+  const enabled = { ...contract, experiments: { ...contract.experiments, enabled: true } }
+  writeExperimentFile(root, { schema: EXPERIMENT_SCHEMA, id: 'E-20260101-01', title: 'bad', status: 'open' })
+  assert.deepEqual(checkExperiments(root, contract), { ok: true, checked: 0, legacy: 0, failed: [], warnings: [] })
+
+  const now = Date.now()
+  writeExperimentFile(root, {
+    ...experimentInput({ id: 'E-20260101-02', title: 'window' }),
+    schema: EXPERIMENT_SCHEMA,
+    status: 'open',
+    created_at: new Date(now - 30 * 86_400_000).toISOString(),
+    updated_at: new Date(now - 30 * 86_400_000).toISOString(),
+  })
+  writeExperimentFile(root, legacyExperiment('E-20260101-03'))
+  writeExperimentFile(root, {
+    schema: EXPERIMENT_SCHEMA,
+    id: 'E-20260101-04',
+    title: 'refuted no cleanup',
+    status: 'refuted',
+    learned: '学到了',
+    cleanupAt: null,
+    ...experimentInput({}),
+  })
+  writeExperimentFile(root, {
+    schema: EXPERIMENT_SCHEMA,
+    id: 'E-20260101-05',
+    title: 'inconclusive no learned',
+    status: 'inconclusive',
+    learned: '',
+    ...experimentInput({}),
+  })
+  addTask(root, contract, { title: '缺实验链接', experiment: 'E-20260101-99' })
+  const result = checkExperiments(root, enabled)
+  assert.equal(result.legacy, 1)
+  assert.equal(result.checked, 4, '坏记录、窗口、refuted、inconclusive')
+  assert.equal(result.ok, false)
+  assert.ok(result.failed.some((item) => item.id === 'E-20260101-01' && item.rule === 'experiment-fields'))
+  assert.ok(result.failed.some((item) => item.id === 'E-20260101-04' && item.rule === 'experiment-cleanup'))
+  assert.ok(
+    result.warnings.some((item) => item.id === 'E-20260101-05' && item.rule === 'experiment-inconclusive-no-learned'),
+    'inconclusive 缺 learned 只 warning',
+  )
+  assert.ok(
+    result.failed.every((item) => item.id !== 'E-20260101-05'),
+    'inconclusive 不进 failed',
+  )
+  assert.ok(result.warnings.some((item) => item.id === 'E-20260101-02' && item.rule === 'experiment-window-elapsed'))
+  assert.ok(result.warnings.some((item) => item.rule === 'task-experiment-missing'))
+  assert.ok(result.failed.every((item) => typeof item.message === 'string' && item.message.length > 0))
+})
+
+test('B1 task.experiment：格式非法 invalid、不存在 warning 仍写入、存在与 update 保留', () => {
+  const { root, contract } = freshProject('b1-task-exp')
+  expectFlowError(() => addTask(root, contract, { title: 'bad', experiment: 'bad id!' }), 'invalid', /experiment/)
+  expectFlowError(() => addTask(root, contract, { title: 'bad', experiment: 42 }), 'invalid', /experiment/)
+
+  drainWarnings()
+  const orphan = addTask(root, contract, { title: '孤儿链接', experiment: 'E-20000101-01' })
+  assert.equal(orphan.experiment, 'E-20000101-01', '不存在也保留字段')
+  assert.ok(drainWarnings().some((item) => item.startsWith('task-experiment-missing:')), '只 warning')
+
+  const experiment = addExperiment(root, contract, experimentInput({ title: 'linked' }))
+  drainWarnings()
+  const linked = addTask(root, contract, { title: 'linked task', experiment: experiment.id })
+  assert.equal(linked.experiment, experiment.id)
+  assert.deepEqual(drainWarnings(), [], '存在的实验不产生 warning')
+
+  const updated = updateTask(root, contract, linked.id, { experiment: 'E-20000101-02' })
+  assert.equal(updated.experiment, 'E-20000101-02')
+  assert.ok(drainWarnings().some((item) => item.startsWith('task-experiment-missing:')))
+  const cleared = updateTask(root, contract, linked.id, { experiment: '' })
+  assert.equal(cleared.experiment, null)
+})
+
+test('B1 契约 enabled：默认 false、缺键关闭、错型回退并 manifest-invalid', () => {
+  const { root, contract } = freshProject('b1-enabled')
+  assert.equal(contract.experiments.enabled, false)
+  const file = path.join(root, '.dsh/flow/flow.json')
+  const raw = readJson(file)
+
+  fs.writeFileSync(file, JSON.stringify({ ...raw, experiments: { source: 'store', dir: raw.experiments.dir } }))
+  const missing = loadContract(root)
+  assert.equal(missing.contract.experiments.enabled, false, '缺键=关闭')
+  assert.deepEqual(missing.warnings, [], '缺键是正常 partial manifest，不告警')
+
+  fs.writeFileSync(file, JSON.stringify({ ...raw, experiments: { ...raw.experiments, enabled: 'yes' } }))
+  const broken = loadContract(root)
+  assert.equal(broken.contract.experiments.enabled, false, '错型回退 false')
+  assert.ok(
+    broken.warnings.some((item) => item.includes('manifest-invalid: experiments.enabled')),
+    broken.warnings.join('\n'),
+  )
+})
+
+test('B1 release 种子含 check experiments；readStoreState 实验 counts 六态', () => {
+  const root = tempRoot('b1-seed')
+  initProject(root, { name: 'b1-seed' })
+  const { contract } = loadContract(root)
+  const release = listGates(root, contract).find((gate) => gate.id === 'release')
+  assert.deepEqual(release.steps.map((step) => step.id), ['baseline', 'experiments'])
+  assert.match(release.steps[1].run, /check experiments/)
+  assert.equal(release.enabled, false, '只加步，不默认开启')
+
+  addExperiment(root, contract, experimentInput({ title: 'c1' }))
+  const counts = readStoreState(root, contract).experiments.counts
+  assert.deepEqual(
+    Object.keys(counts).sort(),
+    ['abandoned', 'confirmed', 'inconclusive', 'open', 'pivoted', 'refuted', 'total', 'unreadable'],
+  )
+  assert.equal(counts.open, 1)
+  for (const status of ['confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted']) {
+    assert.equal(counts[status], 0)
+  }
 })
