@@ -37,7 +37,7 @@
 
 ## 2.1 实验记录字段（`experiments/E-*.json`，schema 2 约定）
 
-> 实验是任务的外围功能（`SKILL.md` §十二）。下表为新实验的字段约定；**新实验缺 `direction` / `expected` / `primaryMetric` / `guardrails` / `falsify` / `windowDays` / `stopLoss` 任一即拒**。旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准）。机器只校验存在/非空/`guardrails`≥1/`windowDays` 正整数/`primaryMetric` 唯一/`direction` ≤120；同义、可判定性等语义项由审查者把关。落盘以 core 实现与 `flow check experiments` 为准。
+> 实验是任务的外围功能（`SKILL.md` §十二）。下表为新实验的字段约定；**新实验缺 `direction` / `expected` / `primaryMetric` / `guardrails` / `falsify` / `windowDays` / `stopLoss` 任一即拒**。旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准）。机器只校验存在/非空/`guardrails`≥1/`windowDays` 正整数/`primaryMetric` 为单个非空 string（唯一主指标；多指标放 `guardrails`）/`direction` ≤120；同义、可判定性等语义项由审查者把关。落盘以 core 实现与 `flow check experiments` 为准。
 
 | 字段 | 必填 | 规则 |
 |---|---|---|

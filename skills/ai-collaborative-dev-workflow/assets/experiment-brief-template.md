@@ -41,7 +41,7 @@
 ## 5 分支动作（按判定只做一支；**B1 落地前按人工执行**）
 
 - **成功**：`flow exp productize`（release 最近一次 `ok` 的 `finished_at` ≥ 进入 `confirmed` 的 `updated_at`）→ 合并 / 上线 → `productizedAt` 与 commits。
-- **不确定**：置 `inconclusive` + 写 `learned`（`open` 只表示进行中）→ 延长 `windowDays` 或派生 `parent` 子实验；**不产品化**。
+- **不确定**：置 `inconclusive` + 写 `learned`（**建议写、不硬拦**；`open` 只表示进行中）→ 延长 `windowDays` 或派生 `parent` 子实验；**不产品化**。
 - **失败**：`learned`（学到什么）+ `flow exp cleanup --flag/--code/--data` 写 `cleanup{flags[],code[],data[]}`（各 ≤20 项）与 `cleanupAt` + 清理证据（命令与输出）；`exp update --status refuted` 不拦，`check experiments` 硬拦。
 - **转向**：`learned`（保留什么、为什么换假设）+ 复用资产清单 + 子实验 id。
 
