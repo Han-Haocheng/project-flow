@@ -163,29 +163,38 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "commits": [],
   "notes": "",
   "created_at": "...",
-  "updated_at": "..."
+  "updated_at": "...",
+  "done_at": null,                      // 可选（T-09）：进入 done 的时刻；回 active/draft 清空
+  "archived_at": null                   // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
 }
 ```
 
 - id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
-- **归档 = 纯 `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），没有
-  `archived_at`/`done_at` 字段，记录文件不移动、不删除；随时可
-  `task update <id> --status done|active` 反向恢复。归档只改 `status` 并刷新 `updated_at`，
-  `created_at`/`id`/`scope`/`acceptance`/`checkpoints`/`commits`/`notes` 原样保留。
-- **完成时刻以 `updated_at` 近似**：归档判定为 `status === 'done'` 且**已满 N 天**：
-  `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（`archiveAfterDays` 默认
-  **7**；差值正好 `N×86400e3` 时也归档——边界含端点）。`updated_at` 不可解析时不动该任务。
-  `done` 之后的任何 patch 都会刷新 `updated_at`，等价于重置归档计时（精确完成时刻需要
-  `done_at` 字段，列为后续增强，当前 schema 不引入）。
+- **归档 = `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），记录文件
+  不移动、不删除；随时可 `task update <id> --status done|active` 反向恢复。归档改 `status`、
+  刷新 `updated_at`、写 `archived_at = now`，并**保留原 `done_at`**（T-09 起完成日不再被
+  归档日覆盖）；`created_at`/`id`/`scope`/`acceptance`/`checkpoints`/`commits`/`notes`
+  原样保留。
+- **完成/归档时刻（T-09，可选字段）**：`updateTask` 进入 `done` 写 `done_at = now`；状态已是
+  `done` 时后续 patch **不覆盖**首个完成时刻；回到 `active`/`draft` 时清空 `done_at`/
+  `archived_at`。`archiveTasks` 进入 `archived` 写 `archived_at = now`（`done_at` 原样保留）。
+  两个字段都是可选 ISO 字符串；**旧记录缺字段不迁移、不批量写**，读路径（`listTasks`/
+  `getTask`/state 投影）回退到 `updated_at`（归档记录无法还原真实完成日，只能近似）。
+  时间戳写入异常只记 `task-time-stamp` warning，不破坏任务主写入。
+- **归档判定仍按 `updated_at`**：`status === 'done'` 且
+  `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（默认 **7**，边界含端点）。
+  `done` 之后的 patch 仍会刷新 `updated_at`，因此判定窗口以最后一次工单活动为准；`done_at`
+  只承载**真实完成时刻**（供趋势/报表），不改变归档触发条件。
 - **幂等**：已 `archived` 的任务不再参与判定；同一时刻重复 sweep 写 0 个文件、返回
   `archived: []`，第二次运行不改任何记录的字节。
 - **触发面只有显式命令与门禁步**：`flow task archive`（§5.1）与 `precommit` 的归档步
   （§3.3.1）。`GET state`/TUI 面板等读路径**永不**归档（§9.1 的只读与请求代价契约），也不
   存在后台定时器或 watcher。
 - **写约束**：先无锁找候选，0 候选直接返回；有候选才进 `withLock`，锁内重读重校，只对仍然
-  到期的任务 `applyTaskPatch(record, {status:'archived'})` 后原子写。单条记录坏掉时跳过它并
+  到期的任务 `applyTaskPatch(record, {status:'archived'})` + `stampTaskTimes`（写
+  `archived_at`、保留 `done_at`）后原子写。单条记录坏掉时跳过它并
   记 `task-archive-skipped` warning，不中断本次 sweep（门禁步不会被一条脏记录卡住）。写锁被
   占用（`conflict`）时跳过本次、记一条 `archive-locked` warning，命令仍退出 **0**（`--json`
   带 `locked:true`）；`--dry-run` 不写、不取锁，只报告候选。

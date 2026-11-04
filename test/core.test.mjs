@@ -3217,3 +3217,101 @@ test('B1 release 种子含 check experiments；readStoreState 实验 counts 六�
     assert.equal(counts[status], 0)
   }
 })
+
+// ======================================================== T-09 done_at/archived_at
+
+const TASK_STAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/
+
+test('T-09 done_at：进入 done 写入、重复 done 不覆盖、回 active/draft 清空', () => {
+  const { root, contract } = freshProject('t09-done')
+  const task = addTask(root, contract, { title: '时刻任务' })
+  assert.equal(Object.hasOwn(task, 'done_at'), false, '可选字段：active 任务不预置')
+
+  const first = updateTask(root, contract, task.id, { status: 'done' })
+  assert.match(first.done_at, TASK_STAMP_RE)
+  assert.equal(first.archived_at, null)
+  const second = updateTask(root, contract, task.id, { notes: '补一句' })
+  assert.equal(second.done_at, first.done_at, 'done 之后普通 patch 不覆盖完成时刻')
+
+  const active = updateTask(root, contract, task.id, { status: 'active' })
+  assert.equal(active.done_at, null, '回 active 清空 done_at')
+  assert.equal(active.archived_at, null)
+
+  const again = updateTask(root, contract, task.id, { status: 'done' })
+  assert.ok(Date.parse(again.done_at) >= Date.parse(first.done_at))
+  const draft = updateTask(root, contract, task.id, { status: 'draft' })
+  assert.equal(draft.done_at, null, 'draft 也不保留完成时刻')
+})
+
+test('T-09 archiveTasks：archived_at=now 且保留 10 天前的 done_at（不被挪到归档日）', () => {
+  const { root, contract } = freshProject('t09-archive')
+  const now = Date.now()
+  const tenDaysAgo = new Date(now - 10 * 86_400_000).toISOString()
+  const task = addTask(root, contract, { title: '十天前完成', status: 'done', updated_at: tenDaysAgo })
+  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+  // 模拟 T-09 之后落盘的记录：真实完成日 10 天前；归档判定仍按 updated_at。
+  fs.writeFileSync(file, `${JSON.stringify({ ...readJson(file), done_at: tenDaysAgo, updated_at: tenDaysAgo }, null, 2)}\n`)
+
+  const result = archiveTasks(root, contract, { now })
+  assert.deepEqual(result.archived, [task.id])
+  const stored = getTask(root, contract, task.id)
+  assert.equal(stored.status, 'archived')
+  assert.equal(stored.done_at, tenDaysAgo, '完成日不得被归档日覆盖')
+  assert.match(stored.archived_at, TASK_STAMP_RE)
+  assert.notEqual(stored.archived_at, tenDaysAgo)
+  assert.ok(Date.parse(stored.archived_at) >= now - 5000, '归档时刻是本次 sweep 的 now')
+
+  const bytes = fs.readFileSync(file, 'utf8')
+  assert.deepEqual(archiveTasks(root, contract, { now }).archived, [], '幂等：已 archived 不再匹配')
+  assert.equal(fs.readFileSync(file, 'utf8'), bytes, '第二次 sweep 不改写文件')
+})
+
+test('T-09 archived_at：直接归档写入、重复归档不覆盖、反向恢复清空两字段', () => {
+  const { root, contract } = freshProject('t09-direct')
+  const task = addTask(root, contract, { title: '直接归档' })
+  const done = updateTask(root, contract, task.id, { status: 'done' })
+  const archived = updateTask(root, contract, task.id, { status: 'archived' })
+  assert.equal(archived.done_at, done.done_at, '归档保留 done_at')
+  assert.match(archived.archived_at, TASK_STAMP_RE)
+  const repeated = updateTask(root, contract, task.id, { notes: '再改' })
+  assert.equal(repeated.archived_at, archived.archived_at, '重复归档/patch 不覆盖归档时刻')
+  const restored = updateTask(root, contract, task.id, { status: 'active' })
+  assert.equal(restored.done_at, null)
+  assert.equal(restored.archived_at, null)
+})
+
+test('T-09 旧记录回退：缺字段读 updated_at，且读路径不写盘（不迁移）', () => {
+  const { root, contract } = freshProject('t09-legacy')
+  const dir = path.join(root, '.dsh/flow/tasks')
+  const doneStamp = '2026-05-01T09:00:00+08:00'
+  const archiveStamp = '2026-04-01T09:00:00+08:00'
+  const doneFile = path.join(dir, 'T-20260101-01.json')
+  const archivedFile = path.join(dir, 'T-20260101-02.json')
+  fs.writeFileSync(doneFile, JSON.stringify({
+    schema: 1, id: 'T-20260101-01', title: '旧 done', status: 'done',
+    created_at: '2026-04-20T09:00:00+08:00', updated_at: doneStamp,
+  }, null, 2))
+  fs.writeFileSync(archivedFile, JSON.stringify({
+    schema: 1, id: 'T-20260101-02', title: '旧 archived', status: 'archived',
+    created_at: '2026-03-01T09:00:00+08:00', updated_at: archiveStamp,
+  }, null, 2))
+  const doneBytes = fs.readFileSync(doneFile, 'utf8')
+  const archivedBytes = fs.readFileSync(archivedFile, 'utf8')
+
+  const done = getTask(root, contract, 'T-20260101-01')
+  assert.equal(done.done_at, doneStamp, '缺 done_at 回退 updated_at')
+  assert.equal(done.archived_at, undefined)
+  const archived = getTask(root, contract, 'T-20260101-02')
+  assert.equal(archived.archived_at, archiveStamp, '缺 archived_at 回退 updated_at')
+  assert.equal(archived.done_at, archiveStamp, '归档旧记录无法还原真实完成日，按 updated_at 近似')
+
+  const listed = Object.fromEntries(listTasks(root, contract).map((record) => [record.id, record]))
+  assert.equal(listed['T-20260101-01'].done_at, doneStamp)
+  assert.equal(listed['T-20260101-02'].archived_at, archiveStamp)
+  const state = readStoreState(root, contract)
+  const row = state.tasks.items.find((item) => item.id === 'T-20260101-01')
+  assert.equal(row.done_at, doneStamp, 'state 投影同样回退')
+
+  assert.equal(fs.readFileSync(doneFile, 'utf8'), doneBytes, '读路径不得迁移写盘')
+  assert.equal(fs.readFileSync(archivedFile, 'utf8'), archivedBytes)
+})
