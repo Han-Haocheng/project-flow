@@ -9,7 +9,7 @@ metadata:
 
 > 随 `@local/project-flow` 插件分发（技能来源 `bundled`）：`resourceBase` 即本文件所在目录，文中 `references/`、`assets/`、`scripts/` 均相对该目录解析。
 
-> 技能版本 2.14（2026-11-04）：随 project-flow 插件分发；检查入口 `flow check`。**2.14**：团队派工规范——命名（队友名 `<role>-<scope>`、任务标题 `<feat|fix|chore>: <范围>`，§10.2.1）；配比 `round(N×0.25) / round(N×0.375) / 余数`（§10.2）；七阶段生命周期与现有状态的映射（§10.3.1）；关键路径与满编调度、满编六条、每轮对账、Lead 派工检查清单（§10.6）；空转三分法与派工前三问（references §3.3）。**2.13**：团队名额上限内按角色配比建满（§10.2 / §10.6）；Lead 收口改为队友 `send_message` 回报唤醒，**默认不 `wait_agent`**（仅排障，§10.6 / §10.7）。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
+> 技能版本 2.15（2026-11-04）：随 project-flow 插件分发；检查入口 `flow check`。**2.15**：实验型项目一节——七段流程、假设七字段硬规范（缺一即拒）、结果分流四分支（成功/不确定/失败/转向）、任务 `experiment` 字段与 `exp/<E-id>/<topic>` 分支（§十二）。**2.14**：团队派工规范——命名（队友名 `<role>-<scope>`、任务标题 `<feat|fix|chore>: <范围>`，§10.2.1）；配比 `round(N×0.25) / round(N×0.375) / 余数`（§10.2）；七阶段生命周期与现有状态的映射（§10.3.1）；关键路径与满编调度、满编六条、每轮对账、Lead 派工检查清单（§10.6）；空转三分法与派工前三问（references §3.3）。**2.13**：团队名额上限内按角色配比建满（§10.2 / §10.6）；Lead 收口改为队友 `send_message` 回报唤醒，**默认不 `wait_agent`**（仅排障，§10.6 / §10.7）。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
 
 本技能只有一个流程：**一个项目有且只有一个中心负责合并与同步，其余人产出可评审的提交与证据，由中心判断提交是否合理**。没有模式开关、没有多中心协商；单人就是"中心与贡献者合一"的退化情形（§1.5）。与语言/构建体系无关。**本技能的命令只使用 shell 系统命令与 git**；随包附带的 `scripts/` 运行需要 `bash`（`doc_check.py`、`gate.py`、`task` 另需 `python3`），项目若在 CI / 非 DSH 环境使用，应把需要的脚本复制进仓库（如 `.agents/scripts/`）随版本管理，而不是依赖某个用户级目录里的副本。类型检查、lint、构建、测试、打包、安装依赖等工具链操作一律由项目技能以"命令契约"声明（见〇）。
 
@@ -179,6 +179,7 @@ metadata:
 - `assets/merge-request-template.md`：贡献者向中心提交评审申请时复制（字段、示例、发送前自检）。
 - `assets/collab-state.template.md`：派工前复制为项目协作台账（仅中心写入，默认不入 git）。
 - `assets/advice-format.md`：给用户回馈反驳与建议时按此格式组织。
+- `assets/experiment-brief-template.md`：实验型项目开工前复制（假设七字段、观测周期与止损、结果判定与清理清单）。
 - `scripts/check_staged_files.sh`（相对本技能目录；DSH 内优先 `flow check staged`）：提交前核对暂存区是否都在允许清单内。
 - `scripts/check_state.sh`（同上；DSH 内优先 `flow check state`）：恢复前做台账健康检查，损坏时进入重建协议。
 - `scripts/release_baseline.sh`（同上；DSH 内优先 `flow check release-baseline`）：计算自发布基线以来的提交数并判断是否达阈值。
@@ -444,3 +445,59 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 4. **闸门迁移**：提交前检查从"必须包含 CHANGELOG.md"改成"**必须带一个新碎片**"（无用户可见变更时显式声明豁免）。
 5. **历史拆分**：主文件只留 `[Unreleased]` + 最新一版，更老版本段逐字搬进 `CHANGELOG-history.md`（**历史不改写**）。
 6. **附带收益**：`userFacing` + `summary` 让**发布说明草稿可自动生成**（发布页要的是用户向摘要，不是工程细节）。
+
+## 十二、实验型项目：假设 → 任务 → 结果分流（2026-11-04）
+
+> **定位**：实验是**任务的外围功能**——任务仍是唯一执行单元，门禁、命名、配比、满编、自动归档全部照旧（§二 / §十）；实验只多两件事：**开工前把假设写死**，**收尾时把结果分流**。面板/CLI 的实验区可选开启（`flow.json` 的 `experiments.enabled`，默认关闭。**关闭 = 面板隐藏实验区 + `flow check experiments` 直接 exit 0 跳过**；`flow exp` / 工具 / 写路径照常。缺键补 `false`，**契约层不记 warning**（只有类型错才回退并记 `manifest-invalid`）；旧项目已有实验时给**一次性引导 warning**，**不自动开启**）。
+
+> **落地状态（B1 前）**：本节的 `experiments.enabled`、`task.experiment` 校验、`flow exp productize|cleanup|review`、`flow check experiments` 都随 **B1 core 落地**；落地前一律按**人工核对**执行——命令报 `unknown subcommand`、新键被忽略均属预期，不据此判违规。
+
+### 12.1 七段流程（实验项目专用，写死）
+
+1. **识别问题**：写清要回答的问题与现状证据，先不改代码。
+2. **提出假设**：方向 + 验证目标，七字段必须齐（§12.2）。
+3. **创建任务**：`title` 仍按 `<type>: <范围>`（§10.2.1），并带 `experiment: <E-id>`（§12.4）。
+4. **设计实现**：任务书写清改动面、验证命令、观测方式与回滚方式（模板见 [assets/task-brief-template.md](assets/task-brief-template.md)）。
+5. **隔离分支实现**：分支名 `exp/<E-id>/<topic>`；提交、门禁按 §1.6 / §二 执行。
+6. **审查实现**：独立审查者按 §1.4 五条给结论（写审分离不变）。
+7. **完成任务后测试并判断结果**：按 §12.3 四分支分流，每支都有强制动作。
+
+### 12.2 假设硬规范（新实验缺任一即拒；旧记录 legacy 不补）
+
+| 字段 | 含义 | 机器拒绝条件 |
+|---|---|---|
+| `direction` | 方向（措辞，自由文本 ≤120 字符，不设枚举） | 空或缺；>120 字符 |
+| `expected` | 验证目标（一句可判真假、含阈值） | 空 |
+| `primaryMetric` | **主指标**：单个字符串（唯一；多指标放 `guardrails[]`） | 缺；空 |
+| `guardrails[]` | **护栏指标**（不可退化的约束，≥1 条） | 缺；空数组 |
+| `falsify` | 证伪条件（什么观测结果说明假设错） | 缺 |
+| `windowDays` | 观测周期（正整数天；**起算点 = `created_at`**） | 缺；≤0；非整数 |
+| `stopLoss` | 止损线（到什么程度立即停并回滚） | 缺 |
+
+- 中心**派实验任务前**核对 7 项；缺一项 ⇒ 不建实验、不建实现卡，退回分析者补全。
+- **`title` / `hypothesis` 沿用旧必填**（非空），七字段是在此之上的追加硬规范。
+- **机器只校验**：存在 / 非空 / `guardrails` ≥1 / `windowDays` 正整数 / `primaryMetric` 为单个非空 string / `direction` ≤120 字符；**`falsify` 与 `expected` 同义、`stopLoss` 是否可判定、`expected` 是否真可证伪**属语义判断，**由审查者把关，不依赖机器校验**。
+- 只对**新实验**硬拒；**legacy**：旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准，不是通用值）。
+- 七字段落在实验记录（`experiments/E-*.json`）与实验简报（[assets/experiment-brief-template.md](assets/experiment-brief-template.md)）两处；插件侧校验以 `flow check experiments`（并入 release gate）兜底，落地前由中心与审查者把关。
+
+### 12.3 结果分流（四分支，写死）
+
+| 判定 | 条件 | 必做动作 |
+|---|---|---|
+| **成功** | 主指标达 `expected`，护栏全绿 | 实验置 `confirmed` → `flow exp productize`（要求 `release` 最近一次 `ok` 运行的 `finished_at` **≥** 实验进入 `confirmed` 的 `updated_at`，早于则拒）写 `productizedAt` / `productizeGate` → 合并 / 上线 |
+| **不确定** | 窗口内主指标无定论、护栏未破 | 实验置 **`inconclusive`**（`learned` **建议写**，`check experiments` 不硬拦；`open` 只表示进行中未判定）→ 延长 `windowDays` 继续观测，或**调整假设**派生 `parent` 子实验；**不得直接产品化** |
+| **失败** | 命中 `falsify`，或触 `stopLoss` | **停止并丢弃**：实验置 `refuted` + `learned`；`flow exp cleanup` 写 `cleanup{flags[], code[], data[]}`（开关 / 代码 / 数据，各 ≤20 项）与 `cleanupAt`；notes 记清理证据，不留死开关。**`exp update --status refuted` 不拦（清理是异步动作），收口靠 `cleanupAt` + `check experiments` 硬拦** |
+| **转向** | 部分资产值得保留、假设要换 | 实验置 `pivoted` + `learned`；保留可复用资产（模块 / 测试 / 数据），**新假设另建子实验**（新实验 `parent` 指向原实验，单向），不改写原结论 |
+
+- 四分支动作都在**任务回收之前**完成（§10.7 逐卡检查），结论进项目任务 `notes`；`refuted` / `pivoted` 缺 `learned`（`refuted` 另缺 `cleanupAt`）视为实验未收尾；`inconclusive` 的 `learned` 只提示、不计未收尾。
+- **产品化 ≠ 实验内合并**：`exp/<E-id>/<topic>` 的内容要进主分支，仍按 §1.2 提评审申请 → 中心合并；产品化门禁是**额外的**一道（release phase）。
+- 判定前可 `flow exp review <id>` **只读自查**（返回 `verdict` / `branch` / `missing[]`，不改记录）。
+- `flow check experiments`（`release` gate 内）**硬拦四项**：七字段缺失、`refuted` 缺 `learned` / `cleanupAt`、`pivoted` 缺后继实验、`confirmed` 未产品化；`open` 超过 `created_at + windowDays` **只给 `experiment-window-elapsed` warning，不判失败**；`inconclusive` 的 `learned` 与 `abandoned` 同级——只提示、不拦。该步须项目先 **`gate enable release`** 才生效（种子默认 `enabled: false`）。
+- **`abandoned`** = 主动放弃且不判定：**不强制 `learned`**（建议写），`check experiments` 只提示、不计失败。
+
+### 12.4 实验与任务的挂接（写死）
+
+- **任务带 `experiment`**：任务记录增加可选字段 `experiment: "E-YYYYMMDD-NN"`，**应指向已存在实验**；格式非法才拒（`invalid`），**不存在时只记 `task-experiment-missing` warning、不拒绝写入**（实验被删或功能未开启时也照常写入）；**实验记录里不存 tasks 列表**（单向引用，不双写）。缺该字段的任务按普通任务跑。
+- **分支约定**：实验实现分支固定 `exp/<E-id>/<topic>`（topic 小写短横线）；同一实验可多条分支，但**不得混入非本实验提交**（提交归属仍按 pathspec 纪律，§1.6）。
+- **状态沿用**：实现 / 审查 / 完成走 §10.3.1 七阶段，不为实验新增 Team 状态；实验状态（`open` / `confirmed` / `refuted` / `abandoned` / `inconclusive` / `pivoted`）只存在实验记录里。
+- **降级**：单域小实验不组队时中心自析自验（§10.8），但 §12.2 的 7 项与 §12.3 的四分支动作一项不少。

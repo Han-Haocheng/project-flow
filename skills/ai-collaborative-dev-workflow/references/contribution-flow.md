@@ -245,6 +245,21 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 - [ ] 没有"只活在 Team 板或对话里"的状态、证据或验收结论；下一个会话只读项目台账就能恢复
 - [ ] 分支 / 工作树已由 Lead 决定保留或清理，并写进项目任务 notes
 
+### 8.3 实验结果分流（实验型项目，`SKILL.md` §12.3 的执行版）
+
+审查 `accept` 之后、任务回收之前，中心按下表分流；结论写进项目任务 notes。**（B1 落地前，表中 `flow exp productize` / `flow exp cleanup` 按人工执行）**
+
+| 判定 | 动作（按顺序） | 实验状态 |
+|---|---|---|
+| **成功** | 主指标达 `expected` + 护栏全绿 → `flow exp productize`（要求 release 最近一次 `ok` 的 `finished_at` ≥ 实验进入 `confirmed` 的 `updated_at`，早于则拒）→ 合并 / 上线 → 回记 commits | `confirmed` |
+| **不确定** | 写 `learned`（**建议写**，`check experiments` 不硬拦）→ 延长 `windowDays` 继续观测，或派生子实验调整假设（`parent` 回指）；**不产品化** | `inconclusive`（`open` 只表示进行中未判定） |
+| **失败** | 命中 `falsify` 或触 `stopLoss` → 停止 → 写 `learned` → `flow exp cleanup` 写 `cleanup{flags[],code[],data[]}`（各 ≤20 项）与 `cleanupAt` → notes 记清理证据 → 丢弃分支 | `refuted` |
+| **转向** | 写 `learned` → 保留可复用资产 → 新假设建子实验（`parent` 回指）→ 原结论不改判 | `pivoted` |
+
+- `refuted` / `pivoted` 缺 `learned`（`refuted` 另缺 `cleanupAt`）⇒ 实验未收尾，卡不得 `completed`；`exp update --status refuted` **不拦**（清理异步），硬拦在 `check experiments`。
+- `abandoned` 不强制 `learned`（建议写），`check experiments` 只提示不计失败。
+- 产品化门禁是**额外一道**：实验分支内容并入主分支仍走评审申请 → 中心合并（§1.2）。
+
 ## 9 常见错误
 
 | 现象 | 原因 | 处理 |

@@ -33,6 +33,36 @@
 | `checkpoints` | 否 | 追加式：`{at, files[], gate, note}`；只增不改 |
 | `commits` | 否 | 关联提交 sha；done 时 ≥1 |
 | `notes` | 否 | ≤20 行/2000 字；只放判断性说明，超出链接设计文档 |
+| `experiment` | 否 | 实验型项目用：`E-YYYYMMDD-NN`，**应指向已存在实验**（格式非法才拒；不存在只记 warning、不拒绝写入）；**实验记录不存 tasks 列表**（单向引用，不双写） |
+
+## 2.1 实验记录字段（`experiments/E-*.json`，schema 2 约定）
+
+> 实验是任务的外围功能（`SKILL.md` §十二）。下表为新实验的字段约定；**新实验缺 `direction` / `expected` / `primaryMetric` / `guardrails` / `falsify` / `windowDays` / `stopLoss` 任一即拒**。旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准）。机器只校验存在/非空/`guardrails`≥1/`windowDays` 正整数/`primaryMetric` 唯一/`direction` ≤120；同义、可判定性等语义项由审查者把关。落盘以 core 实现与 `flow check experiments` 为准。
+
+| 字段 | 必填 | 规则 |
+|---|---|---|
+| `id` / `schema` | 是 | `E-YYYYMMDD-NN`；`schema: 2` |
+| `title` | 是 | 一句话实验名，≤60 字符 |
+| `hypothesis` | 是 | 可证伪的假设，非空字符串（沿用旧必填） |
+| `direction` | 是* | 方向（措辞，自由文本 ≤120 字符，不设枚举） |
+| `expected` | 是* | 验证目标，可判真假 |
+| `primaryMetric` | 是* | 主指标，**单个 string**（唯一；多指标放 `guardrails`） |
+| `guardrails` | 是* | 护栏指标数组，≥1 条 |
+| `falsify` | 是* | 证伪条件（与 `expected` 同义由审查把关） |
+| `windowDays` | 是* | 正整数天；**起算点 = `created_at`**（`check experiments` 据此判超期） |
+| `stopLoss` | 是* | 止损线（可判定性由审查把关） |
+| `status` | 是 | `open` / `confirmed` / `refuted` / `abandoned` / `inconclusive` / `pivoted`（后两态为加法，旧四态兼容） |
+| `parent` | 否 | 父实验 id 或 `null`；环安全，不得自指 |
+| `metrics` | 否 | 观测值对象（按 `primaryMetric` / `guardrails` 记） |
+| `learned` | 条件 | **`refuted` / `pivoted` 必填**；`inconclusive` **建议写**（`check experiments` 不硬拦）：学到什么、下次怎么改 |
+| `cleanup` | 条件 | **`refuted` 必填**：`{flags[], code[], data[]}`（开关 / 代码 / 数据，各 ≤20 项，空数组 = 无该类） |
+| `cleanupAt` | 条件 | **`refuted` 必填**：`flow exp cleanup` 写入的 ISO 时间（系统维护，直接 patch → `invalid`） |
+| `productizedAt` | 否 | 只由 `flow exp productize` 写：要求 `release` 最近一次 `ok` 的 `finished_at` ≥ 进入 `confirmed` 的 `updated_at` |
+| `productizeGate` | 否 | `{id, runAt, log}`，只由 `productize` 写 |
+| `commits` | 否 | 关联提交 sha |
+| `created_at/updated_at` | 是 | ISO8601 带时区 |
+
+是* = 新实验必填，旧记录 legacy 不补。
 
 ## 3 校验规则（`task check` 应实现）
 - **ID/状态**：id 唯一；非法跳转拒绝；`active` 时 baseline、acceptance、preflight 必须齐全。
