@@ -872,6 +872,61 @@ check('TasksCard: an approximated segment drops to 60% opacity and the summary g
   );
 });
 
+check('TasksCard: estimatedFrom boundaries — from covers the window, to marks only the last bar', () => {
+  const opacities = (card) => collect(card, 'project-flow-trendDay').map((day) => day.props.opacity);
+
+  // estimatedFrom === from → the whole 14-day window is approximated.
+  const all = mountTasks(trendTasks({ estimatedFrom: '2026-10-22' }));
+  assert.deepEqual(opacities(all), new Array(14).fill(0.6), 'a window-head approximation must fade every bar');
+  assert.ok(textOf(all).includes('≈'), 'a window-head approximation still shows ≈');
+  assert.ok(trendDayTitles(all).every((title) => title.includes('近似')), 'every bar title must say it is approximated');
+
+  // estimatedFrom === to → only the last bar is approximated.
+  const tail = mountTasks(trendTasks({ estimatedFrom: '2026-11-04' }));
+  const tailOpacities = opacities(tail);
+  assert.equal(tailOpacities[13], 0.6, 'the last bar must be approximated');
+  assert.deepEqual(tailOpacities.slice(0, 13), new Array(13).fill(1), 'earlier bars must stay exact');
+  assert.ok(trendDayTitles(tail)[13].includes('近似'));
+  assert.ok(!trendDayTitles(tail)[12].includes('近似'));
+
+  // Before the window head: the whole window is still the approximated segment.
+  assert.deepEqual(opacities(mountTasks(trendTasks({ estimatedFrom: '2026-10-01' }))), new Array(14).fill(0.6));
+  // After the window tail: nothing in this window was approximated, so no ≈ at all.
+  const after = mountTasks(trendTasks({ estimatedFrom: '2026-12-01' }));
+  assert.deepEqual(opacities(after), new Array(14).fill(1));
+  assert.equal(collect(after, 'project-flow-trendApprox').length, 0, 'a future approximation must not mark this window');
+});
+
+check('normalize: trend numbers are coerced on purpose, but the shape stays strict', () => {
+  // Numeric strings are accepted (documented tolerance — payload is our own snapshot).
+  const loose = probe.normalize({
+    tasks: {
+      total: 1,
+      counts: {},
+      current: null,
+      active: [],
+      recentDone: [],
+      draft: [],
+      trend: { from: '2026-10-22', to: '2026-11-04', days: '14', created: new Array(14).fill(1), done: new Array(14).fill(0), archived: new Array(14).fill(0) },
+    },
+  }).tasks.trend;
+  assert.ok(loose, 'a numeric-string days must still produce a trend');
+  assert.equal(loose.days, 14, 'days must be coerced to a number');
+  assert.deepEqual(loose.created, new Array(14).fill(1), 'series entries are coerced too');
+
+  const reject = (trend) =>
+    probe.normalize({ tasks: { total: 0, counts: {}, current: null, active: [], recentDone: [], draft: [], trend } }).tasks.trend;
+  assert.equal(reject({ from: '2026-10-22', to: '2026-11-04', days: 'fourteen', created: [], done: [], archived: [] }), null);
+  assert.equal(reject({ from: '2026-10-22', to: '2026-11-04', days: 0, created: [], done: [], archived: [] }), null);
+  assert.equal(reject({ from: '2026-10-22', to: '2026-11-04', days: 401, created: [], done: [], archived: [] }), null);
+  assert.equal(reject({ from: '2026-10-22', to: '2026-11-04', days: 1.5, created: [1], done: [0], archived: [0] }), null);
+  assert.equal(
+    reject({ from: '2026-10-22', to: '2026-11-04', days: 3, created: [1, 2], done: [0, 0, 0], archived: [0, 0, 0] }),
+    null,
+    'a mis-sized series must hide the row'
+  );
+});
+
 check('TasksCard: no trend section for an older payload, placeholder for an all-zero window', () => {
   const legacy = probe.normalize({
     tasks: { total: 1, counts: { active: 1 }, current: null, active: [{ id: 'T-A1', title: 'a' }], recentDone: [], draft: [] },

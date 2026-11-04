@@ -820,6 +820,11 @@ window.__ModuleLoader__.load({
     function normalizeTrend(value) {
       if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return null;
       const src = value;
+      /* Deliberately tolerant on the numbers: the payload comes from our own
+         snapshot, where numeric strings (e.g. days:'14') are the only plausible
+         drift, and coercing them is more robust than dropping the whole trend.
+         The shape stays strict — `days` must end up an integer in [1, 400] and
+         every series must have exactly that many entries, else the row hides. */
       const days = asNumber(src.days, 0);
       if (Number.isInteger(days) === false || days < 1 || days > 400) return null;
       const series = (key) => {
@@ -1511,7 +1516,10 @@ window.__ModuleLoader__.load({
               const at = trendDayNumber(trend.estimatedFrom);
               if (Number.isFinite(from) === false || Number.isFinite(at) === false) return -1;
               const index = at - from;
-              return index < 0 || index >= days ? -1 : index;
+              /* An approximation that starts at (or before) the window head covers
+                 every bar; one that starts after the window tail covers none. */
+              if (index <= 0) return 0;
+              return index >= days ? -1 : index;
             })();
       const approx = approxFrom >= 0;
 
