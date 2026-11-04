@@ -36,7 +36,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
   "name": "<basename(root)>",
   "store": { "root": ".dsh/flow" },
   "experiments": { "source": "store", "dir": ".dsh/flow/experiments" },
-  "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6 },
+  "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6,
+             "archiveAfterDays": 7 },
   "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
   "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 },
   "decisions": { "dir": ".dsh/flow/decisions" }
@@ -59,11 +60,20 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `schema` | number | 归一化为 2（文案见上） |
 | `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.dsh/flow` |
 | `experiments` | object：`source` / `dir` 为 string | 逐字段回退 |
-| `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` number | 逐字段回退 |
+| `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` / `archiveAfterDays` number | 逐字段回退 |
+| `tasks.archiveAfterDays` | 有限 number（manifest **只校验类型**，不校验范围；`0` = 关闭自动归档） | 非 number / 非有限 → 回退默认值 7 并记 `manifest-invalid`；负数与越界不在 loadContract 报错，运行期降级（见下） |
 | `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
 | `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
 | `decisions` | object：`dir` 为 string | 逐字段回退 |
 | 其他键（含 legacy `runs`、任意未知键） | **不校验** | 原样保留、**无 warning** |
+
+`tasks.archiveAfterDays` 是**任务自动归档阈值**（天），默认 **7**：`0` 关闭归档；缺键补默认
+值 7（`flow init` 把它写进 manifest）；存在但不是 number 时回退默认值 7 并按上表记一条
+`manifest-invalid: tasks.archiveAfterDays: expected number, got <type>`。运行期取值（manifest
+归一值，或 `--older-than N` 的覆盖值）先 `Math.floor` 向下取整（`7.9` → `7`），再判范围：
+负数 / `NaN` / 非有限值按 `0`（关闭）处理，`> 3650` 截到 `3650`，两种情况各记一次
+`tasks-archive-days-invalid` warning，命令仍退出 0。取整后为 `0`（例如配置 `0.5`）即关闭
+归档，且**不**记 warning。
 
 `normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
 否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
@@ -155,6 +165,25 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
+- **归档 = 纯 `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），没有
+  `archived_at`/`done_at` 字段，记录文件不移动、不删除；随时可
+  `task update <id> --status done|active` 反向恢复。归档只改 `status` 并刷新 `updated_at`，
+  `created_at`/`id`/`scope`/`acceptance`/`checkpoints`/`commits`/`notes` 原样保留。
+- **完成时刻以 `updated_at` 近似**：归档判定为 `status === 'done'` 且**已满 N 天**：
+  `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（`archiveAfterDays` 默认
+  **7**；差值正好 `N×86400e3` 时也归档——边界含端点）。`updated_at` 不可解析时不动该任务。
+  `done` 之后的任何 patch 都会刷新 `updated_at`，等价于重置归档计时（精确完成时刻需要
+  `done_at` 字段，列为后续增强，当前 schema 不引入）。
+- **幂等**：已 `archived` 的任务不再参与判定；同一时刻重复 sweep 写 0 个文件、返回
+  `archived: []`，第二次运行不改任何记录的字节。
+- **触发面只有显式命令与门禁步**：`flow task archive`（§5.1）与 `precommit` 的归档步
+  （§3.3.1）。`GET state`/TUI 面板等读路径**永不**归档（§9.1 的只读与请求代价契约），也不
+  存在后台定时器或 watcher。
+- **写约束**：先无锁找候选，0 候选直接返回；有候选才进 `withLock`，锁内重读重校，只对仍然
+  到期的任务 `applyTaskPatch(record, {status:'archived'})` 后原子写。单条记录坏掉时跳过它并
+  记 `task-archive-skipped` warning，不中断本次 sweep（门禁步不会被一条脏记录卡住）。写锁被
+  占用（`conflict`）时跳过本次、记一条 `archive-locked` warning，命令仍退出 **0**（`--json`
+  带 `locked:true`）；`--dry-run` 不写、不取锁，只报告候选。
 
 ### 3.3 门禁 `gates/<slug>.json`
 
@@ -200,7 +229,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | id | phase | enabled | 步骤（`expect` 均为 `exit 0`） | 标题 |
 |---|---|---|---|---|
 | `session-open` | manual | true | `"<包内绝对路径>/bin/flow.mjs" heartbeat status --require-active` | 会话心跳检查 |
-| `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` | 提交前暂存区检查（含阻塞决策） |
+| `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` + `"<包内绝对路径>/bin/flow.mjs" task archive` | 提交前暂存区检查（含阻塞决策与到期任务归档） |
 | `tests` | commit | false | `node --test test/` | 单元测试（默认关闭，按项目自填命令） |
 | `staged-files` | commit | false | `"<包内绝对路径>/bin/flow.mjs" check staged --allow src` | 暂存文件归属检查（占位） |
 | `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` | 发布基线检查（占位） |
@@ -209,8 +238,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 （`PLUGIN_BIN`），因为门禁的 cwd 是项目根，不能假设根下存在 `bin/flow.mjs`。
 `tests` / `staged-files` / `release` 默认关闭：`node --test test/` 与 `--allow src`
 只是模板，必须由项目改成自己的命令/路径后再 `gate enable`。`precommit` 的第二步
-`check decisions` 是内置检查（见 §6.1.1）：阻塞决策命中暂存文件时提交被拦下。已有项目
-不会自动补这一步，需要手动 `flow gate update precommit --step '<原步骤>' --step 'decisions=…>>exit 0'`
+`check decisions` 是内置检查（见 §6.1.1）：阻塞决策命中暂存文件时提交被拦下；第三步
+`task archive` 按 `tasks.archiveAfterDays`（默认 **7** 天）归档到期任务（该值为 `0` 时这一步
+等价空操作，语义见 §3.2/§5.1；种子步骤 id 为 `tasks-archive`）。已有项目不会自动补这两步，
+需要手动
+`flow gate update precommit --step '<原步骤>' --step 'decisions=…>>exit 0' --step 'tasks-archive=…>>exit 0'`
 （`--step` 是整体替换，必须带上原步骤）。
 
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
@@ -469,6 +501,7 @@ flow task add    --title T [--status draft|active|done|archived]
 flow task update <id> [--title T] [--status draft|active|done|archived]
                  [--owner O] [--goal G] [--notes N]
 flow task rm <id> [--yes]
+flow task archive [--older-than N] [--dry-run]
 
 flow gate list | show <id>
 flow gate add    --id SLUG --title T --phase commit|release|manual
@@ -551,6 +584,15 @@ flow check decisions
 - `gate run --timeout SECONDS` 覆盖该次运行所有步骤的超时（默认按步骤的 600 秒）。
 - `gate logs --limit N` 默认 5，按 `started_at` 新→旧。
 - `rm` 不带 `--yes`：TTY 下交互确认；非 TTY 或 `--json` 模式下直接用法错误（不会误删）。
+- `task archive` 把 `status === 'done'` 且**已满** `tasks.archiveAfterDays` 天（默认 **7**；
+  `now - updated_at >= N×86400e3`，恰 N 天即归档，边界含端点）的任务改成 `archived`（纯状态
+  位，可逆、幂等；语义见 §3.2）；`--older-than N` 覆盖天数（正整数，`0` 不合法），`--dry-run`
+  只报告不写。人类输出形如 `已归档 N 个任务（阈值 7 天，早于 <date>）：<ids>`——`<date>` 是
+  **含端点**阈值（`updated_at ≤ <date>` 即归档，「早于 <date>」只是输出用语，等价「已满 N
+  天」）。`archiveAfterDays` 为 `0` 时提示「任务归档已关闭」并退出 0（`--json` 带
+  `closed:true`），但显式 `--older-than N` 仍按 N 归档——`--older-than` **优先于**关闭态；
+  0 个候选退出 0；写锁被占用时跳过 + `archive-locked` warning + 退出 0（`--json` 带
+  `locked:true`）；未初始化退出 1（同 `task add`）。
 - `flow check` 是只读的机械检查入口（不写 store，细节见 §6）；`--timeout <seconds>`
   控制单次检查超时（默认 120），`--allow` 可重复。
 
@@ -570,7 +612,9 @@ flow check decisions
 补充：`gate run`（单条或 `--phase` 批量）的门禁失败仍是退出 0（用 `data.ok` /
 `data.runs[].ok` 表达）；`heartbeat status --require-active` 在没有 active 心跳时退出 1
 （用法语义，专门给 `session-open` 门禁当开关）；`runGate` 遇到 disabled 门禁且无
-`--force` 时抛 `usage`（退出 1）。
+`--force` 时抛 `usage`（退出 1）；`task archive` 的锁冲突是**例外**——跳过本次 + 记
+`archive-locked` warning + 退出 **0**（`--json` 带 `locked:true`），不按 `conflict` → 2
+处理（见 §3.2/§5.1）。
 
 ### 5.3 `flow status`
 
@@ -585,6 +629,11 @@ question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、
 存在不可读记录时，人类输出的实验/任务/门禁计数追加 ` · +N 无法读取`；
 `--json` 的 `counts.{experiments,tasks,gates}` 各带并列 `unreadable`（`total` 不变）。
 坏记录本身的 `unreadable:` 诊断走统一的 warnings 通道（见 §5.1）。
+
+归档只改计数分布、不改总数：一个 `done` 任务归档后 `done` 减 1、`archived` 加 1，`total`
+不变；`counts.tasks` 一直是全量（含 `archived`）。`recent.tasks` 取全量按 `updated_at`
+倒序的前 3 条，因此仍可能列出 `archived` 任务；面板的行数组（active / 最近完成 / draft）
+默认不渲染 archived 行。
 
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
@@ -762,6 +811,13 @@ listTasks       / getTask       / addTask       / updateTask       / removeTask
 listGates       / getGate       / addGate       / updateGate       / removeGate
                                      // list* 第三个可选参数 {unreadable?: string[]}
                                      // 收走不可读文件的绝对路径，供调用方计数
+archiveTasks(root, contract, {days?, now?, dryRun?})
+                                     // {archived:[id], candidates, days, cutoff, dryRun, locked}
+                                     // 只把已 done 且已满 days 天
+                                     // （now - updated_at >= days*86400e3，边界含端点）的
+                                     // 任务改成 archived；days 缺省取
+                                     // contract.tasks.archiveAfterDays（默认 7）；
+                                     // 幂等，0 候选/归档关闭直接返回（见 §3.2）
 
 runGate(root, contract, id, {timeoutMs?, tailLines?, force?})
                                      // async；disabled 且无 force → usage

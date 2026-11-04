@@ -44,6 +44,7 @@ flow exp list|show <id>|tree    # 实验列表、详情、谱系树
 flow exp add --title T [--hypothesis H --factor F --parent ID --expected E]
 flow exp update <id> --status confirmed --measured '...' --commits abc1234
 flow task add --title T [--status draft|active|done|archived]
+flow task archive [--older-than N]   # 归档到期任务（默认 tasks.archiveAfterDays=7，0 关闭）
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
 flow gate run smoke             # 顺序执行步骤、首个失败即停、写运行记录
 flow gate logs smoke            # 最近运行记录
@@ -83,6 +84,10 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 - **面板只读（一个例外）**：面板唯一的写操作是「初始化」——`POST /api/project-flow/init`，
   同样经过 `lib/core.mjs` 的校验与原子写；其余写入口只有 CLI 与 agent 工具。
 - **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
+- **任务自动归档**：`precommit` 的第 3 步 `flow task archive` 把 `tasks.archiveAfterDays`
+  （默认 **7** 天；`0` 关闭）**已满** N 天（按 `updated_at` 计，边界含端点）的任务改成
+  `archived`——纯状态位、可逆、幂等。归档只由显式命令与门禁步骤触发，面板与读端点从不写；
+  旧项目**缺哪步补哪步**（`decisions` 与 `tasks-archive` 两步，见 `CONTRACT.md` §3.3.1）。
 - **零依赖**：只用 node 内置模块；不联网。
 - **锁只防同机并发**；门禁步骤会以 `shell` 执行，命令来自项目自己的 `gates/*.json`，请只放可信命令。
 - **单飞轮询**：面板对 `GET /api/project-flow/state?root=<当前工作区目录>` 任一时刻至多一个在途请求，

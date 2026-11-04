@@ -18,11 +18,13 @@ import {
   DECISION_SCHEMA,
   HEARTBEAT_STALE_SECONDS,
   SCHEMA_VERSION,
+  TASK_ARCHIVE_AFTER_DAYS,
   addDecision,
   addExperiment,
   addGate,
   addTask,
   answerDecision,
+  archiveTasks,
   checkDecisions,
   containedPath,
   drainWarnings,
@@ -59,6 +61,7 @@ import {
   updateGate,
   updateHeartbeat,
   updateTask,
+  withLock,
   withdrawDecision,
 } from '../lib/core.mjs'
 
@@ -576,6 +579,161 @@ test('task CRUD：状态流转、scope 合并、不可变字段与 not-found', (
   assert.deepEqual(removeTask(root, contract, created.id), { id: created.id, removed: true })
   expectFlowError(() => getTask(root, contract, created.id), 'not-found')
   expectFlowError(() => removeTask(root, contract, created.id), 'not-found')
+})
+
+// -------------------------------------------------------------- tasks archive
+
+test('archiveTasks：done 超阈值转 archived，字段保留、updated_at 刷新、记录仍在', () => {
+  const { root, contract } = freshProject('task-archive')
+  const now = Date.now()
+  const old = new Date(now - 31 * 86_400_000).toISOString()
+  const created = addTask(root, contract, {
+    title: 'old done task',
+    status: 'done',
+    updated_at: old,
+    commits: ['abc1234'],
+    scope: { allow: ['lib/'], deny: [] },
+    notes: 'keep me',
+  })
+  assert.equal(created.updated_at, old)
+
+  const result = archiveTasks(root, contract, { now })
+  assert.deepEqual(result.archived, [created.id])
+  assert.equal(result.candidates, 1)
+  assert.equal(result.days, TASK_ARCHIVE_AFTER_DAYS)
+  assert.equal(result.locked, false)
+  assert.equal(result.dryRun, false)
+  assert.match(result.cutoff, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
+
+  const stored = getTask(root, contract, created.id)
+  assert.equal(stored.status, 'archived')
+  assert.equal(stored.created_at, created.created_at)
+  assert.deepEqual(stored.commits, ['abc1234'])
+  assert.deepEqual(stored.scope, { allow: ['lib/'], deny: [] })
+  assert.equal(stored.notes, 'keep me')
+  assert.notEqual(stored.updated_at, old, '归档应刷新 updated_at')
+  // 归档是状态位，不是删除：记录仍在原文件里。
+  const files = fs.readdirSync(path.join(root, '.dsh/flow/tasks'))
+  assert.deepEqual(files, [`${created.id}.json`])
+})
+
+test('archiveTasks 幂等：同 now 连跑两次，第二次不写文件', () => {
+  const { root, contract } = freshProject('task-archive-idem')
+  const now = Date.now()
+  const old = new Date(now - 40 * 86_400_000).toISOString()
+  const task = addTask(root, contract, { title: 'done long ago', status: 'done', updated_at: old })
+  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+
+  const first = archiveTasks(root, contract, { now })
+  assert.deepEqual(first.archived, [task.id])
+  const bytesAfterFirst = fs.readFileSync(file, 'utf8')
+
+  const second = archiveTasks(root, contract, { now })
+  assert.deepEqual(second.archived, [], 'archived 不再匹配')
+  assert.equal(second.candidates, 0)
+  assert.equal(fs.readFileSync(file, 'utf8'), bytesAfterFirst, '第二次 sweep 不得改写文件')
+})
+
+test('archiveTasks 边界：6 天不动、恰 7 天归档、8 天归档、updated_at 非法与 active 不动', () => {
+  const { root, contract } = freshProject('task-archive-boundary')
+  const now = Date.parse('2026-06-01T00:00:00+08:00')
+  const at = (days) => new Date(now - days * 86_400_000).toISOString()
+  const fresh = addTask(root, contract, { title: 'fresh', status: 'done', updated_at: at(6) })
+  const exact = addTask(root, contract, { title: 'exact', status: 'done', updated_at: at(7) })
+  const stale = addTask(root, contract, { title: 'stale', status: 'done', updated_at: at(8) })
+  const active = addTask(root, contract, { title: 'active old', status: 'active', updated_at: at(100) })
+  const broken = addTask(root, contract, { title: 'broken stamp', status: 'done', updated_at: at(50) })
+  // 直接改文件写非法时间戳：buildTask 只校验字符串，读侧必须自己拒绝归档。
+  const brokenFile = path.join(root, '.dsh/flow/tasks', `${broken.id}.json`)
+  fs.writeFileSync(brokenFile, `${JSON.stringify({ ...readJson(brokenFile), updated_at: 'not-a-date' }, null, 2)}\n`)
+
+  const result = archiveTasks(root, contract, { now })
+  assert.deepEqual([...result.archived].sort(), [exact.id, stale.id].sort())
+
+  const statuses = Object.fromEntries(listTasks(root, contract).map((record) => [record.id, record.status]))
+  assert.equal(statuses[exact.id], 'archived', '恰 7 天按 >= 归档')
+  assert.equal(statuses[stale.id], 'archived', '8 天归档')
+  assert.equal(statuses[fresh.id], 'done', '6 天不动')
+  assert.equal(statuses[active.id], 'active', '只有 done 参与归档')
+  assert.equal(statuses[broken.id], 'done', 'updated_at 非法不动')
+})
+
+test('archiveTasks 配置：0 关闭、负数回退、超上限 clamp，各记一次 tasks-archive-days-invalid', () => {
+  const { root, contract } = freshProject('task-archive-config')
+  const now = Date.now()
+  const old = new Date(now - 400 * 86_400_000).toISOString()
+  const task = addTask(root, contract, { title: 'ancient done', status: 'done', updated_at: old })
+  drainWarnings()
+
+  const off = archiveTasks(root, contract, { now, days: 0 })
+  assert.deepEqual(off.archived, [])
+  assert.equal(off.days, 0)
+  assert.equal(off.cutoff, null, '关闭时没有阈值日期')
+  assert.deepEqual(drainWarnings(), [], '显式 0 是正常关闭，不产生 warning')
+  assert.equal(getTask(root, contract, task.id).status, 'done')
+
+  const negative = archiveTasks(root, contract, { now, days: -5 })
+  assert.equal(negative.days, 0)
+  assert.deepEqual(negative.archived, [])
+  const negativeWarnings = drainWarnings()
+  assert.equal(negativeWarnings.filter((line) => line.startsWith('tasks-archive-days-invalid:')).length, 1)
+  assert.match(negativeWarnings.join('\n'), /-5 is negative; archive disabled \(0\)/)
+
+  const clamped = archiveTasks(root, contract, { now, days: 99_999 })
+  assert.equal(clamped.days, 3650, '超过 3650 天按上限 clamp')
+  assert.deepEqual(clamped.archived, [], '400 天未达 3650 天阈值')
+  assert.match(drainWarnings().join('\n'), /99999 exceeds 3650; clamped to 3650/)
+
+  // manifest 错型：loadContract 回退默认值并给 manifest-invalid，命令仍不抛。
+  const manifest = path.join(root, '.dsh/flow/flow.json')
+  const raw = readJson(manifest)
+  fs.writeFileSync(manifest, `${JSON.stringify({ ...raw, tasks: { ...raw.tasks, archiveAfterDays: 'abc' } }, null, 2)}\n`)
+  const loaded = loadContract(root)
+  assert.equal(loaded.contract.tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
+  assert.match(loaded.warnings.join('\n'), /manifest-invalid: tasks\.archiveAfterDays: expected number, got string/)
+
+  const corrected = archiveTasks(root, loaded.contract, { now })
+  assert.equal(corrected.days, TASK_ARCHIVE_AFTER_DAYS)
+  assert.deepEqual(corrected.archived, [task.id], '回退默认值后照常归档')
+})
+
+test('archiveTasks：dry-run 不取锁不写；锁被占用时跳过并记 archive-locked', () => {
+  const { root, contract } = freshProject('task-archive-lock')
+  const now = Date.now()
+  const old = new Date(now - 60 * 86_400_000).toISOString()
+  const task = addTask(root, contract, { title: 'done old', status: 'done', updated_at: old })
+  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+  const before = fs.readFileSync(file, 'utf8')
+
+  const dry = archiveTasks(root, contract, { now, dryRun: true })
+  assert.deepEqual(dry.archived, [task.id], 'dry-run 报告将要归档的 id')
+  assert.equal(dry.dryRun, true)
+  assert.equal(dry.locked, false)
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'dry-run 不得写文件')
+
+  drainWarnings()
+  // 自己持锁：内层 archiveTasks 拿不到锁，应降级为 locked:true 且不写（exit-0 语义）。
+  const blocked = withLock(root, contract, () => archiveTasks(root, contract, { now }))
+  assert.equal(blocked.locked, true)
+  assert.deepEqual(blocked.archived, [])
+  assert.equal(blocked.candidates, 1)
+  assert.equal(fs.readFileSync(file, 'utf8'), before, '锁冲突不得部分写')
+  assert.match(drainWarnings().join('\n'), /archive-locked:/)
+})
+
+test('init 种子：precommit 第三步是 tasks-archive，契约带 archiveAfterDays 默认值', () => {
+  const root = tempRoot('gate-seed-archive')
+  initProject(root, { name: 'seeded' })
+  const { contract } = loadContract(root)
+  assert.equal(contract.tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
+  assert.equal(readJson(path.join(root, '.dsh/flow/flow.json')).tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
+
+  const precommit = listGates(root, contract).find((gate) => gate.id === 'precommit')
+  assert.ok(precommit, 'precommit 应被种子化')
+  assert.deepEqual(precommit.steps.map((step) => step.id), ['whitespace', 'decisions', 'tasks-archive'])
+  assert.match(precommit.steps[2].run, /task archive\s*$/)
+  assert.equal(precommit.steps[2].expect, 'exit 0')
+  assert.equal(precommit.enabled, true)
 })
 
 // ---------------------------------------------------------------------- gates
@@ -2079,11 +2237,15 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   assert.match(byId['staged-files'].steps[0].run, /check staged --allow src/)
   assert.match(byId.release.steps[0].run, /check release-baseline --marker RELEASE/)
   assert.equal(byId.precommit.steps[0].run, 'git diff --cached --check')
-  assert.equal(byId.precommit.steps.length, 2, 'precommit 第二步是决策门禁')
+  assert.equal(byId.precommit.steps.length, 3, 'precommit：空白检查 → 决策门禁 → 任务归档')
   assert.equal(byId.precommit.steps[1].id, 'decisions')
   assert.ok(byId.precommit.steps[1].run.includes(expectedBin), byId.precommit.steps[1].run)
   assert.match(byId.precommit.steps[1].run, /check decisions$/)
   assert.equal(byId.precommit.steps[1].expect, 'exit 0')
+  assert.equal(byId.precommit.steps[2].id, 'tasks-archive')
+  assert.ok(byId.precommit.steps[2].run.includes(expectedBin), byId.precommit.steps[2].run)
+  assert.match(byId.precommit.steps[2].run, /task archive$/)
+  assert.equal(byId.precommit.steps[2].expect, 'exit 0')
   assert.equal(byId.tests.steps[0].run, 'node --test test/')
 
   // 幂等：再 init 一条都不加

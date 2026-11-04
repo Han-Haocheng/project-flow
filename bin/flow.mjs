@@ -12,7 +12,7 @@
 import path from 'node:path'
 import process from 'node:process'
 import os from 'node:os'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 
 // A closed downstream pipe (`flow status | head`) must end quietly, not throw.
@@ -43,6 +43,8 @@ const USAGE = `project-flow CLI（schema 2）
            [--goal G] [--notes N]
   task update <id> [--title T] [--status draft|active|done|archived]
            [--owner O] [--goal G] [--notes N]
+  task archive [--older-than N] [--dry-run]
+          归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
   task rm <id> [--yes]
 
   gate list | show <id>
@@ -132,6 +134,7 @@ const VALUE_FLAGS = new Set([
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
+  'older-than',
 ])
 const REPEAT_FLAGS = new Set(['step', 'allow', 'claim', 'option', 'blocks', 'affects'])
 
@@ -858,9 +861,33 @@ async function cmdExp(ctx, sub) {
   throw new CliError('usage', `未知子命令 exp ${sub}（可用 list|show|tree|add|update|rm）`)
 }
 
+/** 文本模式的归档结果（core 返回 {archived, candidates, days, cutoff, dryRun, locked}）。 */
+function printArchiveResult(result, days, dryRun) {
+  const ids = result !== null && typeof result === 'object' && Array.isArray(result.archived) ? result.archived : []
+  const candidates = result !== null && typeof result === 'object' && Number.isInteger(result.candidates) ? result.candidates : ids.length
+  const cutoff =
+    result !== null && typeof result === 'object' && (typeof result.cutoff === 'string' || typeof result.cutoff === 'number')
+      ? String(result.cutoff)
+      : ''
+  const suffix = cutoff === '' ? '' : `，早于 ${cutoff}`
+  if (result !== null && typeof result === 'object' && result.locked === true) {
+    out('归档被写锁占用，本次跳过（下次运行会重试）')
+    return
+  }
+  if (dryRun === true) {
+    out(
+      `检测到 ${candidates} 个到期任务（阈值 ${days} 天${suffix}）` +
+        `${ids.length > 0 ? `：${ids.join(', ')}` : ''}（dry-run，未写盘）`,
+    )
+    return
+  }
+  if (ids.length === 0) out(`没有需要归档的任务（阈值 ${days} 天${suffix}）`)
+  else out(`已归档 ${ids.length} 个任务（阈值 ${days} 天${suffix}）：${ids.join(', ')}`)
+}
+
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|rm>')
+  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|rm>')
   const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
@@ -919,6 +946,32 @@ async function cmdTask(ctx, sub) {
     return record
   }
 
+  if (sub === 'archive') {
+    const olderThan = readPositiveInteger(flags, 'older-than', '--older-than 需要正整数天数（例如 --older-than 30）')
+    const dryRun = flags['dry-run'] === true
+    // 与 task add 同一条判定（core 的 STORE_CONTRACT 是固定的 .dsh/flow/flow.json）：
+    // 未初始化按用法错误退出 1，由命令自己给出可操作的下一步。
+    if (existsSync(path.join(ctx.root, '.dsh', 'flow', 'flow.json')) === false) {
+      throw new CliError('usage', '未初始化（未找到 .dsh/flow/flow.json）；先运行 flow init')
+    }
+    // 0=关闭与越界 clamp/warning 都由 core.archiveTasks 统一判定（含 --older-than 覆盖）；
+    // CLI 只负责人类输出与 `closed` 标记，不重复一套窗口逻辑。
+    const reported = await core.archiveTasks(ctx.root, contract, {
+      ...(olderThan === undefined ? {} : { days: olderThan }),
+      dryRun,
+    })
+    const result =
+      reported !== null && typeof reported === 'object' && reported.days === 0 ? { ...reported, closed: true } : reported
+    if (!ctx.json) {
+      if (result !== null && typeof result === 'object' && result.days === 0) {
+        out('任务归档已关闭（tasks.archiveAfterDays=0）；用 --older-than N 显式指定天数')
+      } else {
+        printArchiveResult(result, result?.days, dryRun)
+      }
+    }
+    return result
+  }
+
   if (sub === 'rm') {
     const id = requireString(flags, 'id', '用法: flow task rm <id> [--yes]')
     await confirmDelete(ctx, `任务 ${id}`)
@@ -927,7 +980,7 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|rm）`)
+  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|rm）`)
 }
 
 async function cmdGate(ctx, sub) {
