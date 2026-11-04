@@ -51,7 +51,7 @@
 - **谁占名额**：只有 `spawn_teammate` 建出的队友占名额，**`lead` 不占**；成员记录在开跑前就落盘，**创建失败（`failed`）的成员仍占名额** ⇒ 建员前先 `list_agents` 数现有成员，别重复建同一角色（重名另有 `TEAM_MEMBER_NAME_TAKEN`）。
 - **超限报错**：`TEAM_MEMBER_LIMIT`（`Team member limit N reached`，`dsh-experimental-agent-team/lib/types/roster.js`）是**硬拒绝不是排队**；要更多名额只能改 profile 配置。
 - **默认配比**（**N = 本次实建数 = `min(maxMembers, 计划槽数)`**（计划槽数 = 计划卡数，**含被 `blocked_by` 挡住的审查/后续卡**，不是当前已存在或当前可开工的卡数），**N≥3 才用**）：分析者 `round(N×0.25)`、审查者 `round(N×0.375)`、实现者取余数；N=8 ⇒ 2/3/3，N=16 ⇒ 4/6/6；分析者、审查者各 ≥1。**N<3 不用比例**：确需组队先补足 ≥3 个计划槽（使 N≥3）再按 3 人组（各 1）；补不出按 `SKILL.md` §10.8 不组队；**`maxMembers<3` 一律不组队**。实现者数 I 由写域定，余数 < I 时把 N 上调到「余数 ≥ I」的最小值（I=2 ⇒ N=5、I=3 ⇒ N=8、I=4 ⇒ N=9），比例不得压掉写域；写域不足时把实现者名额让给只读并在卡 notes 记原因；**不为凑比例硬拆同一个文件**。
-- **满编与空转**：满编 = 名额用满，且每槽挂着在跑卡或被 `blocked_by` 挡住的卡（合法空转）；没活可给的名额**不建**（队友无法 dismiss）。写域永远互斥，同一文件同一时段只给一个写者。**允许空转 = 该槽的卡被 `blocked_by` 挡住（不论是否关键路径）**；关键路径卡的 owner 不接新写卡、可接只读核验；**空转合法性只看 `SKILL.md` §10.6 第 4 步三分表**（依赖未清等待合法；可并行未派、依赖未建卡一律不许）。判据与空转判定见 `SKILL.md` §10.6 第 4 步；数字口径只在 `SKILL.md` §10.2 与本 §3.0 各写一次。
+- **满编与空转**：满编 = 名额用满，且每槽挂着在跑卡或被 `blocked_by` 挡住的卡（合法空转）；没活可给的名额**不建**（队友无法 dismiss）。写域永远互斥，同一文件同一时段只给一个写者。**允许空转 = 该槽的卡被 `blocked_by` 挡住（不论是否关键路径）**；关键路径卡的 owner 不接新写卡、可接只读核验；**空转合法性只看三分法（表见本文件 §3.3）**（依赖未清等待合法；可并行未派、依赖未建卡一律不许）。判据与空转判定见 `SKILL.md` §10.6 第 4 步；数字口径只在 `SKILL.md` §10.2 与本 §3.0 各写一次。
 
 ### 3.1 与项目任务（project-flow）对接：项目台账是 durable 真源，Team 板是执行视图
 
@@ -98,14 +98,14 @@
 - **铁律**：`spawn_teammate` 只能 Lead 调；`team_task_update` 是 CAS（先 `get` 拿 revision）；**审查者不得由实现者兼任**；合并、项目台账、push 只归中心。**Lead 派工/唤醒后结束本轮，靠队友 `send_message` 回报收口**——`wait_agent` 仅排障（确认还有谁在跑），不用于等待交付。
 - 状态机与交接物见 `SKILL.md` §10.3–§10.4；各角色的操作检查单见 `contribution-flow.md` §4.4。
 
-### 3.3 空转三分表与派工前三问（2026-11-04，来自 T-20261104-06 的 task-20 利用率审计）
+### 3.3 空转三分法与派工前三问（2026-11-04，来自 T-20261104-06 的 task-20 利用率审计）
 
 审计口径：8 槽 40min，忙碌仅 27%、空转 42%，根因是 **backlog 枯竭**（角色工时 分析 25.4 / 审查 31.1 / 执行 43.6）。**空转必须归因，三分类互斥**（Lead 每轮 `team_task_list` 对账时逐槽打标）：
 
 | 类别 | 判据 | 处理 |
 |---|---|---|
 | **依赖未清等待**（合法） | `team_task_list({ status: 'pending', limit: 100 })` 有卡**不在** `team_task_list({ ready: true, limit: 100 })` 名单（= 被 `blocked_by` 挡住，再核对上游卡仍在板上；两支都要翻完 `nextCursor`，跨调用差集逐卡用 `blocked_by`+`revision` 核；**不论是否关键路径**） | 允许空转；卡 notes 记 `waiting on <上游卡 id>` |
-| **可并行未派**（违规） | 槽是空的，但 `team_task_list({ ready: true })` 里有卡（无人负责 ⇒ `team_task_update action=reassign`；owner `inactive` ⇒ `send_message` 唤醒） | 立刻派；先派只读（预研 / 冲突 diff / 红测计划 / 风险清单） |
+| **可并行未派**（违规） | 槽是空的，但 `team_task_list({ ready: true, limit: 100 })`（翻完 `nextCursor`）里有卡（无人负责 ⇒ `team_task_update action=reassign`；owner `inactive` ⇒ `send_message` 唤醒） | 立刻派；先派只读（预研 / 冲突 diff / 红测计划 / 风险清单） |
 | **依赖未建卡**（缺口） | `pending` 为空、或全部 `pending` 都在 `ready: true` 名单里（没人等依赖，槽却空着）⇒ backlog 枯竭 | 当场拆卡 / 补只读卡；Lead 不下场侦察或实现 |
 
 **上游卡被删**：`blocked_by` 指向的卡已不在板上 ⇒ 用 `team_task_update action=set_dependencies` 修依赖；修完仍无卡可开工的槽，归「依赖未建卡」，**不算合法空转**。
