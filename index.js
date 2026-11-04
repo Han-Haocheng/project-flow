@@ -19,9 +19,20 @@
 // guard, and the ledger lives in the project's main worktree so linked-worktree
 // sessions share one ledger. Root resolution happens per request; there are no
 // watchers and no dependencies beyond node built-ins.
+//
+// Only the root the caller names is touched on disk. Registered workspace rows
+// are normalized with pure path arithmetic (`resolve` plus separator handling),
+// never with a filesystem call: a registered workspace on a missing mount must
+// not cost a request anything. Root resolution in this module is asynchronous
+// (`realpath`/`stat`/`readFile` from node:fs/promises), so a slow root blocks
+// its own request rather than the host event loop. Two synchronous reads remain
+// on purpose and only ever touch the requested root: the `realpath`/`lstat`
+// guard in `containedPath` (a path the requested manifest echoes must not escape
+// through a symlink) and the store reads inside lib/core.mjs.
 
 import { execFile } from 'node:child_process'
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 export const inject = ['webServer']
@@ -270,9 +281,10 @@ function pickInteger(value, fallback, min, max) {
 
 // ------------------------------------------------------- workspace inspection
 
-function readManifestName(root) {
+/** Manifest display name; async so a slow root cannot block the request loop. */
+async function readManifestName(root) {
   try {
-    const parsed = JSON.parse(readFileSync(storeContractPath(root), 'utf8'))
+    const parsed = JSON.parse(await readFile(storeContractPath(root), 'utf8'))
     if (isPlainObject(parsed) && typeof parsed.name === 'string' && parsed.name.trim().length > 0) {
       return parsed.name.trim()
     }
@@ -295,15 +307,28 @@ function hasStore(root) {
   }
 }
 
+/** Async `hasStore` for the HTTP/panel request path. */
+async function hasStoreAsync(root) {
+  try {
+    return (await stat(storeContractPath(root))).isFile()
+  } catch {
+    return false
+  }
+}
+
 
 // ------------------------------------------------------------ workspace scope
 //
 // The panel is scoped to one workspace. There is no global candidate list any
 // more: a requested root is canonicalized, validated against the registered
 // workspaces (or its own manifest) and then read in isolation.
+//
+// Canonicalization is reserved for the root the caller names. Registered rows
+// are compared lexically: a workspace on an unmounted disk must not turn every
+// poll into a stat storm on the host event loop.
 
 /** Canonical form of one path: resolved, then realpath when the path exists. */
-function canonicalRoot(path) {
+async function canonicalRoot(path) {
   let resolved
   try {
     resolved = resolve(path)
@@ -311,25 +336,45 @@ function canonicalRoot(path) {
     resolved = String(path)
   }
   try {
-    return realpathSync(resolved)
+    return await realpath(resolved)
   } catch {
     return resolved
   }
 }
 
-/** Whether one path is an existing directory. */
-function isDirectory(path) {
+/** Whether one path is an existing directory (async: request path only). */
+async function isDirectory(path) {
   try {
-    return statSync(path).isDirectory() === true
+    return (await stat(path)).isDirectory() === true
   } catch {
     return false
   }
 }
 
 /**
- * The registered workspaces as `{ path, title }` rows, canonicalized. An
- * unavailable or broken registry projection yields an empty list rather than an
- * error: the endpoint then accepts only roots with their own manifest.
+ * Pure-path form of one registered workspace row: `resolve` folds `..`, `.` and
+ * a trailing separator without touching the filesystem. A filesystem root keeps
+ * its separator.
+ */
+function workspacePath(value) {
+  let resolved
+  try {
+    resolved = resolve(value)
+  } catch {
+    return String(value)
+  }
+  if (resolved.length > 1 && resolved.endsWith(sep) && dirname(resolved) !== resolved) {
+    return resolved.slice(0, -sep.length)
+  }
+  return resolved
+}
+
+/**
+ * The registered workspaces as `{ path, title }` rows. Paths are normalized by
+ * pure path arithmetic, never by realpath/stat: an unavailable mount among the
+ * registered rows costs this request nothing. An unavailable or broken registry
+ * projection yields an empty list rather than an error: the endpoint then
+ * accepts only roots with their own manifest.
  */
 function listWorkspaces(ctx) {
   const workspaces = []
@@ -359,7 +404,7 @@ function listWorkspaces(ctx) {
     }
     if (typeof path !== 'string' || path.length === 0) continue
     workspaces.push({
-      path: canonicalRoot(path),
+      path: workspacePath(path),
       title: typeof title === 'string' ? title.trim() : '',
     })
   }
@@ -374,11 +419,11 @@ function rootWithin(root, base) {
 }
 
 /** Whether a root is a registered workspace, inside one, or declares its own flow store. */
-function rootAccepted(root, workspaces) {
+async function rootAccepted(root, workspaces) {
   for (const workspace of workspaces) {
     if (rootWithin(root, workspace.path)) return true
   }
-  return hasStore(root)
+  return hasStoreAsync(root)
 }
 
 /**
@@ -386,8 +431,8 @@ function rootAccepted(root, workspaces) {
  * workspace containing the root (workspaces may nest, e.g. /Project and
  * /Project/app), else the folder name.
  */
-function rootName(root, workspaces) {
-  if (hasStore(root)) return readManifestName(root)
+async function rootName(root, workspaces) {
+  if (await hasStoreAsync(root)) return await readManifestName(root)
   let owner
   for (const workspace of workspaces) {
     if (rootWithin(root, workspace.path) === false) continue
@@ -396,7 +441,6 @@ function rootName(root, workspaces) {
   if (owner !== undefined) return owner.title.length > 0 ? owner.title : basename(root)
   return basename(root)
 }
-
 
 // ----------------------------------------------------------------------- head
 
@@ -747,7 +791,7 @@ function recentDoneOf(records, limit) {
 
 /** Panel payload with no readable store: every section empty. */
 async function emptyStoreState(root, entry, now, warnings) {
-  entry.name = readManifestName(root)
+  entry.name = await readManifestName(root)
   return {
     ok: true,
     generatedAt: isoLocal(new Date(now)),
@@ -952,7 +996,7 @@ function originAllowed(ctx, request) {
   return origin === expected
 }
 
-async function handleState(ctx, request, response) {
+async function handleState(host, request, response) {
   let url
   try {
     url = new URL(String(request.url ?? ROUTE_PATH), 'http://localhost')
@@ -972,16 +1016,18 @@ async function handleState(ctx, request, response) {
     return
   }
 
-  if (!originAllowed(ctx, request)) {
+  if (!originAllowed(host, request)) {
     sendError(response, 403, 'forbidden')
     return
   }
 
   const now = Date.now()
 
+  // One registry enumeration per request: the projection below receives these
+  // rows instead of listing the registry again.
   let workspaces
   try {
-    workspaces = listWorkspaces(ctx)
+    workspaces = listWorkspaces(host)
   } catch (error) {
     sendError(response, 500, 'internal', brief(error))
     return
@@ -996,12 +1042,12 @@ async function handleState(ctx, request, response) {
       sendError(response, 400, 'bad-root', 'root must name the workspace directory')
       return
     }
-    root = canonicalRoot(requested)
-    if (isDirectory(root) === false) {
+    root = await canonicalRoot(requested)
+    if ((await isDirectory(root)) === false) {
       sendError(response, 400, 'bad-root', `root is not an existing directory: ${root}`)
       return
     }
-    if (rootAccepted(root, workspaces) === false) {
+    if ((await rootAccepted(root, workspaces)) === false) {
       sendError(
         response,
         400,
@@ -1011,10 +1057,10 @@ async function handleState(ctx, request, response) {
       return
     }
   } else {
-    root = canonicalRoot(process.cwd())
+    root = await canonicalRoot(process.cwd())
     // Without an explicit root there is no chosen workspace: it must both be
     // accepted and actually carry a ledger, otherwise nothing is scoped.
-    if (rootAccepted(root, workspaces) === false || hasStore(root) === false) {
+    if ((await rootAccepted(root, workspaces)) === false || (await hasStoreAsync(root)) === false) {
       sendJson(response, 200, {
         ok: false,
         generatedAt: isoLocal(new Date(now)),
@@ -1026,19 +1072,26 @@ async function handleState(ctx, request, response) {
     }
   }
 
-  sendJson(response, 200, await collectPanelState(ctx, root))
+  sendJson(response, 200, await collectPanelState(host, root, workspaces))
 }
 
 /**
  * The read-only payload for exactly one workspace: the `/api/project-flow/state`
  * response body and the TUI panel's read path are this one object.
+ *
+ * `workspaces` is required: the caller enumerates the registry exactly once and
+ * passes the rows in, so no projection ever re-reads the registry inside the
+ * same request. `ctx` is accepted for symmetry with the other handlers and is
+ * not consulted for workspace discovery.
  */
-async function collectPanelState(ctx, root) {
+async function collectPanelState(ctx, root, workspaces) {
+  if (!Array.isArray(workspaces)) {
+    throw new TypeError('collectPanelState requires the caller to enumerate the workspace registry')
+  }
   const now = Date.now()
-  const workspaces = listWorkspaces(ctx)
-  const entry = { path: root, name: rootName(root, workspaces) }
+  const entry = { path: root, name: await rootName(root, workspaces) }
 
-  if (hasStore(root) === false) {
+  if ((await hasStoreAsync(root)) === false) {
     return {
       ok: false,
       generatedAt: isoLocal(new Date(now)),
@@ -1072,8 +1125,10 @@ async function collectPanelState(ctx, root) {
 export function panelStateReader(ctx) {
   return async function readPanelState(cwd) {
     try {
-      const root = canonicalRoot(typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd())
-      return await collectPanelState(ctx, root)
+      // The panel reads the registry once, like the HTTP route does.
+      const workspaces = listWorkspaces(ctx)
+      const root = await canonicalRoot(typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd())
+      return await collectPanelState(ctx, root, workspaces)
     } catch (error) {
       return { ok: false, error: brief(error) }
     }
@@ -1174,8 +1229,8 @@ async function handleInit(ctx, request, response) {
     sendError(response, 400, 'bad-root', 'root must name the workspace directory')
     return
   }
-  const root = canonicalRoot(requested)
-  if (isDirectory(root) === false) {
+  const root = await canonicalRoot(requested)
+  if ((await isDirectory(root)) === false) {
     sendError(response, 400, 'bad-root', `root is not an existing directory: ${root}`)
     return
   }
@@ -1187,7 +1242,7 @@ async function handleInit(ctx, request, response) {
     sendError(response, 500, 'internal', brief(error))
     return
   }
-  if (rootAccepted(root, workspaces) === false) {
+  if ((await rootAccepted(root, workspaces)) === false) {
     sendError(
       response,
       400,
@@ -1197,7 +1252,7 @@ async function handleInit(ctx, request, response) {
     return
   }
 
-  const name = rootName(root, workspaces)
+  const name = await rootName(root, workspaces)
 
   let result
   try {
@@ -1277,8 +1332,8 @@ async function handleGate(ctx, request, response) {
     sendError(response, 400, 'bad-root', 'root must name the workspace directory')
     return
   }
-  const root = canonicalRoot(requested)
-  if (isDirectory(root) === false) {
+  const root = await canonicalRoot(requested)
+  if ((await isDirectory(root)) === false) {
     sendError(response, 400, 'bad-root', `root is not an existing directory: ${root}`)
     return
   }
@@ -1290,7 +1345,7 @@ async function handleGate(ctx, request, response) {
     sendError(response, 500, 'internal', brief(error))
     return
   }
-  if (rootAccepted(root, workspaces) === false) {
+  if ((await rootAccepted(root, workspaces)) === false) {
     sendError(
       response,
       400,
@@ -1309,7 +1364,7 @@ async function handleGate(ctx, request, response) {
     sendError(response, 400, 'bad-request', 'enabled must be a boolean')
     return
   }
-  if (hasStore(root) === false) {
+  if ((await hasStoreAsync(root)) === false) {
     sendError(response, 400, 'bad-request', `no flow store in ${root}; run: node bin/flow.mjs init`)
     return
   }

@@ -13,8 +13,15 @@
  *
  * The panel is scoped to ONE workspace. `PanelBody` reads the tab's `sessionId`
  * and resolves that session's `cwd` through the `useSessions` prop, then the
- * panel polls `api/project-flow/state?root=<workspace cwd>` every 2500 ms,
- * keeps the last good snapshot on failure, and renders:
+ * panel polls `api/project-flow/state?root=<workspace cwd>`: one request at a
+ * time (single flight), with the next one armed `POLL_MS` (2500 ms) after the
+ * previous one settles — a success or a failure both settle. A request slower
+ * than 2500 ms is therefore never cancelled by its own successor, which is what
+ * used to leave the panel stuck on the loading card. A teardown (unmount,
+ * workspace switch, manual-refresh restart) is not a settle: it terminates this
+ * chain — abort the one in-flight request, drop the pending re-arm — and
+ * schedules or writes nothing afterwards, so abort belongs to teardown only.
+ * On failure the panel keeps the last good snapshot and renders:
  *   experiment lineage tree · task ledger progress · gate definitions ·
  *   agent heartbeats.
  * The tab's `sessionId` is used only to highlight its own heartbeat; it is not
@@ -2223,26 +2230,64 @@ window.__ModuleLoader__.load({
 
       // Polling loop for the current session's workspace. Restarts on a workspace
       // change or a manual refresh; no workspace yet means no polling at all.
+      // Single flight: one request at a time, and the next one is armed POLL_MS
+      // after a success or a failure settles — never on a fixed wall-clock
+      // interval. A teardown (unmount, workspace switch, manual-refresh restart)
+      // does not settle: it ends this chain, so nothing is re-armed and nothing
+      // is written. A host slower than POLL_MS therefore keeps its request
+      // instead of being cancelled by its own successor.
       useEffect(() => {
         if (workspaceRoot === undefined) return undefined;
 
-        let cancelled = false;
+        /* Teardown latch: once it flips this chain never writes state, never arms
+           a timer and never aborts anything again. */
+        let disposed = false;
+        /* The one in-flight request, or null. Abort belongs to teardown only. */
         let controller = null;
+        /* The pending `POLL_MS` re-arm, or null. */
         let timer = null;
+        /* A visibility refresh that arrived while a request was in flight. */
+        let queuedRefresh = false;
 
         setRefreshing(false);
 
         const url = STATE_ENDPOINT + '?root=' + encodeURIComponent(workspaceRoot);
 
-        const load = async (manual) => {
-          if (cancelled) return;
-          if (typeof document !== 'undefined' && document.hidden) return;
-          if (controller) {
-            try {
-              controller.abort();
-            } catch (error) {
-              /* ignore */
-            }
+        const clearTimer = () => {
+          if (timer !== null) {
+            window.clearTimeout(timer);
+            timer = null;
+          }
+        };
+
+        /* Arm the next poll, measured from the moment this one settled. */
+        const schedule = () => {
+          if (disposed) return;
+          clearTimer();
+          timer = window.setTimeout(() => {
+            timer = null;
+            void poll(false);
+          }, POLL_MS);
+        };
+
+        const poll = async (manual) => {
+          if (disposed) return;
+          /* Single flight: a request that is merely slow keeps the slot, so this
+             call neither cancels it nor arms a second one. A refresh arriving now
+             is a wish, not a request: it is honored the moment that request
+             settles (a settle always re-arms the chain, so no tick is lost). */
+          if (controller !== null) {
+            if (manual) queuedRefresh = true;
+            return;
+          }
+          /* Nothing is in flight, so a pending tick is now redundant. */
+          clearTimer();
+          if (typeof document !== 'undefined' && document.hidden) {
+            /* Same skip the fixed interval used to perform, but the chain stays
+               alive: the visible tab flips it from `onVisibility`, and until then
+               the parked tick re-arms itself without fetching. */
+            schedule();
+            return;
           }
           const current = new AbortController();
           controller = current;
@@ -2262,7 +2307,7 @@ window.__ModuleLoader__.load({
             } catch (error) {
               payload = null;
             }
-            if (cancelled) return;
+            if (disposed) return;
             if (!response.ok || !payload || payload.ok !== true) {
               const hostError = payload && payload.error ? payload.error : null;
               const failure = new Error(
@@ -2275,37 +2320,64 @@ window.__ModuleLoader__.load({
             setErrorInfo(null);
             setLastOkAt(Date.now());
           } catch (error) {
-            if (cancelled || !error || error.name === 'AbortError') return;
+            if (disposed || !error || error.name === 'AbortError') return;
+            /* A failure only records the reason; `data` keeps the last good
+               snapshot (the stale banner is rendered from errorInfo). */
             setErrorInfo({
               code: asText(error.code) || 'network',
               message: asText(error.message),
               at: Date.now(),
             });
           } finally {
-            if (!cancelled) setRefreshing(false);
+            /* Only the request that still owns the slot may clear the busy flag
+               and re-arm the chain: an aborted predecessor must not wipe the busy
+               state (or the schedule) of the chain that replaced it. */
+            const owns = controller === current;
+            if (owns) controller = null;
+            if (!disposed && owns) {
+              setRefreshing(false);
+              /* A visibility refresh that had to wait is honored now, from the
+                 settle moment, instead of being queued behind a 2500 ms tick. */
+              if (queuedRefresh) {
+                queuedRefresh = false;
+                void poll(true);
+              } else {
+                schedule();
+              }
+            }
           }
         };
 
-        void load(reloadKey > 0);
-        timer = window.setInterval(() => void load(false), POLL_MS);
+        /* First frame: fire immediately, no timer wait (unchanged behaviour). */
+        void poll(reloadKey > 0);
 
         const onVisibility = () => {
           if (typeof document !== 'undefined' && document.hidden) return;
-          void load(true);
+          if (controller !== null) {
+            /* One request at a time: remember the wish and refresh on settle
+               rather than starting a second, parallel request. */
+            queuedRefresh = true;
+            return;
+          }
+          void poll(true);
         };
         if (typeof document !== 'undefined') {
           document.addEventListener('visibilitychange', onVisibility);
         }
 
         return () => {
-          cancelled = true;
-          if (timer !== null) window.clearInterval(timer);
+          disposed = true;
+          clearTimer();
           if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', onVisibility);
           }
-          if (controller) {
+          /* Abort is teardown-only: workspace switch, manual refresh restart or
+             unmount. Nothing else cancels an in-flight state request. */
+          if (controller !== null) {
+            const inFlight = controller;
+            controller = null;
             try {
-              controller.abort();
+              inFlight.abort();
             } catch (error) {
               /* ignore */
             }

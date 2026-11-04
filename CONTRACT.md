@@ -849,6 +849,55 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。
 
+#### 9.1.1 state 的根解析与文件系统纪律
+
+- **只规范化请求的 root**：`GET state` 每次请求只对 `?root=`（缺省为宿主 cwd）做
+  `realpath`/`stat`。注册表里的其它工作区行**不得**触发任何 `stat`/`realpath`/`readFile`——
+  它们可能位于失联挂载（例如 Steam 盘没插时的 `/mnt/g/...`），同步 `realpath` 一次可阻塞
+  3 秒以上，而面板每 2.5s 轮询一次，会直接让整个宿主事件循环卡死。
+- **包含关系用纯路径比较**：工作区行只做 `resolve`（折叠 `..`、`.`、尾斜杠）后按路径
+  分隔符做前缀比较，判断「root 是否在该注册工作区内」，不落地文件系统。因此注册行
+  即使指向不存在/不可访问的目录也不影响本请求的耗时；代价是**不解析符号链接**——注册行
+  若是 symlink，请求端 `realpath` 后的 root 可能不再与它前缀匹配（调用方应注册真实路径）。
+- **请求路径上的 fs 必须异步**：`index.js` 在 HTTP/TUI 读路径上只使用 `node:fs/promises`
+  的 `realpath`/`stat`/`readFile`（工作区行连这些都不调用），`sendJson`/`sendError`、
+  方法/Origin 校验与错误码（`bad-root`/`unknown-root`/`no-project`/`not-initialized`）
+  保持不变。原因同上：同步 `realpath` 会阻塞宿主事件循环；异步版本最坏只让**本请求**变慢。
+- **一次请求只枚举一次注册表**：`handleState()` 只枚举一次 `workspaceRegistry.list()`，把行
+  集作为第三参传给 `collectPanelState(ctx, root, workspaces)`（`workspaces` 必填，投影内
+  不再枚举）；`panelStateReader(ctx)`（TUI 读路径）同样取一次后传入。`lib/core.mjs` 的
+  store 读取仍是同步实现（CLI/工具共用），因此请求的 root 必须先通过异步 `stat` 判定为
+  存在目录，才会进入 store 读取。
+- **同步 fs 只留在被请求 root 内部**：请求路径上不再出现针对注册表行或 root 发现的
+  `realpathSync`/`statSync`/`readFileSync`；剩余的同步调用只作用于「已被异步 `stat` 确认
+  存在」的那个 root 内部（`containedPath()` 的 containment 校验、core 的 store 读取）。
+  新增读路径代码默认只准用 `node:fs/promises`，引入同步 fs 必须在评审里给出理由。
+- **验收值（失联挂载）**：注册表里存在一个不可访问的工作区行（例如未挂载的 `/mnt/g/...`
+  automount）时，单次 `GET state` 的响应**< 100 ms**，且该请求进行期间其它端点（含同一
+  路由的并发请求）的延迟**< 50 ms**——事件循环不被独占，坏盘只让本请求自己变慢。注册表
+  投影本身取不到行时按空列表处理（随后只接受自带 store 的 root），不因此报错。这两条上限
+  由 `test/t-20261104-01-state.test.mjs` 守着：「带最小 flow.json 契约的真实 root」用例的
+  < 100 ms（该用例上限已收紧到 100 ms），以及「并发端点：慢 root 在飞时另一正常 root 请求
+  <50ms settle」用例的 < 50 ms。
+
+#### 9.1.2 面板轮询：单飞，按 settle 排期
+
+面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多一个在途请求，下一次的计时从上次
+**落定**（settle：成功或失败）开始，不是固定墙钟间隔。
+
+- **首拉立即**：面板挂载、工作区切换、手动刷新都立刻发一次请求，不等 2500 ms；工作区尚未
+  确定时完全不起链（也就没有空请求）。
+- **每次 settle 后 2500 ms 再排**：下一次抓取排在上一次的 settle 时刻之后 2500 ms。因此
+  慢于 2500 ms 的响应**不会被后继请求取消**——不存在「固定 tick 追上新请求、abort 旧请求」
+  的路径。
+- **abort 只属于 teardown**：只有卸载、工作区切换、手动刷新重启才 abort 在途请求；慢响应、
+  超时、标签页切到后台都不 abort。teardown 后这条链不再排期、不再写状态。
+- **`document.hidden` 不发请求但保链**：隐藏时跳过一次抓取、照常重排下一次，链不中断；
+  回到可见时立即补拉一次，若此刻已有在途请求则记下意愿、在它 settle 后立刻补拉（仍不并发）。
+- **失败保留最后 good snapshot**：抓取失败只记 `errorInfo{code, message, at}` 并在面板上
+  显示陈旧标记；`data` 仍是上一次成功的 payload，不清空、不退回空态。
+- 整条链只发 `GET state`，不发写请求；写操作只有用户点击触发的 init/gate 两个 POST。
+
 ### 9.2 心跳作用域：只面向主会话
 
 心跳是**主会话之间**的协作面：同一项目的多个主会话（不同窗口、不同工作树）靠它登记
