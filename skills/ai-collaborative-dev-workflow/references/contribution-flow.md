@@ -98,7 +98,7 @@ pulled → analyzing → assigned → implementing → reviewing
 ```
 
 - 一张实现卡依次由实现者推进到 `reviewing`，审查者给结论，中心完成 `accepted → merged → reclaimed`。
-- `rejected` 是回边不是终态：`reject` 按理由重做；`request-rebase` 换 base 后重提；两者都回 `implementing`，**不新建卡**。
+- `rejected` 是回边不是终态：`reject` 先回 `analyzing` 由分析者修订任务书、再回 `implementing` 重做；`request-rebase` 只换 base，直接回 `implementing` 重提；**都不新建卡**。
 
 ### 4.3 握手时序
 
@@ -239,7 +239,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 
 - [ ] 每张 Team 任务都有结论：`completed`（已合并）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
 - [ ] 每张卡有 `role:` 标注；实现卡另有 `domain:` 且与 `write_scopes` 一致；审查卡 `blocked_by` 实现卡、审查者≠实现者
-- [ ] 状态机对得上：`accepted → merged`、`reject / request-rebase → 回实现者且重提/重做有记录`
+- [ ] 状态机对得上：`accepted → merged`；`reject` 先回分析者修订任务书再重做、`request-rebase` 回实现者只换 base，两者都有记录
 - [ ] 每个对应项目任务 notes 有 `team: <taskId>`，`status` / `commits` 已更新（未合并不得 done）
 - [ ] 被 reject / 放弃 / 接管的卡写清原因与现场（branch + path + commit）
 - [ ] 没有"只活在 Team 板或对话里"的状态、证据或验收结论；下一个会话只读项目台账就能恢复

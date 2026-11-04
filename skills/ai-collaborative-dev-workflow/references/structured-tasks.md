@@ -14,8 +14,8 @@
 | `schema` | 是 | 固定 `1`，迁移时升版本 |
 | `id` | 是 | `T-YYYYMMDD-NN`，全局唯一，加锁分配 |
 | `legacy_id` | 否 | 旧 Markdown 的 `TASK-NNN`，迁移用 |
-| `title` | 是 | ≤60 字，动宾结构 |
-| `status` | 是 | `draft/active/blocked/done/archived`；只允许 `draft→active→done→archived`，`active↔blocked` |
+| `title` | 是 | `<type>: <一句话范围>`（type ∈ `feat` / `fix` / `chore`），≤60 字符；正反例见 `SKILL.md` §10.2.1 |
+| `status` | 是 | `draft/active/done/archived`（**无 `blocked`**，见 `lib/core.mjs` 的 `TASK_STATUS`）；只允许 `draft→active→done→archived`；依赖记在 Team 卡 `blocked_by`，不落 flow 状态 |
 | `owner` | 是 | 协调者会话 id；子代理不写 |
 | `created_at/updated_at` | 是 | ISO8601 带时区 |
 | `baseline` | 是 | 开工前完整 HEAD sha 或短 sha；active 时必须非空 |

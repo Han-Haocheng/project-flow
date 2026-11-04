@@ -9,7 +9,7 @@
 
 - 角色（`role`）：`analyst` / `implementer` / `reviewer`（一张卡一个角色）
 - Team 任务 id：`task-<N>`；`description` 标注：首行 `flow: <T-id>`，第二行 `role: <...>`，实现者第三行 `domain: <path prefix>`
-- 状态机位置（`SKILL.md` §10.3）：`pulled` / `analyzing` / `assigned` / `implementing` / `reviewing` / `accepted` / `rejected` / `merged` / `reclaimed`——**本卡从 ____ 推进到 ____**
+- 状态机位置（`SKILL.md` §10.3）：`pulled` / `analyzing` / `assigned` / `implementing` / `reviewing` / `accepted` / `rejected` / `merged` / `reclaimed`——**本卡从 ____ 推进到 ____**；七阶段口径（创建/分析/等待/实现/审查/完成/归档）见 §10.3.1
 - 交接物与下一手：
   - 分析者 → **任务书**交给中心（中心确认后下发给实现者/审查者）
   - 实现者 → **提交 + 证据 + 评审申请**交给审查者（中心同读）
@@ -18,6 +18,8 @@
 
 ## 任务
 
+- 标题（项目任务 `title` 与 Team 卡 `subject` 同一句）：`<feat|fix|chore>: <一句话范围>`（≤60 字符；type 只允许这三个，见 `SKILL.md` §10.2.1）
+- 队友名（`<role>-<scope>`，如 `analyst-lifecycle` / `impl-skill-docs` / `reviewer-consistency`；见 §10.2.1）：
 - 目标（一句话）：
 - task id：
 - **base（必须写死）**：`<branch>` @ `<commit sha>`（`git log -1 --oneline` 的结果）

@@ -126,7 +126,7 @@ def task_errors(t, cfg, others=None):
         e("schema", "SCHEMA", "schema 必须为 1")
     if not re.match(r"^T-\d{8}-\d{2}$", str(t.get("id", ""))):
         e("id", "ID_FORMAT", "id 应形如 T-YYYYMMDD-NN")
-    if t.get("status") not in ("draft", "active", "blocked", "done", "archived"):
+    if t.get("status") not in ("draft", "active", "done", "archived"):
         e("status", "STATUS", "非法状态")
 
     scope = t.get("scope") or {}

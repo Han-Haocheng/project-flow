@@ -36,7 +36,7 @@
 
 | 工具 | 语义 | 陷阱 |
 |---|---|---|
-| `spawn_teammate` | Lead 专用；建**持久**队友（`fresh` = 无历史 / `fork` = 继承**已完成**轮次） | `fork` **看不到当前在飞的轮**；名字唯一；`description` 决定它自己怎么理解职责；**只有 Lead 能调**，分析者/实现者/审查者也由 Lead 建 |
+| `spawn_teammate` | Lead 专用；建**持久**队友（`fresh` = 无历史 / `fork` = 继承**已完成**轮次） | `fork` **看不到当前在飞的轮**；名字 = `<role>-<scope>`（`SKILL.md` §10.2.1）、唯一，重名报 `TEAM_MEMBER_NAME_TAKEN`；`description` 决定它自己怎么理解职责；**只有 Lead 能调**，分析者/实现者/审查者也由 Lead 建 |
 | `send_message` | durable 投递；**running 队友在最近步边界收到，inactive 队友被唤醒** | 成功发送 = 已持久化，**别重发**；这是唯一"开跑"手段 |
 | `wait_agent` | 等下一次成员状态/邮箱/共享任务变化 | **Lead 默认不用，仅排障**（确认还有谁在跑）；**只观察调用之后的变化**，**从不唤醒**任何人；没有其他成员在跑时立刻返回 `noProgress`；超时后应 `list_agents` 重列而不是轮询 |
 | `list_agents` | 花名册与可用性 | `inactive` = **没在跑**，不等于失败/完成/等待；`provisioning` / `failed` 才是创建态 |
@@ -50,8 +50,8 @@
 - **上限怎么查**：profile 补丁层 `~/.dsh/profiles/<profile>/cordis.yml` 里 `agent-team`（`@deepseek-ai/dsh-experimental-agent-team`）的 `config.maxMembers`；未配置时包缺省 `DEFAULT_MAX_MEMBERS = 16`（`lib/types/index.js`）。2026-11-04 实测 profile `web` = **8**；每次派工按**当下查到的值**算，别记死数字。
 - **谁占名额**：只有 `spawn_teammate` 建出的队友占名额，**`lead` 不占**；成员记录在开跑前就落盘，**创建失败（`failed`）的成员仍占名额** ⇒ 建员前先 `list_agents` 数现有成员，别重复建同一角色（重名另有 `TEAM_MEMBER_NAME_TAKEN`）。
 - **超限报错**：`TEAM_MEMBER_LIMIT`（`Team member limit N reached`，`dsh-experimental-agent-team/lib/types/roster.js`）是**硬拒绝不是排队**；要更多名额只能改 profile 配置。
-- **默认配比**（建满，不按最小人数开张）：**1 名 analyst**（先出任务书）→ **N 名 implementer**（N = 互斥 `domain:` 的写域数，不硬拆同一文件）→ **≥1 名 reviewer**（非实现者；名额够就多名，各覆盖一个验收面，如实现面 / 文档与外观面 / 门禁与打包面）。
-- **配额纪律**：剩余名额优给**只读审查与核验**（可多、不会双写）；写域永远互斥，同一文件同一时段只给一个写者；没有活可给的名额**不建**队友。
+- **默认配比**（**N = 本次实建数 = `min(maxMembers, 计划槽数)`**（计划槽数 = 计划卡数，**含被 `blocked_by` 挡住的审查/后续卡**，不是当前已存在或当前可开工的卡数），**N≥3 才用**）：分析者 `round(N×0.25)`、审查者 `round(N×0.375)`、实现者取余数；N=8 ⇒ 2/3/3，N=16 ⇒ 4/6/6；分析者、审查者各 ≥1。**N<3 不用比例**：确需组队先补足 ≥3 个计划槽（使 N≥3）再按 3 人组（各 1）；补不出按 `SKILL.md` §10.8 不组队；**`maxMembers<3` 一律不组队**。实现者数 I 由写域定，余数 < I 时把 N 上调到「余数 ≥ I」的最小值（I=2 ⇒ N=5、I=3 ⇒ N=8、I=4 ⇒ N=9），比例不得压掉写域；写域不足时把实现者名额让给只读并在卡 notes 记原因；**不为凑比例硬拆同一个文件**。
+- **满编与空转**：满编 = 名额用满，且每槽挂着在跑卡或被 `blocked_by` 挡住的卡（合法空转）；没活可给的名额**不建**（队友无法 dismiss）。写域永远互斥，同一文件同一时段只给一个写者。**允许空转 = 该槽的卡被 `blocked_by` 挡住（不论是否关键路径）**；关键路径卡的 owner 不接新写卡、可接只读核验；**空转合法性只看 `SKILL.md` §10.6 第 4 步三分表**（依赖未清等待合法；可并行未派、依赖未建卡一律不许）。判据与空转判定见 `SKILL.md` §10.6 第 4 步；数字口径只在 `SKILL.md` §10.2 与本 §3.0 各写一次。
 
 ### 3.1 与项目任务（project-flow）对接：项目台账是 durable 真源，Team 板是执行视图
 
@@ -61,6 +61,7 @@
 |---|---|---|---|
 | 项目 → Team | Team 任务 `description` **首行** | `flow: <T-id>`；一张 Team 任务只对应一个项目任务（覆盖多个就拆多张） | Lead 建卡时写 |
 | 角色标注 | Team 任务 `description` **第二行** | `role: analyst` / `role: implementer` / `role: reviewer`；实现者第三行 `domain: <path prefix>` | Lead 建卡时写 |
+| 标题 | 项目任务 `title` + Team 卡 `subject` | `<type>: <一句话范围>`（≤60 字符；type ∈ `feat` / `fix` / `chore`），两处写同一句；正反例见 `SKILL.md` §10.2.1 | Lead |
 | 写域 | Team 任务 `write_scopes` + 实现者 `domain:` | 两者一致；分析/审查卡只读、无写域 | Lead |
 | Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论；notes 覆盖式更新，保留原内容） | Lead（唯一台账写者） |
 | 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**已合并**才置 `done`，reject/阻塞/放弃写原因后回 `active` 或 `archived` | Lead |
@@ -68,13 +69,17 @@
 
 **执行闭环**：`flow_task list` / `flow_task show` 读项目任务（`pulled`）→ 建分析卡 `role: analyst` 出**任务书**（`analyzing`）→ 中心确认后按文件域与依赖拆实现卡（`role: implementer` + `domain:`，`write_scopes` 一致）与审查卡（`role: reviewer`，`blocked_by` 实现卡）（`assigned`）→ 项目 notes 回记 `team: <taskId>` → `spawn_teammate` + `send_message` → 实现者 claim / 自己分支提交 / 门禁 / 评审申请（`implementing`）→ 审查者（非实现者）独立复核给 `accept` / `reject` / `request-rebase` + 证据（`reviewing`）→ 中心按 `SKILL.md` §1.4 复跑门禁并最终裁定 → 合并（`accepted` → `merged`）→ 更新项目任务（status / commits / notes）→ 回收 Team 任务（`complete`，或 `release`/`reopen` + 原因）→ 清理分支/工作树（`reclaimed`）。
 
+**七阶段视图**：创建 / 分析 / 等待 / 实现 / 审查 / 完成 / 归档 与九态、Team 三态、项目状态的强制映射见 `SKILL.md` §10.3.1；**阶段不落库、不写 notes**（与 §10.5 禁双写一致）；**人工归档**前必须先完成上面的执行闭环，**自动归档**（时间阈值，T-07 precommit 触发）只做 `done → archived`，不要求清理分支/工作树。
+
 **禁止双写**：`status` / `commits` / 验收结论只写项目台账；Team 卡只反映执行状态与角色；不把同一进度叙事两边各写一份；实现者/审查者不写项目台账、不写心跳（心跳只面向主会话）⇒ **Team 板随 Lead 会话消失，会话结束前必须逐卡回收**。
 
 **回收检查单（Lead，会话结束前）**：
 
 - [ ] 每张 Team 任务有结论：`completed`（已合并）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
 - [ ] 每张卡有 `role:` 标注；实现卡另有 `domain:` 且与 `write_scopes` 一致；审查卡 `blocked_by` 实现卡、审查者≠实现者
-- [ ] 状态机对得上：`accepted → merged`、`reject / request-rebase → 回实现者且重提/重做有记录`
+- [ ] 状态机对得上：`accepted → merged`；`reject` 先回分析者修订任务书再重做、`request-rebase` 回实现者只换 base，两者都有记录
+- [ ] **人工归档前**：卡已回收、分支/工作树已清理、现场入 notes
+- [ ] **自动归档**：无需检查（只写 `done → archived`，可先于回收；清理后补 notes）
 - [ ] 对应项目任务 notes 有 `team: <taskId>`，`status` / `commits` 已更新（未合并不得 done）
 - [ ] reject / 放弃 / 接管：原因与现场（branch + path + commit）已写进项目 notes
 - [ ] 没有"只活在 Team 板或对话里"的状态与证据；下一个会话只读项目台账就能恢复
@@ -92,6 +97,20 @@
 
 - **铁律**：`spawn_teammate` 只能 Lead 调；`team_task_update` 是 CAS（先 `get` 拿 revision）；**审查者不得由实现者兼任**；合并、项目台账、push 只归中心。**Lead 派工/唤醒后结束本轮，靠队友 `send_message` 回报收口**——`wait_agent` 仅排障（确认还有谁在跑），不用于等待交付。
 - 状态机与交接物见 `SKILL.md` §10.3–§10.4；各角色的操作检查单见 `contribution-flow.md` §4.4。
+
+### 3.3 空转三分表与派工前三问（2026-11-04，来自 T-20261104-06 的 task-20 利用率审计）
+
+审计口径：8 槽 40min，忙碌仅 27%、空转 42%，根因是 **backlog 枯竭**（角色工时 分析 25.4 / 审查 31.1 / 执行 43.6）。**空转必须归因，三分类互斥**（Lead 每轮 `team_task_list` 对账时逐槽打标）：
+
+| 类别 | 判据 | 处理 |
+|---|---|---|
+| **依赖未清等待**（合法） | `team_task_list({ status: 'pending', limit: 100 })` 有卡**不在** `team_task_list({ ready: true, limit: 100 })` 名单（= 被 `blocked_by` 挡住，再核对上游卡仍在板上；两支都要翻完 `nextCursor`，跨调用差集逐卡用 `blocked_by`+`revision` 核；**不论是否关键路径**） | 允许空转；卡 notes 记 `waiting on <上游卡 id>` |
+| **可并行未派**（违规） | 槽是空的，但 `team_task_list({ ready: true })` 里有卡（无人负责 ⇒ `team_task_update action=reassign`；owner `inactive` ⇒ `send_message` 唤醒） | 立刻派；先派只读（预研 / 冲突 diff / 红测计划 / 风险清单） |
+| **依赖未建卡**（缺口） | `pending` 为空、或全部 `pending` 都在 `ready: true` 名单里（没人等依赖，槽却空着）⇒ backlog 枯竭 | 当场拆卡 / 补只读卡；Lead 不下场侦察或实现 |
+
+**上游卡被删**：`blocked_by` 指向的卡已不在板上 ⇒ 用 `team_task_update action=set_dependencies` 修依赖；修完仍无卡可开工的槽，归「依赖未建卡」，**不算合法空转**。
+
+**派工前三问**（判一张卡现在就该派）：① `blocked_by` 空（在 `ready: true` 名单里）？② owner 空？③ 有未完成后继（∃Y，Y.status≠completed ∧ Y.`blocked_by` ∋ X.id ⇒ 关键路径）？**皆 yes ⇒ 立刻派**；否则给等待者派只读预审卡，并把该槽归到上表某一行。
 
 ## 4 目标 `create_goal` / `get_goal` / `update_goal`
 
