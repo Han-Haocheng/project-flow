@@ -967,9 +967,12 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
-`heartbeats` 节由读子进程（`lib/state-snapshot.mjs`）自行投影，与 CLI 的
-`readHeartbeatSection` **键集合、排序、截断一致**（`counts` 五键 + item `liveness`/`reason`，
-见 §5.3/§3.5），但两者是不同实例：面板行不读 CLI 进程的 warning 缓冲，也不写心跳文件。
+`heartbeats` 节由读子进程投影为**行数组**（`lib/state-snapshot.mjs` 的 `panelHeartbeats`）：行 =
+CLI section item + `title`/`statusLine`，**没有** `counts`/`root`/`dir`；排序（mtime 倒序）与
+截断（`heartbeats.max`）与 CLI 一致。`counts` 由面板读端自派生（`total`/`active`/`stale`/
+`dead`，**无 hidden**，见 `client.js`）；只有 CLI 的 `readHeartbeatSection` 才返回
+`{root, dir, items, counts{total,active,stale,dead,hidden}}`（见 §5.3/§3.5）。两者是不同实例：
+面板行不读 CLI 进程的 warning 缓冲，也不写心跳文件。
 
 #### 9.1.1 state 的根解析与文件系统纪律
 
@@ -1028,8 +1031,9 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   stdio 全 `ignore`（只剩 IPC 通道），请求与回复都是 JSON；`cwd` 固定为**包根**，
   `execArgv: []`（不继承宿主的 node 参数），env 走 `stateWorkerEnv()` **白名单**（只透传
   `PATH`/`HOME`/`TMPDIR`/`LANG`/`TZ` 等运行必需项 + `PF_STATE_WORKER=1`，不继承其它环境
-  变量与凭据）；`PF_STATE_WORKER_SCRIPT` 测试接缝须同时设 `PF_STATE_WORKER_SCRIPT_ALLOW=1`
-  才生效（双开关，生产不设即不可指向别的脚本）。写路径（`init`/`gate`）仍在
+  变量与凭据）；两个 test-only 接缝都要配 `_ALLOW=1` 才生效：`PF_STATE_WORKER_SCRIPT` 须设
+  `PF_STATE_WORKER_SCRIPT_ALLOW=1`（生产不设即不可指向别的脚本），`PF_STATE_MAX_CHILDREN`
+  （池上限覆盖）须设 `PF_STATE_MAX_CHILDREN_ALLOW=1`。写路径（`init`/`gate`）仍在
   主线程、仍在 `withLock` 内完成，读路径不取锁。
 - **stale 呈现归读端**：宿主不缓存、不重放上一份 payload——`ok:false` 就是「这次没读到」。
   是否降级为陈旧展示由读端决定：web 面板保留最后一份 good payload、只更新
