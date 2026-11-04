@@ -414,6 +414,60 @@ test('冷池首轮两并发（hung+normal）：normal 必须成功且 <500ms，h
   assert.equal(overlapped, true, '两个并发请求在重叠窗口内应各占一个子进程')
 })
 
+test('冷池 5 路并发正常 root：5/5 ok、root 各自正确、无 unavailable', async () => {
+  const roots = []
+  for (let i = 0; i < 5; i += 1) roots.push(makeProject(`burst-${i}`))
+  // `mount` 只 apply（预热 fork 在途）就返回：立刻并发，覆盖 F1 的突发争抢。
+  const { routes } = await mount(roots)
+  const firedAt = Date.now()
+  const results = await Promise.all(roots.map((root) => startState(routes, root).done))
+  const elapsed = Date.now() - firedAt
+  const payloads = results.map((res) => json(res))
+  for (let i = 0; i < payloads.length; i += 1) {
+    assert.equal(payloads[i].ok, true, `第 ${i} 路应成功：${JSON.stringify(payloads[i].error ?? null)}`)
+    assert.equal(payloads[i].root, fs.realpathSync(roots[i]), 'payload.root 必须各自正确')
+    assert.equal(payloads[i].tasks.total, 1)
+    assert.notEqual(payloads[i].error?.code, 'state-worker-unavailable')
+  }
+  assert.ok(elapsed < 1500, `冷池 5 路突发应 <1500ms，实际 ${elapsed}ms`)
+})
+
+test('冷池饱和（上限 2）：3 路 hung → 2 路 state-timeout + 1 路 saturated unavailable，children≤2', { skip: POSIX === false }, async () => {
+  const previousAllow = process.env.PF_STATE_MAX_CHILDREN_ALLOW
+  const previousCap = process.env.PF_STATE_MAX_CHILDREN
+  process.env.PF_STATE_MAX_CHILDREN_ALLOW = '1'
+  process.env.PF_STATE_MAX_CHILDREN = '2'
+  try {
+    const roots = [
+      makeProject('sat-a', { fifoTask: true }),
+      makeProject('sat-b', { fifoTask: true }),
+      makeProject('sat-c', { fifoTask: true }),
+    ]
+    const { routes } = await mount(roots)
+    const firedAt = Date.now()
+    const requests = roots.map((root) => startState(routes, root))
+    // 任何时刻子进程数都不得越过上限（每 10ms 采样 600ms）。
+    const exceeded = await waitUntil(() => workerPids().length > 2, 600)
+    const results = await Promise.all(requests.map((request) => request.done))
+    const payloads = results.map((res) => json(res))
+    const codes = payloads.map((payload) => payload.error?.code ?? 'ok')
+    const timeouts = payloads.filter((payload) => payload.error?.code === 'state-timeout')
+    const unavailable = payloads.filter((payload) => payload.error?.code === 'state-worker-unavailable')
+
+    assert.equal(timeouts.length, 2, JSON.stringify(codes))
+    assert.equal(unavailable.length, 1, JSON.stringify(codes))
+    assert.match(unavailable[0].error.message, /saturated/)
+    assert.equal(unavailable[0].error.message.includes('at most 8'), false)
+    assert.equal(exceeded, false, `子进程数不得超过上限 2：${JSON.stringify(workerPids())}`)
+    assert.ok(Date.now() - firedAt <= TIMEOUT_BUDGET_MS)
+  } finally {
+    if (previousAllow === undefined) delete process.env.PF_STATE_MAX_CHILDREN_ALLOW
+    else process.env.PF_STATE_MAX_CHILDREN_ALLOW = previousAllow
+    if (previousCap === undefined) delete process.env.PF_STATE_MAX_CHILDREN
+    else process.env.PF_STATE_MAX_CHILDREN = previousCap
+  }
+})
+
 test('崩溃自愈：忙子进程被 SIGKILL → state-worker-crashed；下一次请求自建新子进程并成功', { skip: LINUX === false }, async () => {
   const root = makeProject('crash', { fifoTask: true })
   const { ctx, routes } = await mount([root])

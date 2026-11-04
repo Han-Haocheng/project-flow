@@ -315,6 +315,18 @@ const STATE_DEADLINE_MS = 1800
 const STATE_READY_MS = 4000
 const STATE_MAX_IDLE = 1
 const STATE_MAX_CHILDREN = 8
+
+/**
+ * Test seam: lowering the child cap requires an explicit opt-in pair, so a
+ * production host can never be pushed below its real capacity by a stray env
+ * var (`PF_STATE_MAX_CHILDREN` alone is ignored).
+ */
+function stateMaxChildren() {
+  if (process.env.PF_STATE_MAX_CHILDREN_ALLOW !== '1') return STATE_MAX_CHILDREN
+  const raw = Number(process.env.PF_STATE_MAX_CHILDREN)
+  return Number.isInteger(raw) && raw > 0 ? raw : STATE_MAX_CHILDREN
+}
+
 const STATE_WORKER_DEFAULT_SCRIPT = fileURLToPath(new URL('./lib/state-snapshot.mjs', import.meta.url))
 
 /**
@@ -382,6 +394,8 @@ class StateWorkerPool {
     this.pending = new Map()
     this.seq = 0
     this.disposed = false
+    /** Child cap for this pool (production 8; the test seam may lower it). */
+    this.maxChildren = stateMaxChildren()
     /** In-flight warm-up fork; a second request must await it instead of forking again. */
     this.starting = undefined
   }
@@ -413,7 +427,9 @@ class StateWorkerPool {
   /**
    * Obtain a slot for one request.
    *
-   * An idle child is claimed atomically. When the pool is cold, the warm-up in
+   * `snapshot()` calls this for every read, so a cold burst (N requests in the
+   * same tick) must get N children, up to the cap — never just the keep-warm
+   * spare. An idle child is claimed atomically. When the pool is cold, the warm-up in
    * flight is awaited and its result is claimed — never handed out blind: a
    * second concurrent request that loses the race spawns its own child instead
    * of reusing the first request's busy one (the bug where a hung read took a
@@ -426,16 +442,27 @@ class StateWorkerPool {
     if (this.disposed) return undefined
     const claimed = this.takeIdle()
     if (claimed !== undefined) return claimed
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let guard = 0; guard < this.maxChildren * 2; guard += 1) {
       if (this.disposed) return undefined
-      if (this.starting === undefined) {
-        if (this.children.size >= STATE_MAX_CHILDREN) return undefined
-        this.ensureWarm()
-        if (this.starting === undefined) return undefined
+      // Real saturation: every child the cap allows is already in flight.
+      if (this.children.size >= this.maxChildren) return undefined
+      if (this.starting !== undefined) {
+        const starting = this.starting
+        try {
+          await starting
+        } catch {
+          return undefined
+        }
+        const slot = this.takeIdle()
+        if (slot !== undefined) return slot
+        continue
       }
-      const starting = this.starting
+      // Cold pool / burst: fork one child for this request and claim it. Routing
+      // this through `ensureWarm` would stop at the keep-warm spare (ONE idle
+      // child), so a third concurrent request would be refused while the pool was
+      // nowhere near `STATE_MAX_CHILDREN`.
       try {
-        await starting
+        await this.spawn()
       } catch {
         return undefined
       }
@@ -450,7 +477,7 @@ class StateWorkerPool {
     if (this.disposed) return
     if (this.idleCount() >= STATE_MAX_IDLE) return
     if (this.starting !== undefined) return
-    if (this.children.size >= STATE_MAX_CHILDREN) return
+    if (this.children.size >= this.maxChildren) return
     const starting = this.spawn()
     this.starting = starting
     starting.then(
@@ -641,7 +668,7 @@ class StateWorkerPool {
         code: 'state-worker-unavailable',
         message: this.disposed
           ? 'state worker pool is disposed'
-          : `state worker pool is unavailable (at most ${STATE_MAX_CHILDREN} read children)`,
+          : `state worker pool saturated (max ${this.maxChildren} read children); retry`,
       }
     }
     return await this.call(slot, request)

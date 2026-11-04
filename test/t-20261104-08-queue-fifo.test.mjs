@@ -113,6 +113,39 @@ test('tasks.current：manifest 未声明时派生为队列头；声明时优先�
   assert.equal(none.tasks.current, null)
 })
 
+test('FIFO 与 updated_at 解耦：claim 取 created 最老（即使它的 updated_at 最旧）', () => {
+  const { root, contract } = freshProject('claim-created-wins')
+  // A = created 最老 + updated 最旧；B = created 较新 + updated 最新。若排序键退回
+  // updated_at 倒序会误领 B，因此这条夹具能杀死该变异。
+  const a = task(root, contract, 'T-20260101-16', 'A 最老', 'active', AT(1), AT(1))
+  task(root, contract, 'T-20260101-17', 'B 较新', 'active', AT(2), AT(9))
+
+  const record = startHeartbeat(root, contract, { session: 'session-i', agent: 'lead' })
+  assert.equal(record.createdTask, null)
+  assert.equal(record.task, a.id, 'created 最老者优先，updated_at 不参与认领排序')
+})
+
+test('tasks.current 派生与 updated_at 解耦：created 最老但 updated 最旧仍是队首', async () => {
+  const { root, contract } = freshProject('current-created-wins')
+  const a = task(root, contract, 'T-20260101-18', 'A 最老', 'active', AT(1), AT(1))
+  task(root, contract, 'T-20260101-19', 'B 较新', 'active', AT(2), AT(9))
+
+  const payload = await snapshotOf(root)
+  assert.equal(payload.tasks.current, a.id, '队列头按 created_at，而不是 updated_at')
+  assert.deepEqual(ids(payload.tasks.active), [a.id, 'T-20260101-19'])
+})
+
+test('draft FIFO 与 updated_at 解耦：created 最老但 updated 最新者排第一', async () => {
+  const { root, contract } = freshProject('draft-created-wins')
+  // A = created 最老 + updated 最旧；B = created 较新 + updated 最新：updated_at 倒序
+  // 会先排 B，与 FIFO 期望相反。
+  const a = task(root, contract, 'T-20260101-20', '草稿 A', 'draft', AT(1), AT(1))
+  task(root, contract, 'T-20260101-21', '草稿 B', 'draft', AT(2), AT(9))
+
+  const payload = await snapshotOf(root)
+  assert.deepEqual(ids(payload.tasks.draft), [a.id, 'T-20260101-21'])
+})
+
 test('heartbeat start：认领最老的无主 active（FIFO），不抢他人名下的任务', () => {
   const { root, contract } = freshProject('claim-fifo')
   task(root, contract, 'T-20260101-11', '最老 active', 'active', AT(1), AT(8))
