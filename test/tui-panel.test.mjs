@@ -124,6 +124,27 @@ test('ready payload counters, section order and task rows follow the web panel',
   assert.equal(gateRow.tone, 'success')
 })
 
+test('心跳计数行用「活跃」，dead 判据同时认 liveness 与布尔 dead:true', () => {
+  const payload = fixture();
+  payload.heartbeats = [
+    { session: 'a', goal: '还活着', status: 'working' },
+    { session: 'b', goal: '只有布尔标记', status: 'working', dead: true },
+    { session: 'c', goal: '有 liveness', status: 'working', liveness: 'dead' },
+  ];
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+  const heartbeat = model.sections.find((section) => section.title === '心跳');
+  assert.ok(heartbeat, 'heartbeat section missing');
+  const header = heartbeat.rows[0].text;
+  assert.equal(header, '活跃 1 · 已结束 2 / 共 3', 'the count line must use the web panel wording');
+  assert.ok(!header.includes('working'), 'the count line must not mix English: ' + header);
+  assert.equal(heartbeat.rows.filter((entry) => entry.text.startsWith('×')).length, 2, 'dead rows need the × glyph');
+  assert.equal(heartbeat.rows.filter((entry) => entry.text.startsWith('▶')).length, 1, 'only the live beat is working');
+  assert.ok(
+    heartbeat.rows.some((entry) => entry.text.includes('只有布尔标记') && entry.text.includes('已结束')),
+    'a beat with only `dead: true` must render as ended, not working'
+  );
+});
+
 test('every line is clipped to the requested width (CJK counted as one)', () => {
   const model = panelModel(fixture(), { width: 20, height: 40, now: NOW })
   const lines = allLines(model)
@@ -494,8 +515,10 @@ test('首读失败才显示错误卡；not-initialized 仍是正常空态（不�
 test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 字段', () => {
   const single = panelModel(fixture())
   // 与 T-05 之前（HEAD 版 tui-panel.js）的输出逐字节一致。
+  // task-88：唯一的差异是心跳计数行由 `working N` 改为与 web 一致的 `活跃 N`
+  // （T-10 文案对齐），其余字段未变；单参调用仍然不产出 `staleNote`。
   const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
-  assert.equal(digest, '1cdd504bd3654c7286016ba84af78a7aded0831e0babe70b2fd749f313bd9ddf')
+  assert.equal(digest, 'fd33740145839eba22e47b82fb5899ec5e01ce36c6b3a2a8a78028516857aab7')
   assert.equal(Object.hasOwn(single, 'staleNote'), false)
 
   const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })

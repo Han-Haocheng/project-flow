@@ -26,7 +26,7 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "team: task-64/65(分析) task-71(技能侧，待改) task-72(交叉核对) task-74(契约草稿 v2 543行) task-75(client布局分析) task-76(FoldHeader+openItems key，已完成) task-78(草稿vs技能核对，已完成) task-82(技能10条修正) task-84(B1 core落点分析)。D-20261104-10 采纳 4 项；Lead 裁决 8 条技术细节（direction 自由文本/cleanup{flags,code,data}/pivoted 单向 parent/review 恒0/task.experiment 不存在 warning/超期 open 只 warning/产品化基准 gate finished_at≥实验 updated_at/面板落 §9.1.3）。D-20261104-12 采纳：关闭时 check experiments skip exit 0；缺 enabled 的旧项目默认关闭 + 一次性引导 warning（不自动开启，Myai 22 条需手动开）。实施顺序 B1 core → B2 CLI+工具 / B3 面板+TUI（可并行）→ B4 文档+check。",
+  "notes": "team: 分析 task-64/65/72/75/84/89/95；实施 task-71(技能，§十二)、82(技能10条修正)、76(FoldHeader/openItems)、94(B1 core，进行中)、88(TUI/i18n)；文档 task-74(草稿 v2 543行)、86(CONTRACT 五条漂移)；审查 task-78/87/90。裁决：D-10 四项 + Lead 8 条技术细节 + D-12（关闭时 check skip、缺 enabled 默认关+一次性 warning）。B2 形态最终定：`flow exp review <id>` 只读自查（verdict/branch/missing、无 --result、恒 0），状态走 `exp update --status` + `exp cleanup` + `exp productize`（confirmed + release finished_at ≥ 实验 updated_at、幂等）；七字段 CLI：--direction/--expected/--primary-metric/--guardrail(可重复)/--falsify/--window-days/--stop-loss；check experiments 走 bin 内置（不进 lib/checks.mjs）；legacy 判定 `record.schema !== 2`。顺序 B1(task-94) → B2(blocked 94+86) / B3(blocked B1+88+95) → B4(草稿落盘)。",
   "created_at": "2026-11-04T20:22:38+08:00",
-  "updated_at": "2026-11-04T20:46:00+08:00"
+  "updated_at": "2026-11-04T20:49:35+08:00"
 }

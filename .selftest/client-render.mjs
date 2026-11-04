@@ -49,7 +49,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { zh, en, normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -680,6 +680,29 @@ check('DetailBlock: keeps original newlines in a <pre>', () => {
   assert.equal(values[0].type, 'pre');
   assert.ok(values[0].children[0].includes('\n'), 'hypothesis newline lost');
   assert.equal(collect(detail, 'project-flow-detailLabel').length, 3);
+});
+
+check('i18n: zh/en dictionaries stay in lockstep (keys, placeholders, ASCII-only en, every t() key defined)', () => {
+  const zh = probe.zh;
+  const en = probe.en;
+  assert.ok(zh && en, 'the zh/en dictionaries are not exposed through __probe');
+  const zhKeys = Object.keys(zh).sort();
+  const enKeys = Object.keys(en).sort();
+  assert.deepEqual(zhKeys, enKeys, 'zh/en key sets differ');
+  const placeholders = (value) => [...String(value).matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+  const mismatch = zhKeys.filter((key) => placeholders(zh[key]) !== placeholders(en[key]));
+  assert.deepEqual(mismatch, [], `placeholder mismatch between zh and en: ${mismatch.join(', ')}`);
+  const chinese = enKeys.filter((key) => /[\u4e00-\u9fff]/.test(String(en[key])));
+  assert.deepEqual(chinese, [], `en still contains Chinese: ${chinese.join(', ')}`);
+  // Every literal t('…') must resolve; the dynamic prefixes are whitelisted but
+  // must exist in the dictionary (so a renamed bucket cannot go silent).
+  const dynamic = ['tasks.status.', 'gates.phase.', 'hb.status.'];
+  const used = [...source.matchAll(/\bt\(\s*'([^']+)'/g)].map((m) => m[1]);
+  const missing = [...new Set(used)].filter((key) => !(key in zh) && !dynamic.some((prefix) => key.startsWith(prefix)));
+  assert.deepEqual(missing, [], `t() keys with no zh definition: ${missing.join(', ')}`);
+  for (const prefix of dynamic) {
+    assert.ok(zhKeys.some((key) => key.startsWith(prefix)), `dynamic prefix ${prefix}* has no keys`);
+  }
 });
 
 check('ExperimentTree: row expansion is keyed by experiment id and survives a reorder', () => {

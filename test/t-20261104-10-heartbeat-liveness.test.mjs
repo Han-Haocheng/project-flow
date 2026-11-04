@@ -177,7 +177,7 @@ test('TUI：dead 心跳不再算 working，行用 × + 已结束 + error tone', 
   const section = model.sections.find((item) => item.title === '心跳')
   assert.ok(section, '缺少心跳段')
   const texts = section.rows.map((row) => row.text)
-  assert.equal(texts[0], 'working 1 · 已结束 1 / 共 2', texts.join(' | '))
+  assert.equal(texts[0], '活跃 1 · 已结束 1 / 共 2', texts.join(' | '))
   const deadRow = section.rows.find((row) => row.text.includes('死会话'))
   assert.ok(deadRow, texts.join(' | '))
   assert.ok(deadRow.text.startsWith('×'), deadRow.text)
@@ -193,7 +193,7 @@ test('TUI：旧记录（无 liveness 字段）行为同今日，仍按 status �
     { file: 'legacy.json', session: 'legacy', status: 'working', goal: '旧记录', ageSeconds: 5 },
   ]), { width: 80, height: 40, now: Date.now() })
   const section = model.sections.find((item) => item.title === '心跳')
-  assert.equal(section.rows[0].text, 'working 1 / 共 1')
+  assert.equal(section.rows[0].text, '活跃 1 / 共 1')
   assert.ok(section.rows.some((row) => row.text.startsWith('▶')))
   assert.equal(section.rows.some((row) => row.text.includes('已结束')), false)
 })
@@ -299,7 +299,7 @@ test('GET state：dead 心跳带 liveness/reason，TUI 视图不计入 working',
     assert.equal(heartbeatRow(payload, 'live-session').liveness, 'live')
     const model = panelModel(payload, { width: 80, height: 40, now: Date.now() })
     const section = model.sections.find((item) => item.title === '心跳')
-    assert.match(section.rows[0].text, /working 1 /, 'dead 心跳不得计入 working')
+    assert.match(section.rows[0].text, /活跃 1 /, 'dead 心跳不得计入 working')
     assert.ok(section.rows.some((row) => row.text.includes('已结束')), 'dead 行应标「已结束」')
   } finally {
     host.disposeAll()

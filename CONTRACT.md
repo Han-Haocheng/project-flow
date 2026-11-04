@@ -109,7 +109,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - **面板 `tasks.current` 的派生**：manifest 声明了合法相对路径时原样作为 `current` 回显；
   未声明（`null`）时，Host 的面板投影把它派生为**队列头**——`active` 里 `created_at` 最老的
   一条任务的 `id`（只读投影，不回写 `flow.json`，manifest 仍是 `null`）；没有 `active` 时为
-  `null`。
+  `null`。manifest 声明了但被 containment 拒绝时 `current` 保持 `null`（记原 warning），
+  **不回退**队列头。
 
 合法相对路径的解析结果与旧行为完全一致。
 
@@ -345,13 +346,18 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   | 无任何证据且 age ≤ 6h | `unknown` | `no-liveness-evidence` |
   | 无任何证据且 age > 6h | `stale` | `no-liveness-evidence` |
 
+  **非 Linux 降级**：没有 `/proc` 的平台读不到 `boot_id` 与 `pid_start`（两个字段为空），
+  于是跳过「boot 变更 / pid 复用」判定，退化为 `pid` 存活探测（`process.kill(pid, 0)`）+
+  6h 年龄兜底：探不到 pid → `dead`，探到 → `live`；记录没有 pid 证据时仍按 `unknown`/`stale`。
+
   `ageSeconds`（及 liveness 的年龄兜底）按 `updated_at` 计算；`updated_at` 不可解析时
   回退心跳文件的 mtime，**不会**因为坏时间戳而误判 `stale`。旧记录缺字段按
   `unknown` / `stale` 兜底，不报错（向后兼容）。`heartbeatStatus` 返回
   `{active, liveness, reason, ageSeconds, record}`；`active` = `status ∈ {working,idle}` 且
   （`liveness === "live"` → 直接 active（**pid 证活不受 6h 门槛**），否则
-  `liveness ∉ {dead,foreign,stale}` 且 `ageSeconds ≤ 6h`）。`heartbeatStatus(root, contract,
-  session, {live:true})` 是给宿主的正向证据入口（`agents` 服务命中该会话）：判定覆盖为
+  `liveness ∉ {dead,foreign,stale}` 且 `ageSeconds ≤ 6h`）。
+  `heartbeatStatus(root, contract, session, {live:true})` 是给宿主的正向证据入口（`agents`
+  服务命中该会话）：判定覆盖为
   `live`/`agent-live`，忙碌但 >6h 未续写的活跃会话仍 active；没有记录时不会凭空造 active。
   因此 `flow heartbeat status --require-active` 对死会话/陈旧/跨机心跳退出 1（`session-open`
   门禁不再对死会话假绿）。
@@ -368,7 +374,10 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime,liveness,reason}`，
   计数 `{total, active, stale, dead, hidden}`（total/active/stale/dead 只统计可见项；
   `active` 口径见上：status active 且（live 或 fresh 且非 dead/foreign/stale）；`dead` 计
-  `liveness === "dead"`；存活判定只读，GET state 读路径不写心跳文件；`root` 是解析后的
+  `liveness === "dead"`；`stale` 计 `ageSeconds > HEARTBEAT_STALE_SECONDS`（6h）的可见项，
+  **可与 `dead` 重叠**（一条记录可同时 stale 与 dead）；**没有 `foreign` 计数键**——跨机记录
+  计入 `total`/`stale`，但不计 `active`、不计 `dead`；存活判定只读，GET state 读路径不写
+  心跳文件；`root` 是解析后的
   主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。
 
 ### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`
@@ -618,6 +627,9 @@ flow check decisions
 - `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
 - `exp update` 的 `--metrics` 必须是 JSON 对象，如 `'{"tie":0.4}'`；`--commits` 逗号分隔。
+- `flow task list` 保持 `updated_at` **倒序**（CLI 的历史视角，最近更新在前），与面板
+  `active`/`draft` 的 FIFO 顺序（`created_at` 升序，见 §5.3）**不同**；两者各自稳定，不要
+  互相推断（`task list` 不因 FIFO 改造而改变）。
 - `--step` 格式 `id=命令>>expect`，可重复；`expect` 可为 `exit 0`、`exit 2`、
   `contains:文本`；未写 `>>expect` 时为 `exit 0`。
 - `gate run --timeout SECONDS` 覆盖该次运行所有步骤的超时（默认按步骤的 600 秒）。
@@ -678,19 +690,24 @@ FIFO 队列；patch 刷新 `updated_at` 不会改变队列位次），最近完�
 
 心跳读自**项目主工作区**的 `contract.heartbeats.dir`（默认 `.agents/heartbeat`，worktree
 会话也读主工作区；解析/降级规则见 §3.5）下的 `*.json`（只有 `source: 'none'` 关闭）：
-拼 `status · last_action`，按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；
-`ageSeconds > 6h` 记为可能已停（`HEARTBEAT_STALE_SECONDS`，与面板一致）。
+拼 `status · last_action`，按 mtime 倒序并按 `heartbeats.max`（默认 20）截断；存活按 §3.5 的
+`liveness` 判定（`ageSeconds > 6h` → `stale`「可能已停」；宿主重启或 pid 消失 → `dead`「可
+证明已死」；跨机 → `foreign`「只在别处活跃」）。
 目录不存在按空集处理，不报错。`agent: "subagent"` 的旧记录不展示
 （只提示隐藏条数，`flow heartbeat gc` 可清理）。心跳目录下的 `.md` 不再读取。
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
 其中 `heartbeats` 为
-`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime }], counts: { total, active, stale, hidden } }`
+`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime, liveness, reason }], counts: { total, active, stale, dead, hidden } }`
 （富形状来自 `readHeartbeatSection`；`readHeartbeats` 仍返回旧的
 `{file,title,statusLine,ageSeconds,mtime}` 以免破坏既有调用，同样只读 json）。
+`counts` 是**五键**：`active` 只算 live 或「fresh 且非 dead/foreign/stale」；`stale` =
+`ageSeconds > 6h`，可与 `dead` 重叠；`dead` 计 `liveness === 'dead'`；**没有 `foreign` 键**
+（跨机记录计入 `total`/`stale`，不计 `active`/`dead`）。
 
-`flow heartbeat list` 用同一份富形状输出表格（session 短名 / agent / status / 年龄 /
-task / claims / goal），并额外打印一条汇总与可能已停的文件名。
+`flow heartbeat list` 用同一份富形状输出表格（session 短名 / agent / status / **存活** / 年龄 /
+task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 reason），并额外打印
+一条汇总与可能已停的文件名。
 
 ## 6 机械检查（`flow check`）
 
@@ -873,9 +890,13 @@ startHeartbeat(root, contract, {session?, agent?, goal?, task?, claims?,
 updateHeartbeat(root, contract, session, patch)
                                      // 只允许 status/last_action/goal/task/claims/turn
 endHeartbeat(root, contract, {session?, status?='done', note?})
-heartbeatStatus(root, contract, session)   // {active, record|null}
+heartbeatStatus(root, contract, session, {live?})
+                                     // {active, liveness, reason, ageSeconds, record|null}
+                                     // live:true = 宿主的正向证据（agents 命中该会话）→ live/agent-live
 readHeartbeats(root, contract)             // 旧形状 [{file,title,statusLine,ageSeconds,mtime}]，只读 json
-readHeartbeatSection(root, contract)       // 富形状 {root, dir, items[], counts{total,active,stale,hidden}}
+readHeartbeatSection(root, contract, {pathMemo?})
+                                     // 富形状 {root, dir, items[], counts{total,active,stale,dead,hidden}}；
+                                     // item 带 liveness/reason；无 foreign 计数键（见 §3.5）
 resolveHeartbeatWorkspace(root)            // {root, degraded, reason}：心跳根=项目主工作区
 gcLegacyHeartbeats(root, contract, {dryRun?})  // {root, dir, removed[], kept, dryRun}
 
@@ -946,6 +967,9 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
+`heartbeats` 节由读子进程（`lib/state-snapshot.mjs`）自行投影，与 CLI 的
+`readHeartbeatSection` **键集合、排序、截断一致**（`counts` 五键 + item `liveness`/`reason`，
+见 §5.3/§3.5），但两者是不同实例：面板行不读 CLI 进程的 warning 缓冲，也不写心跳文件。
 
 #### 9.1.1 state 的根解析与文件系统纪律
 
@@ -962,11 +986,12 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   方法/Origin 校验与错误码（`bad-root`/`unknown-root`/`no-project`/`not-initialized`）
   保持不变。原因同上：同步 `realpath` 会阻塞宿主事件循环；异步版本最坏只让**本请求**变慢。
   快照组装里的同步 store 读取不在主线程执行（见「读隔离」）。
-- **一次请求只枚举一次注册表**：`handleState()` 只枚举一次 `workspaceRegistry.list()`，把行
-  集随快照请求（IPC）传入读子进程（`workspaces` 必填；子进程不持有 registry、不会二次
-  枚举）；`panelStateReader(ctx)`（TUI 读路径）同样取一次后传入。`lib/core.mjs` 的 store
-  读取仍是同步实现（CLI/工具共用），因此请求的 root 必须先通过异步 `stat` 判定为存在目录，
-  才会把快照请求发进子进程。
+- **一次请求只枚举一次注册表**：`handleState()` 只枚举一次 `workspaceRegistry.list()`，行集
+  **只留在主线程**用于「root 是否被接受」与展示名——IPC 请求只带
+  `{root, realRoot, entry, hostWarnings, now}`，**不传行集**；读子进程不持有 registry、也不会
+  二次枚举。`panelStateReader(ctx)`（TUI 读路径）同样只取一次。`lib/core.mjs` 的 store 读取
+  仍是同步实现（CLI/工具共用），因此请求的 root 必须先通过异步 `stat` 判定为存在目录，才会
+  把快照请求发进子进程。
 - **同步 fs 只留在读子进程与被请求 root 内部**：主线程请求路径上不再出现针对注册表行或
   root 发现的 `realpathSync`/`statSync`/`readFileSync`；同步调用只在两处——读子进程内的
   快照组装（`containedPath()` 的 containment 校验 + core 的 store 读取），以及写路径对被
@@ -978,7 +1003,8 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
   禁止进程级缓存（挂载状态会变）；CLI/工具与写路径不传 memo，保持逐次 realpath 的旧行为。
 - **验收值（失联挂载、假死 root、假死回收）**：注册表里存在一个不可访问的工作区行（例如
   未挂载的 `/mnt/g/...` automount）时，单次 `GET state` 的响应**< 100 ms**；正常 root 预热
-  后仍**< 100 ms**；假死 root（真实存在但 `realpath`/`stat` 永久阻塞，如 FIFO）**≤ 2 s**
+  后仍**< 100 ms**；假死 root（真实存在但 `realpath`/`stat` 或 store 读被永久阻塞——tasks
+  下的 FIFO、root 挂死等）**≤ 2 s**
   返回 `state-timeout`，期间事件循环 `max` 延迟**< 50 ms**（其它端点不被拖慢），超时后读
   子进程**≤ 300 ms** 消失且无悬挂 Promise；假死与正常 root 并发时，正常请求**≤ 500 ms**、
   两者 `payload.root` 各自正确。注册表投影本身取不到行时按空列表处理（随后只接受自带
@@ -988,15 +1014,22 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 - **请求期限与返回形状**：读路径有硬期限 **1800 ms**（`STATE_DEADLINE_MS`）：到点返回 HTTP
   **200** + `{ok:false, error:{code:'state-timeout', message}}`，**不返回半成品、不返回旧
   payload**。另两个设施错误码：`state-worker-crashed`（读子进程异常退出或 IPC 发送失败；
-  下一次请求自动重建子进程）与 `state-worker-unavailable`（无法 fork、启动期未 ready 或池
-  已 dispose；`init`/`gate` 等写端点不受影响）。三者都是 `ok:false`，与
+  下一次请求自动重建子进程）与 `state-worker-unavailable`（无法 fork、启动期未 ready、池已
+  dispose，或读子进程已达 `STATE_MAX_CHILDREN=8`——**突发饱和拒绝不排队**：冷池同一 tick 的并发
+  请求各自 fork 并持有一个子进程（`acquire()` 直接建，不受 keep-warm 的 1 个空闲备用限制），
+  超过 8 的那一路返回本错误码并提示 `retry`；下一次请求重试即自愈；
+  `init`/`gate` 等写端点不受影响）。三者都是 `ok:false`，与
   `bad-root`/`unknown-root`/`no-project`/`not-initialized` 并列，HTTP 状态码语义不变
   （读路径仍是 200；`bad-root`/`unknown-root` 仍是 400）。
 - **读隔离：fork + SIGKILL**：只读快照在 `child_process.fork` 出的读子进程里组装（**不用**
   `worker_threads`：`terminate()` 对阻塞在 fs syscall 的线程无效，FIFO 场景实测 >3 s 仍未
   回收；fork + `SIGKILL` 约 3 ms 回收）。主线程只做异步根解析、注册表枚举、IPC 与期限；
   子进程只读：只调用 core 的只读聚合与投影辅助，不调用写 API、不 import 宿主 `index.js`；
-  stdio 全 `ignore`（只剩 IPC 通道），请求与回复都是 JSON。写路径（`init`/`gate`）仍在
+  stdio 全 `ignore`（只剩 IPC 通道），请求与回复都是 JSON；`cwd` 固定为**包根**，
+  `execArgv: []`（不继承宿主的 node 参数），env 走 `stateWorkerEnv()` **白名单**（只透传
+  `PATH`/`HOME`/`TMPDIR`/`LANG`/`TZ` 等运行必需项 + `PF_STATE_WORKER=1`，不继承其它环境
+  变量与凭据）；`PF_STATE_WORKER_SCRIPT` 测试接缝须同时设 `PF_STATE_WORKER_SCRIPT_ALLOW=1`
+  才生效（双开关，生产不设即不可指向别的脚本）。写路径（`init`/`gate`）仍在
   主线程、仍在 `withLock` 内完成，读路径不取锁。
 - **stale 呈现归读端**：宿主不缓存、不重放上一份 payload——`ok:false` 就是「这次没读到」。
   是否降级为陈旧展示由读端决定：web 面板保留最后一份 good payload、只更新
