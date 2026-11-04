@@ -1,0 +1,33 @@
+{
+  "title": "state 端点同步 realpath 全量工作区 → 死挂载点阻塞宿主事件循环",
+  "status": "done",
+  "goal": "/api/project-flow/state 每次请求对全部注册工作区做同步 realpathSync，其中 /mnt/g/SteamLibrary/steamapps（失联 autofs，stat 耗时 3.2s）导致单次请求阻塞事件循环 6.4s；面板每 2.5s 轮询 → 整个 dsh 宿主卡死、侧栏永远停在「读取中…」。改为：只规范化请求的 root、不 stat 无关工作区、去掉 collectPanelState 的二次全量枚举、客户端单飞轮询。",
+  "scope": {
+    "allow": [
+      "index.js",
+      "client.js",
+      "test/",
+      "CONTRACT.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "注册表里含一个 stat 会阻塞的失联路径时，/api/project-flow/state 单次响应 <100ms，且请求期间其它端点（如 /）延迟 <50ms（事件循环不再被阻塞）",
+    "listWorkspaces 不再对每个注册工作区调用 realpathSync；路径收窄比较用纯路径解析，需要真路径的地方改用异步 realpath（fs/promises）",
+    "collectPanelState 接收 handleState 已算出的 workspaces，一次请求只枚举一次注册表（现状 2 次 → 1 次）",
+    "客户端轮询改为上一次完成后再排下一次（in-flight 守卫），abort 只用于卸载，响应慢时不再自噬取消（承接 T-20261030-06）",
+    "回归用例：stub registry 含不可 stat 路径（可用 node 的 spawnSync 阻塞探针或 fixture）并断言耗时与调用次数；node --test 全绿"
+  ],
+  "schema": 1,
+  "id": "T-20261104-01",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [
+    "33a9b4d"
+  ],
+  "notes": "team: task-1(实施/index.js) task-2(实施/client.js) task-3(实施/test) task-4(实施/CONTRACT.md) task-6(审查/index.js) task-7(审查/client.js) task-8(审查/test+docs) task-9(分析/环境止血+生效路径) task-10(分析/残余风险) task-11(README=T-03) task-12(注释) task-13(并发用例)。已合并 33a9b4d。审查结论：reviewer-server/client/tests 均 accept-with-notes，无 reject。证据：node --test 154/154、.selftest 25/25、precommit 2/2；真实 autofs 复现：正常 root 31.3ms/失联行命中 0/listCalls 1，root 自身失联 400 bad-root 6382ms 但全异步、同步命中 0。残留面（不属本任务验收）：被请求 root 为「已挂载但慢」时 core 同步读仍独占事件循环（76 次 core realpath + 1~4 次 index.js realpath），已立 T-20261104-04（realpath 去重）与 T-20261104-05（worker 隔离+期限）。环境侧：/mnt/g 注册行 2e83c1e4 已于 18:46 由活宿主删除，触发源消失；插件需重启宿主才加载新码（link: 加载，无 cache-bust）。",
+  "created_at": "2026-11-04T18:44:23+08:00",
+  "updated_at": "2026-11-04T19:14:04+08:00"
+}

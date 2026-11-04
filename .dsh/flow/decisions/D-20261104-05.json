@@ -1,0 +1,54 @@
+{
+  "question": "T-20261104-01 即将收口（只剩 reviewer-server 与 task-9 分析）；分析员又挖出两个后续项 T-20261104-04（core 内 realpath 去重，便宜）与 T-20261104-05（worker 线程隔离 + 请求期限，治本），现在要怎么排？",
+  "kind": "choice",
+  "rationale": "当前任务已达成验收，继续做 04 会改 lib/core.mjs（本任务写域之外），需要新写域与新一轮实施+审查；05 成本更高。现在插队会把已绿的工作晾着，也容易混提交。",
+  "options": [
+    {
+      "id": "close-then-04",
+      "label": "先提交收口 T-01，再开 T-04（推荐）",
+      "impact": "我先把 T-01 分笔提交+台账置 done，再把 T-04 派给空闲队友（实施+审查两张卡）。"
+    },
+    {
+      "id": "parallel-04",
+      "label": "T-01 收口同时并行开 T-04",
+      "impact": "立刻派 T-04，与 T-01 提交并行；写域不重叠（lib/core.mjs + index.js 需协调，可能与 T-01 的 index.js 提交时序打架）。"
+    },
+    {
+      "id": "open-04-05",
+      "label": "04 + 05 一起开（大改造）",
+      "impact": "04 去重 + 05 线程隔离一起上；成本最大，需要多轮实施/审查，今晚不一定收尾。"
+    },
+    {
+      "id": "stop",
+      "label": "都先不开，收口即可",
+      "impact": "只把 T-01 交付，后续项留在 draft 台账里等你下次点。"
+    }
+  ],
+  "recommendation": "close-then-04",
+  "affects": [
+    "lib/core.mjs",
+    "index.js",
+    "test"
+  ],
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 1,
+  "schema": 1,
+  "id": "D-20261104-05",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "close-then-04",
+    "note": "用户选「先收口 T-01，再开 T-04（推荐）」",
+    "at": "2026-11-04T19:08:35+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T19:08:35+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "fd7d8cddcb600174",
+  "asked_at": "2026-11-04T19:08:17+08:00",
+  "created_at": "2026-11-04T19:08:17+08:00",
+  "updated_at": "2026-11-04T19:08:35+08:00"
+}

@@ -1,0 +1,27 @@
+{
+  "title": "README 同步：面板轮询描述改为单飞 + settle 排期，隐藏不发请求但保链",
+  "goal": "reviewer-client 审查发现 README.md §边界 仍写「面板每 2.5 秒轮询…页面隐藏时暂停」，与 T-20261104-01 的单飞轮询实现/契约漂移；同步该两行描述。",
+  "scope": {
+    "allow": [
+      "README.md"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "README §边界 中面板轮询描述与 CONTRACT.md §9.1.2 一致：单飞（上次 settle 后 2500ms 再排）、慢响应不被后继取消、页面隐藏不发请求但链保持",
+    "不改 README 其它章节；不改代码/测试/契约/skills"
+  ],
+  "schema": 1,
+  "id": "T-20261104-03",
+  "status": "done",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [
+    "2731605"
+  ],
+  "notes": "team: task-11(regression-test 实施，只写 README.md)。已合并 2731605。reviewer-client 审查时发现 README 与 §9.1.2 漂移，改 README §边界 单飞轮询描述；node --test 154/154 仍绿。",
+  "created_at": "2026-11-04T19:07:26+08:00",
+  "updated_at": "2026-11-04T19:14:12+08:00"
+}

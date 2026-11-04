@@ -1,0 +1,29 @@
+{
+  "title": "调整插件技能：智能体团队分工（分析/实施/审查）与派工纪律",
+  "goal": "把「尽量用满智能体团队、按分析/实施/审查分工、按创建上限建员、主会话不用 wait_agent 等待而是靠队友回报」写进插件随附的 ai-collaborative-dev-workflow 技能，作为长期派工纪律。",
+  "scope": {
+    "allow": [
+      "skills/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "SKILL.md §十 与 references/agent-teams-and-tasks.md §3 明确：角色配比（analyst 先出任务书、implementer ×N 按文件域、reviewer 独立且非实现者）、默认按 Team 创建上限（agent-team.maxMembers，当前 profile=8，缺省 16）建满不浪费",
+    "写明 Lead 默认不调用 wait_agent：派工后结束轮次，队友完成即 send_message 回报唤醒；仅排障时才用 wait_agent，且不把它当催活手段",
+    "写明队友必须主动回报：交付物 + 证据 + 结论（accept/reject/request-rebase）一次性 send_message 给 lead，不等被问",
+    "文档改动不破坏现有 flow:/role:/domain: 映射与回收检查单；doc_check 对该技能文件不新增失败"
+  ],
+  "schema": 1,
+  "id": "T-20261104-02",
+  "status": "done",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [
+    "040c5c4"
+  ],
+  "notes": "team: task-5(skill-editor 实施，只写 skills/)。已合并 040c5c4。改动：SKILL.md §10.2 默认配比/§10.6 第6·9条/§10.7 末条 + references §3.0/§3.1 周边；smoke_test ALL PASS，doc_check 无新增失败类别。审查：本任务为文档纪律调整，由 Lead 复核 diff（无独立 reviewer，属单域小任务降级，不涉及代码）。",
+  "created_at": "2026-11-04T19:01:50+08:00",
+  "updated_at": "2026-11-04T19:14:04+08:00"
+}

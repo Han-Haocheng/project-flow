@@ -1,0 +1,29 @@
+{
+  "title": "state 请求内 realpath 去重：112 次 → 9 次（core normalize 复用）",
+  "goal": "client-audit 分析发现：同一次 GET state 里 core.mjs 对同一 root 重复 realpathSync/normalizeContract，112 次 realpath 只解析 9 个不同路径；per-request memo 后同步调用 176→73、tmpfs 3.5ms→1.6ms。把请求入口 normalize 一次并传递 contract（或 per-request realpath 缓存），降低慢挂载下事件循环阻塞面 2~10×，语义不变。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "index.js",
+      "test/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "acceptance": [
+    "同一次 GET state / panelStateReader 内对同一路径的 realpathSync 不超过 1 次（per-request 缓存，不做进程级缓存）",
+    "core 的同步 API（CLI/工具共用）签名不变或向后兼容",
+    "node --test 全绿；新增一条计数断言（同一请求内 realpathSync 次数 ≤ 不同路径数 + 常数）",
+    "失联挂载下注册行仍零触碰（T-20261104-01 的回归用例继续绿）"
+  ],
+  "schema": 1,
+  "id": "T-20261104-04",
+  "status": "draft",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [],
+  "notes": "来源：client-audit (task-10) 分析 + reviewer-server (task-6) R1/R2。建议顺序：先本任务（per-request realpath 去重，112→9），再 T-20261104-05（worker+期限）。",
+  "created_at": "2026-11-04T19:08:09+08:00",
+  "updated_at": "2026-11-04T19:14:12+08:00"
+}
