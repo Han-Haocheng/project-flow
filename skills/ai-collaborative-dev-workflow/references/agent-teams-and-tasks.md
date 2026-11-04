@@ -38,12 +38,20 @@
 |---|---|---|
 | `spawn_teammate` | Lead 专用；建**持久**队友（`fresh` = 无历史 / `fork` = 继承**已完成**轮次） | `fork` **看不到当前在飞的轮**；名字唯一；`description` 决定它自己怎么理解职责；**只有 Lead 能调**，分析者/实现者/审查者也由 Lead 建 |
 | `send_message` | durable 投递；**running 队友在最近步边界收到，inactive 队友被唤醒** | 成功发送 = 已持久化，**别重发**；这是唯一"开跑"手段 |
-| `wait_agent` | 等下一次成员状态/邮箱/共享任务变化 | **只观察调用之后的变化**，**从不唤醒**任何人；没有其他成员在跑时立刻返回 `noProgress`；超时后应 `list_agents` 重列而不是轮询 |
+| `wait_agent` | 等下一次成员状态/邮箱/共享任务变化 | **Lead 默认不用，仅排障**（确认还有谁在跑）；**只观察调用之后的变化**，**从不唤醒**任何人；没有其他成员在跑时立刻返回 `noProgress`；超时后应 `list_agents` 重列而不是轮询 |
 | `list_agents` | 花名册与可用性 | `inactive` = **没在跑**，不等于失败/完成/等待；`provisioning` / `failed` 才是创建态 |
 | `interrupt_agent` | Lead 专用中断某队友当前轮，**保留 pending inbox** | 中断 ≠ 取消任务；唤醒不保证恢复原状 |
 | `team_task_*` | 共享任务板；`update` 用 `expected_revision` 做 **CAS**（`claim` / `complete` / `release` / `reopen` / `edit` / `set_dependencies` / `reassign` / `delete`） | 先 `list`/`get` 拿**当前 revision** 再改；`write_scopes` 与 `blocked_by` 是**协调信息，不是锁**；**readiness 不会自动开跑 owner**——要 `send_message` 唤醒；**板随 Lead 会话消失，映射与回收见 §3.1**；`description` 的 `role:` / `domain:` 标注见 `SKILL.md` §10.4 |
 
 **派工检查单**：任务书路径 / base（branch + commit）/ **角色标注（`description` 第二行 `role:`，实现者第三行 `domain:`）** / 允许写域（与其他在跑成员尽量不相交，`write_scopes` 与 `domain:` 一致）/ 交付格式（只给结论 + 指针，≤6–8KB）/ **仅在自己分支提交 + 按模板提评审申请/审查结论，不合并、不 push**（见 `contribution-flow.md`）/ 停止条件 / 验证命令。
+
+### 3.0 团队规模与角色配比（上限内建满，2026-11-04）
+
+- **上限怎么查**：profile 补丁层 `~/.dsh/profiles/<profile>/cordis.yml` 里 `agent-team`（`@deepseek-ai/dsh-experimental-agent-team`）的 `config.maxMembers`；未配置时包缺省 `DEFAULT_MAX_MEMBERS = 16`（`lib/types/index.js`）。2026-11-04 实测 profile `web` = **8**；每次派工按**当下查到的值**算，别记死数字。
+- **谁占名额**：只有 `spawn_teammate` 建出的队友占名额，**`lead` 不占**；成员记录在开跑前就落盘，**创建失败（`failed`）的成员仍占名额** ⇒ 建员前先 `list_agents` 数现有成员，别重复建同一角色（重名另有 `TEAM_MEMBER_NAME_TAKEN`）。
+- **超限报错**：`TEAM_MEMBER_LIMIT`（`Team member limit N reached`，`dsh-experimental-agent-team/lib/types/roster.js`）是**硬拒绝不是排队**；要更多名额只能改 profile 配置。
+- **默认配比**（建满，不按最小人数开张）：**1 名 analyst**（先出任务书）→ **N 名 implementer**（N = 互斥 `domain:` 的写域数，不硬拆同一文件）→ **≥1 名 reviewer**（非实现者；名额够就多名，各覆盖一个验收面，如实现面 / 文档与外观面 / 门禁与打包面）。
+- **配额纪律**：剩余名额优给**只读审查与核验**（可多、不会双写）；写域永远互斥，同一文件同一时段只给一个写者；没有活可给的名额**不建**队友。
 
 ### 3.1 与项目任务（project-flow）对接：项目台账是 durable 真源，Team 板是执行视图
 
@@ -77,12 +85,12 @@
 
 | 角色 | 谁来做 | 建卡 / 派工（Lead） | 自己的工具动作 | 交接物 |
 |---|---|---|---|---|
-| **中心**（Lead） | 主工作区会话 | `team_task_create`（`description` 标注 `flow:` / `role:` / 实现者 `domain:`）；`spawn_teammate`；`team_task_update` 回收 | `flow_task`、`send_message`、`wait_agent`、`list_agents`、`interrupt_agent`、git 合并与门禁 | 项目台账更新 + Team 卡回收 |
+| **中心**（Lead） | 主工作区会话 | `team_task_create`（`description` 标注 `flow:` / `role:` / 实现者 `domain:`）；`spawn_teammate`；`team_task_update` 回收 | `flow_task`、`send_message`、`wait_agent`（仅排障）、`list_agents`、`interrupt_agent`、git 合并与门禁 | 项目台账更新 + Team 卡回收 |
 | **分析者**（analyst） | 只读队友（降级时 Lead 自析） | Lead 建 `role: analyst` 只读卡 | `team_task_get` / `update`（claim / complete）、只读工具、`send_message` | 任务书（`assets/task-brief-template.md`） |
 | **实现者**（implementer ×N） | 每人一条分支/worktree 的队友 | Lead 建 `role: implementer` + `domain:` 卡（`write_scopes` 一致） | `team_task_*`、`create_worktree`（或本地分支）、提交与门禁工具 | 提交 + 证据 + 评审申请 |
-| **审查者**（reviewer） | 只读队友，**必须是实现者之外的人** | Lead 建 `role: reviewer` 只读卡，`blocked_by` 实现卡 | `team_task_*`、只读工具 + 跑测试 | 结论（accept / reject / request-rebase）+ 证据 |
+| **审查者**（reviewer） | 只读队友，**必须是实现者之外的人**；验收面多就建多名，各覆盖一面、互不写文件 | Lead 建 `role: reviewer` 只读卡，`blocked_by` 实现卡 | `team_task_*`、只读工具 + 跑测试 | 结论（accept / reject / request-rebase）+ 证据 |
 
-- **铁律**：`spawn_teammate` 只能 Lead 调；`team_task_update` 是 CAS（先 `get` 拿 revision）；**审查者不得由实现者兼任**；合并、项目台账、push 只归中心。
+- **铁律**：`spawn_teammate` 只能 Lead 调；`team_task_update` 是 CAS（先 `get` 拿 revision）；**审查者不得由实现者兼任**；合并、项目台账、push 只归中心。**Lead 派工/唤醒后结束本轮，靠队友 `send_message` 回报收口**——`wait_agent` 仅排障（确认还有谁在跑），不用于等待交付。
 - 状态机与交接物见 `SKILL.md` §10.3–§10.4；各角色的操作检查单见 `contribution-flow.md` §4.4。
 
 ## 4 目标 `create_goal` / `get_goal` / `update_goal`

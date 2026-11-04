@@ -9,7 +9,7 @@ metadata:
 
 > 随 `@local/project-flow` 插件分发（技能来源 `bundled`）：`resourceBase` 即本文件所在目录，文中 `references/`、`assets/`、`scripts/` 均相对该目录解析。
 
-> 技能版本 2.12（2026-10-31）：随 project-flow 插件分发；检查入口 `flow check`。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
+> 技能版本 2.13（2026-11-04）：随 project-flow 插件分发；检查入口 `flow check`。**2.13**：团队名额上限内按角色配比建满（analyst → N implementer → ≥1 reviewer，§10.2 / §10.6）；Lead 收口改为队友 `send_message` 回报唤醒，**默认不 `wait_agent`**（仅排障，§10.6 / §10.7）。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
 
 本技能只有一个流程：**一个项目有且只有一个中心负责合并与同步，其余人产出可评审的提交与证据，由中心判断提交是否合理**。没有模式开关、没有多中心协商；单人就是"中心与贡献者合一"的退化情形（§1.5）。与语言/构建体系无关。**本技能的命令只使用 shell 系统命令与 git**；随包附带的 `scripts/` 运行需要 `bash`（`doc_check.py`、`gate.py`、`task` 另需 `python3`），项目若在 CI / 非 DSH 环境使用，应把需要的脚本复制进仓库（如 `.agents/scripts/`）随版本管理，而不是依赖某个用户级目录里的副本。类型检查、lint、构建、测试、打包、安装依赖等工具链操作一律由项目技能以"命令契约"声明（见〇）。
 
@@ -138,7 +138,7 @@ metadata:
 1. **选执行面（先定怎么跑）**：中心先读项目任务与进度（`flow_task list` / `flow_task show`），再按顺序选执行面——**本次会话内有多路可并行写域、或需要来回追问/补证据 ⇒ Agent Teams（§十，默认，按四类角色跑）**；**跨会话 / 无人值守 / 要钉工作区与权限 ⇒ Host 任务板卡片（§九）**；**大规模只读扇出 ⇒ `workflow` / 并行子代理**；**一次性只读调研，或当前会话工具列表里没有 Team 工具 ⇒ 一次性 subagent（唯一降级，只做只读）**。项目任务再多、只有一条写线时也不组队：中心自己推进更快。
 2. **分析（只读）→ 任务书**：组队时先把项目任务交给分析者（`role: analyst` 卡）只读出任务书：目标、范围/base、文件域切分、验收标准、验证命令、风险、依赖（[assets/task-brief-template.md](assets/task-brief-template.md)）；中心确认后才派实现。单域小任务不组队，中心自析自验（§10.8）。
 3. **拆分：项目任务 → Team 任务**：按**文件域与依赖**拆三类卡——分析卡（`role: analyst`，只读）、实现卡（`role: implementer` + `domain:`，一片可独立验收且域不相交的写域）、审查卡（`role: reviewer`，只读，`blocked_by` 实现卡）；`description` **首行 `flow: <T-id>`、第二行 `role:`，实现者第三行 `domain:`**（一张卡只对应一个项目角色/一片域；要覆盖多个就拆多张），正文写任务书路径、交付格式（分支 + 提交 + 证据 + 申请/结论）与停止条件；依赖用 `blocked_by`、文件域用 `write_scopes` 预声明（**协调信息，不是锁**）。拆完由中心把 `team: <taskId>` 回记到**项目任务 notes**——项目台账是 durable 真源，Team 板只是本次会话的执行视图。
-4. **派队友**：`spawn_teammate`（Lead 专用）按角色建持久队友——实现者每人一条分支/worktree、一片 `domain:`，**审查者必须是非实现者**；prompt 必须自带 role/domain 标注、Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式与停止条件（队友看不到 Lead 的对话）。**建卡与派工都不会自动开跑**：队友按 `team_task_get` 取当前 revision 后 `claim`；Lead 用 `send_message` 唤醒或追加指令。
+4. **派队友**：`spawn_teammate`（Lead 专用）按角色建持久队友——实现者每人一条分支/worktree、一片 `domain:`，**审查者必须是非实现者**；prompt 必须自带 role/domain 标注、Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式与停止条件（队友看不到 Lead 的对话）。**建卡与派工都不会自动开跑**：队友按 `team_task_get` 取当前 revision 后 `claim`；Lead 用 `send_message` 唤醒或追加指令。人数按 §10.2 配比在 `maxMembers` 上限内建满；唤醒后**结束本轮等队友 `send_message` 回报**，不用 `wait_agent` 干等。
 5. **外部世界核对**：派工/恢复前做 `git status`、当前 HEAD、台账 `COLLAB_STATE.md`、远端/CI 是否变化；未归属改动先冻结并询问用户。
 6. **实现者产出**：队友认领后只在自己的分支/worktree、只写自己 `domain:` 内的文件，按任务书提交、跑门禁、按模板提评审申请（branch + path + commit + 命令结果 + 影响面 + 希望中心做什么），完成后把实现卡置 `completed`；**不写项目台账、不写心跳、不合并、不审自己**。
 7. **审查者复核**：审查者认领审查卡（`blocked_by` 对应实现卡），只读 + 跑测试，按 §1.4 五条清单独立复核 diff / 范围 / 门禁 / 契约影响，给 **accept / reject（具体理由）/ request-rebase（新 base）** + 证据；**不得是实现者**，不改代码、不合并。
@@ -229,7 +229,7 @@ metadata:
 >
 > **2026-10-31 起（T-20261031-01）：团队固定四类角色——中心 / 分析者 / 实现者 / 审查者**（§10.2），配一条状态机（§10.3）与四类固定交接物（§10.4）。角色是**权限与职责划分**，不是头衔：写的人不审自己、审的人不改代码、合并与台账只归中心；单文件/单域小任务不组队（§10.8）。
 
-**工具**：`spawn_teammate`（Lead 专用；`context` = `fresh` 无历史 / `fork` 继承**已完成**轮次）· `send_message`（durable，**唯一能唤醒 inactive 队友**的手段，也是派新活的方式）· `wait_agent`（只观察**调用之后**的状态/邮箱/任务变化，**从不唤醒**任何成员；无人在跑时立即 `noProgress`）· `list_agents`（`inactive` = 此刻没在跑，**不代表失败或完成**；`provisioning` / `failed` 才是创建态）· `interrupt_agent`（Lead 专用，**保留 pending inbox**）· `team_task_create` / `get` / `list` / `update`（共享任务板；`update` 用 `expected_revision` 做 **CAS**：claim → 干活 → complete）。
+**工具**：`spawn_teammate`（Lead 专用；`context` = `fresh` 无历史 / `fork` 继承**已完成**轮次）· `send_message`（durable，**唯一能唤醒 inactive 队友**的手段，也是派新活的方式）· `wait_agent`（**Lead 默认不用**，仅排障时确认还有谁在跑；只观察**调用之后**的状态/邮箱/任务变化，**从不唤醒**任何成员；无人在跑时立即 `noProgress`）· `list_agents`（`inactive` = 此刻没在跑，**不代表失败或完成**；`provisioning` / `failed` 才是创建态）· `interrupt_agent`（Lead 专用，**保留 pending inbox**）· `team_task_create` / `get` / `list` / `update`（共享任务板；`update` 用 `expected_revision` 做 **CAS**：claim → 干活 → complete）。
 
 ### 10.1 真源与执行视图：项目台账 durable，Team 板随会话消失
 
@@ -246,7 +246,16 @@ metadata:
 | **中心**（Lead；集成权威） | 主工作区会话、项目维护者 | 从项目台账拉取任务（`flow_task list` / `show`）、拆分与分配、裁决并发、**最终合并主分支**、**唯一写项目台账**、唯一 push、逐卡回收 | 不兼任实现（组队时不下场写实现域）；不跳过独立复核直接合并；不把审查权交给自己或实现者本人 | 项目台账更新 + Team 卡回收 |
 | **分析者**（analyst） | 只读队友（单域降级时可由中心自析） | 只读仓库/契约/任务，产出**任务书**：目标、范围/base、文件域切分、验收标准、验证命令、风险、依赖 | 不写代码、不提交、不改任何文件、不合并、不写台账 | 任务书（中心确认后下发给实现者与审查者） |
 | **实现者**（implementer ×N） | 各占一条分支/worktree 的队友 | 只写**自己 `domain:`**：提交、跑门禁、写证据、提评审申请 | 不写他人 domain；不合并、不 push、不写台账/心跳；不审自己 | 提交 + 证据 + 评审申请 |
-| **审查者**（reviewer） | 只读队友，**必须与实现者不同人** | 只读 + 跑测试：独立复核 diff/范围/门禁/契约影响，给结论与证据 | 不改代码（问题回实现者改）；不合并、不写台账；不能是实现者本人 | 结论（accept / reject / request-rebase）+ 证据 |
+| **审查者**（reviewer） | 只读队友，**必须与实现者不同人**；验收面多就建多名 | 只读 + 跑测试：独立复核 diff/范围/门禁/契约影响，给结论与证据 | 不改代码（问题回实现者改）；不合并、不写台账；不能是实现者本人 | 结论（accept / reject / request-rebase）+ 证据 |
+
+**默认配比：名额上限内建满（2026-11-04 用户纪律）**
+
+人数上限来自 profile 的 `agent-team` 插件 `config.maxMembers`（包缺省 `DEFAULT_MAX_MEMBERS = 16`；`lead` 不占名额，**创建失败的成员仍占名额**，超限报 `TEAM_MEMBER_LIMIT`；查法与算法见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.0）。**默认按上限建满可用名额，不按最小人数开张**：
+
+1. **1 名分析者**先出任务书；多卡并行时可按写域拆多名只读分析者，但任务书只认中心确认过的那份。
+2. **N 名实现者**，一人一片互斥 `domain:`；N = 可并行且域不相交的写域数，**不为了凑人数硬拆同一个文件**。
+3. **≥1 名独立审查者**（非实现者）；名额够就**多名 reviewer 分别覆盖不同验收面**（实现面 / 文档与外观面 / 门禁与打包面），互不写文件、各自独立出结论。
+4. 剩余名额优给**只读核验**（审查、复核、外部事实核对）；没有活可给的名额不建队友（空转占额，还会让回收变糊）。
 
 **五条铁律（违反按事故处理）**：
 1. **写审分离**：同一变更的实现者不得担任审查者；审查者发现问题只写结论，不顺手改代码。
@@ -316,10 +325,10 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 3. 按**文件域与依赖**拆卡：一实现者 = 一条分支/worktree = 一片 `domain:`；`write_scopes` 预声明文件域（**协调信息，不是锁**）；`blocked_by` 表达依赖（审查卡依赖实现卡；依赖未完成时 readiness 不会自动开跑，完成后仍要 `send_message`）。
 4. `team_task_create` 建卡：`description` 按 §10.4 标注（`flow:` / `role:` / 实现者 `domain:`）；正文写任务书路径、允许写域、交付格式、验证命令与停止条件。
 5. 项目任务 notes 回记 `team: <taskId>`（Lead 写，§10.5）。
-6. `spawn_teammate({ context: "fresh" })` 按角色建持久队友：实现者每人一域；**审查者必须是非实现者**；prompt 自带 role/domain 标注、Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式（只在自己分支提交 + 按模板提申请/结论，不合并、不 push）、停止条件。
+6. `spawn_teammate({ context: "fresh" })` 按角色建持久队友（**名额按 §10.2 配比在上限内建满**：analyst → N implementer → ≥1 reviewer，上限查法见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.0）：实现者每人一域；**审查者必须是非实现者**；prompt 自带 role/domain 标注、Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式（只在自己分支提交 + 按模板提申请/结论，不合并、不 push）、停止条件。
 7. **并发与冲突**：`write_scopes` 不相交是派工前提；重叠时中心二选一——① **串行化**（先合一份，后一份 rebase 后再合）；② **让分析者重拆**（把共享文件划给唯一写者，或拆成先后卡）。同一文件同一时段只给一个写者；共享构建产物目录（`target/`、`dist/`、`.cache/`）并发构建需约定跳过本地验证、由中心收口统一跑。
 8. **结论回流**：审查 `request-rebase` ⇒ 回实现者换 base、复跑、重提（中心不代做）；`reject` ⇒ 按具体理由重做；审查者不得自己改代码绕过实现者。
-9. 需要时 `send_message` 追加指令或唤醒；`wait_agent` 只等变化、不催活。
+9. **派工后结束本轮，不 `wait_agent`**：需要追加指令或推进时用 `send_message`（running 队友在最近步边界收到，inactive 队友被唤醒）；**Lead 派工/唤醒后即结束本轮**，说明派了谁、等哪几路回报；队友完成后主动 `send_message` 唤醒 Lead，**收口以 inbox 回报为准**。`wait_agent` **只在排障时用**（确认还有谁在跑），且只观察变化、不催活、不唤醒任何人。
 
 ### 10.7 执行与回收：一次会话的完整闭环
 
@@ -337,7 +346,7 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 
 - **会话结束前逐卡检查**：没有 `in_progress` 悬空；每张 `completed` 卡都能在项目 notes 找到 `team: <taskId>` 与对应提交；reject / 放弃 / 接管的卡写清原因与现场（branch + path + commit）；每张卡的角色与结论可核（实现者未自审、审查者未改代码）。完整检查单见 [references/contribution-flow.md](references/contribution-flow.md) §8.2 与 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1。
 - **失败保留现场**：Lead 不替队友继续写；记录 branch + commit 后接管或丢弃。队友的"已完成"是声明，交付按产出物验收（`git status` + mtime + 复跑门禁 + 申请字段）。
-- **Lead 必须等必需队友收口再给最终答复**；不要在队友未回收时结束会话。
+- **收口靠 inbox 回报，不靠 `wait_agent`**：Lead 派工或 `send_message` 唤醒后结束本轮；队友完成后主动 `send_message` 唤醒 Lead，Lead 收到回报再复跑门禁、裁定、合并与回收。`wait_agent` 只在排障时用（确认还有谁在跑），且只观察、不催活、不唤醒。**没收到必需队友的回报、没回记项目台账，就不得宣布任务完成**（会话收尾仍按「会话结束前逐卡检查」执行）。
 
 ### 10.8 降级：单域小任务不组队（唯一降级）
 
