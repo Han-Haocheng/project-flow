@@ -450,7 +450,7 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 
 > **定位**：实验是**任务的外围功能**——任务仍是唯一执行单元，门禁、命名、配比、满编、自动归档全部照旧（§二 / §十）；实验只多两件事：**开工前把假设写死**，**收尾时把结果分流**。面板/CLI 的实验区可选开启（`flow.json` 的 `experiments.enabled`，默认关闭。**关闭 = 面板隐藏实验区 + `flow check experiments` 直接 exit 0 跳过**；`flow exp` / 工具 / 写路径照常。缺键补 `false`，**契约层不记 warning**（只有类型错才回退并记 `manifest-invalid`）；旧项目已有实验时给**一次性引导 warning**，**不自动开启**）。
 
-> **落地状态（B1 前）**：本节的 `experiments.enabled`、`task.experiment` 校验、`flow exp productize|cleanup|review`、`flow check experiments` 都随 **B1 core 落地**；落地前一律按**人工核对**执行——命令报 `unknown subcommand`、新键被忽略均属预期，不据此判违规。
+> **落地状态**：core 侧（`schema:2` 七字段 + 软/硬分离、`task.experiment` 校验、`checkExperiments`、`productizeExperiment` / `cleanupExperiment`）**已随 B1 落地（`5a2ae37`）**；**CLI 与 `check` 路由**（`flow exp review|productize|cleanup`、七字段 flag、`flow check experiments`）随 **B2 落地**——B2 未合入前这些命令报 `unknown subcommand`，按人工核对。B2 后的退出码：`exp review` **恒 0**（**无 `--result`**，结论看 `--json`）；`exp productize` 不满足 confirmed / 门禁基准 → **2**（`invalid`）；`check experiments` **0 通过 / 1 判定失败**（`check` 家族词汇与 CLI 退出码表一致：0 成功 / 1 用法·检查失败 / 2 校验·配置 / 3 未找到 / 4 IO）。
 
 ### 12.1 七段流程（实验项目专用，写死）
 
@@ -484,15 +484,15 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 
 | 判定 | 条件 | 必做动作 |
 |---|---|---|
-| **成功** | 主指标达 `expected`，护栏全绿 | 实验置 `confirmed` → `flow exp productize`（要求 `release` 最近一次 `ok` 运行的 `finished_at` **≥** 实验进入 `confirmed` 的 `updated_at`，早于则拒）写 `productizedAt` / `productizeGate` → 合并 / 上线 |
+| **成功** | 主指标达 `expected`，护栏全绿 | 实验置 `confirmed` → `flow exp productize`（要求 `release` 最近一次 `ok` 运行的 `finished_at` **≥** 实验进入 `confirmed` 的 `updated_at`，早于则拒，**不满足退出码 2**）写 `productizedAt` / `productizeGate` → 合并 / 上线 |
 | **不确定** | 窗口内主指标无定论、护栏未破 | 实验置 **`inconclusive`**（`learned` **建议写**，`check experiments` 不硬拦；`open` 只表示进行中未判定）→ 延长 `windowDays` 继续观测，或**调整假设**派生 `parent` 子实验；**不得直接产品化** |
 | **失败** | 命中 `falsify`，或触 `stopLoss` | **停止并丢弃**：实验置 `refuted` + `learned`；`flow exp cleanup` 写 `cleanup{flags[], code[], data[]}`（开关 / 代码 / 数据，各 ≤20 项）与 `cleanupAt`；notes 记清理证据，不留死开关。**`exp update --status refuted` 不拦（清理是异步动作），收口靠 `cleanupAt` + `check experiments` 硬拦** |
 | **转向** | 部分资产值得保留、假设要换 | 实验置 `pivoted` + `learned`；保留可复用资产（模块 / 测试 / 数据），**新假设另建子实验**（新实验 `parent` 指向原实验，单向），不改写原结论 |
 
 - 四分支动作都在**任务回收之前**完成（§10.7 逐卡检查），结论进项目任务 `notes`；`refuted` / `pivoted` 缺 `learned`（`refuted` 另缺 `cleanupAt`）视为实验未收尾；`inconclusive` 的 `learned` 只提示、不计未收尾。
 - **产品化 ≠ 实验内合并**：`exp/<E-id>/<topic>` 的内容要进主分支，仍按 §1.2 提评审申请 → 中心合并；产品化门禁是**额外的**一道（release phase）。
-- 判定前可 `flow exp review <id>` **只读自查**（返回 `verdict` / `branch` / `missing[]`，不改记录）。
-- `flow check experiments`（`release` gate 内）**硬拦四项**：七字段缺失、`refuted` 缺 `learned` / `cleanupAt`、`pivoted` 缺后继实验、`confirmed` 未产品化；`open` 超过 `created_at + windowDays` **只给 `experiment-window-elapsed` warning，不判失败**；`inconclusive` 的 `learned` 与 `abandoned` 同级——只提示、不拦。该步须项目先 **`gate enable release`** 才生效（种子默认 `enabled: false`）。
+- 判定前可 `flow exp review <id>` **只读自查**（返回 `verdict` / `branch` / `missing[]`，不改记录；**无 `--result`，恒 exit 0**，结论看 `--json`）。
+- `flow check experiments`（`release` gate 内）**硬拦四项**：七字段缺失、`refuted` 缺 `learned` / `cleanupAt`、`pivoted` 缺后继实验、`confirmed` 未产品化；`open` 超过 `created_at + windowDays` **只给 `experiment-window-elapsed` warning，不判失败**；命令退出码 **0 通过 / 1 判定失败**；`inconclusive` 的 `learned` 与 `abandoned` 同级——只提示、不拦。该步须项目先 **`gate enable release`** 才生效（种子默认 `enabled: false`）。
 - **`abandoned`** = 主动放弃且不判定：**不强制 `learned`**（建议写），`check experiments` 只提示、不计失败。
 
 ### 12.4 实验与任务的挂接（写死）

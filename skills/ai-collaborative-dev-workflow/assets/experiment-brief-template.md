@@ -38,7 +38,7 @@
 - 护栏指标实测：
 - 是否命中 `falsify` / `stopLoss`：
 
-## 5 分支动作（按判定只做一支；**B1 落地前按人工执行**）
+## 5 分支动作（按判定只做一支；**`productize` / `cleanup` 的 CLI 随 B2 落地，未合入前人工执行**）
 
 - **成功**：`flow exp productize`（release 最近一次 `ok` 的 `finished_at` ≥ 进入 `confirmed` 的 `updated_at`）→ 合并 / 上线 → `productizedAt` 与 commits。
 - **不确定**：置 `inconclusive` + 写 `learned`（**建议写、不硬拦**；`open` 只表示进行中）→ 延长 `windowDays` 或派生 `parent` 子实验；**不产品化**。

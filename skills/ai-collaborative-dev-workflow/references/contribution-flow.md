@@ -247,7 +247,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 
 ### 8.3 实验结果分流（实验型项目，`SKILL.md` §12.3 的执行版）
 
-审查 `accept` 之后、任务回收之前，中心按下表分流；结论写进项目任务 notes。**（B1 落地前，表中 `flow exp productize` / `flow exp cleanup` 按人工执行）**
+审查 `accept` 之后、任务回收之前，中心按下表分流；结论写进项目任务 notes。**（core 已随 B1 落地；`flow exp productize` / `flow exp cleanup` 的 CLI 随 B2 落地，未合入前按人工执行）**
 
 | 判定 | 动作（按顺序） | 实验状态 |
 |---|---|---|
