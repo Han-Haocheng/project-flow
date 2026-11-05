@@ -1,7 +1,7 @@
 {
   "id": "T-20261030-16",
   "title": "内嵌技能与脚本对齐实现",
-  "status": "draft",
+  "status": "active",
   "owner": "",
   "goal": "enforcement.md 写的 gate task / --force --reason 在 gate.py 里不存在；SKILL.md 指向包外 ~/.codex 的 quick_validate.py；usage 技能说 scope 用 --json（实际是输出，CLI --allow 又被忽略）。",
   "scope": {
@@ -22,8 +22,11 @@
   ],
   "checkpoints": [],
   "commits": [],
-  "notes": "来源：第四路 A9。",
+  "notes": "原卡（2026-10-30 建立）：enforcement.md 写的 gate task / --force --reason 在 gate.py 里不存在；SKILL.md 指向包外 ~/.codex 的 quick_validate.py；usage 技能说 scope 用 --json（实际是输出，CLI --allow 又被忽略）。验收见 acceptance（技能命令可执行/不引包外路径/参数说明与实现一致/smoke 覆盖 gate-task-exp 三线）。",
   "created_at": "2026-10-30T20:34:07+08:00",
-  "updated_at": "2026-10-30T20:34:07+08:00",
-  "schema": 1
+  "updated_at": "2026-11-05T22:44:24+08:00",
+  "schema": 1,
+  "parent": null,
+  "done_at": null,
+  "archived_at": null
 }

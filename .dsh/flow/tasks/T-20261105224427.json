@@ -1,0 +1,20 @@
+{
+  "title": "任务模块优化：必填 type / 合并 title-goal / 卡片显示 / 不可变字段",
+  "type": "feat",
+  "status": "active",
+  "goal": "①任务必填 type（10 值枚举）；②合并 title 与 goal 为 title（旧记录 goal 去向待 D-20261105-09）；③面板任务卡：标题 type: title、内容 notes、署名 id；④收紧更新字段，type 与 title 至少不可改。",
+  "schema": 1,
+  "id": "T-20261105224427",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-05T22:44:27+08:00",
+  "updated_at": "2026-11-05T22:44:27+08:00"
+}

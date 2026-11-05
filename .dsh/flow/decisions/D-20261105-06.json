@@ -1,0 +1,50 @@
+{
+  "question": "P1 下一张做哪个：CLI 参数面（15）还是客户端对比度/a11y（07）？",
+  "kind": "choice",
+  "rationale": "两张预研任务书都已完成且互不重叠写域；T-08（init 加锁 + id 时间戳）已提交 86b5400。15 有行为变更（未声明参数从静默 rc0 改为用法错误），07 是对比度/a11y 且已顺带修 P0 连线 bug。需要你定顺序。",
+  "options": [
+    {
+      "id": "cli-params",
+      "label": "CLI 参数面拒绝未用参数（15）",
+      "impact": "做 T-20261030-15：dispatch 前按子命令 flags 白名单校校，未声明 flag → usage rc1 且不写盘；覆盖当前「--allow/--id/--metrics 静默成功」。含一个待定子项（tool 支持 id、CLI 不支持，需对齐）。"
+    },
+    {
+      "id": "client-a11y",
+      "label": "客户端对比度/a11y/状态缓存（07）",
+      "impact": "做 T-20261030-07 剩余项：chip/trend 浅色对比度（2.15–2.28 不达标）、aria-busy、sr-only live 区、按 root 缓存 UI state（真 keepMounted 不做）。"
+    },
+    {
+      "id": "both",
+      "label": "两张同时开工",
+      "impact": "两张并行（写域不重叠：bin/flow.mjs+index.js vs client.js）；团队有 5 个空闲名额。"
+    },
+    {
+      "id": "stop",
+      "label": "先停，等 live 核对",
+      "impact": "先停，等你下次重启后我做 live 核对（≈/TUI/侧栏/树连接线）再定。"
+    }
+  ],
+  "recommendation": "both",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 4,
+  "schema": 1,
+  "id": "D-20261105-06",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "both",
+    "note": "用户选 both（CLI 参数面 15 + 客户端 a11y/对比度 07 并行），并要求「跑满整个智能体团队」",
+    "at": "2026-11-05T21:42:34+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-05T21:42:34+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "da90528483120e76",
+  "asked_at": "2026-11-05T21:30:29+08:00",
+  "created_at": "2026-11-05T21:30:29+08:00",
+  "updated_at": "2026-11-05T21:42:34+08:00"
+}

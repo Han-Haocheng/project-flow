@@ -1,0 +1,20 @@
+{
+  "title": "自动格式化门禁：常态归一化旧记录（type/goal 迁移）",
+  "type": "chore",
+  "status": "active",
+  "goal": "用户要求（D-20261105-09 答复）：不靠投影兼容旧结构，而是在插件里挂载一个自动格式化门禁，检测并修正旧记录（缺 type、含已被合并的 goal 等），可自动修或交由 AI 按提示修正。作为 check 门禁的一个子命令 + precommit 步骤接入。",
+  "schema": 1,
+  "id": "T-20261105224822",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-05T22:48:22+08:00",
+  "updated_at": "2026-11-05T22:48:22+08:00"
+}

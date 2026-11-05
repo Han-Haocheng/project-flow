@@ -1,0 +1,44 @@
+{
+  "question": "同秒删除再建会复用 id（子任务的 parent 会串到新记录）——怎么处理？",
+  "kind": "choice",
+  "rationale": "审查 task-181 实测：固定同一秒内 A→child(parent=A)→删 A→再建，新任务拿到 A 的旧 id，child.parent 静默指向新记录；而 CONTRACT 承诺「删除不回填」。要严格不复用得引入持久 tombstone（与「无计数器」相悖），或接受复用但用删除时引用检查阻断危险场景。",
+  "options": [
+    {
+      "id": "refs",
+      "label": "接受复用 + 删除前引用检查（推荐）",
+      "impact": "接受同秒复用（文档写清「跨秒保证前进」），但给 removeTask 加**引用检查**：被其它任务当 parent / 被 decisions.blocks / 心跳 task 引用时拒绝删除（或强制 --force 并 warning）。这样复用只发生在无人引用的 id 上，不会串引用；不改存储、不加 tombstone。"
+    },
+    {
+      "id": "tombstone",
+      "label": "严格不复用（tombstone 标记）",
+      "impact": "严格不复用：在 store 里留已发 id 标记（如 tasks/ 下 `.issued-<id>` 或单独高水位文件），nextTaskId 连标记一起扫，删任务不删标记（需清理策略）。多一份状态文件。"
+    },
+    {
+      "id": "document",
+      "label": "只文档化与钉测（不改行为）",
+      "impact": "只改文档 + 用例：CONTRACT 改成「跨秒保证前进；同秒删除再建可能复用，不得再引用已删 id」，并补同秒复用行为用例钉住（不加删除检查）。"
+    }
+  ],
+  "recommendation": "refs",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 4,
+  "schema": 1,
+  "id": "D-20261105-07",
+  "default": null,
+  "status": "withdrawn",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": null,
+  "answered_at": null,
+  "withdraw": {
+    "reason": "用户在选项之外给出新方案「任务建立时等一秒」，三项选项（refs/tombstone/document）均未命中；改提等待方案的新决策",
+    "at": "2026-11-05T21:44:53+08:00",
+    "by": "user"
+  },
+  "superseded_by": null,
+  "fingerprint": "47dafcedccd4f73d",
+  "asked_at": "2026-11-05T21:34:25+08:00",
+  "created_at": "2026-11-05T21:34:25+08:00",
+  "updated_at": "2026-11-05T21:44:53+08:00"
+}

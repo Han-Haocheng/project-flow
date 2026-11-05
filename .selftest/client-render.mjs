@@ -1166,7 +1166,40 @@ check('TasksCard tree: A→B→C nest with 12px indent, connector class and aria
   // The connector/indent rules exist and are 12px based.
   assert.ok(source.includes('.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px)'), 'indent rule missing');
   assert.ok(source.includes('.project-flow-taskChildren{'), 'child list rule missing');
-  assert.ok(source.includes('border-left:1px solid var(--dsw-alias-border-l2)'), 'connector line missing (border-l2)');
+  /* Pin each rule on its own: a single `source.includes(...)` lets one of the two
+     connector rules silently drop to l1 while the other keeps the assertion green
+     (task-183 M2b). Each block is matched inside its own selector, never across. */
+  /* A selector may appear in several rules (the control-row buttons share one
+     combined border rule, then override colour in a second rule), so collect
+     every enclosing rule body for the selector and require each body that
+     declares a border to use l2. Matching the first `selector{` hit would pick
+     the colour-only rule and miss a silenced connector (task-183 M2b). */
+  const ruleBodies = (selector) => {
+    const bodies = [];
+    let index = source.indexOf(selector);
+    while (index >= 0) {
+      const open = source.indexOf('{', index);
+      const end = open >= 0 ? source.indexOf('}', open) : -1;
+      const between = open >= 0 ? source.slice(index + selector.length, open) : '}';
+      const isOwnRule = open >= 0 && end > open && !/[{}]/.test(between);
+      if (isOwnRule) bodies.push(source.slice(open, end));
+      index = source.indexOf(selector, index + selector.length);
+    }
+    assert.ok(bodies.length > 0, 'missing rule: ' + selector);
+    return bodies;
+  };
+  for (const [selector, label] of [
+    ['.project-flow-taskNested', 'the nested row connector'],
+    ['.project-flow-taskChildren', 'the child list connector'],
+    ['.project-flow-displayAll', 'the control-row button border'],
+  ]) {
+    const bordered = ruleBodies(selector).filter((body) => /border/.test(body));
+    assert.ok(bordered.length > 0, label + ' declares no border rule');
+    for (const body of bordered) {
+      assert.match(body, /border(-left)?:1px solid var\(--dsw-alias-border-l2\)/, label + ' must use border-l2 inside its own rule');
+      assert.ok(!/--dsw-alias-border-l(?!\d)/.test(body), label + ' must not use the removed bare border-l');
+    }
+  }
 
   // Expanding B reveals C at the next level; the child <ul> is a group.
   const bCaret = caretOf(card, 'project-flow-taskChildren-T-B');

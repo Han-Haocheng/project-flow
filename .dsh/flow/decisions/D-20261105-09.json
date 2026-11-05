@@ -1,0 +1,44 @@
+{
+  "question": "title 与 goal 合并：旧记录的 goal 内容怎么处理？",
+  "kind": "choice",
+  "rationale": "你要合并两字段，但 40+ 条旧任务都有 goal（有些 goal 比 title 长得多）。合并方式决定是否丢数据、标题长度、以及是否需要迁移投影；三种做法互斥，必须先定。",
+  "options": [
+    {
+      "id": "move-notes",
+      "label": "goal 并入 notes（推荐）",
+      "impact": "新记录只有 title（不再有 goal）；旧记录投影时把 goal 内容并入 notes（前缀「goal: 」），title 保持干净，不丢信息不迁移文件。"
+    },
+    {
+      "id": "append-title",
+      "label": "goal 拼到 title",
+      "impact": "旧记录把 goal 拼到 title（`title — goal`）；新记录禁 goal。字面最贴「合并为 title」，但长 goal 会把标题撞得很长。"
+    },
+    {
+      "id": "drop-goal",
+      "label": "删掉 goal（丢内容）",
+      "impact": "直接删 goal 字段，旧记录 goal 内容丢失（只留 git 历史）；标题干净、改动最小。"
+    }
+  ],
+  "recommendation": "move-notes",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 4,
+  "schema": 1,
+  "id": "D-20261105-09",
+  "default": null,
+  "status": "withdrawn",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": null,
+  "answered_at": null,
+  "withdraw": {
+    "reason": "用户给出选项外方案（原话）：「目前使用这个插件的不多，在插件里挂载一个自动格式化门禁，通过这个门禁处理或让ai改正」→ 不做投影兼容分支，改为提供自动格式化/归一化门禁（检测并修正旧结构：缺 type、含 goal），按此新拆卡。",
+    "at": "2026-11-05T22:48:09+08:00",
+    "by": "user"
+  },
+  "superseded_by": null,
+  "fingerprint": "b8868aae790de21f",
+  "asked_at": "2026-11-05T21:58:40+08:00",
+  "created_at": "2026-11-05T21:58:40+08:00",
+  "updated_at": "2026-11-05T22:48:09+08:00"
+}
