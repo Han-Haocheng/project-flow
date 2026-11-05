@@ -26,9 +26,13 @@
  * Run: node .selftest/client-render.mjs
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { legacyExperimentsWarning } from '../lib/state-snapshot.mjs';
+import { addTask, initProject, loadContract } from '../lib/core.mjs';
+import { buildSnapshot, legacyExperimentsWarning } from '../lib/state-snapshot.mjs';
 
 const SRC = fileURLToPath(new URL('../client.js', import.meta.url));
 const PROBE_DIR = fileURLToPath(new URL('./.client-probe/', import.meta.url));
@@ -1311,6 +1315,99 @@ check('TasksCard tree: an older payload without parent renders flat (no caret, n
     assert.equal(collect(row, 'project-flow-taskBadge').length, 0, 'no badge without a parent');
   }
 });
+
+// ------------------------------ real-payload trend end-to-end (task-165)
+//
+// The approximation marker has to survive the WHOLE chain: core reads the ledger,
+// `projectTaskTimes` backfills a missing `done_at` from `updated_at` and flags it
+// (`doneAtEstimated`), `buildSnapshot` derives `tasks.trend`, `normalize` keeps
+// it, and `TasksCard` draws the dashed tail. Fixtures that inject a payload (the
+// checks above) never exercise that projection, which is exactly how the `≈` was
+// lost once: old done records looked exact because `done_at` had been backfilled.
+// So this case builds a real project and asks the real `buildSnapshot`.
+const TREND_NOW = new Date(2026, 10, 4, 12).getTime();
+const trendDay = (day) => new Date(2026, 9, day, 10).toISOString();
+
+/** A temp project with one done task, patched on disk to control done_at. */
+async function makeRealTrendProject(mutate) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-e2e-trend-'));
+  initProject(root, { name: 'e2e-trend', noGates: true });
+  const { contract } = loadContract(root);
+  const made = addTask(root, contract, {
+    title: 'chore: trend e2e',
+    status: 'active',
+    created_at: trendDay(20),
+    updated_at: trendDay(28),
+  });
+  const file = path.join(root, '.dsh', 'flow', 'tasks', made.id + '.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  mutate(record);
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
+  const payload = await buildSnapshot({ root, now: TREND_NOW });
+  return { root, payload };
+}
+
+/* Legacy shape: done with only `updated_at` — the approximation must be reported. */
+const realLegacyTrend = await makeRealTrendProject((record) => {
+  record.status = 'done';
+  delete record.done_at;
+  record.updated_at = trendDay(28);
+});
+/* Modern shape: an explicit `done_at` — the day is exact, so no ≈ anywhere. */
+const realExactTrend = await makeRealTrendProject((record) => {
+  record.status = 'done';
+  record.done_at = trendDay(27);
+  record.updated_at = trendDay(28);
+});
+
+check('trend ≈ (real payload): a done task without done_at keeps estimatedFrom through the projection', () => {
+  const trend = realLegacyTrend.payload.tasks && realLegacyTrend.payload.tasks.trend;
+  assert.ok(trend, 'buildSnapshot lost tasks.trend');
+  /* The core projection backfills done_at from updated_at on this legacy record;
+     the estimate flag is the only thing that keeps the approximation visible. */
+  assert.equal(trend.estimatedFrom, '2026-10-28', 'the projection dropped the estimated marker: ' + JSON.stringify(trend));
+  assert.ok(trend.done.reduce((sum, value) => sum + value, 0) >= 1, 'the done task must land in the done series');
+
+  const card = mountTasks(probe.normalize(realLegacyTrend.payload).tasks);
+  const summary = collect(card, 'project-flow-trendSummary')[0];
+  assert.ok(summary && textOf(summary).includes('近 14 天 · 新增'), 'the trend summary is missing: ' + (summary ? textOf(summary) : 'none'));
+  /* ≈ is its own sibling marker, so the whole head is checked. */
+  assert.equal(collect(card, 'project-flow-trendApprox').length, 1, 'the ≈ marker is missing');
+  assert.ok(textOf(card).includes('≈'), 'the rendered trend must show ≈ for a projected approximation');
+  const dashed = approxLines(card);
+  assert.equal(dashed.length, 2, 'both series need a dashed tail');
+  for (const line of dashed) {
+    assert.equal(line.props.opacity, 0.6, 'the approximated tail drops to 60%');
+    assert.equal(line.props.strokeDasharray, '2 1.5', 'the approximated tail is dashed');
+  }
+  assert.equal(collect(card, 'project-flow-trendApproxPoint').length, 2, 'the cut point needs a marker');
+  const titles = trendDayTitles(card);
+  assert.ok(
+    titles.some((title) => title.startsWith('10-28') && title.includes('近似')),
+    'the approximated day title must say why: ' + titles[6]
+  );
+});
+
+check('trend ≈ (real payload): an explicit done_at stays exact — no ≈, no dashed segment', () => {
+  const trend = realExactTrend.payload.tasks && realExactTrend.payload.tasks.trend;
+  assert.ok(trend, 'buildSnapshot lost tasks.trend');
+  assert.equal(trend.estimatedFrom, null, 'an explicit done_at must not be flagged as estimated');
+  const card = mountTasks(probe.normalize(realExactTrend.payload).tasks);
+  assert.equal(collect(card, 'project-flow-trendApprox').length, 0, 'no ≈ marker for an exact series');
+  assert.equal(approxLines(card).length, 0, 'no dashed segment for an exact series');
+  assert.equal(collect(card, 'project-flow-trendApproxPoint').length, 0, 'no cut marker for an exact series');
+  assert.ok(!textOf(card).includes('≈'));
+  const titles = trendDayTitles(card);
+  assert.ok(titles.some((title) => title.startsWith('10-27')), 'the exact day must be plotted: ' + titles[5]);
+});
+
+for (const project of [realLegacyTrend, realExactTrend]) {
+  try {
+    fs.rmSync(project.root, { recursive: true, force: true });
+  } catch (error) {
+    /* a leftover temp dir is harmless */
+  }
+}
 
 // ------------------------------------------------ display row (T-13 A5)
 const DISPLAY_DEFAULTS = { allCollapsed: false, showExperiments: true, showTrend: true, showHeartbeats: true };
