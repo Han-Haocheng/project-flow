@@ -202,6 +202,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "status": "draft",                    // draft | active | done | archived
   "owner": "",
   "goal": "",
+  "parent": null,                        // 可选（T-13）：父任务 id；null/空串 = 根
   "experiment": null,                    // 可选：关联实验 id（可省略，新建任务默认不写该键）
   "scope": { "allow": [], "deny": [] },  // 数组元素必须为字符串
   "acceptance": [],                      // 字符串数组
@@ -218,6 +219,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
+- **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则
+  （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根。写路径（`task add|update --parent`）
+  要求父**已存在**（否则 `invalid`，消息含 `parent-not-found`）、**禁自指**、**禁环**
+  （沿 parent 链上溯回到自己 → `invalid`，消息含 `parent-cycle`）。读路径（`listTasks`/
+  `getTask`/state 投影）对父不存在或成环**不报错、按根处理**（投影成 `parent: null`）：
+  行仍返回、**不迁移、不写回**；删除父任务后子任务自动变根。父子是单向引用（任务→父），
+  父记录不回写子 id。
 - **`experiment`（可选）**：关联一条实验 id。写路径（`task add|update --experiment`）用**宽松
   引用格式**校验：字母开头、长度 2..61、只允许字母/数字/`_`/`.`/`-`
   （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`，与 `parent` 引用同一宽松规则）——这样 Myai 等项目的

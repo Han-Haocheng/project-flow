@@ -3320,3 +3320,92 @@ test('T-09 旧记录回退：缺字段读 updated_at，且读路径不写盘（�
   assert.equal(fs.readFileSync(doneFile, 'utf8'), doneBytes, '读路径不得迁移写盘')
   assert.equal(fs.readFileSync(archivedFile, 'utf8'), archivedBytes)
 })
+
+// ======================================================== T-13 task parent
+//
+// 任务父子：宽引用（REF_ID_RE）、父须存在、禁自指/禁环；读路径父失效按根、不迁移。
+
+test('T-13 task parent：合法父/null/空串落盘，读路径保留父子关系', () => {
+  const { root, contract } = freshProject('t13-parent')
+  const parent = addTask(root, contract, { title: '父任务' })
+  const child = addTask(root, contract, { title: '子任务', parent: parent.id })
+  assert.equal(child.parent, parent.id, 'add --parent 合法父应落盘')
+
+  const explicitNull = addTask(root, contract, { title: '显式根', parent: null })
+  assert.equal(explicitNull.parent, null)
+  const empty = addTask(root, contract, { title: '空串根', parent: '' })
+  assert.equal(empty.parent, null)
+
+  assert.equal(getTask(root, contract, child.id).parent, parent.id)
+  const listed = Object.fromEntries(listTasks(root, contract).map((item) => [item.id, item]))
+  assert.equal(listed[child.id].parent, parent.id)
+
+  const raw = JSON.parse(fs.readFileSync(path.join(root, '.dsh/flow/tasks', `${child.id}.json`), 'utf8'))
+  assert.equal(raw.parent, parent.id, 'parent 必须落盘（不是只读投影）')
+
+  const cleared = updateTask(root, contract, child.id, { parent: null })
+  assert.equal(cleared.parent, null, 'update parent:null 清空')
+  const reparented = updateTask(root, contract, child.id, { parent: parent.id })
+  assert.equal(reparented.parent, parent.id)
+})
+
+test('T-13 task parent：格式非法/自指/父不存在/环 → invalid', () => {
+  const { root, contract } = freshProject('t13-parent-invalid')
+  const a = addTask(root, contract, { title: 'A' })
+
+  expectFlowError(() => addTask(root, contract, { title: 'bad', parent: 'bad id!' }), 'invalid', /not a valid task id/)
+  expectFlowError(() => addTask(root, contract, { title: 'num', parent: 42 }), 'invalid', /string or null/)
+  expectFlowError(
+    () => addTask(root, contract, { id: `T-${stamp()}-09`, title: 'self', parent: `T-${stamp()}-09` }),
+    'invalid',
+    /cannot reference itself/,
+  )
+  expectFlowError(
+    () => addTask(root, contract, { title: 'orphan', parent: 'T-20000101-01' }),
+    'invalid',
+    /parent-not-found/,
+  )
+
+  // A→B 合法；再把 A 的 parent 指回 B 就成环。
+  const b = addTask(root, contract, { title: 'B', parent: a.id })
+  expectFlowError(() => updateTask(root, contract, a.id, { parent: b.id }), 'invalid', /parent-cycle/)
+  assert.equal(getTask(root, contract, a.id).parent, null, '失败的 update 不得写坏 A')
+})
+
+test('T-13 task parent：旧记录无 parent 读为根且零写入；多级链原样返回', () => {
+  const { root, contract } = freshProject('t13-parent-legacy')
+  const dir = path.join(root, '.dsh/flow/tasks')
+  fs.mkdirSync(dir, { recursive: true })
+  const legacyFile = path.join(dir, 'T-20260101-01.json')
+  fs.writeFileSync(legacyFile, JSON.stringify({
+    schema: 1, id: 'T-20260101-01', title: '旧任务', status: 'active',
+    created_at: '2026-01-01T00:00:00+08:00', updated_at: '2026-01-01T00:00:00+08:00',
+  }, null, 2))
+  const bytes = fs.readFileSync(legacyFile, 'utf8')
+
+  const legacy = getTask(root, contract, 'T-20260101-01')
+  assert.equal(Object.hasOwn(legacy, 'parent'), false, '缺 parent 即根，不补字段')
+  assert.equal(listTasks(root, contract).find((item) => item.id === 'T-20260101-01').parent, undefined)
+  assert.equal(fs.readFileSync(legacyFile, 'utf8'), bytes, '读路径不得迁移写盘')
+
+  // 新的三级链 A→B→C：合法时原样返回。
+  const c = addTask(root, contract, { title: 'C' })
+  const b = addTask(root, contract, { title: 'B', parent: c.id })
+  const a = addTask(root, contract, { title: 'A', parent: b.id })
+  assert.deepEqual([a.parent, b.parent, c.parent], [b.id, c.id, null])
+})
+
+test('T-13 task parent：删父后子读为根、行仍在、文件不变（不迁移）', () => {
+  const { root, contract } = freshProject('t13-parent-delete')
+  const parent = addTask(root, contract, { title: '将被删' })
+  const child = addTask(root, contract, { title: '子', parent: parent.id })
+  const childFile = path.join(root, '.dsh/flow/tasks', `${child.id}.json`)
+  const bytes = fs.readFileSync(childFile, 'utf8')
+
+  assert.deepEqual(removeTask(root, contract, parent.id), { id: parent.id, removed: true })
+  const orphan = getTask(root, contract, child.id)
+  assert.equal(orphan.parent, null, '父不存在时读路径按根（parent 投影为 null）')
+  assert.equal(orphan.title, '子', '子行仍完整返回')
+  assert.equal(listTasks(root, contract).find((item) => item.id === child.id).parent, null)
+  assert.equal(fs.readFileSync(childFile, 'utf8'), bytes, '删父不写子记录')
+})
