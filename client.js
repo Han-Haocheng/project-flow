@@ -186,6 +186,9 @@ window.__ModuleLoader__.load({
       'display.collapseCard': '收起此卡',
       'display.expandCard': '展开此卡',
       'display.experimentsOff': '项目未开启实验区（experiments.enabled=false）',
+      'live.busy': '正在刷新…',
+      'live.updated': '已更新',
+      'live.error': '读取失败',
       'signals.hidden': '+{n} 条已隐藏（--all 见 CLI）',
       'tasks.expandChildren': '展开 {n} 个子任务',
       'tasks.collapseChildren': '收起 {n} 个子任务',
@@ -340,6 +343,9 @@ window.__ModuleLoader__.load({
       'display.collapseCard': 'Collapse this card',
       'display.expandCard': 'Expand this card',
       'display.experimentsOff': 'The experiment area is off for this project (experiments.enabled=false)',
+      'live.busy': 'Refreshing…',
+      'live.updated': 'Updated',
+      'live.error': 'Read failed',
       'signals.hidden': '+{n} hidden (--all in the CLI)',
       'tasks.expandChildren': 'Expand {n} subtasks',
       'tasks.collapseChildren': 'Collapse {n} subtasks',
@@ -1799,14 +1805,19 @@ window.__ModuleLoader__.load({
       const recentTasks = asArray(tasks.recentDone);
       const t = props.t;
       const now = props.now;
+      /* D-20261105-06: the UI state below survives a workspace round trip through
+         the per-root cache (the panel is keyed by root, so this remounts). */
+      const stateRoot = asText(props.stateRoot);
 
       /* One expanded row at a time, keyed by the business id so a data refresh
          keeps the same row open instead of collapsing on index shifts. */
-      const [openId, setOpenId] = useState(null);
+      const [openId, setOpenId] = useState(() => uiRead(stateRoot, 'openId', null));
       const toggleTask = (id) => {
         const value = asText(id);
         if (!value) return;
-        setOpenId((current) => (current === value ? null : value));
+        const next = openId === value ? null : value;
+        uiWrite(stateRoot, 'openId', next);
+        setOpenId(next);
       };
 
       const current = tasks.current;
@@ -1827,26 +1838,24 @@ window.__ModuleLoader__.load({
          never by row index — so a 2.5 s poll that reorders rows keeps the state.
          Defaults keep the first screen short: the queue head (active) opens on a
          preview, the backlog and the recent completions start folded. */
-      const [groupLimits, setGroupLimits] = useState(() => ({
-        active: TASK_PREVIEW_ROWS,
-        draft: 0,
-        recentDone: 0,
-      }));
+      const [groupLimits, setGroupLimits] = useState(() =>
+        uiRead(stateRoot, 'groupLimits', { active: TASK_PREVIEW_ROWS, draft: 0, recentDone: 0 })
+      );
       const groupLimit = (key) => {
         const table = asObject(groupLimits) || {};
         const value = asNumber(table[key], 0);
         return value > 0 ? Math.min(value, MAX_LIST_ROWS) : 0;
       };
       const toggleGroup = (key) => {
-        setGroupLimits((current) => {
-          const table = asObject(current) || {};
-          const shown = asNumber(table[key], 0);
-          const next = Object.assign({}, table);
-          /* Preview -> full cap -> folded -> full cap: a folded or previewed
-             group always opens completely first, so one click never hides rows. */
-          next[key] = shown >= MAX_LIST_ROWS ? 0 : MAX_LIST_ROWS;
-          return next;
-        });
+        const table = asObject(groupLimits) || {};
+        const shown = asNumber(table[key], 0);
+        const next = Object.assign({}, table);
+        /* Preview -> full cap -> folded -> full cap: a folded or previewed group
+           always opens completely first, so one click never hides rows. */
+        next[key] = shown >= MAX_LIST_ROWS ? 0 : MAX_LIST_ROWS;
+        /* Cache first, then the hook: the cache is what survives a root switch. */
+        uiWrite(stateRoot, 'groupLimits', next);
+        setGroupLimits(next);
       };
 
       const statusOrder = ['draft', 'active', 'done', 'archived'];
@@ -1870,7 +1879,7 @@ window.__ModuleLoader__.load({
 
       /* T-13 A3: fold state per PARENT task id (never per index), so a 2.5 s poll
          that reorders rows keeps every subtree open. Default shows one level. */
-      const [collapsedIds, setCollapsedIds] = useState({});
+      const [collapsedIds, setCollapsedIds] = useState(() => uiRead(stateRoot, 'collapsedIds', {}));
       const collapsedOf = (id, depth) => {
         const table = asObject(collapsedIds);
         return Object.prototype.hasOwnProperty.call(table, id) ? table[id] === true : depth >= 1;
@@ -1878,7 +1887,9 @@ window.__ModuleLoader__.load({
       const toggleChildren = (id, expanded) => {
         const key = asText(id);
         if (key === '') return;
-        setCollapsedIds((current) => Object.assign({}, asObject(current), { [key]: expanded }));
+        const next = Object.assign({}, asObject(collapsedIds), { [key]: expanded });
+        uiWrite(stateRoot, 'collapsedIds', next);
+        setCollapsedIds(next);
       };
 
       /* Which group owns each task: the same-group nesting rule and the
@@ -2990,6 +3001,34 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /* Per-root UI state (D-20261105-06). Switching workspace unmounts the panel
+       (`PanelBody` keys it by root), so without a cache every grouping/expansion
+       is lost. Memory only on purpose: the display prefs already own the single
+       storage key, and a cache must never become a second write. */
+    const UI_STATE = new Map();
+    function uiStateOf(root) {
+      const key = asText(root);
+      /* No root (a bare render, or a pending panel) never touches the cache: it
+         would otherwise become one shared bucket across unrelated renders. */
+      if (key === '') return null;
+      let entry = UI_STATE.get(key);
+      if (entry === undefined) {
+        entry = {};
+        UI_STATE.set(key, entry);
+      }
+      return entry;
+    }
+    function uiRead(root, slot, fallback) {
+      const entry = uiStateOf(root);
+      if (entry === null) return fallback;
+      return Object.prototype.hasOwnProperty.call(entry, slot) ? entry[slot] : fallback;
+    }
+    function uiWrite(root, slot, value) {
+      const entry = uiStateOf(root);
+      if (entry === null) return;
+      entry[slot] = value;
+    }
+
     /** 「全部收起」wins over a per-card manual expand (D-20261113). */
     function cardCollapsed(prefs, manual) {
       return asObject(prefs).allCollapsed === true || manual === true;
@@ -3099,11 +3138,27 @@ window.__ModuleLoader__.load({
       const now = props.now;
       const workspaceRoot = props.workspaceRoot;
       const sessionId = props.sessionId;
+      const refreshing = props.refreshing === true;
+      const failed = props.failed === true;
+      const stateRoot = asText(view ? view.root : '');
+      const phase = failed ? 'error' : refreshing ? 'busy' : 'idle';
+
+      /* Screen-reader announcement (D-20261105-06): the polite region only writes
+         on a PHASE TRANSITION — background polls never flip `refreshing`, so the
+         2.5 s loop stays silent; a manual refresh announces once when it starts
+         and once when it settles. The initial value is empty (nothing to say). */
+      const [announced, setAnnounced] = useState({ phase: 'idle', text: '' });
+      if (announced.phase !== phase) {
+        const text = phase === 'busy' ? t('live.busy') : phase === 'error' ? t('live.error') : t('live.updated');
+        setAnnounced({ phase, text });
+      }
 
       /* Display preferences (D-20261113): persisted per workspace root, read on
          every render so a root switch simply picks up that root's file. */
       const [displayTick, setDisplayTick] = useState(0);
-      const [foldedCards, setFoldedCards] = useState({});
+      /* Card folds follow the root cache, not component state: a workspace switch
+         remounts the panel, and a trip back restores what was open. */
+      const foldedCards = asObject(uiRead(stateRoot, 'foldedCards', {}));
       const display = readDisplayPrefs(view ? view.root : '');
       const updateDisplay = (patch) => {
         writeDisplayPrefs(view ? view.root : '', Object.assign({}, display, patch));
@@ -3114,14 +3169,10 @@ window.__ModuleLoader__.load({
            only 「全部展开」leaves that mode. Clicking one must not secretly record
            a per-card state that would resurrect a closed card afterwards. */
         if (display.allCollapsed === true) return;
-        setFoldedCards((current) => {
-          const table = asObject(current);
-          const next = Object.assign({}, table);
-          /* D-13「总控权威」: while 「全部收起」is on a per-card caret does nothing —
-             only 「全部展开」 resets the mode (the caret cannot punch a hole in it). */
-          next[key] = table[key] === true ? false : true;
-          return next;
-        });
+        const next = Object.assign({}, foldedCards);
+        next[key] = foldedCards[key] === true ? false : true;
+        uiWrite(stateRoot, 'foldedCards', next);
+        setDisplayTick((value) => value + 1);
       };
       /* Local switch vs project switch: a hidden experiment area disables the
          toggle instead of letting the user "show" a card that must not exist. */
@@ -3131,7 +3182,9 @@ window.__ModuleLoader__.load({
          the card supplies the body, and 「全部收起」overrides the per-card state. */
       const foldCard = (key, titleKey, card) =>
         React.createElement(FoldCard, {
-          key,
+          /* Keyed by root: a workspace switch remounts the cards, so their state
+             initialisers read that root's cache instead of reusing another's. */
+          key: stateRoot + ':' + key,
           t,
           collapsed: cardCollapsed(display, asObject(foldedCards)[key] === true),
           onToggle: () => toggleCard(key),
@@ -3141,8 +3194,13 @@ window.__ModuleLoader__.load({
         });
 
       return React.createElement(
-        React.Fragment,
-        null,
+        'div',
+        { className: 'project-flow-view', 'aria-busy': refreshing ? true : undefined },
+        React.createElement(
+          'div',
+          { className: 'project-flow-srOnly', role: 'status', 'aria-live': 'polite' },
+          announced.text
+        ),
         React.createElement(DisplayBar, {
           t,
           display,
@@ -3178,7 +3236,7 @@ window.__ModuleLoader__.load({
             foldCard(
               'tasks',
               'tasks.title',
-              React.createElement(TasksCard, { tasks: view.tasks, t, now, showTitle: false, showTrend: display.showTrend !== false })
+              React.createElement(TasksCard, { tasks: view.tasks, t, now, showTitle: false, stateRoot, showTrend: display.showTrend !== false })
             ),
             /* Gate definitions sit between tasks and live signals. */
             view.gates
@@ -3408,6 +3466,8 @@ window.__ModuleLoader__.load({
                 now,
                 workspaceRoot,
                 sessionId,
+                refreshing,
+                failed,
               });
 
       return React.createElement(
@@ -3629,7 +3689,17 @@ window.__ModuleLoader__.load({
      * scroll container.
      */
     const CSS = `
-.project-flow-page{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;}
+.project-flow-page{box-sizing:border-box;width:100%;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;
+  /* Plugin-local text colours (D-20261105-06). The host state-* primaries are
+     tuned for large marks, not 11 px chip text (light: 2.2-2.3:1 on white).
+     Mixing them 52/48 with the theme's label colour darkens the hue on a light
+     theme and lightens it on a dark one, so this needs neither a literal colour
+     nor a theme branch — it simply follows whatever the host set. The first
+     declaration is the fallback for engines without color-mix support. */
+  --project-flow-ok-text:var(--dsw-alias-state-success-primary);
+  --project-flow-ok-text:color-mix(in srgb, var(--dsw-alias-state-success-primary) 52%, var(--dsw-alias-label-primary));
+  --project-flow-warn-text:var(--dsw-alias-state-warn-primary);
+  --project-flow-warn-text:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 52%, var(--dsw-alias-label-primary));}
 .project-flow-inner{box-sizing:border-box;width:100%;padding:12px;container-type:inline-size;}
 .project-flow-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 8px;}
 .project-flow-lead{display:flex;align-items:center;gap:8px;min-width:0;}
@@ -3661,6 +3731,8 @@ window.__ModuleLoader__.load({
 .project-flow-cardFold:hover{color:var(--dsw-alias-label-primary);}
 .project-flow-ready .project-flow-cardHead .project-flow-cardTitle{display:inline-flex;align-items:center;gap:2px;}
 .project-flow-cardBody{min-width:0;}
+.project-flow-view{min-width:0;}
+.project-flow-srOnly{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;}
 .project-flow-taskRow{position:relative;}
 .project-flow-taskNested{padding-left:calc(var(--d,1) * 12px);border-left:1px solid var(--dsw-alias-border-l2);margin-left:8px;}
 .project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l2);margin-left:12px;}
@@ -3674,22 +3746,22 @@ window.__ModuleLoader__.load({
 .project-flow-trendChart{display:block;width:100%;height:26px;margin-top:4px;shape-rendering:crispEdges;}
 .project-flow-trendLine{fill:none;stroke-width:1.2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;}
 .project-flow-trendLineCreated{stroke:var(--dsw-alias-brand-primary);}
-.project-flow-trendLineDone{stroke:var(--dsw-alias-state-success-primary);}
+.project-flow-trendLineDone{stroke:var(--project-flow-ok-text);}
 .project-flow-trendLine--approx{stroke-dasharray:2 1.5;opacity:.6;}
 .project-flow-trendPoint{stroke:none;}
 .project-flow-trendPointCreated{fill:var(--dsw-alias-brand-primary);}
-.project-flow-trendPointDone{fill:var(--dsw-alias-state-success-primary);}
+.project-flow-trendPointDone{fill:var(--project-flow-ok-text);}
 .project-flow-trendDay{fill:transparent;}
 .project-flow-trendLegend{display:inline-flex;gap:8px;margin-left:auto;flex:none;}
 .project-flow-trendLegendItem{display:inline-flex;align-items:center;gap:2px;white-space:nowrap;}
 .project-flow-trendLegendCreated{color:var(--dsw-alias-brand-primary);}
-.project-flow-trendLegendDone{color:var(--dsw-alias-state-success-primary);}
+.project-flow-trendLegendDone{color:var(--project-flow-ok-text);}
 .project-flow-trendAxis{display:flex;justify-content:space-between;gap:6px;margin-top:2px;font-size:10px;color:var(--dsw-alias-label-secondary);}
 .project-flow-trendEmpty{margin:4px 0 0;font-size:11px;}
 .project-flow-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
-.project-flow-chip--ok{color:var(--dsw-alias-state-success-primary);}
+.project-flow-chip--ok{color:var(--project-flow-ok-text);}
 .project-flow-chip--error{color:var(--dsw-alias-state-error-primary);}
-.project-flow-chip--warn{color:var(--dsw-alias-state-warn-primary);}
+.project-flow-chip--warn{color:var(--project-flow-warn-text);}
 .project-flow-chip--brand{color:var(--dsw-alias-brand-primary);}
 .project-flow-chip--muted{color:var(--dsw-alias-label-secondary);opacity:.75;}
 .project-flow-chip--hb-working{color:var(--dsw-alias-state-success-primary);}

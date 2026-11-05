@@ -31,7 +31,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { addTask, initProject, loadContract } from '../lib/core.mjs';
+import { addTask as addTaskCore, initProject, loadContract } from '../lib/core.mjs';
+
+/** T-15 fixtures: default type unless the call supplies one. */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options);
+}
 import { buildSnapshot, legacyExperimentsWarning } from '../lib/state-snapshot.mjs';
 
 const SRC = fileURLToPath(new URL('../client.js', import.meta.url));
@@ -1351,6 +1356,131 @@ const cardTitleTexts = (tree) => collect(tree, 'project-flow-cardTitle').map((ti
 const PREF_KEY = (view) => 'project-flow.display:' + String((view && view.root) || '');
 const bodyHidden = (tree) => collect(tree, 'project-flow-cardBody').map((body) => body.props.hidden === true);
 
+// --------------------------- contrast + aria + per-root state (task-185)
+/** WCAG relative luminance for a #rrggbb colour. */
+function contrastRatio(foreground, background) {
+  const channel = (value) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const rgb = (hex) => [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+  const lum = (hex) => {
+    const [r, g, b] = rgb(hex).map(channel);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const [hi, lo] = [lum(foreground), lum(background)].sort((left, right) => right - left);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+check('CSS: the plugin-local ok/warn text tokens clear WCAG on both themes', () => {
+  /* Host values measured in task-178 (theme: body / body[data-ds-dark-theme]):
+     state-success #22c55e, state-warn #f59e0b; light label #0f1115, dark label
+     #f9fafb; chip background = bg-layer-2 (#ffffff / #2c2c2e). */
+  const okSource = /--project-flow-ok-text\s*:\s*color-mix\(in srgb, var\(--dsw-alias-state-success-primary\) (\d+)%, var\(--dsw-alias-label-primary\)\)/;
+  const warnSource = /--project-flow-warn-text\s*:\s*color-mix\(in srgb, var\(--dsw-alias-state-warn-primary\) (\d+)%, var\(--dsw-alias-label-primary\)\)/;
+  const okMatch = okSource.exec(source);
+  const warnMatch = warnSource.exec(source);
+  assert.ok(okMatch, 'the ok token must mix the host success colour with the label colour');
+  assert.ok(warnMatch, 'the warn token must mix the host warn colour with the label colour');
+  assert.equal(okMatch[1], '52');
+  assert.equal(warnMatch[1], '52');
+  /* No literal colour, no theme branch: the mix follows whatever the host set. */
+  assert.ok(!/#[0-9a-f]{6}/i.test(source), 'the plugin must not hardcode a hex colour');
+  assert.ok(!/@media\s*\(prefers-color-scheme/.test(source), 'no OS theme branch is needed (and viewport media queries are banned)');
+  assert.ok(source.includes('--project-flow-ok-text:var(--dsw-alias-state-success-primary)'), 'a non-color-mix fallback is required');
+
+  const mix = (base, label, share) => {
+    const a = [1, 3, 5].map((o) => parseInt(base.slice(o, o + 2), 16));
+    const b = [1, 3, 5].map((o) => parseInt(label.slice(o, o + 2), 16));
+    const mixed = a.map((value, index) => value * share + b[index] * (1 - share));
+    return '#' + mixed.map((value) => Math.round(value).toString(16).padStart(2, '0')).join('');
+  };
+  const share = Number(okMatch[1]) / 100;
+  const themes = [
+    { name: 'light', label: '#0f1115', chip: '#ffffff', card: '#ffffff' },
+    { name: 'dark', label: '#f9fafb', chip: '#2c2c2e', card: '#232324' },
+  ];
+  for (const theme of themes) {
+    const okText = mix('#22c55e', theme.label, share);
+    const warnText = mix('#f59e0b', theme.label, share);
+    const okRatio = contrastRatio(okText, theme.chip);
+    const warnRatio = contrastRatio(warnText, theme.chip);
+    assert.ok(okRatio >= 4.5, `${theme.name} ok text ${okText} is ${okRatio.toFixed(2)}:1 (needs 4.5)`);
+    assert.ok(warnRatio >= 4.5, `${theme.name} warn text ${warnText} is ${warnRatio.toFixed(2)}:1 (needs 4.5)`);
+    /* The trend line / dots are graphics: the lower 3:1 bar, same token. */
+    assert.ok(contrastRatio(okText, theme.card) >= 3, `${theme.name} trend line is below 3:1`);
+  }
+  assert.ok(source.includes('.project-flow-trendLineDone{stroke:var(--project-flow-ok-text);}'), 'trend done line must use the token');
+  assert.ok(source.includes('.project-flow-chip--ok{color:var(--project-flow-ok-text);}'), 'ok chip must use the token');
+  assert.ok(source.includes('.project-flow-chip--warn{color:var(--project-flow-warn-text);}'), 'warn chip must use the token');
+  assert.ok(!/--dsw-alias-[a-z0-9-]+\s*:/.test(source), 'the plugin must not redeclare a host alias');
+});
+
+check('PanelView: aria-busy tracks refreshing, and the live region only writes on a transition', () => {
+  const view = probe.normalize(panelViewPayload());
+  const render = (extra = {}) =>
+    renderWithState(probe.PanelView, panelViewProps(view, extra), { reset: Object.keys(extra).length === 0 });
+  render(); // establish the idle baseline
+  const idle = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+  assert.equal(collect(idle, 'project-flow-view')[0].props['aria-busy'], undefined, 'idle is not busy');
+  assert.equal(textOf(collect(idle, 'project-flow-srOnly')[0]), '', 'the live region starts empty');
+
+  const busy = renderWithState(probe.PanelView, panelViewProps(view, { refreshing: true }));
+  assert.equal(collect(busy, 'project-flow-view')[0].props['aria-busy'], true, 'refreshing must set aria-busy');
+  assert.equal(textOf(collect(busy, 'project-flow-srOnly')[0]), '正在刷新…');
+  const stillBusy = renderWithState(probe.PanelView, panelViewProps(view, { refreshing: true }));
+  assert.equal(textOf(collect(stillBusy, 'project-flow-srOnly')[0]), '正在刷新…', 'a repeat render keeps the same text (no rewrite)');
+
+  const settled = renderWithState(probe.PanelView, panelViewProps(view));
+  assert.equal(collect(settled, 'project-flow-view')[0].props['aria-busy'], undefined);
+  assert.equal(textOf(collect(settled, 'project-flow-srOnly')[0]), '已更新', 'settling announces once');
+  const failed = renderWithState(probe.PanelView, panelViewProps(view, { failed: true }));
+  assert.equal(textOf(collect(failed, 'project-flow-srOnly')[0]), '读取失败');
+  const live = collect(failed, 'project-flow-srOnly')[0];
+  assert.equal(live.props.role, 'status');
+  assert.equal(live.props['aria-live'], 'polite');
+});
+
+check('UI state: grouping/expansion is cached per root and restored on the way back', () => {
+  const make = (root) => {
+    const payload = panelViewPayload();
+    payload.root = root;
+    /* The captured fixture has no draft rows, and the fold state needs rows to
+       be observable: inject two so "folded" vs "expanded" is a row count. */
+    payload.tasks = Object.assign({}, payload.tasks, {
+      draft: [
+        { id: 'T-D1', title: 'draft one', status: 'draft' },
+        { id: 'T-D2', title: 'draft two', status: 'draft' },
+      ],
+    });
+    payload.tasks.counts = Object.assign({}, payload.tasks.counts, { draft: 2 });
+    return probe.normalize(payload);
+  };
+  const alpha = make('/w/alpha');
+  const beta = make('/w/beta');
+  const draftRows = (tree) => {
+    const group = collect(tree, 'project-flow-group').find((entry) => entry.props.key === 'draft');
+    return group ? collect(group, 'project-flow-taskRow').length : 0;
+  };
+  withStorage({}, () => {
+    const first = renderWithState(probe.PanelView, panelViewProps(alpha), { reset: true });
+    assert.equal(draftRows(first), 0, 'the draft group starts folded');
+    const toggle = collect(first, 'project-flow-groupToggle').find((button) => button.props['aria-controls'] === 'project-flow-group-draft');
+    assert.ok(toggle, 'draft group toggle missing');
+    toggle.props.onClick({});
+
+    const openedAlpha = renderWithState(probe.PanelView, panelViewProps(alpha));
+    assert.ok(draftRows(openedAlpha) > 0, 'expanding the draft group must render its rows');
+
+    const other = renderWithState(probe.PanelView, panelViewProps(beta));
+    assert.equal(draftRows(other), 0, 'another root must start from its own defaults');
+
+    const back = renderWithState(probe.PanelView, panelViewProps(alpha));
+    assert.ok(draftRows(back) > 0, 'returning to the first root restores its grouping');
+    assert.equal(draftRows(beta), 0, 'the second root stays folded');
+  });
+});
+
 check('PanelView: each switch removes exactly its own card (and the grid re-flows)', () => {
   const payload = panelViewPayload();
   const view = probe.normalize(payload);
@@ -1550,6 +1680,8 @@ async function makeRealTrendProject(mutate) {
   initProject(root, { name: 'e2e-trend', noGates: true });
   const { contract } = loadContract(root);
   const made = addTask(root, contract, {
+    /* `type` became mandatory in core (T-20261105-01): a task without it throws. */
+    type: 'chore',
     title: 'chore: trend e2e',
     status: 'active',
     created_at: trendDay(20),
