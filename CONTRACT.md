@@ -217,7 +217,18 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 }
 ```
 
-- id 规则与实验相同（`^[A-Z]+-\d{8}-\d{2}$`，`T-` 前缀）。
+- **id 分配（T-08 / D-20261105-05 timestamp）**：新任务 id = `T-<YYYYMMDDHHMMSS>`
+  （**本地时间 14 位**，如 `T-20261105212130`）。同一秒创建第二张起追加 `-NN`（两位，从
+  `02` 起，例 `T-20261105212130-02`）；同秒上限 **99**，超出抛
+  `conflict: no free T id left for <stamp> (same-second limit 99)`。
+- **天然单调、不复用**：时间戳只前进，删除记录后**不会回填旧号**；因此任务 id **不需要**
+  `flow.json` 计数器（契约里没有该键）。旧 `T-YYYYMMDD-NN` 历史 id **继续可读、
+  可被引用**（`parent`、`decisions.blocks`、heartbeat `task`），**不迁移、不回填**。实验 id
+  仍为 `E-YYYYMMDD-NN`，本规则只适用于任务 `T-`。
+- **跨分支同秒撞名 = git 合并冲突**：多个分支/worktree 在同一秒创建会生成相同 id（概率低但
+  可能）；合并时**人工重编号**，**禁止** `git merge -X ours` / `-X theirs` 静默丢弃（会静默
+  丢掉一条任务或实验）。重编号需同步文本引用：`decisions` 的 `blocks`、heartbeat 的 `task`、
+  任务的 `parent`、实验的 `commits` 等；批量工具 `flow task renumber` 尚未提供，属后续可选卡。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则

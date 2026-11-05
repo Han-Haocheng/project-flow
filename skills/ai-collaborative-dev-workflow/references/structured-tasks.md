@@ -12,7 +12,7 @@
 | 字段 | 必填 | 规则 |
 |---|---|---|
 | `schema` | 是 | 固定 `1`，迁移时升版本 |
-| `id` | 是 | `T-YYYYMMDD-NN`，全局唯一，加锁分配 |
+| `id` | 是 | `T-<YYYYMMDDHHMMSS>`（本地时间 14 位，如 `T-20261105212130`），加锁自动生成；同一秒第二张起追加 `-02`、`-03`…（上限 99，超出 conflict）；**天然单调、删除不复用**；旧 `T-YYYYMMDD-NN` 保留可读可引用（不迁移）；跨分支同秒撞名属 **git 合并冲突**，人工重编号、**禁止** `-X ours/theirs` |
 | `legacy_id` | 否 | 旧 Markdown 的 `TASK-NNN`，迁移用 |
 | `title` | 是 | `<type>: <一句话范围>`（type ∈ `feat` / `fix` / `chore`），≤60 字符；正反例见 `SKILL.md` §10.2.1 |
 | `status` | 是 | `draft/active/done/archived`（**无 `blocked`**，见 `lib/core.mjs` 的 `TASK_STATUS`）；只允许 `draft→active→done→archived`；依赖记在 Team 卡 `blocked_by`，不落 flow 状态 |
@@ -35,6 +35,8 @@
 | `notes` | 否 | ≤20 行/2000 字；只放判断性说明，超出链接设计文档 |
 | `parent` | 否 | **任务拆分层级**：父任务 id，宽引用 `^[A-Za-z][A-Za-z0-9_.-]{1,60}$`（字母开头、2..61）；`null`/空串 = 根（CLI/工具另接受 `none`，`''`/`none`/`null` **大小写不敏感**）。写路径要求父**已存在**（`parent-not-found`）、**禁自指**、**禁环**（`parent-cycle`）；读路径父失效/成环**按根**（投影 `parent: null`，不迁移、不写回）；**单向 child→parent，不存 `children` 数组** |
 | `experiment` | 否 | 实验型项目用：`E-YYYYMMDD-NN`，**应指向已存在实验**（格式非法才拒；不存在只记 warning、不拒绝写入）；**实验记录不存 tasks 列表**（单向引用，不双写） |
+
+**任务 id 的分配与重编号**：新 id 是**本地时间戳** `T-<YYYYMMDDHHMMSS>`（如 `T-20261105212130`），`addTask` 在锁内生成；同一秒建第二张起追加 `-02`、`-03`…（两位补零，同秒上限 99，超出 `conflict: no free T id left for <stamp> (same-second limit 99)`）。时间戳只前进，**删除记录不会复用旧号**，所以任务 id **不需要** `flow.json` 计数器（契约无该键）。旧 `T-YYYYMMDD-NN` 历史 id 继续可读、可被 `parent`/`decisions.blocks`/heartbeat `task` 引用，**不迁移、不回填**；实验 `E-YYYYMMDD-NN` 不变。**跨分支/worktree** 同一秒创建会得到相同 id，合并时属 **git 合并冲突**，必须**人工重编号**（保留一方、另一方顺延到新时间戳或改后缀），**禁止** `git merge -X ours` / `-X theirs` 静默丢弃。重编号同时要改所有文本引用：`decisions` 的 `blocks`、heartbeat 的 `task`、任务的 `parent`、实验的 `commits` 等（批量工具 `flow task renumber` 尚未提供，属后续可选卡）。
 
 **两种 `parent` 别混**：实验 `parent` = 后继/派生关系（`pivoted` 的新实验指向旧实验，硬规则里「有后继」即指它）；任务 `parent` = 拆分层级（子任务挂父任务）。两者都**单向**——记录只存自己的 `parent`，父记录不回写子 id。
 
