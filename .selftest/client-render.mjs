@@ -807,101 +807,167 @@ function trendTasks(overrides = {}) {
   }).tasks;
 }
 
+const trendLines = (card) => collect(card, 'project-flow-trendLine');
+const linePoints = (line) =>
+  String(line.props.points)
+    .split(' ')
+    .filter(Boolean)
+    .map((pair) => pair.split(',').map(Number));
 const trendDayTitles = (card) =>
   collect(card, 'project-flow-trendDay').map((day) => {
     const title = (day.children || []).find((child) => child && child.type === 'title');
     return title ? String(title.children[0]) : '';
   });
+const approxLines = (card) => trendLines(card).filter((line) => String(line.props.className).includes('project-flow-trendLine--approx'));
 
-check('TasksCard: trend summary, one bar per day and per-bar titles', () => {
+check('TasksCard: trend twin lines (created/done), shared peak, per-day hover titles and legend', () => {
   const card = mountTasks(trendTasks());
   const text = textOf(card);
   assert.ok(text.includes('近 14 天 · 新增 6 · 完成 4 · 归档 1'), 'trend summary missing: ' + text.slice(0, 200));
+  assert.ok(text.includes('近 14 天 · 新增 6 · 完成 4'), 'the chart-level title is missing');
+
   const charts = collect(card, 'project-flow-trendChart');
   assert.equal(charts.length, 1, 'expected exactly one trend chart');
   assert.equal(charts[0].type, 'svg');
   assert.equal(charts[0].props.width, '100%');
   assert.equal(charts[0].props.height, 26, 'the band is 26 px tall');
   assert.equal(charts[0].props.viewBox, '0 0 14 26');
+  assert.equal(charts[0].props.preserveAspectRatio, 'none');
 
-  const days = collect(card, 'project-flow-trendDay');
-  assert.equal(days.length, 14, 'one stacked bar per day');
+  // Exactly two lines, one point per day, both flat at full opacity.
+  const lines = trendLines(card);
+  assert.equal(lines.length, 2, 'expected the created and done lines only');
+  const createdLine = lines.find((line) => String(line.props.className).includes('project-flow-trendLineCreated'));
+  const doneLine = lines.find((line) => String(line.props.className).includes('project-flow-trendLineDone'));
+  assert.ok(createdLine && doneLine, 'both series need a polyline');
+  for (const line of lines) {
+    assert.equal(linePoints(line).length, 14, 'one point per day');
+    assert.equal(line.props.opacity, 1, 'an exact series is fully opaque');
+    assert.equal(line.props.strokeDasharray, undefined, 'an exact series is not dashed');
+  }
+  assert.equal(approxLines(card).length, 0, 'no dashed segment without estimatedFrom');
+
+  // Shared peak = 2 (a created day), so the mapping is y = 25 - 12*v.
+  const created = linePoints(createdLine);
+  const done = linePoints(doneLine);
+  assert.deepEqual(created[0], [0.5, 25], 'a zero value sits on the baseline');
+  assert.deepEqual(created[4], [4.5, 1], 'the peak value reaches the 1 px top pad');
+  assert.deepEqual(done[0], [0.5, 13], 'a done value of 1 lands at 25 - 12 = 13');
+  assert.deepEqual(done[6], [6.5, 1]);
+  assert.deepEqual(created[13], [13.5, 13], 'v=1 → 25 - 12 = 13');
+  for (const [x, y] of created.concat(done)) {
+    assert.ok(x >= 0 && x <= 14, 'points stay inside the viewBox: ' + x);
+    assert.ok(y >= 1 && y <= 25, 'points stay inside the 1 px pads: ' + y);
+  }
+
+  // One mono-line dot per NON-ZERO day (5 created + 3 done), never on a zero.
+  assert.equal(collect(card, 'project-flow-trendPoint').length, 8, 'dots only mark non-zero days');
+  assert.equal(collect(card, 'project-flow-trendPointCreated').length, 5);
+  assert.equal(collect(card, 'project-flow-trendPointDone').length, 3);
+  const dotXs = collect(card, 'project-flow-trendPoint').map((dot) => dot.props.cx);
+  assert.ok(!dotXs.includes(2.5), 'a zero day must not get a dot');
+
+  // Hover: one transparent hit column per day with all three counters.
+  const hits = collect(card, 'project-flow-trendDay');
+  assert.equal(hits.length, 14, 'one hit column per day');
+  for (const hit of hits) {
+    assert.equal(hit.props.width, 1, 'each hit column is one day wide');
+    assert.equal(hit.props.height, 26);
+  }
   const titles = trendDayTitles(card);
-  assert.equal(titles[0], '10-22 新增 0 · 完成 1 · 归档 0', 'the first bar title must carry all three numbers');
+  assert.equal(titles[0], '10-22 新增 0 · 完成 1 · 归档 0', 'the first day title must carry all three numbers');
   assert.equal(titles[4], '10-26 新增 2 · 完成 0 · 归档 0');
-  for (const title of titles) assert.match(title, /新增 \d+ · 完成 \d+ · 归档 \d+/, 'every bar needs the three counters');
+  for (const title of titles) assert.match(title, /新增 \d+ · 完成 \d+ · 归档 \d+/, 'every day needs the three counters');
+
+  // Legend: two colour keys, both localized.
+  const legend = collect(card, 'project-flow-trendLegendItem');
+  assert.equal(legend.length, 2, 'the legend needs the created and done swatches');
+  const legendText = legend.map((item) => textOf(item)).join('|');
+  assert.ok(legendText.includes('新增') && legendText.includes('完成'), 'legend copy missing: ' + legendText);
+
+  // The peak is per line, not per day total: 3 created + 3 done on one day must put
+  // BOTH lines at the top (a summed peak would halve them).
+  const both = mountTasks(trendTasks({ created: [3, ...new Array(13).fill(0)], done: [3, ...new Array(13).fill(0)] }));
+  const bothLines = trendLines(both);
+  const createdTop = linePoints(bothLines.find((line) => String(line.props.className).includes('Created')))[0];
+  const doneTop = linePoints(bothLines.find((line) => String(line.props.className).includes('Done')))[0];
+  assert.deepEqual(createdTop, [0.5, 1], 'a per-line peak must reach the top');
+  assert.deepEqual(doneTop, [0.5, 1], 'both lines share that same peak');
 
   // Only the first and last dates are labelled.
   const axis = collect(card, 'project-flow-trendAxis');
   assert.equal(axis.length, 1);
   assert.deepEqual(axis[0].children.map((child) => child.children[0]), ['10-22', '11-04']);
-
-  // Stacked segments: created + done + archived rects exist, with a real gap.
-  const created = collect(card, 'project-flow-trendCreated');
-  const done = collect(card, 'project-flow-trendDone');
-  const archived = collect(card, 'project-flow-trendArchived');
-  // One segment per NON-ZERO day (a day with 2 created draws a single 2-unit rect).
-  assert.equal(created.length, 5, 'created series must render one segment per non-zero day');
-  assert.equal(done.length, 3, 'done series must render one segment per non-zero day');
-  assert.equal(archived.length, 1);
-  assert.ok(created[0].props.x + created[0].props.width < created[1].props.x, 'a gap is required between bars');
-
-  // A tiny value next to a tall neighbour still gets a visible 1 px segment.
-  const spiky = mountTasks(trendTasks({ created: [50, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }));
-  for (const rect of collect(spiky, 'project-flow-trendCreated')) {
-    assert.ok(rect.props.height >= 1, 'every non-zero segment is at least 1 px tall');
-    assert.ok(rect.props.y >= 0, 'segments must stay inside the band');
-  }
 });
 
-check('TasksCard: an approximated segment drops to 60% opacity and the summary gets ≈', () => {
+check('TasksCard: the approximated tail is dashed at 60% and the summary gets ≈', () => {
   const card = mountTasks(trendTasks({ estimatedFrom: '2026-11-01' }));
   assert.equal(collect(card, 'project-flow-trendApprox').length, 1, 'the ≈ marker is missing');
   assert.ok(textOf(card).includes('≈'), 'the summary must show ≈ for an approximated segment');
-  const days = collect(card, 'project-flow-trendDay');
-  // from 2026-10-22, so 11-01 is index 10: days 0..9 exact, 10..13 approximated.
-  for (let index = 0; index < days.length; index += 1) {
-    assert.equal(days[index].props.opacity, index >= 10 ? 0.6 : 1, `day ${index} opacity`);
+
+  const lines = trendLines(card);
+  const dashed = approxLines(card);
+  assert.equal(lines.length, 4, 'each series splits into an exact and a dashed part');
+  assert.equal(dashed.length, 2, 'both series need a dashed tail');
+  for (const line of dashed) {
+    assert.equal(line.props.opacity, 0.6, 'the approximated tail drops to 60%');
+    assert.equal(line.props.strokeDasharray, '2 1.5', 'the approximated tail is dashed');
+    const points = linePoints(line);
+    assert.equal(points[0][0], 10.5, 'the dashed part starts at estimatedFrom (index 10)');
+    assert.equal(points[points.length - 1][0], 13.5, 'and runs to the window tail');
   }
-  assert.ok(trendDayTitles(card)[10].includes('近似'), 'an approximated bar title must say why');
-  assert.ok(!trendDayTitles(card)[0].includes('近似'), 'an exact bar must not claim approximation');
+  for (const line of lines.filter((entry) => entry.props.opacity === 1)) {
+    assert.equal(linePoints(line).length, 11, 'the exact part covers indexes 0..10 (shared cut point)');
+  }
+  // The cut is marked so the dashes read as a deliberate boundary, not a glitch.
+  assert.equal(collect(card, 'project-flow-trendApproxPoint').length, 2, 'a boundary marker is expected per series');
+  assert.ok(trendDayTitles(card)[10].includes('近似'), 'an approximated day title must say why');
+  assert.ok(!trendDayTitles(card)[0].includes('近似'), 'an exact day must not claim approximation');
   assert.equal(
-    collect(mountTasks(trendTasks()), 'project-flow-trendApprox').length,
+    approxLines(mountTasks(trendTasks())).length,
     0,
-    'an exact series must not render ≈'
+    'an exact series must not render a dashed segment'
   );
 });
 
-check('TasksCard: estimatedFrom boundaries — from covers the window, to marks only the last bar', () => {
-  const opacities = (card) => collect(card, 'project-flow-trendDay').map((day) => day.props.opacity);
+check('TasksCard: estimatedFrom boundaries — from covers the window, to marks only the last point', () => {
+  const approxShape = (card) => ({
+    exact: trendLines(card).filter((line) => line.props.opacity === 1).length,
+    dashed: approxLines(card).length,
+    dashedPoints: approxLines(card).map((line) => linePoints(line).length),
+    markers: collect(card, 'project-flow-trendApproxPoint').length,
+    hasApprox: collect(card, 'project-flow-trendApprox').length,
+  });
 
-  // estimatedFrom === from → the whole 14-day window is approximated.
-  const all = mountTasks(trendTasks({ estimatedFrom: '2026-10-22' }));
-  assert.deepEqual(opacities(all), new Array(14).fill(0.6), 'a window-head approximation must fade every bar');
-  assert.ok(textOf(all).includes('≈'), 'a window-head approximation still shows ≈');
-  assert.ok(trendDayTitles(all).every((title) => title.includes('近似')), 'every bar title must say it is approximated');
+  // estimatedFrom === from → the whole window is approximated: no solid lines at all.
+  const all = approxShape(mountTasks(trendTasks({ estimatedFrom: '2026-10-22' })));
+  assert.deepEqual(all, { exact: 0, dashed: 2, dashedPoints: [14, 14], markers: 0, hasApprox: 1 });
+  assert.equal(approxLines(mountTasks(trendTasks({ estimatedFrom: '2026-10-22' })))[0].props.opacity, 0.6);
 
-  // estimatedFrom === to → only the last bar is approximated.
-  const tail = mountTasks(trendTasks({ estimatedFrom: '2026-11-04' }));
-  const tailOpacities = opacities(tail);
-  assert.equal(tailOpacities[13], 0.6, 'the last bar must be approximated');
-  assert.deepEqual(tailOpacities.slice(0, 13), new Array(13).fill(1), 'earlier bars must stay exact');
-  assert.ok(trendDayTitles(tail)[13].includes('近似'));
-  assert.ok(!trendDayTitles(tail)[12].includes('近似'));
+  // estimatedFrom === to → only the last point is approximated.
+  const tailCard = mountTasks(trendTasks({ estimatedFrom: '2026-11-04' }));
+  const tail = approxShape(tailCard);
+  assert.equal(tail.exact, 2, 'both series stay solid up to the last day');
+  assert.equal(tail.dashed, 2, 'the last point still needs a dashed marker segment');
+  assert.deepEqual(tail.dashedPoints, [1, 1], 'a single approximated day is a one-point segment');
+  assert.equal(tail.markers, 2);
+  assert.equal(tail.hasApprox, 1);
+  assert.equal(linePoints(trendLines(tailCard).find((line) => line.props.opacity === 1))[0][0], 0.5);
 
-  // Before the window head: the whole window is still the approximated segment.
-  assert.deepEqual(opacities(mountTasks(trendTasks({ estimatedFrom: '2026-10-01' }))), new Array(14).fill(0.6));
-  // After the window tail: nothing in this window was approximated, so no ≈ at all.
-  const after = mountTasks(trendTasks({ estimatedFrom: '2026-12-01' }));
-  assert.deepEqual(opacities(after), new Array(14).fill(1));
-  assert.equal(collect(after, 'project-flow-trendApprox').length, 0, 'a future approximation must not mark this window');
+  // Before the window head: the whole window is the approximated segment.
+  const before = approxShape(mountTasks(trendTasks({ estimatedFrom: '2026-10-01' })));
+  assert.deepEqual(before, { exact: 0, dashed: 2, dashedPoints: [14, 14], markers: 0, hasApprox: 1 });
+  // After the window tail: nothing in this window was approximated.
+  const after = approxShape(mountTasks(trendTasks({ estimatedFrom: '2026-12-01' })));
+  assert.deepEqual(after, { exact: 2, dashed: 0, dashedPoints: [], markers: 0, hasApprox: 0 });
 });
 
 check('TasksCard: estimatedFrom exactly one day past the tail stays unmarked (index === days)', () => {
   /* The off-by-one cell: `index >= days` must not silently become `> days`. */
   const edge = mountTasks(trendTasks({ estimatedFrom: '2026-11-05' }));
-  const opacities = collect(edge, 'project-flow-trendDay').map((day) => day.props.opacity);
-  assert.deepEqual(opacities, new Array(14).fill(1), 'index === days must not fade any bar');
+  assert.equal(trendLines(edge).length, 2, 'both series stay whole');
+  assert.equal(approxLines(edge).length, 0, 'index === days must not add a dashed segment');
+  assert.equal(collect(edge, 'project-flow-trendApproxPoint').length, 0, 'index === days must not add a marker');
   assert.equal(collect(edge, 'project-flow-trendApprox').length, 0, 'index === days must not add the ≈ marker');
   assert.ok(!textOf(edge).includes('≈'), 'index === days must not print ≈ in the summary');
 });
@@ -922,6 +988,7 @@ check('normalize: trend numbers are coerced on purpose, but the shape stays stri
   assert.ok(loose, 'a numeric-string days must still produce a trend');
   assert.equal(loose.days, 14, 'days must be coerced to a number');
   assert.deepEqual(loose.created, new Array(14).fill(1), 'series entries are coerced too');
+  assert.deepEqual(loose.archived, new Array(14).fill(0));
 
   const reject = (trend) =>
     probe.normalize({ tasks: { total: 0, counts: {}, current: null, active: [], recentDone: [], draft: [], trend } }).tasks.trend;

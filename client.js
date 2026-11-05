@@ -90,7 +90,6 @@ window.__ModuleLoader__.load({
     const MAX_LIST_ROWS = 25;
     /* Trend sparkline (T-09): fixed 26 px band, one stacked bar per day. */
     const TREND_BAR_HEIGHT = 26;
-    const TREND_BAR_GAP = 0.12;
     const TREND_DAY_MS = 86400000;
     /* First-screen budget for the task card: the active group opens on this many
        rows so a 50-task ledger still fits the sidebar. Everything beyond it stays
@@ -179,6 +178,9 @@ window.__ModuleLoader__.load({
       'tasks.trendApproxTitle': '完成/归档按 updated_at 近似（无 done_at/archived_at）',
       'tasks.trendEmpty': '暂无趋势',
       'tasks.trendAria': '近 {days} 天任务趋势',
+      'tasks.trendChartTitle': '近 {days} 天 · 新增 {created} · 完成 {done}',
+      'tasks.trendLegendCreated': '新增',
+      'tasks.trendLegendDone': '完成',
       'tasks.queueHead': '队列头',
       'tasks.queueEmpty': '暂无进行中任务',
       'tasks.active': '进行中',
@@ -318,6 +320,9 @@ window.__ModuleLoader__.load({
       'tasks.trendApproxTitle': 'done/archived approximated from updated_at (no done_at/archived_at)',
       'tasks.trendEmpty': 'No trend yet',
       'tasks.trendAria': 'Task trend over the last {days} days',
+      'tasks.trendChartTitle': 'Last {days}d · {created} new · {done} done',
+      'tasks.trendLegendCreated': 'new',
+      'tasks.trendLegendDone': 'done',
       'tasks.queueHead': 'Queue head',
       'tasks.queueEmpty': 'Nothing in progress',
       'tasks.active': 'In progress',
@@ -1542,6 +1547,20 @@ window.__ModuleLoader__.load({
             done: sum(done),
             archived: sum(archived),
           })
+        ),
+        React.createElement(
+          'span',
+          { className: 'project-flow-trendLegend' },
+          React.createElement(
+            'span',
+            { className: 'project-flow-trendLegendItem project-flow-trendLegendCreated' },
+            '\u25CF ' + t('tasks.trendLegendCreated')
+          ),
+          React.createElement(
+            'span',
+            { className: 'project-flow-trendLegendItem project-flow-trendLegendDone' },
+            '\u25CF ' + t('tasks.trendLegendDone')
+          )
         )
       );
 
@@ -1558,14 +1577,85 @@ window.__ModuleLoader__.load({
         );
       }
 
-      const peak = Math.max(1, ...totals);
-      const unit = TREND_BAR_HEIGHT / peak;
-      const barWidth = 1 - TREND_BAR_GAP;
-      const bars = [];
+      /* Peak per line, not per day total: a day with 3 created + 3 done must put
+         BOTH lines at the top, otherwise the two lines are not comparable. */
+      const peak = Math.max(1, ...created, ...done);
+      /* Shared y scale (both lines use the same peak) with a 1 px top/bottom pad;
+         the unit is one day column wide, so `preserveAspectRatio="none"` only
+         stretches horizontally. */
+      const spine = TREND_BAR_HEIGHT - 2;
+      const round = (value) => Math.round(value * 100) / 100;
+      const column = (index) => round(index + 0.5);
+      const level = (value) => round(TREND_BAR_HEIGHT - 1 - (value * spine) / peak);
+
+      const segment = (series, start, end, key, tone, dashed) => {
+        const points = [];
+        for (let index = start; index <= end; index += 1) {
+          points.push(column(index) + ',' + level(asNumber(series[index], 0)));
+        }
+        return React.createElement('polyline', {
+          key,
+          className: 'project-flow-trendLine ' + tone + (dashed ? ' project-flow-trendLine--approx' : ''),
+          points: points.join(' '),
+          opacity: dashed ? 0.6 : 1,
+          ...(dashed ? { strokeDasharray: '2 1.5' } : null),
+        });
+      };
+
+      /* Two lines: daily created vs daily done. Archived stays in the summary
+         text only — a third line turns the 26 px band into noise. The line is
+         split at `estimatedFrom` so the approximated tail can be dashed. */
+      const lines = [];
+      const dots = [];
+      const cut = approx ? approxFrom : -1;
+      for (const [lineTone, dotTone, series] of [
+        ['project-flow-trendLineCreated', 'project-flow-trendPointCreated', created],
+        ['project-flow-trendLineDone', 'project-flow-trendPointDone', done],
+      ]) {
+        if (cut < 0) {
+          /* Fully exact window. */
+          lines.push(segment(series, 0, days - 1, lineTone, lineTone, false));
+        } else if (cut === 0) {
+          /* The approximation covers the whole window — nothing to split. */
+          lines.push(segment(series, 0, days - 1, lineTone + '-approx', lineTone, true));
+        } else {
+          lines.push(segment(series, 0, cut, lineTone, lineTone, false));
+          lines.push(segment(series, cut, days - 1, lineTone + '-approx', lineTone, true));
+          /* Mark where the estimate takes over, so the dashes read as a boundary
+             rather than a rendering glitch. */
+          dots.push(
+            React.createElement('circle', {
+              key: 'trend-cut-' + lineTone,
+              className: 'project-flow-trendApproxPoint',
+              cx: column(cut),
+              cy: level(asNumber(series[cut], 0)),
+              r: 0.9,
+              opacity: 0.6,
+            })
+          );
+        }
+        for (let index = 0; index < days; index += 1) {
+          const value = asNumber(series[index], 0);
+          if (value <= 0) continue;
+          dots.push(
+            React.createElement('circle', {
+              key: dotTone + '-' + index,
+              className: 'project-flow-trendPoint ' + dotTone,
+              cx: column(index),
+              cy: level(value),
+              r: 0.6,
+            })
+          );
+        }
+      }
+
+      /* One transparent hit column per day keeps the per-day numbers reachable
+         (the old stacked bars had them in `<title>`). */
+      const hover = [];
       for (let index = 0; index < days; index += 1) {
         const values = [asNumber(created[index], 0), asNumber(done[index], 0), asNumber(archived[index], 0)];
         const dayApprox = approx && index >= approxFrom;
-        const label = trendDayLabel(trend.from, index, String(created[index] ?? ''));
+        const label = trendDayLabel(trend.from, index, String(days));
         const title =
           t('tasks.trendBar', {
             date: label,
@@ -1573,35 +1663,19 @@ window.__ModuleLoader__.load({
             done: values[1],
             archived: values[2],
           }) + (dayApprox ? ' · ' + t('tasks.trendApproxTitle') : '');
-        let y = TREND_BAR_HEIGHT;
-        const segments = [];
-        const tones = ['project-flow-trendCreated', 'project-flow-trendDone', 'project-flow-trendArchived'];
-        for (let slot = 0; slot < 3; slot += 1) {
-          const amount = values[slot];
-          if (amount <= 0) continue;
-          const height = Math.min(y, Math.max(1, amount * unit));
-          y -= height;
-          segments.push(
-            React.createElement('rect', {
-              key: tones[slot],
-              className: tones[slot],
-              x: index + TREND_BAR_GAP / 2,
-              y,
-              width: barWidth,
-              height,
-            })
-          );
-        }
-        bars.push(
+        hover.push(
           React.createElement(
-            'g',
+            'rect',
             {
-              key: 'trend-' + index,
+              key: 'trend-hit-' + index,
               className: 'project-flow-trendDay',
-              opacity: dayApprox ? 0.6 : 1,
+              x: index,
+              y: 0,
+              width: 1,
+              height: TREND_BAR_HEIGHT,
+              fill: 'transparent',
             },
-            React.createElement('title', null, title),
-            segments
+            React.createElement('title', null, title)
           )
         );
       }
@@ -1621,7 +1695,14 @@ window.__ModuleLoader__.load({
             role: 'img',
             'aria-label': t('tasks.trendAria', { days }),
           },
-          bars
+          React.createElement(
+            'title',
+            null,
+            t('tasks.trendChartTitle', { days, created: sum(created), done: sum(done) })
+          ),
+          lines,
+          dots,
+          hover
         ),
         React.createElement(
           'div',
@@ -3107,9 +3188,18 @@ window.__ModuleLoader__.load({
 .project-flow-trendApprox{color:var(--dsw-alias-label-secondary);font-weight:600;cursor:help;}
 .project-flow-trendSummary{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .project-flow-trendChart{display:block;width:100%;height:26px;margin-top:4px;shape-rendering:crispEdges;}
-.project-flow-trendCreated{fill:var(--dsw-alias-brand-primary);}
-.project-flow-trendDone{fill:var(--dsw-alias-state-success-primary);}
-.project-flow-trendArchived{fill:var(--dsw-alias-label-secondary);opacity:.55;}
+.project-flow-trendLine{fill:none;stroke-width:1.2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke;}
+.project-flow-trendLineCreated{stroke:var(--dsw-alias-brand-primary);}
+.project-flow-trendLineDone{stroke:var(--dsw-alias-state-success-primary);}
+.project-flow-trendLine--approx{stroke-dasharray:2 1.5;opacity:.6;}
+.project-flow-trendPoint{stroke:none;}
+.project-flow-trendPointCreated{fill:var(--dsw-alias-brand-primary);}
+.project-flow-trendPointDone{fill:var(--dsw-alias-state-success-primary);}
+.project-flow-trendDay{fill:transparent;}
+.project-flow-trendLegend{display:inline-flex;gap:8px;margin-left:auto;flex:none;}
+.project-flow-trendLegendItem{display:inline-flex;align-items:center;gap:2px;white-space:nowrap;}
+.project-flow-trendLegendCreated{color:var(--dsw-alias-brand-primary);}
+.project-flow-trendLegendDone{color:var(--dsw-alias-state-success-primary);}
 .project-flow-trendAxis{display:flex;justify-content:space-between;gap:6px;margin-top:2px;font-size:10px;color:var(--dsw-alias-label-secondary);}
 .project-flow-trendEmpty{margin:4px 0 0;font-size:11px;}
 .project-flow-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
