@@ -3539,6 +3539,8 @@ function runCliAsync(cwd, args) {
 test('init 持锁：conflict 退出且不写 flow.json / gates（不再“持锁仍成功”）', () => {
   const root = tempRoot('init-held-lock')
   const store = path.join(root, '.dsh/flow')
+  // N3/N5（文档化接受）：seed 保持在锁内（移出锁需第二轮锁与写路径风险，不做）；
+  // conflict 时允许留下空 `.dsh/flow` 目录，但**不允许任何数据文件**（flow.json/gates）。
   withLock(root, undefined, () => {
     expectFlowError(() => initProject(root, { name: 'locked' }), 'conflict', /locked by another writer/)
     assert.equal(fs.existsSync(path.join(store, 'flow.json')), false, '冲突时不得写出 flow.json')
@@ -3566,6 +3568,52 @@ test('init 持锁（CLI）：真实子进程持锁时 flow init = exit 2 conflic
   assert.equal(fs.existsSync(path.join(store, 'gates')), false)
 })
 
+test('init 持锁（N4）：`init --force` 同样必须 conflict，不得绕过锁写盘', () => {
+  const root = tempRoot('init-held-force')
+  const store = path.join(root, '.dsh/flow')
+  withLock(root, undefined, () => {
+    // API：force 也在锁内竞争，输给持锁者就是 conflict。
+    expectFlowError(() => initProject(root, { force: true, name: 'forced-api' }), 'conflict', /locked by another writer/)
+    // CLI：真实子进程同样 exit 2 + conflict（变异「force 绕过锁」会在这里红）。
+    const cli = runCli(root, ['init', '--force', '--name', 'forced-cli', '--json'])
+    assert.equal(cli.code, 2, cli.stdout + cli.stderr)
+    assert.equal(cli.json?.error?.code, 'conflict')
+    assert.equal(fs.existsSync(path.join(store, 'flow.json')), false, 'force 持锁冲突时不得写 flow.json')
+    assert.equal(fs.existsSync(path.join(store, 'gates')), false, 'force 持锁冲突时不得 seed gates')
+  })
+  assert.equal(fs.existsSync(path.join(store, 'flow.json')), false)
+})
+
+test('init 自定义 store.root（N1）：锁按 manifest 的真实 store 取，持锁 init 必须 conflict 且不 seed', () => {
+  const root = tempRoot('init-custom-store')
+  const defaultStore = path.join(root, '.dsh/flow')
+  const customStore = path.join(root, 'custom-aware')
+  fs.mkdirSync(defaultStore, { recursive: true })
+  const manifestFile = path.join(defaultStore, 'flow.json')
+  fs.writeFileSync(manifestFile, `${JSON.stringify({
+    schema: 2,
+    name: 'custom-aware',
+    store: { root: 'custom-aware' },
+  }, null, 2)}\n`)
+  const { contract } = loadContract(root)
+  assert.equal(storePaths(root, contract).store, customStore)
+  const manifestBefore = fs.readFileSync(manifestFile, 'utf8')
+
+  withLock(root, contract, () => {
+    // 锁在 custom store；init 若仍按默认 `.dsh/flow` 取锁，就会“成功”并 seed。
+    expectFlowError(() => initProject(root, { force: true }), 'conflict', /locked by another writer/)
+    const cli = runCli(root, ['init', '--force', '--json'])
+    assert.equal(cli.code, 2, cli.stdout + cli.stderr)
+    assert.equal(cli.json?.error?.code, 'conflict')
+  })
+  assert.equal(fs.readFileSync(manifestFile, 'utf8'), manifestBefore, 'manifest 不得被改写')
+  assert.equal(fs.existsSync(path.join(customStore, 'gates')), false, 'custom store 不得出现 gates（未 seed）')
+  assert.deepEqual(
+    fs.existsSync(path.join(customStore, 'gates')) ? fs.readdirSync(path.join(customStore, 'gates')) : [],
+    [],
+  )
+})
+
 test('init 并行 ×8：单份合法 flow.json、gates 恰 5、无半成品/临时文件', async () => {
   const root = tempRoot('init-race')
   const results = await Promise.all(
@@ -3576,6 +3624,19 @@ test('init 并行 ×8：单份合法 flow.json、gates 恰 5、无半成品/临�
   for (const result of results) {
     assert.ok(result.code === 0 || result.code === 2, `init 退出码应为 0/2：${result.code} ${result.stderr}`)
     if (result.code === 2) assert.equal(result.json?.error?.code, 'conflict', '竞争失败必须是 conflict→exit 2')
+  }
+  // N2：只有真正写 flow.json 的那一个 init 报告 created；其余成功者必须在锁内
+  // 重算 alreadyExists 后返回 created: []（变异“复用锁外 alreadyExists”→多个 created）。
+  const creators = ok.filter((result) => Array.isArray(result.json?.data?.created)
+    && result.json.data.created.includes('.dsh/flow/flow.json'))
+  assert.equal(creators.length, 1, `并行 init 必须恰有一个 created，实际 ${creators.length}（${ok.map((r) => JSON.stringify(r.json?.data?.created)).join(' / ')}）`)
+  for (const result of ok) {
+    if (result === creators[0]) continue
+    assert.deepEqual(result.json?.data?.created, [], '非创建者的 created 必须为空')
+    assert.ok(
+      (result.json?.data?.warnings ?? []).some((line) => String(line).startsWith('already-initialized:')),
+      '非创建者应看到锁内重算的 already-initialized warning',
+    )
   }
   const store = path.join(root, '.dsh/flow')
   const contract = JSON.parse(fs.readFileSync(path.join(store, 'flow.json'), 'utf8'))
