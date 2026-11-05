@@ -315,7 +315,13 @@ test('GET state：dead 心跳带 liveness/reason，TUI 视图不计入 working',
     assert.equal(dead.reason, 'pid-gone')
     const model = panelModel(payload, { width: 80, height: 40, now: Date.now() })
     const section = model.sections.find((item) => item.title === '心跳')
-    assert.equal(section.rows[0].text, '活跃 1 / 共 1', 'dead 不回填 payload，也不计入 working')
+    /* T-13 A5/D-14: the dead row is hidden from the list but still counted in the
+       total, so 「共 total」 stays honest while the visible rows stay short. */
+    assert.equal(payload.heartbeatsHidden, 1, 'the hidden dead row is reported in the payload')
+    assert.equal(section.rows[0].text, '活跃 1 / 共 2', 'dead 不回填 payload，也不计入 working，但计入总数')
+    const visibleBeats = section.rows.slice(1).filter((entry) => /^[▶×✓·]/.test(entry.text))
+    assert.equal(visibleBeats.length, 1, 'only the live session is rendered: ' + visibleBeats.map((entry) => entry.text).join(' | '))
+    assert.ok(visibleBeats[0].text.includes('live-session') || visibleBeats[0].text.startsWith('▶'), 'the visible row is the live one')
   } finally {
     host.disposeAll()
   }
@@ -404,7 +410,11 @@ test('GET state payload 兼容：heartbeats 仍是行数组，旧记录行为同
     }
     const model = panelModel(payload, { width: 80, height: 40, now: Date.now() })
     const section = model.sections.find((item) => item.title === '心跳')
-    assert.equal(section.rows[0].text, '活跃 1 / 共 1', '只有新鲜旧记录可见')
+    /* Same rule as above: one fresh row visible, one stale row hidden, total 2. */
+    assert.equal(section.rows[0].text, '活跃 1 / 共 2', '只有新鲜旧记录可见，但 total 含隐藏行')
+    const visibleBeats = section.rows.slice(1).filter((entry) => /^[▶×✓·]/.test(entry.text))
+    assert.equal(visibleBeats.length, 1, 'the hidden stale row must not render a beat line')
+    assert.ok(visibleBeats[0].text.includes('fresh-legacy'), 'the fresh legacy row stays visible')
   } finally {
     host.disposeAll()
   }

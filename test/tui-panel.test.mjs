@@ -186,6 +186,25 @@ test('心跳计数行：dead=0 时不再输出「已结束 0」', () => {
   assert.equal(heartbeat.rows[0].text, '活跃 1 / 共 1');
 });
 
+test('心跳隐藏计数：hostHidden 计入总数并单列一行，=0 或缺省不显示', () => {
+  const payload = fixture();
+  payload.heartbeatsHidden = 2;
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+  const heartbeat = model.sections.find((section) => section.title === '心跳');
+  assert.equal(heartbeat.rows[0].text, '活跃 1 / 共 3', 'the total must include host-hidden rows');
+  assert.ok(
+    heartbeat.rows.some((entry) => entry.text.includes('+2 条已隐藏（--all 见 CLI）')),
+    'the hidden count line is missing: ' + heartbeat.rows.map((entry) => entry.text).join(' | ')
+  );
+
+  const plain = panelModel(fixture(), { width: 80, height: 40, now: NOW });
+  assert.ok(!plain.sections.find((section) => section.title === '心跳').rows.some((entry) => entry.text.includes('已隐藏')));
+  const zero = fixture();
+  zero.heartbeatsHidden = 0;
+  const zeroModel = panelModel(zero, { width: 80, height: 40, now: NOW });
+  assert.ok(!zeroModel.sections.find((section) => section.title === '心跳').rows.some((entry) => entry.text.includes('已隐藏')));
+});
+
 test('every line is clipped to the requested width (CJK counted as one)', () => {
   const model = panelModel(fixture(), { width: 20, height: 40, now: NOW })
   const lines = allLines(model)

@@ -50,7 +50,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { zh, en, normalize, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { zh, en, normalize, readDisplayPrefs, writeDisplayPrefs, cardCollapsed, applyFold, DisplayBar, DisplayRow: DisplayBar, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -1310,6 +1310,198 @@ check('TasksCard tree: an older payload without parent renders flat (no caret, n
     assert.equal(collect(row, 'project-flow-taskCaret').length, 0, 'no caret without children');
     assert.equal(collect(row, 'project-flow-taskBadge').length, 0, 'no badge without a parent');
   }
+});
+
+// ------------------------------------------------ display row (T-13 A5)
+const DISPLAY_DEFAULTS = { allCollapsed: false, showExperiments: true, showTrend: true, showHeartbeats: true };
+
+/** Run with a fake `window.localStorage`; restores the previous one afterwards. */
+function withStorage(seed, run) {
+  const previous = typeof window !== 'undefined' && window ? window.localStorage : undefined;
+  const data = new Map(Object.entries(seed || {}));
+  const fake = {
+    getItem: (key) => (data.has(key) ? data.get(key) : null),
+    setItem: (key, value) => { data.set(key, String(value)); },
+    removeItem: (key) => { data.delete(key); },
+    key: (index) => Array.from(data.keys())[index] ?? null,
+    get length() { return data.size; },
+  };
+  if (typeof window === 'undefined') globalThis.window = {};
+  window.localStorage = fake;
+  try {
+    return run(fake);
+  } finally {
+    if (previous === undefined) delete window.localStorage;
+    else window.localStorage = previous;
+  }
+}
+
+check('display prefs: defaults, per-root persistence, corrupt/version/shape fallbacks', () => {
+  withStorage({}, (store) => {
+    assert.deepEqual(probe.readDisplayPrefs('/w/a'), DISPLAY_DEFAULTS, 'first visit keeps every default');
+    probe.writeDisplayPrefs('/w/a', { allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true });
+    const stored = JSON.parse(store.getItem('project-flow.display:/w/a'));
+    assert.deepEqual(stored, { v: 1, allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true }, 'the persisted shape is versioned');
+    assert.deepEqual(probe.readDisplayPrefs('/w/a'), { allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true });
+    // Two roots never share preferences.
+    assert.deepEqual(probe.readDisplayPrefs('/w/b'), DISPLAY_DEFAULTS, 'a second root keeps its own defaults');
+    probe.writeDisplayPrefs('/w/b', { showTrend: false });
+    assert.deepEqual(probe.readDisplayPrefs('/w/a'), { allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true }, 'root a is untouched');
+    assert.deepEqual(probe.readDisplayPrefs('/w/b'), { allCollapsed: false, showExperiments: true, showTrend: false, showHeartbeats: true });
+    // Broken values fall back instead of throwing.
+    store.setItem('project-flow.display:/w/c', '{not json');
+    assert.deepEqual(probe.readDisplayPrefs('/w/c'), DISPLAY_DEFAULTS, 'corrupt JSON');
+    store.setItem('project-flow.display:/w/d', JSON.stringify({ v: 2, allCollapsed: true }));
+    assert.deepEqual(probe.readDisplayPrefs('/w/d'), DISPLAY_DEFAULTS, 'version mismatch');
+    store.setItem('project-flow.display:/w/e', JSON.stringify({ v: 1, allCollapsed: 'yes', showTrend: 0 }));
+    assert.deepEqual(probe.readDisplayPrefs('/w/e'), DISPLAY_DEFAULTS, 'wrong field types');
+    store.setItem('project-flow.display:/w/f', JSON.stringify({ v: 1, allCollapsed: true, showTrend: false }));
+    assert.deepEqual(probe.readDisplayPrefs('/w/f'), { allCollapsed: true, showExperiments: true, showTrend: false, showHeartbeats: true }, 'partial file keeps defaults for missing keys');
+  });
+  // No storage at all: defaults and a false write result, never a throw.
+  const previous = window.localStorage;
+  delete window.localStorage;
+  assert.deepEqual(probe.readDisplayPrefs('/w/g'), DISPLAY_DEFAULTS);
+  assert.equal(probe.writeDisplayPrefs('/w/g', { allCollapsed: true }), false);
+  window.localStorage = previous;
+});
+
+check('DisplayBar: collapse-all plus three switches; the experiments switch disables when the project says off', () => {
+  withStorage({}, (store) => {
+    let seen = null;
+    const display = probe.readDisplayPrefs('/w/panel');
+    const bar = probe.DisplayBar({
+      t,
+      display,
+      experimentsEnabled: true,
+      onAllCollapsed: (next) => { seen = { all: next }; },
+      onToggle: (key) => { seen = { key }; },
+    });
+    const all = collect(bar, 'project-flow-displayAll')[0];
+    assert.equal(textOf(all), '全部收起', 'the default label collapses');
+    all.props.onClick({});
+    assert.deepEqual(seen, { all: true }, 'the control row asks for collapse-all');
+    // Expanding after a collapse flips the label.
+    const expandedBar = probe.DisplayBar({ t, display: { ...display, allCollapsed: true }, experimentsEnabled: true, onAllCollapsed: (next) => { seen = { all: next }; } });
+    assert.equal(textOf(collect(expandedBar, 'project-flow-displayAll')[0]), '全部展开');
+    collect(expandedBar, 'project-flow-displayAll')[0].props.onClick({});
+    assert.deepEqual(seen, { all: false });
+
+    const toggles = collect(bar, 'project-flow-displayToggle');
+    assert.equal(toggles.length, 3, 'experiments / trend / heartbeats');
+    assert.deepEqual(toggles.map((button) => textOf(button)), ['实验', '趋势', '心跳']);
+    toggles[1].props.onClick({});
+    assert.deepEqual(seen, { key: 'showTrend' });
+    assert.equal(toggles[1].props['aria-pressed'], true);
+
+    // experiments.enabled=false: the switch renders disabled and dispatches nothing.
+    let dispatched = null;
+    const off = probe.DisplayBar({ t, display, experimentsEnabled: false, onToggle: (key) => { dispatched = key; } });
+    const expToggle = collect(off, 'project-flow-displayToggle')[0];
+    assert.equal(expToggle.props.disabled, true);
+    assert.equal(expToggle.props['aria-disabled'], true);
+    expToggle.props.onClick({});
+    assert.equal(dispatched, null, 'a disabled switch must not dispatch');
+    // and the project flag keeps the card out of the panel entirely
+    assert.ok(source.includes('view.exp.enabled === true && display.showExperiments !== false'), 'the panel must gate the card on both switches');
+  });
+});
+
+check('fold: 全部收起 wins over a manual expand, every card gets a resolvable caret', () => {
+  assert.equal(probe.cardCollapsed({ allCollapsed: true }, false), true, 'collapse-all must beat a manual expand');
+  assert.equal(probe.cardCollapsed({ allCollapsed: true }, true), true);
+  assert.equal(probe.cardCollapsed({ allCollapsed: false }, true), true);
+  assert.equal(probe.cardCollapsed({ allCollapsed: false }, false), false);
+
+  const card = probe.TasksCard({ tasks: view.tasks, t, now: NOW });
+  const fold = { collapsed: false, onToggle: () => {}, controlsId: 'project-flow-cardBody-tasks' };
+  const folded = probe.applyFold(card, t, fold);
+  const caret = collect(folded, 'project-flow-cardFold')[0];
+  const body = collect(folded, 'project-flow-cardBody')[0];
+  assert.ok(caret, 'the card title needs a fold caret');
+  assert.equal(caret.props['aria-expanded'], true);
+  assert.equal(caret.props['aria-controls'], 'project-flow-cardBody-tasks');
+  assert.equal(body.props.id, 'project-flow-cardBody-tasks', 'the aria-controls target must resolve');
+  assert.equal(body.props.hidden, undefined, 'an open card is not hidden');
+  const collapsed = probe.applyFold(card, t, { ...fold, collapsed: true });
+  assert.equal(collect(collapsed, 'project-flow-cardBody')[0].props.hidden, true);
+  assert.equal(collect(collapsed, 'project-flow-cardFold')[0].props['aria-expanded'], false);
+  // A card whose title has no head row (SignalsCard) still gets one.
+  const signals = probe.applyFold(
+    probe.SignalsCard({ heartbeats: view.heartbeats, heartbeatCounts: view.heartbeatCounts, t, now: NOW }),
+    t,
+    { collapsed: false, onToggle: () => {}, controlsId: 'project-flow-cardBody-signals' }
+  );
+  assert.equal(collect(signals, 'project-flow-cardFold').length, 1);
+  assert.equal(collect(signals, 'project-flow-cardBody')[0].props.id, 'project-flow-cardBody-signals');
+  // The Panel routes all five cards through the same fold helper.
+  for (const key of ['decisions', 'experiments', 'tasks', 'gates', 'signals']) {
+    assert.ok(new RegExp("foldCard\\(\\s*'" + key + "'").test(source), 'card not folded: ' + key);
+  }
+});
+
+check('section switches: trend off hides the trend row, heartbeat hidden count only when positive', () => {
+  const off = mountTasks(trendTasks());
+  assert.equal(collect(off, 'project-flow-trend').length, 1, 'the trend row renders by default');
+  const hiddenTrend = renderWithState(probe.TasksCard, { tasks: trendTasks(), t, now: NOW, showTrend: false }, { reset: true });
+  assert.equal(collect(hiddenTrend, 'project-flow-trend').length, 0, 'showTrend=false must drop the row, not render zeros');
+  assert.ok(!textOf(hiddenTrend).includes('近 14 天'), 'no summary either');
+
+  const signals = (extra) =>
+    probe.SignalsCard({ heartbeats: view.heartbeats, heartbeatCounts: view.heartbeatCounts, t, now: NOW, ...extra });
+  assert.equal(collect(signals({ heartbeatsHidden: 3 }), 'project-flow-hiddenCount').length, 1);
+  assert.ok(textOf(signals({ heartbeatsHidden: 3 })).includes('+3 条已隐藏'), 'the hidden count text is missing');
+  assert.equal(collect(signals({ heartbeatsHidden: 0 }), 'project-flow-hiddenCount').length, 0, 'zero hides the line');
+  assert.equal(collect(signals({}), 'project-flow-hiddenCount').length, 0, 'a missing field hides the line');
+});
+
+check('display prefs never touch the ledger: the panel only writes its own storage key', () => {
+  const writes = source.match(/\.setItem\(|\.removeItem\(/g) || [];
+  assert.equal(writes.length, 1, 'the panel must have exactly one storage write (display prefs), got ' + writes.length);
+  assert.ok(!/localStorage\s*\.\s*(setItem|removeItem|clear)/.test(source), 'no direct localStorage writes outside the guarded helper');
+  assert.ok(source.includes("project-flow.display:"), 'the namespaced storage key is missing');
+  assert.ok(!/writeFileSync|appendFileSync|createWriteStream/.test(source), 'the panel must never write files');
+  assert.ok(!/flow\.json/.test(source), 'the panel must not touch flow.json');
+  const snapshot = JSON.stringify({ v: 1, allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true });
+  withStorage({}, (store) => {
+    probe.writeDisplayPrefs('/w/ledger', { allCollapsed: true, showExperiments: false, showTrend: false, showHeartbeats: true });
+    assert.equal(store.getItem('project-flow.display:/w/ledger'), snapshot, 'the persisted value is exactly the versioned preference object');
+    for (const key of store.length ? Array.from({ length: store.length }, (_, index) => store.key(index)) : []) {
+      assert.ok(key.startsWith('project-flow.display:'), 'unexpected storage key: ' + key);
+    }
+  });
+});
+
+check('TaskRow: the caret label says 收起 when expanded and 展开 when collapsed', () => {
+  const open = rowOf(mountTasks(treeTasks()), 'A 根任务');
+  const openCaret = collect(open, 'project-flow-taskCaret')[0];
+  assert.match(openCaret.props['aria-label'], /收起 1 个子任务/, 'an expanded parent offers collapse: ' + openCaret.props['aria-label']);
+  openCaret.props.onClick({ stopPropagation() {} });
+  const collapsed = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  const collapsedCaret = collect(rowOf(collapsed, 'A 根任务'), 'project-flow-taskCaret')[0];
+  assert.match(collapsedCaret.props['aria-label'], /展开 1 个子任务/, 'a collapsed parent offers expand');
+});
+
+check('TasksCard: the queue head takes tasks.current even when it is not active[0]', () => {
+  const tasks = probe.normalize({
+    tasks: {
+      total: 3,
+      counts: { active: 3 },
+      current: 'T-C',
+      active: [
+        { id: 'T-A', title: '第一行' },
+        { id: 'T-B', title: '第二行' },
+        { id: 'T-C', title: '真实的队列头' },
+      ],
+    },
+  }).tasks;
+  const card = mountTasks(tasks);
+  const head = collect(card, 'project-flow-queueHead')[0];
+  assert.ok(head, 'the queue head line is missing');
+  assert.ok(textOf(head).includes('T-C'), 'the head must be tasks.current: ' + textOf(head));
+  assert.ok(textOf(head).includes('真实的队列头'));
+  assert.ok(!textOf(head).includes('T-A'), 'active[0] must not win when current is set');
+  assert.ok(collect(card, 'project-flow-taskRow').length <= 12, 'the first screen stays within 12 rows');
 });
 
 check('TasksCard: chips, current task, folded groups and one row per task', () => {

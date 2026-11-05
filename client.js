@@ -178,6 +178,15 @@ window.__ModuleLoader__.load({
       'tasks.trendApproxTitle': '完成/归档按 updated_at 近似（无 done_at/archived_at）',
       'tasks.trendEmpty': '暂无趋势',
       'tasks.parentIn': '父在{group}',
+      'display.collapseAll': '全部收起',
+      'display.expandAll': '全部展开',
+      'display.showExperiments': '实验',
+      'display.showTrend': '趋势',
+      'display.showHeartbeats': '心跳',
+      'display.collapseCard': '收起此卡',
+      'display.expandCard': '展开此卡',
+      'display.experimentsOff': '项目未开启实验区（experiments.enabled=false）',
+      'signals.hidden': '+{n} 条已隐藏（--all 见 CLI）',
       'tasks.expandChildren': '展开 {n} 个子任务',
       'tasks.collapseChildren': '收起 {n} 个子任务',
       'tasks.trendAria': '近 {days} 天任务趋势',
@@ -323,6 +332,15 @@ window.__ModuleLoader__.load({
       'tasks.trendApproxTitle': 'done/archived approximated from updated_at (no done_at/archived_at)',
       'tasks.trendEmpty': 'No trend yet',
       'tasks.parentIn': 'parent in {group}',
+      'display.collapseAll': 'Collapse all',
+      'display.expandAll': 'Expand all',
+      'display.showExperiments': 'Experiments',
+      'display.showTrend': 'Trend',
+      'display.showHeartbeats': 'Heartbeats',
+      'display.collapseCard': 'Collapse this card',
+      'display.expandCard': 'Expand this card',
+      'display.experimentsOff': 'The experiment area is off for this project (experiments.enabled=false)',
+      'signals.hidden': '+{n} hidden (--all in the CLI)',
       'tasks.expandChildren': 'Expand {n} subtasks',
       'tasks.collapseChildren': 'Collapse {n} subtasks',
       'tasks.trendAria': 'Task trend over the last {days} days',
@@ -969,6 +987,8 @@ window.__ModuleLoader__.load({
         gates,
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
+        /* T-13 A5: rows the payload held back (hidden dead/stale beats). */
+        heartbeatsHidden: asNumber(src.heartbeatsHidden, 0),
         decisions: normalizeDecisions(src.decisions),
         warnings,
       };
@@ -1121,7 +1141,7 @@ window.__ModuleLoader__.load({
       const toggleChildren = () => {
         if (typeof tree.onToggleChildren === 'function') tree.onToggleChildren();
       };
-      const caretLabel = t(expanded ? 'tasks.expandChildren' : 'tasks.collapseChildren', {
+      const caretLabel = t(expanded ? 'tasks.collapseChildren' : 'tasks.expandChildren', {
         n: asNumber(tree.childCount, 0),
       });
       const title = asText(task.title);
@@ -2047,8 +2067,9 @@ window.__ModuleLoader__.load({
             )
           )
         ),
-        /* Trend band: hidden entirely for an older payload without `tasks.trend`. */
-        React.createElement(TrendBlock, { trend: tasks.trend, t }),
+        /* Trend band: hidden entirely for an older payload without `tasks.trend`,
+           and switchable off from the display row (A5). */
+        props.showTrend === false ? null : React.createElement(TrendBlock, { trend: tasks.trend, t }),
         React.createElement(
           'div',
           { className: 'project-flow-current' },
@@ -2514,6 +2535,9 @@ window.__ModuleLoader__.load({
       const hbTotal = asNumber(heartbeatCounts.total, heartbeats.length);
       /* T-10: a provably dead session is not "active", but the count is shown. */
       const hbDead = asNumber(heartbeatCounts.dead, heartbeats.filter((beat) => beat.dead === true).length);
+      /* T-13 A5: the payload may hold back rows (dead/stale hidden by default);
+         the count keeps the total honest instead of silently shrinking it. */
+      const hbHidden = asNumber(props.heartbeatsHidden, 0);
 
       return React.createElement(
         'section',
@@ -2527,6 +2551,9 @@ window.__ModuleLoader__.load({
             onToggle: () => toggleSection('heartbeat'),
             countText: t('hb.counts', { active: hbActive, dead: hbDead, total: hbTotal }),
           },
+          hbHidden > 0
+            ? React.createElement('p', { className: 'project-flow-muted project-flow-hiddenCount' }, t('signals.hidden', { n: hbHidden }))
+            : null,
           heartbeats.length === 0
             ? React.createElement(EmptyLine, null, t('signals.heartbeat.empty'))
             : React.createElement(
@@ -2895,6 +2922,202 @@ window.__ModuleLoader__.load({
     // #endregion
 
     // #region panel + polling
+    // #region display preferences (D-20261113: in-place fold + a top control row)
+    const DISPLAY_KEY = 'project-flow.display:';
+    const DISPLAY_VERSION = 1;
+    const DISPLAY_DEFAULTS = {
+      allCollapsed: false,
+      showExperiments: true,
+      showTrend: true,
+      showHeartbeats: true,
+    };
+
+    /** localStorage when the host page has it; null keeps every call a no-op. */
+    function displayStorage() {
+      try {
+        if (typeof window === 'undefined' || !window || !window.localStorage) return null;
+        return window.localStorage;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    /**
+     * Read the display preferences for one workspace root.
+     *
+     * Storage holds `{v:1, allCollapsed, showExperiments, showTrend, showHeartbeats}`
+     * under `project-flow.display:<root>`. Anything missing, unparsable, of a
+     * different version or of the wrong type falls back to the defaults — the
+     * panel must never fail to render because a preference is corrupt.
+     */
+    function readDisplayPrefs(root) {
+      const prefs = Object.assign({}, DISPLAY_DEFAULTS);
+      try {
+        const store = displayStorage();
+        if (store === null) return prefs;
+        const raw = store.getItem(DISPLAY_KEY + asText(root));
+        if (typeof raw !== 'string' || raw === '') return prefs;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return prefs;
+        if (parsed.v !== DISPLAY_VERSION) return prefs;
+        for (const key of Object.keys(DISPLAY_DEFAULTS)) {
+          if (typeof parsed[key] === 'boolean') prefs[key] = parsed[key];
+        }
+      } catch (error) {
+        /* Corrupt JSON or a blocked storage: defaults, never a throw. */
+      }
+      return prefs;
+    }
+
+    function writeDisplayPrefs(root, prefs) {
+      try {
+        const store = displayStorage();
+        if (store === null) return false;
+        const source = asObject(prefs);
+        store.setItem(
+          DISPLAY_KEY + asText(root),
+          JSON.stringify({
+            v: DISPLAY_VERSION,
+            allCollapsed: source.allCollapsed === true,
+            showExperiments: source.showExperiments !== false,
+            showTrend: source.showTrend !== false,
+            showHeartbeats: source.showHeartbeats !== false,
+          })
+        );
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+
+    /** 「全部收起」wins over a per-card manual expand (D-20261113). */
+    function cardCollapsed(prefs, manual) {
+      return asObject(prefs).allCollapsed === true || manual === true;
+    }
+
+    /** Children of an element in both the real React and the selftest stub shape. */
+    function elementChildren(element) {
+      if (!element || typeof element !== 'object') return [];
+      if (Array.isArray(element.children)) return element.children;
+      const fromProps = element.props ? element.props.children : undefined;
+      if (Array.isArray(fromProps)) return fromProps;
+      return fromProps === undefined ? [] : [fromProps];
+    }
+
+    function hasClass(element, name) {
+      if (!element || !element.props) return false;
+      const value = element.props.className;
+      return typeof value === 'string' && value.split(/\s+/).includes(name);
+    }
+
+    /**
+     * In-place card fold: the caret joins the card's own title row and the rest
+     * of the card is wrapped so `hidden` can collapse it. Done centrally so all
+     * five cards fold identically without five copies of the markup.
+     */
+    function applyFold(element, t, fold) {
+      if (!element || typeof element !== 'object' || fold === null) return element;
+      const children = elementChildren(element);
+      const caret = React.createElement(
+        'button',
+        {
+          type: 'button',
+          className: 'project-flow-cardFold',
+          'aria-expanded': fold.collapsed ? false : true,
+          'aria-controls': fold.controlsId,
+          'aria-label': t(fold.collapsed ? 'display.expandCard' : 'display.collapseCard'),
+          title: t(fold.collapsed ? 'display.expandCard' : 'display.collapseCard'),
+          onClick: fold.onToggle,
+        },
+        fold.collapsed ? '\u25B8' : '\u25BE'
+      );
+      const body = (rest) =>
+        React.createElement(
+          'div',
+          { key: 'body', id: fold.controlsId, className: 'project-flow-cardBody', hidden: fold.collapsed ? true : undefined },
+          rest
+        );
+      const headIndex = children.findIndex((child) => hasClass(child, 'project-flow-cardHead'));
+      if (headIndex >= 0) {
+        const head = children[headIndex];
+        const nextHead = React.createElement(
+          head.type,
+          head.props,
+          elementChildren(head).map((child) =>
+            hasClass(child, 'project-flow-cardTitle')
+              ? React.createElement(child.type, child.props, caret, ...elementChildren(child))
+              : child
+          )
+        );
+        const next = children.slice();
+        next.splice(headIndex, 1, nextHead);
+        next.splice(headIndex + 1, next.length - headIndex - 1, body(children.filter((child, index) => index !== headIndex)));
+        return React.createElement(element.type, element.props, ...next);
+      }
+      const titleIndex = children.findIndex((child) => hasClass(child, 'project-flow-cardTitle'));
+      if (titleIndex < 0) return element;
+      const title = children[titleIndex];
+      return React.createElement(
+        element.type,
+        element.props,
+        React.createElement(
+          'div',
+          { className: 'project-flow-cardHead' },
+          React.createElement(title.type, title.props, caret, ...elementChildren(title))
+        ),
+        body(children.filter((child, index) => index !== titleIndex))
+      );
+    }
+
+    /** Top control row: collapse all + the three section switches. */
+    function DisplayBar(props) {
+      const t = props.t;
+      const display = asObject(props.display);
+      const experimentsEnabled = props.experimentsEnabled === true;
+      const allCollapsed = display.allCollapsed === true;
+      const toggle = (key, label) => {
+        const on = display[key] !== false;
+        const disabled = key === 'showExperiments' && experimentsEnabled === false;
+        return React.createElement(
+          'button',
+          {
+            key,
+            type: 'button',
+            className: 'project-flow-displayToggle' + (on ? '' : ' project-flow-displayToggle--off'),
+            'aria-pressed': on ? true : false,
+            'aria-disabled': disabled ? true : undefined,
+            disabled: disabled ? true : undefined,
+            title: disabled ? t('display.experimentsOff') : undefined,
+            onClick: () => {
+              if (disabled) return;
+              if (typeof props.onToggle === 'function') props.onToggle(key);
+            },
+          },
+          t(label)
+        );
+      };
+      return React.createElement(
+        'div',
+        { className: 'project-flow-displayRow' },
+        React.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'project-flow-displayAll',
+            'aria-pressed': allCollapsed ? true : false,
+            onClick: () => {
+              if (typeof props.onAllCollapsed === 'function') props.onAllCollapsed(!allCollapsed);
+            },
+          },
+          t(allCollapsed ? 'display.expandAll' : 'display.collapseAll')
+        ),
+        toggle('showExperiments', 'display.showExperiments'),
+        toggle('showTrend', 'display.showTrend'),
+        toggle('showHeartbeats', 'display.showHeartbeats')
+      );
+    }
+    // #endregion
+
     function Panel(props) {
       const t = typeof props.t === 'function' ? props.t : (key) => key;
       /* The one workspace this panel may show; undefined until the tab resolves it. */
@@ -3073,6 +3296,36 @@ window.__ModuleLoader__.load({
 
       const view = useMemo(() => (data ? normalize(data) : null), [data]);
 
+      /* Display preferences (D-20261113): persisted per workspace root, read on
+         every render so a root switch simply picks up that root's file. */
+      const [displayTick, setDisplayTick] = useState(0);
+      const [foldedCards, setFoldedCards] = useState({});
+      const display = readDisplayPrefs(view ? view.root : '');
+      const updateDisplay = (patch) => {
+        writeDisplayPrefs(view ? view.root : '', Object.assign({}, display, patch));
+        setDisplayTick((value) => value + 1);
+      };
+      const toggleCard = (key) => {
+        setFoldedCards((current) => {
+          const table = asObject(current);
+          const next = Object.assign({}, table);
+          /* Toggling while 「全部收起」is on would look broken: the first manual
+             expand drops the all-collapsed mode so the card can actually open. */
+          next[key] = table[key] === true ? false : true;
+          return next;
+        });
+      };
+      /* Local switch vs project switch: a hidden experiment area disables the
+         toggle instead of letting the user "show" a card that must not exist. */
+      const expVisible = view !== null && view.exp.enabled === true && display.showExperiments !== false;
+      const heartbeatsVisible = display.showHeartbeats !== false;
+      const foldCard = (key, element) =>
+        applyFold(element, t, {
+          collapsed: cardCollapsed(display, asObject(foldedCards)[key] === true),
+          onToggle: () => toggleCard(key),
+          controlsId: 'project-flow-cardBody-' + key,
+        });
+
       const refresh = useCallback(() => {
         setReloadKey((value) => value + 1);
       }, []);
@@ -3095,35 +3348,51 @@ window.__ModuleLoader__.load({
             : React.createElement(
                 React.Fragment,
                 null,
+                React.createElement(DisplayBar, {
+                  t,
+                  display,
+                  experimentsEnabled: view.exp.enabled === true,
+                  onAllCollapsed: (next) => updateDisplay({ allCollapsed: next }),
+                  onToggle: (key) => updateDisplay({ [key]: display[key] === false }),
+                }),
                 /* Pending decisions sit above both columns, full width. */
-                React.createElement(DecisionsCard, { decisions: view.decisions, t, now }),
+                foldCard('decisions', React.createElement(DecisionsCard, { decisions: view.decisions, t, now })),
                 React.createElement(
                   'div',
-                  /* The base class stays a literal (a selftest pins it); the closed
-                     area only adds the single-column modifier. */
-                  { className: 'project-flow-grid' + (view.exp.enabled === true ? '' : ' project-flow-grid--single') },
-                  view.exp.enabled === true
+                  /* The base class stays a literal (a selftest pins it); a closed
+                     experiment area only adds the single-column modifier. */
+                  { className: 'project-flow-grid' + (expVisible ? '' : ' project-flow-grid--single') },
+                  expVisible
                     ? React.createElement(
                         'div',
                         { className: 'project-flow-col' },
-                        React.createElement(ExperimentTree, { exp: view.exp, t, now })
+                        foldCard('experiments', React.createElement(ExperimentTree, { exp: view.exp, t, now }))
                       )
                     : null,
                   React.createElement(
                     'div',
                     { className: 'project-flow-col' },
-                    React.createElement(TasksCard, { tasks: view.tasks, t, now }),
+                    foldCard(
+                      'tasks',
+                      React.createElement(TasksCard, { tasks: view.tasks, t, now, showTrend: display.showTrend !== false })
+                    ),
                     /* Gate definitions sit between tasks and live signals. */
                     view.gates
-                      ? React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot })
+                      ? foldCard('gates', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot }))
                       : null,
-                    React.createElement(SignalsCard, {
-                      heartbeats: view.heartbeats,
-                      heartbeatCounts: view.heartbeatCounts,
-                      t,
-                      now,
-                      sessionId,
-                    })
+                    heartbeatsVisible
+                      ? foldCard(
+                          'signals',
+                          React.createElement(SignalsCard, {
+                            heartbeats: view.heartbeats,
+                            heartbeatCounts: view.heartbeatCounts,
+                            heartbeatsHidden: view.heartbeatsHidden,
+                            t,
+                            now,
+                            sessionId,
+                          })
+                        )
+                      : null
                   )
                 ),
                 React.createElement(Footer, { view, t })
@@ -3370,6 +3639,15 @@ window.__ModuleLoader__.load({
 .project-flow-btn:disabled{opacity:.55;cursor:default;}
 .project-flow-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 .project-flow-chips{display:flex;flex-wrap:wrap;gap:5px;}
+.project-flow-displayRow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:8px 0 2px;}
+.project-flow-displayAll,.project-flow-displayToggle{border:1px solid var(--dsw-alias-border-l);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:1px 8px;font-size:11px;line-height:18px;cursor:pointer;}
+.project-flow-displayAll{color:var(--dsw-alias-label-primary);}
+.project-flow-displayToggle--off{opacity:.55;text-decoration:line-through;}
+.project-flow-displayToggle[disabled]{opacity:.4;cursor:not-allowed;text-decoration:none;}
+.project-flow-cardFold{flex:none;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;margin-right:2px;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;line-height:1;}
+.project-flow-cardFold:hover{color:var(--dsw-alias-label-primary);}
+.project-flow-ready .project-flow-cardHead .project-flow-cardTitle{display:inline-flex;align-items:center;gap:2px;}
+.project-flow-cardBody{min-width:0;}
 .project-flow-taskRow{position:relative;}
 .project-flow-taskNested{padding-left:calc(var(--d,1) * 12px);border-left:1px solid var(--dsw-alias-border-l);margin-left:8px;}
 .project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l);margin-left:12px;}

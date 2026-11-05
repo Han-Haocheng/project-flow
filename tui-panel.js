@@ -190,7 +190,7 @@ function buildGateRows(gates, now) {
   return rows
 }
 
-function buildHeartbeatRows(heartbeats) {
+function buildHeartbeatRows(heartbeats, hostHidden) {
   const list = asArray(heartbeats).filter(isObject)
   /* T-10：宿主已判定 dead 的会话不再算 working，行上给「已结束」标记。 */
   /* 与 web 面板同判据：既认 `liveness === 'dead'`，也认宿主只投影的布尔 `dead: true`。 */
@@ -210,13 +210,16 @@ function buildHeartbeatRows(heartbeats) {
     return true
   }
   const shown = list.filter(visible)
-  const hiddenCount = list.length - shown.length
+  /* Rows the host already dropped are not in `list`; the payload reports them so
+     the total stays honest (T-13 A5). */
+  const hostHiddenCount = Math.max(0, asNumber(hostHidden, 0))
+  const hiddenCount = list.length - shown.length + hostHiddenCount
   const working = shown.filter((beat) => asText(beat.status) === 'working')
   const deadCount = list.filter(dead).length
   const header =
     list.length === 0
       ? '没有心跳文件'
-      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + list.length
+      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + (list.length + hostHiddenCount)
   const rows = [row(header, working.length > 0 ? 'normal' : 'dim')]
   const ordered = working.concat(shown.filter((beat) => asText(beat.status) !== 'working'))
   for (const beat of ordered.slice(0, MAX_BEAT_ROWS)) {
@@ -297,7 +300,7 @@ function readyModel(payload, now) {
 
   const sections = [section('任务', buildTaskRows(tasks))]
   if (expEnabled) sections.push(section('实验', buildExperimentRows(experiments)))
-  sections.push(section('门禁', buildGateRows(gates, now)), section('心跳', buildHeartbeatRows(payload.heartbeats)))
+  sections.push(section('门禁', buildGateRows(gates, now)), section('心跳', buildHeartbeatRows(payload.heartbeats, payload.heartbeatsHidden)))
   const decisionSection = buildDecisionSection(decisions)
   if (decisionSection !== null) sections.push(decisionSection)
   const warningSection = buildWarningSection(payload.warnings)
