@@ -58,6 +58,28 @@ function freshProject(label) {
   return { root, contract, store: path.join(root, '.dsh/flow') }
 }
 
+/** Local `YYYYMMDDHHMMSS` for timestamp task ids (test clock math). */
+function timeStamp14(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+    + `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+/**
+ * Broken task files around "now" for timestamp ids: a CLI/tool add picks the
+ * current second (or a same-second suffix), so a ±30s band makes the bad-record
+ * conflict deterministic without depending on one exact second.
+ */
+function writeBadTimestampRecords(root, radiusSeconds = 30) {
+  const dir = path.join(root, '.dsh/flow/tasks')
+  fs.mkdirSync(dir, { recursive: true })
+  const now = Date.now()
+  for (let offset = -radiusSeconds; offset <= radiusSeconds; offset += 1) {
+    const stamp = timeStamp14(new Date(now + offset * 1000))
+    fs.writeFileSync(path.join(dir, `T-${stamp}.json`), '{ broken')
+  }
+}
+
 function stamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0')
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
@@ -172,13 +194,14 @@ test('契约错型矩阵：saveContract 写入错型字段时静默修复而不�
 
 test('坏记录+nextId：坏文件不被覆盖，自动 id 与显式 id 都 conflict', () => {
   const { root, contract } = freshProject('bad-record-guard')
-  const id = `T-${stamp()}-01`
+  const fixed = new Date(2026, 10, 5, 21, 21, 30)
+  const id = 'T-20261105212130'
   const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
   fs.writeFileSync(file, '{ broken')
   drainWarnings()
 
   assert.throws(
-    () => addTask(root, contract, { title: 'auto' }),
+    () => addTask(root, contract, { title: 'auto' }, { now: fixed }),
     (error) => error instanceof FlowError && error.code === 'conflict' && /already occupied/.test(error.message),
   )
   assert.equal(fs.readFileSync(file, 'utf8'), '{ broken', '坏文件内容必须原样保留')
@@ -190,12 +213,12 @@ test('坏记录+nextId：坏文件不被覆盖，自动 id 与显式 id 都 conf
     (error) => error instanceof FlowError && error.code === 'conflict' && error.message.includes(id),
   )
   assert.equal(fs.readFileSync(file, 'utf8'), '{ broken')
-  // 已知代价：坏文件占着 -01 时，当天自动 id 也会持续 conflict（中心已接受）。
-  assert.throws(() => addTask(root, contract, { title: 'auto again' }), /already occupied/)
+  // 已知代价：坏文件占着该秒 base 时，同一秒的自动 id 也会持续 conflict（中心已接受）。
+  assert.throws(() => addTask(root, contract, { title: 'auto again' }, { now: fixed }), /already occupied/)
 
   // 换个没被占用的 id 仍可写；撞可读记录仍是 already exists（守卫不误报）。
-  const other = addTask(root, contract, { id: `T-${stamp()}-02`, title: 'other' })
-  assert.equal(other.id, `T-${stamp()}-02`)
+  const other = addTask(root, contract, { id: 'T-20261105212131', title: 'other' })
+  assert.equal(other.id, 'T-20261105212131')
   assert.throws(() => addTask(root, contract, { id: other.id, title: 'dup' }), /already exists/)
   assert.ok(drainWarnings().some((item) => item.startsWith('unreadable:')))
 })
@@ -224,12 +247,16 @@ test('坏记录+nextId：unreadable 计数与 warning 一致（status 与 readSt
   assert.ok(human.stdout.includes('+1 无法读取'), human.stdout)
 })
 
-test('坏记录+nextId：99 用尽时仍是 no free T id left', () => {
+test('坏记录+nextId：同秒 99 用尽时仍是 no free T id left', () => {
   const { root, contract } = freshProject('ids-full')
-  for (let index = 1; index <= 99; index += 1) {
-    addTask(root, contract, { id: `T-${stamp()}-${String(index).padStart(2, '0')}`, title: `t${index}` })
+  const fixed = new Date(2026, 10, 5, 21, 21, 30)
+  for (let index = 0; index < 99; index += 1) {
+    addTask(root, contract, { title: `t${index}` }, { now: fixed })
   }
-  assert.throws(() => addTask(root, contract, { title: 'overflow' }), /no free T id left for \d{8}/)
+  assert.throws(
+    () => addTask(root, contract, { title: 'overflow' }, { now: fixed }),
+    /no free T id left for 20261105212130 \(same-second limit 99\)/,
+  )
 })
 
 test('坏记录+nextId：显式 id 撞可读记录仍是 already exists（不误报 occupied）', () => {
@@ -285,7 +312,8 @@ test('CLI 警告：坏记录在人类输出走 stderr，在 --json 走顶层 war
 
 test('CLI 警告：失败路径同样带 warnings，错误形状不变', () => {
   const { root } = freshProject('cli-error-warnings')
-  fs.writeFileSync(path.join(root, '.dsh/flow/tasks', `T-${stamp()}-01.json`), '{ broken')
+  // 时间戳 id 取自真实时钟；用 ±30s 的坏文件带让“坏文件占住当前秒”确定发生。
+  writeBadTimestampRecords(root)
 
   const json = runCli(root, ['task', 'add', '--title', 'blocked', '--json'])
   assert.equal(json.code, 2, 'conflict 映射退出码 2')
@@ -427,7 +455,7 @@ test('插件：apply 两次后上一次失败诊断消失，本次真实失败�
 
 test('插件：工具成功结果附加 core warnings，失败时 logger.warn 且 message 不变', async () => {
   const { root } = freshProject('plugin-tools')
-  fs.writeFileSync(path.join(root, '.dsh/flow/tasks', `T-${stamp()}-01.json`), '{ broken')
+  writeBadTimestampRecords(root)
   const loggerMessages = []
   const logger = { warn(message) { loggerMessages.push(String(message)) } }
   const { ctx, registeredTools } = pluginCtx({ root, logger })
@@ -509,12 +537,13 @@ test('插件：面板读路径 drain 后丢弃，不把警告转进 payload', as
 
 test('坏记录：移除坏文件后同一 id 可正常创建', () => {
   const { root, contract } = freshProject('bad-record-recover')
-  const id = `T-${stamp()}-01`
+  const fixed = new Date(2026, 10, 5, 21, 21, 30)
+  const id = 'T-20261105212130'
   const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
   fs.writeFileSync(file, '{ broken')
-  assert.throws(() => addTask(root, contract, { title: 'blocked' }), /already occupied/)
+  assert.throws(() => addTask(root, contract, { title: 'blocked' }, { now: fixed }), /already occupied/)
   fs.rmSync(file)
-  const created = addTask(root, contract, { title: 'recovered' })
+  const created = addTask(root, contract, { title: 'recovered' }, { now: fixed })
   assert.equal(created.id, id)
   assert.equal(getTask(root, contract, id).title, 'recovered')
   assert.deepEqual(listTasks(root, contract).map((item) => item.id), [id])

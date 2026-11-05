@@ -621,7 +621,8 @@ test('未初始化时写操作抛 usage，读操作返回空列表', () => {
 test('task CRUD：状态流转、scope 合并、不可变字段与 not-found', () => {
   const { root, contract } = freshProject('task-crud')
   const created = addTask(root, contract, { title: 'wire CLI', owner: 'agent-a' })
-  assert.equal(created.id, `T-${stamp()}-01`)
+  assert.ok(created.id.startsWith(`T-${stamp()}`), created.id)
+  assert.match(created.id, /^T-\d{14}(?:-\d{2})?$/, '新任务 id 用时间戳格式')
   assert.equal(created.status, 'draft')
   assert.deepEqual(created.scope, { allow: [], deny: [] })
   assert.deepEqual(created.acceptance, [])
@@ -1132,7 +1133,7 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
 
   const task = runCli(root, ['task', 'add', '--title', 'CLI 任务', '--owner', 'agent-a', '--json'])
   assert.equal(task.code, 0)
-  assert.match(task.json.data.id, /^T-\d{8}-\d{2}$/)
+  assert.match(task.json.data.id, /^T-\d{14}(?:-\d{2})?$/)
   const taskUpdated = runCli(root, ['task', 'update', task.json.data.id, '--status', 'active', '--json'])
   assert.equal(taskUpdated.code, 0)
   assert.equal(taskUpdated.json.data.status, 'active')
@@ -1424,7 +1425,7 @@ test('readHeartbeatSection：只读 json 心跳，source 任意非 none 值均�
     assert.equal(json.session, SESSION)
     assert.equal(json.agent, 'lead')
     assert.equal(json.goal, '主会话视图')
-    assert.match(json.task, /^T-\d{8}-\d{2}$/)
+    assert.match(json.task, /^T-\d{14}(?:-\d{2})?$/)
     assert.deepEqual(json.claims, ['lib/a.mjs'])
     assert.equal(json.status, 'working')
     assert.equal(json.last_action, '跑测试')
@@ -2678,7 +2679,7 @@ test('CLI heartbeat：start 自动建任务、status --require-active 退出码�
     const startedData = started.json.data
     assert.equal(startedData.session, session)
     assert.equal(startedData.goal, 'CLI 心跳')
-    assert.match(startedData.task, /^T-\d{8}-\d{2}$/)
+    assert.match(startedData.task, /^T-\d{14}(?:-\d{2})?$/)
     assert.equal(startedData.createdTask, startedData.task, '自动建任务并回填')
     assert.deepEqual(startedData.claims, ['lib/core.mjs', 'bin/flow.mjs'])
     assert.equal(startedData.status, 'working')
@@ -3752,4 +3753,127 @@ test('读路径零锁：持锁时 readStoreState/listTasks/getTask 仍成功，�
   readStoreState(root, contract)
   getTask(root, contract, task.id)
   assert.deepEqual(fs.readdirSync(store).sort(), before)
+})
+
+
+// ===================================================== T-08 B1：时间戳任务 id
+//
+// 格式 `T-YYYYMMDDHHMMSS`（本地时间 14 位）；同秒第二张起 `-02`…；不写 flow.json。
+// 旧 `T-YYYYMMDD-NN` 保持可读/可引用，不迁移。
+
+const FIXED_ID_TIME = new Date(2026, 10, 5, 21, 21, 30) // 本地 2026-11-05 21:21:30
+
+test('时间戳 id：固定 now 连建 2 张 → base + -02', () => {
+  const { root, contract } = freshProject('ts-id-two')
+  const first = addTask(root, contract, { title: '第一张' }, { now: FIXED_ID_TIME })
+  const second = addTask(root, contract, { title: '第二张' }, { now: FIXED_ID_TIME })
+  assert.equal(first.id, 'T-20261105212130')
+  assert.equal(second.id, 'T-20261105212130-02')
+  assert.equal(getTask(root, contract, second.id).id, second.id)
+})
+
+test('时间戳 id：同秒 5 张 → -02..-05 连续且唯一', () => {
+  const { root, contract } = freshProject('ts-id-five')
+  const ids = []
+  for (let index = 0; index < 5; index += 1) {
+    ids.push(addTask(root, contract, { title: `同秒 ${index}` }, { now: FIXED_ID_TIME }).id)
+  }
+  assert.deepEqual(ids, [
+    'T-20261105212130',
+    'T-20261105212130-02',
+    'T-20261105212130-03',
+    'T-20261105212130-04',
+    'T-20261105212130-05',
+  ])
+  assert.equal(new Set(ids).size, 5)
+})
+
+test('时间戳 id：并发 10 路 add → 10 个唯一 id、无丢失', async () => {
+  const { root } = freshProject('ts-id-concurrent')
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, index) => runCliAsync(root, ['task', 'add', '--title', `并发 ${index}`, '--json'])),
+  )
+  // 锁竞争下个别 add 可能合法 conflict（exit 2）；重试后必须 10/10 成功。
+  const ids = []
+  for (const [index, result] of results.entries()) {
+    let settled = result
+    if (settled.code !== 0) {
+      assert.equal(settled.code, 2, settled.stderr)
+      settled = runCli(root, ['task', 'add', '--title', `并发 ${index}`, '--json'])
+    }
+    assert.equal(settled.code, 0, settled.stderr)
+    ids.push(settled.json.data.id)
+  }
+  assert.equal(new Set(ids).size, 10, '并发 10 路必须唯一')
+  for (const id of ids) assert.match(id, /^T-\d{14}(?:-\d{2})?$/)
+  assert.equal(listTasks(root, loadContract(root).contract).length, 10, '不得丢记录')
+})
+
+test('时间戳 id：删除后不复用（下一张是新时刻）', () => {
+  const { root, contract } = freshProject('ts-id-no-reuse')
+  const deleted = addTask(root, contract, { title: '将被删' }, { now: FIXED_ID_TIME })
+  assert.equal(deleted.id, 'T-20261105212130')
+  assert.deepEqual(removeTask(root, contract, deleted.id), { id: deleted.id, removed: true })
+  const nextTime = new Date(2026, 10, 5, 21, 21, 31)
+  const next = addTask(root, contract, { title: '下一秒' }, { now: nextTime })
+  assert.equal(next.id, 'T-20261105212131')
+  assert.notEqual(next.id, deleted.id, '时间戳 id 不复用已删除编号')
+  // 同一新秒再建一张 → -02。
+  assert.equal(addTask(root, contract, { title: '同秒再来' }, { now: nextTime }).id, 'T-20261105212131-02')
+})
+
+test('旧 id 兼容：T-YYYYMMDD-NN 仍可 show/update/parent/decisions.blocks 引用', () => {
+  const { root, contract } = freshProject('ts-id-legacy')
+  const legacy = addTask(root, contract, { id: 'T-20261105-01', title: '旧任务' })
+  assert.equal(legacy.id, 'T-20261105-01')
+  assert.equal(getTask(root, contract, 'T-20261105-01').title, '旧任务')
+
+  const updated = updateTask(root, contract, 'T-20261105-01', { status: 'active' })
+  assert.equal(updated.id, 'T-20261105-01', '旧 id 不迁移')
+
+  const child = addTask(root, contract, { title: '子任务', parent: 'T-20261105-01' }, { now: FIXED_ID_TIME })
+  assert.equal(child.parent, 'T-20261105-01', '新任务可挂旧 id 父')
+
+  const decision = addDecision(root, contract, {
+    question: '引用旧任务？',
+    kind: 'choice',
+    options: [
+      { id: 'yes', label: '是', impact: '继续' },
+      { id: 'no', label: '否', impact: '停止' },
+    ],
+    rationale: '验证旧 id 引用',
+    recommendation: 'yes',
+    blocks: ['T-20261105-01'],
+    affects: ['lib/'],
+  })
+  assert.deepEqual((decision.decision ?? decision).blocks, ['T-20261105-01'])
+
+  // 新旧混排：listTasks 仍按 updated_at 倒序、id 仅 tie-break，不丢行。
+  const listed = listTasks(root, contract).map((task) => task.id).sort()
+  assert.deepEqual(listed, ['T-20261105-01', child.id].sort())
+})
+
+test('时间戳 id：同秒 99 张后再建 → conflict（同秒上限）', () => {
+  const { root, contract } = freshProject('ts-id-limit')
+  for (let index = 0; index < 99; index += 1) {
+    addTask(root, contract, { title: `满员 ${index}` }, { now: FIXED_ID_TIME })
+  }
+  expectFlowError(
+    () => addTask(root, contract, { title: '第 100 张' }, { now: FIXED_ID_TIME }),
+    'conflict',
+    /no free T id left for 20261105212130 \(same-second limit 99\)/,
+  )
+  assert.equal(listTasks(root, contract).length, 99)
+})
+
+test('时间戳 id：生成不写 flow.json（字节不变），显式新旧 id 均合法', () => {
+  const { root, contract } = freshProject('ts-id-no-manifest-write')
+  const contractFile = path.join(root, '.dsh/flow/flow.json')
+  const before = fs.readFileSync(contractFile)
+  addTask(root, contract, { title: '新 id' }, { now: FIXED_ID_TIME })
+  addTask(root, contract, { id: 'T-20261105-01', title: '显式旧 id' })
+  addTask(root, contract, { id: 'T-20261105212131-07', title: '显式新 id' })
+  assert.deepEqual(fs.readFileSync(contractFile), before, 'id 生成不得写 flow.json')
+  expectFlowError(() => addTask(root, contract, { id: 'T-2026-01', title: 'bad id' }), 'invalid', /invalid format/)
+  expectFlowError(() => addTask(root, contract, { id: 'E-20260101-01', title: 'wrong prefix' }), 'invalid', /invalid format/)
 })

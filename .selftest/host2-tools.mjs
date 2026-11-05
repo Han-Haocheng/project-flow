@@ -490,7 +490,7 @@ const createdTask = await taskTool.execute(
   exec,
 )
 const taskId = createdTask.task?.id
-check('flow_task add: id generated', typeof taskId === 'string' && /^T-\d{8}-\d{2}$/.test(taskId), taskId)
+check('flow_task add: id generated (timestamp)', typeof taskId === 'string' && /^T-\d{14}(?:-\d{2})?$/.test(taskId), taskId)
 
 const listedTask = await taskTool.execute({ action: 'list' }, exec)
 eq('flow_task list: total 1', listedTask.total, 1)
