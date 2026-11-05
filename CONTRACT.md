@@ -220,8 +220,9 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则
-  （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根。写路径（`task add|update --parent`）
-  要求父**已存在**（否则 `invalid`，消息含 `parent-not-found`）、**禁自指**、**禁环**
+  （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根；CLI 传
+  `task add|update --parent <T-id>`，`--parent ''` / `none` / `null` 清空为根
+  （`flow_task` 工具同名参数传空串等价）。写路径要求父**已存在**（否则 `invalid`，消息含 `parent-not-found`）、**禁自指**、**禁环**
   （沿 parent 链上溯回到自己 → `invalid`，消息含 `parent-cycle`）。读路径（`listTasks`/
   `getTask`/state 投影）对父不存在或成环**不报错、按根处理**（投影成 `parent: null`）：
   行仍返回、**不迁移、不写回**；删除父任务后子任务自动变根。父子是单向引用（任务→父），
@@ -635,9 +636,9 @@ flow exp rm <id> [--yes]
 
 flow task list | show <id>
 flow task add    --title T [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N] [--experiment E-id]
+                 [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
 flow task update <id> [--title T] [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N] [--experiment E-id]
+                 [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
 flow task rm <id> [--yes]
 flow task archive [--older-than N] [--dry-run]
 

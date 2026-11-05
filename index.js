@@ -1993,7 +1993,7 @@ function buildToolDefinitions(ctx) {
     {
       name: 'flow_task',
       description:
-        'List, inspect, add, update or remove project-flow tasks (title, status, owner, goal, scope, acceptance, commits). All actions require the .dsh/flow store.',
+        'List, inspect, add, update or remove project-flow tasks (title, status, owner, goal, parent tree, scope, acceptance, commits). All actions require the .dsh/flow store. `parent` links a subtask to an existing task (the parent must exist; self-reference and cycles are invalid; empty string/none/null makes it a root).',
       parameters: {
         type: 'object',
         properties: {
@@ -2008,6 +2008,10 @@ function buildToolDefinitions(ctx) {
           experiment: {
             type: 'string',
             description: 'Linked experiment id (optional; an unknown id only warns, a malformed one is invalid).',
+          },
+          parent: {
+            type: 'string',
+            description: '父任务 id（可选；空串/none/null = 根）。父须存在，禁自指/禁环。',
           },
           commits: { type: 'array', items: { type: 'string' }, description: 'Short commit shas.' },
           scope: {
@@ -2073,6 +2077,7 @@ function buildToolDefinitions(ctx) {
             'scope',
             'acceptance',
             'experiment',
+            'parent',
           ])
           return { root, task: c.addTask(root, contract, input) }
         }
@@ -2088,6 +2093,7 @@ function buildToolDefinitions(ctx) {
             'scope',
             'acceptance',
             'experiment',
+            'parent',
           ])
           if (Object.keys(patch).length === 0) throw new Error('flow_task update requires at least one field to change')
           return { root, task: c.updateTask(root, contract, id, patch) }

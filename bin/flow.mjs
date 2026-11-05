@@ -47,9 +47,10 @@ const USAGE = `project-flow CLI（schema 2）
 
   task list | show <id>
   task add --title T [--status draft|active|done|archived] [--owner O]
-           [--goal G] [--notes N] [--experiment E-id]
+           [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
   task update <id> [--title T] [--status draft|active|done|archived]
-           [--owner O] [--goal G] [--notes N] [--experiment E-id]
+           [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+          父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
   task rm <id> [--yes]
@@ -999,6 +1000,17 @@ function printArchiveResult(result, days, dryRun) {
   else out(`已归档 ${ids.length} 个任务（阈值 ${days} 天${suffix}）：${ids.join(', ')}`)
 }
 
+/**
+ * `--parent <T-id>`：`''`/`none`/`null` 表示清空（根）。其余原样交给 core 校验
+ * （宽引用/父须存在/禁自指/禁环 → invalid/退出码 2）。
+ */
+function readParentFlag(flags) {
+  const raw = readString(flags, 'parent')
+  if (raw === undefined) return undefined
+  const value = raw.trim()
+  return value === '' || /^(none|null)$/i.test(value) ? null : value
+}
+
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
   if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|rm>')
@@ -1041,6 +1053,8 @@ async function cmdTask(ctx, sub) {
     }
     const experiment = readString(flags, 'experiment')
     if (experiment !== undefined) input.experiment = experiment.trim() === '' ? null : experiment
+    const parent = readParentFlag(flags)
+    if (parent !== undefined) input.parent = parent
     if (!input.title) throw new CliError('usage', '用法: flow task add --title T [...]')
     const record = await core.addTask(ctx.root, contract, input)
     if (!ctx.json) out(`已创建任务 ${record.id}  ${record.title}`)
@@ -1056,6 +1070,8 @@ async function cmdTask(ctx, sub) {
     }
     const experiment = readString(flags, 'experiment')
     if (experiment !== undefined) patch.experiment = experiment.trim() === '' ? null : experiment
+    const parent = readParentFlag(flags)
+    if (parent !== undefined) patch.parent = parent
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'task update 至少需要一个字段参数（如 --status）')
     }
