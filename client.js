@@ -177,6 +177,9 @@ window.__ModuleLoader__.load({
       'tasks.trendApprox': '≈',
       'tasks.trendApproxTitle': '完成/归档按 updated_at 近似（无 done_at/archived_at）',
       'tasks.trendEmpty': '暂无趋势',
+      'tasks.parentIn': '父在{group}',
+      'tasks.expandChildren': '展开 {n} 个子任务',
+      'tasks.collapseChildren': '收起 {n} 个子任务',
       'tasks.trendAria': '近 {days} 天任务趋势',
       'tasks.trendChartTitle': '近 {days} 天 · 新增 {created} · 完成 {done}',
       'tasks.trendLegendCreated': '新增',
@@ -319,6 +322,9 @@ window.__ModuleLoader__.load({
       'tasks.trendApprox': '≈',
       'tasks.trendApproxTitle': 'done/archived approximated from updated_at (no done_at/archived_at)',
       'tasks.trendEmpty': 'No trend yet',
+      'tasks.parentIn': 'parent in {group}',
+      'tasks.expandChildren': 'Expand {n} subtasks',
+      'tasks.collapseChildren': 'Collapse {n} subtasks',
       'tasks.trendAria': 'Task trend over the last {days} days',
       'tasks.trendChartTitle': 'Last {days}d · {created} new · {done} done',
       'tasks.trendLegendCreated': 'new',
@@ -798,6 +804,9 @@ window.__ModuleLoader__.load({
         created_at: asText(task.created_at),
         updated_at: asText(task.updated_at),
         gate: asText(task.gate),
+        /* T-13 A2 tree fields: absent on an older payload → null / 0 (flat). */
+        parent: asText(task.parent) || null,
+        depth: asNumber(task.depth, 0),
       };
     }
 
@@ -1102,6 +1111,19 @@ window.__ModuleLoader__.load({
       const task = asObject(props.task);
       const t = props.t;
       const open = props.open === true;
+      /* T-13 A3 tree facet: depth for the indent, a caret that is its OWN button
+         (so it never triggers the row's detail toggle), and the child <ul>. */
+      const tree = asObject(props.tree);
+      const depth = asNumber(tree.depth, 0);
+      const visualDepth = Math.min(depth, 3);
+      const hasChildren = tree.hasChildren === true;
+      const expanded = tree.expanded !== false;
+      const toggleChildren = () => {
+        if (typeof tree.onToggleChildren === 'function') tree.onToggleChildren();
+      };
+      const caretLabel = t(expanded ? 'tasks.expandChildren' : 'tasks.collapseChildren', {
+        n: asNumber(tree.childCount, 0),
+      });
       const title = asText(task.title);
       const goal = asText(task.goal);
       const meta = taskMetaText(task, props.now, t);
@@ -1111,9 +1133,43 @@ window.__ModuleLoader__.load({
       const toggle = () => {
         if (typeof props.onToggle === 'function') props.onToggle(asText(task.id));
       };
+      const caret = hasChildren
+        ? React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'project-flow-taskCaret',
+              'aria-expanded': expanded ? true : false,
+              'aria-controls': asText(tree.controlsId),
+              'aria-label': caretLabel,
+              title: caretLabel,
+              onClick: (event) => {
+                /* The row header is itself a button: stop the caret click from
+                   bubbling into it, or opening the tree would open the detail. */
+                if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+                toggleChildren();
+              },
+              onKeyDown: (event) => {
+                if (!event) return;
+                const key = event.key || event.keyCode;
+                if (key !== 'Enter' && key !== ' ' && key !== 'Spacebar') return;
+                if (typeof event.stopPropagation === 'function') event.stopPropagation();
+                if (typeof event.preventDefault === 'function') event.preventDefault();
+                toggleChildren();
+              },
+            },
+            expanded ? '\u25BE' : '\u25B8'
+          )
+        : null;
+      const badge = asText(tree.badge);
       return React.createElement(
         'li',
-        { className: 'project-flow-taskRow' },
+        {
+          className: 'project-flow-taskRow' + (depth > 0 ? ' project-flow-taskNested' : ''),
+          style: visualDepth > 0 ? { '--d': visualDepth } : undefined,
+          'aria-level': visualDepth + 1,
+          'data-depth': depth,
+        },
         React.createElement(
           'div',
           {
@@ -1131,6 +1187,7 @@ window.__ModuleLoader__.load({
               toggle();
             },
           },
+          caret,
           mark
             ? React.createElement(
                 'span',
@@ -1143,10 +1200,12 @@ window.__ModuleLoader__.load({
               )
             : null,
           React.createElement('span', { className: 'project-flow-taskTitle', title: title || undefined }, title || t('misc.dash')),
+          badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
           meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
           goal ? React.createElement('span', { className: 'project-flow-taskGoal', title: goal }, goal) : null
         ),
-        open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null
+        open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null,
+        tree.childrenList || null
       );
     }
     // #endregion
@@ -1775,34 +1834,163 @@ window.__ModuleLoader__.load({
       const otherCount = asNumber(counts.other, 0);
       const statusRows = otherCount > 0 ? statusOrder.concat(['other']) : statusOrder;
 
-      /* Queue head = the first row of the active group. A+ moves the real order
-         into the Host payload; until then this is a pure front-end pick, so the
-         payload shape is untouched. */
-      const queueHead = activeTasks.length > 0 ? activeTasks[0] : null;
+      /* Queue head: A2 derives `tasks.current` as the oldest active ROOT, so the
+         head is a real queue head rather than "whatever the array starts with".
+         A row that vanished (or a legacy payload) falls back to the first row. */
+      const queueHead = (() => {
+        const id = asText(currentId);
+        if (id !== '') {
+          const match = activeTasks.find((row) => asText(asObject(row).id) === id);
+          if (match) return match;
+        }
+        return activeTasks.length > 0 ? activeTasks[0] : null;
+      })();
       const queueHeadId = queueHead ? asText(queueHead.id) : '';
       const queueHeadTitle = queueHead ? asText(queueHead.title) : '';
 
+      /* T-13 A3: fold state per PARENT task id (never per index), so a 2.5 s poll
+         that reorders rows keeps every subtree open. Default shows one level. */
+      const [collapsedIds, setCollapsedIds] = useState({});
+      const collapsedOf = (id, depth) => {
+        const table = asObject(collapsedIds);
+        return Object.prototype.hasOwnProperty.call(table, id) ? table[id] === true : depth >= 1;
+      };
+      const toggleChildren = (id, expanded) => {
+        const key = asText(id);
+        if (key === '') return;
+        setCollapsedIds((current) => Object.assign({}, asObject(current), { [key]: expanded }));
+      };
+
+      /* Which group owns each task: the same-group nesting rule and the
+         「父在…」badge both read this map. */
+      const groupOfTask = new Map();
+      for (const [groupKey, groupRows] of [['active', activeTasks], ['draft', draftTasks], ['done', recentTasks]]) {
+        for (const row of groupRows) {
+          const id = asText(row.id);
+          if (id !== '' && !groupOfTask.has(id)) groupOfTask.set(id, groupKey);
+        }
+      }
+
+      /** Parent-linked forest for one group; a cycle or dangling parent re-roots. */
+      const buildForest = (rows) => {
+        const nodes = rows.map((task, index) => ({ task, id: asText(task.id) || 'row-' + index, children: [] }));
+        const byId = new Map();
+        for (const node of nodes) if (!byId.has(node.id)) byId.set(node.id, node);
+        const roots = [];
+        for (const node of nodes) {
+          const parentId = asText(node.task.parent);
+          const parent = parentId !== '' && parentId !== node.id ? byId.get(parentId) : null;
+          if (parent) parent.children.push(node);
+          else roots.push(node);
+        }
+        /* Anything unreachable from a root (a parent cycle) is promoted back to a
+           root, so a bad `parent` can never hide a row. */
+        const seen = new Set();
+        const walk = (node) => {
+          if (seen.has(node)) return;
+          seen.add(node);
+          node.children.forEach(walk);
+        };
+        roots.forEach(walk);
+        for (const node of nodes) {
+          if (seen.has(node)) continue;
+          for (const other of nodes) {
+            const at = other.children.indexOf(node);
+            if (at >= 0) other.children.splice(at, 1);
+          }
+          roots.push(node);
+          walk(node);
+        }
+        return roots;
+      };
+
+      const badgeFor = (kind, task) => {
+        const parentId = asText(task.parent);
+        if (parentId === '') return '';
+        const owner = groupOfTask.get(parentId);
+        if (owner === kind) return '';
+        return t('tasks.parentIn', { group: t('tasks.status.' + (owner || 'archived')) });
+      };
+
       /** Rows of one group; business ids are the React keys, never row indexes. */
-      const renderRows = (kind, rows) =>
-        React.createElement(
-          'ul',
-          {
-            className: 'project-flow-list project-flow-taskList',
-            id: 'project-flow-group-' + kind,
-            hidden: groupLimit(kind) > 0 ? undefined : true,
-          },
-          rows.map((task, index) => {
-            const id = asText(task.id);
-            return React.createElement(TaskRow, {
-              key: id || kind + '-' + index,
-              task,
-              t,
-              now,
-              open: id !== '' && id === openId,
-              onToggle: toggleTask,
-            });
-          })
-        );
+      const renderRows = (kind, rows) => {
+        const limit = groupLimit(kind);
+        const roots = buildForest(rows);
+        const countVisible = (nodes, depth) =>
+          nodes.reduce(
+            (sum, node) => sum + 1 + (collapsedOf(node.id, depth) ? 0 : countVisible(node.children, depth + 1)),
+            0
+          );
+        const visibleTotal = countVisible(roots, 0);
+        let rendered = 0;
+        const renderNode = (node, depth) => {
+          if (rendered >= limit) return null;
+          rendered += 1;
+          const id = node.id;
+          const taskId = asText(node.task.id);
+          const collapsed = collapsedOf(id, depth);
+          const hasChildren = node.children.length > 0;
+          const controlsId = 'project-flow-taskChildren-' + id;
+          const children = [];
+          if (hasChildren && !collapsed) {
+            for (const child of node.children) {
+              if (rendered >= limit) break;
+              const element = renderNode(child, depth + 1);
+              if (element) children.push(element);
+            }
+          }
+          const childrenList = hasChildren
+            ? React.createElement(
+                'ul',
+                {
+                  key: 'children',
+                  id: controlsId,
+                  role: 'group',
+                  className: 'project-flow-taskChildren',
+                  hidden: collapsed ? true : undefined,
+                },
+                children
+              )
+            : null;
+          return React.createElement(TaskRow, {
+            key: id,
+            task: node.task,
+            t,
+            now,
+            open: taskId !== '' && taskId === openId,
+            onToggle: toggleTask,
+            tree: {
+              depth,
+              hasChildren,
+              expanded: hasChildren ? collapsed === false : false,
+              controlsId,
+              childCount: node.children.length,
+              badge: badgeFor(kind, node.task),
+              childrenList,
+              onToggleChildren: () => toggleChildren(id, !collapsed),
+            },
+          });
+        };
+        const elements = [];
+        for (const root of roots) {
+          if (rendered >= limit) break;
+          elements.push(renderNode(root, 0));
+        }
+        return {
+          list: React.createElement(
+            'ul',
+            {
+              className: 'project-flow-list project-flow-taskList',
+              id: 'project-flow-group-' + kind,
+              hidden: limit > 0 ? undefined : true,
+            },
+            elements
+          ),
+          /* A folded group and a preview both report what they hold back; rows in
+             a collapsed subtree are the caret's business, not "还有 N 条". */
+          hidden: Math.max(0, visibleTotal - rendered),
+        };
+      };
 
       /* One foldable group: a real <button> (keyboard + aria-expanded/controls),
          its visible rows, and a "N more" line whenever rows are held back — the
@@ -1810,8 +1998,7 @@ window.__ModuleLoader__.load({
       const renderGroup = (group) => {
         const rows = group.rows;
         const limit = groupLimit(group.key);
-        const shown = rows.slice(0, limit);
-        const hidden = rows.length - shown.length;
+        const treeRows = renderRows(group.key, rows);
         return React.createElement(
           'div',
           { className: 'project-flow-group', key: group.key },
@@ -1826,15 +2013,15 @@ window.__ModuleLoader__.load({
           /* Always render the list element, even for an empty group: the toggle's
              aria-controls must point at an element that exists, and "nothing in
              progress / nothing completed yet" are common everyday states. */
-          renderRows(group.key, shown),
+          treeRows.list,
           rows.length === 0 && group.empty
             ? React.createElement(EmptyLine, null, t(group.empty))
             : null,
-          hidden > 0
+          treeRows.hidden > 0
             ? React.createElement(
                 'p',
                 { className: 'project-flow-muted project-flow-more' },
-                t('tasks.more', { n: hidden })
+                t('tasks.more', { n: treeRows.hidden })
               )
             : null
         );
@@ -3183,6 +3370,12 @@ window.__ModuleLoader__.load({
 .project-flow-btn:disabled{opacity:.55;cursor:default;}
 .project-flow-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 .project-flow-chips{display:flex;flex-wrap:wrap;gap:5px;}
+.project-flow-taskRow{position:relative;}
+.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px);border-left:1px solid var(--dsw-alias-border-l);margin-left:8px;}
+.project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l);margin-left:12px;}
+.project-flow-taskCaret{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:1;}
+.project-flow-taskCaret:hover{color:var(--dsw-alias-label-primary);}
+.project-flow-taskBadge{flex:none;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap;}
 .project-flow-trend{margin-top:8px;min-width:0;}
 .project-flow-trendHead{display:flex;align-items:baseline;gap:4px;font-size:11px;min-width:0;}
 .project-flow-trendApprox{color:var(--dsw-alias-label-secondary);font-weight:600;cursor:help;}

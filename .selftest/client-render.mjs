@@ -1103,6 +1103,215 @@ check('Panel wiring: the experiment card is opt-in, single column keeps the lite
   assert.ok(wide > 0 && single > wide, 'the single-column rule must come after the two-column rule');
 });
 
+// ---------------------------------------------------- task tree (T-13 A3)
+/** A→B→C chain in the active group, plus a cross-group child and a draft parent. */
+function treeTasks(overrides = {}) {
+  return probe.normalize({
+    tasks: {
+      total: 5,
+      counts: { draft: 1, active: 4, done: 1, archived: 0, other: 0 },
+      current: 'T-A',
+      active: [
+        { id: 'T-A', title: 'A 根任务', status: 'active', parent: null, depth: 0 },
+        { id: 'T-B', title: 'B 子任务', status: 'active', parent: 'T-A', depth: 1 },
+        { id: 'T-C', title: 'C 孙任务', status: 'active', parent: 'T-B', depth: 2 },
+        { id: 'T-X', title: 'X 跨组任务', status: 'active', parent: 'T-D', depth: 1 },
+      ],
+      draft: [{ id: 'T-D', title: 'D 草稿任务', status: 'draft', parent: null, depth: 0 }],
+      recentDone: [{ id: 'T-E', title: 'E 完成', status: 'done', parent: null, depth: 0 }],
+      ...overrides,
+    },
+  }).tasks;
+}
+
+/* `textOf(row)` walks the whole subtree, so a parent row also "contains" its
+   children's text. Identify a row by its own title instead. */
+const rowTitleOf = (row) => {
+  const title = collect(row, 'project-flow-taskTitle')[0];
+  return title ? textOf(title) : '';
+};
+const rowOf = (card, title) => collect(card, 'project-flow-taskRow').find((row) => rowTitleOf(row) === title);
+
+const caretOf = (card, controlsId) =>
+  collect(card, 'project-flow-taskCaret').find((button) => button.props['aria-controls'] === controlsId);
+
+check('TasksCard tree: A→B→C nest with 12px indent, connector class and aria-level, capped at 4', () => {
+  const card = mountTasks(treeTasks());
+  const rows = () => collect(card, 'project-flow-taskRow');
+  // Default: one level open → A and its child B render, B's child C stays folded.
+  assert.equal(rows().length, 3, 'the default shows the root plus one level (A, B, X)');
+  assert.ok(rows().some((row) => textOf(row).includes('A 根任务')));
+  assert.ok(rows().some((row) => textOf(row).includes('B 子任务')));
+  assert.ok(!rows().some((row) => textOf(row).includes('C 孙任务')), 'a depth-2 row starts folded');
+
+  const a = rowOf(card, 'A 根任务');
+  const b = rowOf(card, 'B 子任务');
+  assert.equal(a.props['aria-level'], 1, 'the root is level 1');
+  assert.equal(a.props['data-depth'], 0);
+  assert.equal(String(a.props.className).includes('project-flow-taskNested'), false, 'a root is not indented');
+  assert.equal(b.props['aria-level'], 2, 'a child is level 2');
+  assert.equal(b.props['data-depth'], 1);
+  assert.equal(String(b.props.className).includes('project-flow-taskNested'), true, 'a child must be indented');
+  assert.equal(b.props.style['--d'], 1, 'the indents step is 12px per level (CSS uses --d * 12px)');
+
+  // The connector/indent rules exist and are 12px based.
+  assert.ok(source.includes('.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px)'), 'indent rule missing');
+  assert.ok(source.includes('.project-flow-taskChildren{'), 'child list rule missing');
+  assert.ok(source.includes('border-left:1px solid var(--dsw-alias-border-l)'), 'connector line missing');
+
+  // Expanding B reveals C at the next level; the child <ul> is a group.
+  const bCaret = caretOf(card, 'project-flow-taskChildren-T-B');
+  assert.ok(bCaret, 'B needs a caret');
+  assert.equal(bCaret.props['aria-expanded'], false, 'B starts folded');
+  bCaret.props.onClick({ stopPropagation() {} });
+  const opened = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  assert.ok(collect(opened, 'project-flow-taskRow').some((row) => textOf(row).includes('C 孙任务')), 'C must appear');
+  const c = rowOf(opened, 'C 孙任务');
+  assert.equal(c.props['aria-level'], 3);
+  const groups = collect(opened, 'project-flow-taskChildren').filter((list) => list.props.role === 'group');
+  assert.ok(groups.length >= 2, 'nested lists carry role=group');
+
+  // Depth is visually capped at 3 → aria-level never exceeds 4.
+  const deep = mountTasks(
+    treeTasks({
+      active: [
+        { id: 'D0', title: 'd0', status: 'active', parent: null, depth: 0 },
+        { id: 'D1', title: 'd1', status: 'active', parent: 'D0', depth: 1 },
+        { id: 'D2', title: 'd2', status: 'active', parent: 'D1', depth: 2 },
+        { id: 'D3', title: 'd3', status: 'active', parent: 'D2', depth: 3 },
+        { id: 'D4', title: 'd4', status: 'active', parent: 'D3', depth: 4 },
+      ],
+      counts: { draft: 0, active: 5, done: 0, archived: 0, other: 0 },
+    })
+  );
+  for (const caret of collect(deep, 'project-flow-taskCaret')) {
+    if (caret.props['aria-expanded'] === false) caret.props.onClick({ stopPropagation() {} });
+  }
+  let levels = collect(deep, 'project-flow-taskRow').map((row) => row.props['aria-level']);
+  assert.ok(levels.length > 0);
+  for (const level of levels) assert.ok(level >= 1 && level <= 4, 'aria-level stays inside 1..4, got ' + level);
+});
+
+check('TasksCard tree: a cross-group child becomes a root row with a 父在…badge', () => {
+  const card = mountTasks(treeTasks());
+  const x = rowOf(card, 'X 跨组任务');
+  assert.ok(x, 'a cross-group child must still render');
+  assert.equal(x.props['aria-level'], 1, 'it stays a root row, it is not nested');
+  assert.equal(x.props['data-depth'], 0);
+  const badge = collect(x, 'project-flow-taskBadge')[0];
+  assert.ok(badge, 'the badge is missing');
+  assert.equal(textOf(badge), '父在草稿', 'the badge must name the parent group: ' + textOf(badge));
+
+  // A parent that is not in the payload at all reads as archived.
+  const orphan = mountTasks(
+    treeTasks({ active: [{ id: 'T-Z', title: 'Z 孤儿', status: 'active', parent: 'T-GONE', depth: 1 }] })
+  );
+  const z = collect(orphan, 'project-flow-taskRow')[0];
+  assert.equal(textOf(collect(z, 'project-flow-taskBadge')[0]), '父在已归档');
+});
+
+check('TasksCard tree: the parent caret does not steal the row click (detail stays closed)', () => {
+  const card = mountTasks(treeTasks());
+  const rowA = rowOf(card, 'A 根任务');
+  const headOfA = collect(rowA, 'project-flow-taskHead')[0];
+  const caret = collect(rowA, 'project-flow-taskCaret')[0];
+  assert.ok(caret, 'the root parent needs a caret');
+
+  // Simulate a bubbling click: the caret must stop propagation, so the head's
+  // detail toggle never runs.
+  let stopped = false;
+  caret.props.onClick({ stopPropagation: () => { stopped = true; } });
+  if (!stopped) headOfA.props.onClick({});
+  const after = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  assert.equal(stopped, true, 'the caret click must call stopPropagation');
+  assert.equal(collect(after, 'project-flow-taskDetail').length, 0, 'the caret must not open the task detail');
+  // The caret collapsed A instead: its child list is hidden and the child rows go away.
+  const aAfter = rowOf(after, 'A 根任务');
+  assert.equal(collect(aAfter, 'project-flow-taskCaret')[0].props['aria-expanded'], false, 'the caret collapses the subtree');
+  const listAfter = collect(after, 'project-flow-taskChildren').find((list) => list.props.id === 'project-flow-taskChildren-T-A');
+  assert.equal(listAfter.props.hidden, true, 'a collapsed subtree hides its list');
+  assert.equal(rowOf(after, 'B 子任务'), undefined, 'a collapsed child is not rendered');
+  // Re-opening restores the child at its level.
+  collect(aAfter, 'project-flow-taskCaret')[0].props.onClick({ stopPropagation() {} });
+  const reopenedTree = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  assert.equal(rowOf(reopenedTree, 'B 子任务').props['aria-level'], 2, 're-opening restores the nesting');
+
+  // The row head itself still opens the detail.
+  const reopened = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW }, { reset: true });
+  const head2 = collect(rowOf(reopened, 'A 根任务'), 'project-flow-taskHead')[0];
+  head2.props.onClick({});
+  const detailed = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  assert.equal(collect(detailed, 'project-flow-taskDetail').length, 1, 'the row head must open the detail');
+});
+
+check('TasksCard tree: the fold state is keyed by task id and survives a reordered poll', () => {
+  const first = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW }, { reset: true });
+  caretOf(first, 'project-flow-taskChildren-T-B').props.onClick({ stopPropagation() {} });
+  const opened = renderWithState(probe.TasksCard, { tasks: treeTasks(), t, now: NOW });
+  assert.ok(collect(opened, 'project-flow-taskRow').some((row) => textOf(row).includes('C 孙任务')), 'C must be open');
+
+  // Same rows, reversed order: the id-keyed state must keep C visible.
+  const reversed = treeTasks();
+  reversed.active = reversed.active.slice().reverse();
+  const after = renderWithState(probe.TasksCard, { tasks: reversed, t, now: NOW });
+  assert.ok(
+    collect(after, 'project-flow-taskRow').some((row) => textOf(row).includes('C 孙任务')),
+    'the subtree must stay open after a reorder'
+  );
+  const bRow = rowOf(after, 'B 子任务');
+  assert.equal(collect(bRow, 'project-flow-taskCaret')[0].props['aria-expanded'], true, 'B stays expanded');
+});
+
+check('TasksCard tree: the preview budget counts rendered rows, child rows included', () => {
+  const previewTasks = treeTasks({
+      counts: { draft: 0, active: 7, done: 0, archived: 0, other: 0 },
+      active: [
+        { id: 'P0', title: 'p0 根', status: 'active', parent: null, depth: 0 },
+        { id: 'P1', title: 'p1 子', status: 'active', parent: 'P0', depth: 1 },
+        { id: 'P2', title: 'p2 子', status: 'active', parent: 'P0', depth: 1 },
+        { id: 'P3', title: 'p3 子', status: 'active', parent: 'P0', depth: 1 },
+        { id: 'P4', title: 'p4 子', status: 'active', parent: 'P0', depth: 1 },
+        { id: 'P5', title: 'p5 根', status: 'active', parent: null, depth: 0 },
+        { id: 'P6', title: 'p6 根', status: 'active', parent: null, depth: 0 },
+      ],
+  });
+  const flat = mountTasks(previewTasks);
+  const rows = collect(flat, 'project-flow-taskRow');
+  assert.equal(rows.length, 6, 'the preview shows exactly six rendered rows (parent + children)');
+  assert.ok(rows.some((row) => textOf(row).includes('p1 子')), 'child rows count toward the budget');
+  const activeGroup = collect(flat, 'project-flow-group').find((group) => group.props.key === 'active');
+  const more = collect(activeGroup, 'project-flow-more');
+  assert.equal(more.length, 1, 'the overflow line is missing');
+  assert.equal(textOf(more[0]), '还有 1 条未显示');
+  // Expanding the group lifts the preview and renders everything.
+  const opened = toggleGroup(flat, 'active', previewTasks);
+  assert.equal(collect(opened, 'project-flow-taskRow').length, 7, 'expanding lifts the preview to every row');
+});
+
+check('TasksCard tree: an older payload without parent renders flat (no caret, no badge)', () => {
+  const legacy = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { active: 2 },
+      current: 'T-1',
+      active: [
+        { id: 'T-1', title: '旧任务一', status: 'active' },
+        { id: 'T-2', title: '旧任务二', status: 'active' },
+      ],
+    },
+  }).tasks;
+  assert.equal(legacy.active[0].parent, null, 'a missing parent must normalize to null');
+  const card = mountTasks(legacy);
+  const rows = collect(card, 'project-flow-taskRow');
+  assert.equal(rows.length, 2, 'both legacy rows render');
+  for (const row of rows) {
+    assert.equal(row.props['aria-level'], 1, 'legacy rows stay at level 1');
+    assert.equal(String(row.props.className).includes('project-flow-taskNested'), false);
+    assert.equal(collect(row, 'project-flow-taskCaret').length, 0, 'no caret without children');
+    assert.equal(collect(row, 'project-flow-taskBadge').length, 0, 'no badge without a parent');
+  }
+});
+
 check('TasksCard: chips, current task, folded groups and one row per task', () => {
   const card = mountTasks(view.tasks);
   assert.equal(collect(card, 'project-flow-chip').length, 4, 'other chip should stay hidden at 0');
