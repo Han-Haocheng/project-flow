@@ -72,6 +72,8 @@ function taskRowOk(row, { gate = false } = {}) {
     'commits',
     'created_at',
     'updated_at',
+    'parent',
+    'depth',
   ]
   if (gate) keys.push('gate')
   if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false
@@ -86,6 +88,8 @@ function taskRowOk(row, { gate = false } = {}) {
   for (const key of ['acceptance', 'commits']) {
     if (!Array.isArray(row[key]) || !row[key].every((entry) => typeof entry === 'string')) return false
   }
+  if (row.parent !== null && typeof row.parent !== 'string') return false
+  if (!Number.isInteger(row.depth) || row.depth < 0 || row.depth > 3) return false
   return gate ? row.gate === null || typeof row.gate === 'string' : true
 }
 
