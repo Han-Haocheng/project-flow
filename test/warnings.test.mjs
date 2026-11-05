@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url'
 import {
   FlowError,
   addGate,
-  addTask,
+  addTask as addTaskCore,
   containedPath,
   drainWarnings,
   getTask,
@@ -28,6 +28,11 @@ import {
   removeTask,
   saveContract,
 } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 import { apply, panelStateReader } from '../index.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -315,7 +320,7 @@ test('CLI 警告：失败路径同样带 warnings，错误形状不变', () => {
   // 时间戳 id 取自真实时钟；用 ±30s 的坏文件带让“坏文件占住当前秒”确定发生。
   writeBadTimestampRecords(root)
 
-  const json = runCli(root, ['task', 'add', '--title', 'blocked', '--json'])
+  const json = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'blocked', '--json'])
   assert.equal(json.code, 2, 'conflict 映射退出码 2')
   assert.equal(json.json.ok, false)
   assert.equal(json.json.error.code, 'conflict')
@@ -324,7 +329,7 @@ test('CLI 警告：失败路径同样带 warnings，错误形状不变', () => {
   assert.ok(json.json.warnings.some((item) => item.startsWith('unreadable:')))
   assert.equal(json.stderr, '')
 
-  const human = runCli(root, ['task', 'add', '--title', 'blocked'])
+  const human = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'blocked'])
   assert.equal(human.code, 2)
   assert.ok(human.stderr.includes('警告: unreadable:'), human.stderr)
   const warningAt = human.stderr.indexOf('警告:')
@@ -471,7 +476,7 @@ test('插件：工具成功结果附加 core warnings，失败时 logger.warn �
 
   let thrown = null
   try {
-    await taskTool.execute({ action: 'add', title: 'blocked', root }, { agent: { session: { cwd: root } } })
+    await taskTool.execute({ action: 'add', type: 'feat', title: 'blocked', root }, { agent: { session: { cwd: root } } })
   } catch (error) {
     thrown = error
   }

@@ -53,9 +53,9 @@ function taskFile(root, id) {
 
 test('CLI task add --parent：合法父落盘，show/文件均可读', () => {
   const root = freshProject('add')
-  const parent = runCli(root, ['task', 'add', '--title', '父任务', '--json'])
+  const parent = runCli(root, ['task', 'add', '--type', 'feat', '--title', '父任务', '--json'])
   assert.equal(parent.code, 0, parent.stderr)
-  const child = runCli(root, ['task', 'add', '--title', '子任务', '--parent', parent.json.data.id, '--json'])
+  const child = runCli(root, ['task', 'add', '--type', 'feat', '--title', '子任务', '--parent', parent.json.data.id, '--json'])
   assert.equal(child.code, 0, child.stderr)
   assert.equal(child.json.data.parent, parent.json.data.id)
 
@@ -67,8 +67,8 @@ test('CLI task add --parent：合法父落盘，show/文件均可读', () => {
 
 test("CLI task --parent ''/none/null：清空为根（add 与 update，大小写不敏感）", () => {
   const root = freshProject('clear')
-  const parent = runCli(root, ['task', 'add', '--title', '父', '--json']).json.data.id
-  const child = runCli(root, ['task', 'add', '--title', '子', '--parent', parent, '--json']).json.data.id
+  const parent = runCli(root, ['task', 'add', '--type', 'feat', '--title', '父', '--json']).json.data.id
+  const child = runCli(root, ['task', 'add', '--type', 'feat', '--title', '子', '--parent', parent, '--json']).json.data.id
   for (const value of ['', 'none', 'null', 'NULL', 'NONE']) {
     const cleared = runCli(root, ['task', 'update', child, '--parent', value, '--json'])
     assert.equal(cleared.code, 0, `${value}: ${cleared.stderr}`)
@@ -77,7 +77,7 @@ test("CLI task --parent ''/none/null：清空为根（add 与 update，大小写
     assert.equal(runCli(root, ['task', 'update', child, '--parent', parent, '--json']).json.data.parent, parent)
   }
   for (const value of ['', 'none', 'NULL', 'NONE']) {
-    const emptyAdd = runCli(root, ['task', 'add', '--title', `根-${value || 'empty'}`, '--parent', value, '--json'])
+    const emptyAdd = runCli(root, ['task', 'add', '--type', 'feat', '--title', `根-${value || 'empty'}`, '--parent', value, '--json'])
     assert.equal(emptyAdd.code, 0, `${value}: ${emptyAdd.stderr}`)
     assert.equal(emptyAdd.json.data.parent, null, `task add --parent ${JSON.stringify(value)} 应为根`)
   }
@@ -85,8 +85,8 @@ test("CLI task --parent ''/none/null：清空为根（add 与 update，大小写
 
 test('CLI task update（不带 --parent）：父关系保持，不被清空', () => {
   const root = freshProject('keep')
-  const parent = runCli(root, ['task', 'add', '--title', '父', '--json']).json.data.id
-  const child = runCli(root, ['task', 'add', '--title', '子', '--parent', parent, '--json']).json.data.id
+  const parent = runCli(root, ['task', 'add', '--type', 'feat', '--title', '父', '--json']).json.data.id
+  const child = runCli(root, ['task', 'add', '--type', 'feat', '--title', '子', '--parent', parent, '--json']).json.data.id
 
   const statusOnly = runCli(root, ['task', 'update', child, '--status', 'active', '--json'])
   assert.equal(statusOnly.code, 0, statusOnly.stderr)
@@ -99,18 +99,18 @@ test('CLI task update（不带 --parent）：父关系保持，不被清空', ()
 
 test('CLI task --parent：不存在 → 2 parent-not-found；自指 → 2；环 → 2 parent-cycle', () => {
   const root = freshProject('errors')
-  const missing = runCli(root, ['task', 'add', '--title', '孤儿', '--parent', 'T-20000101-01', '--json'])
+  const missing = runCli(root, ['task', 'add', '--type', 'feat', '--title', '孤儿', '--parent', 'T-20000101-01', '--json'])
   assert.equal(missing.code, 2)
   assert.equal(missing.json.error.code, 'invalid')
   assert.match(missing.json.error.message, /parent-not-found/)
 
-  const a = runCli(root, ['task', 'add', '--title', 'A', '--json']).json.data.id
+  const a = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'A', '--json']).json.data.id
   const self = runCli(root, ['task', 'update', a, '--parent', a, '--json'])
   assert.equal(self.code, 2)
   assert.equal(self.json.error.code, 'invalid')
   assert.match(self.json.error.message, /cannot reference itself/)
 
-  const b = runCli(root, ['task', 'add', '--title', 'B', '--parent', a, '--json'])
+  const b = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'B', '--parent', a, '--json'])
   assert.equal(b.code, 0)
   const cycle = runCli(root, ['task', 'update', a, '--parent', b.json.data.id, '--json'])
   assert.equal(cycle.code, 2)
@@ -166,8 +166,8 @@ async function toolHarness(root) {
 test('flow_task 工具 parent 三态：add 生效 / update 清空 / 缺失与环 invalid', async () => {
   const root = freshProject('tool')
   const { tool, exec } = await toolHarness(root)
-  const parent = await tool.execute({ action: 'add', title: '工具父' }, exec)
-  const child = await tool.execute({ action: 'add', title: '工具子', parent: parent.task.id }, exec)
+  const parent = await tool.execute({ action: 'add', type: 'feat', title: '工具父' }, exec)
+  const child = await tool.execute({ action: 'add', type: 'feat', title: '工具子', parent: parent.task.id }, exec)
   assert.equal(child.task.parent, parent.task.id, 'add 带 parent 生效')
 
   const cleared = await tool.execute({ action: 'update', id: child.task.id, parent: '' }, exec)
@@ -176,7 +176,7 @@ test('flow_task 工具 parent 三态：add 生效 / update 清空 / 缺失与环
   assert.equal(reattached.task.parent, parent.task.id)
 
   await assert.rejects(
-    () => tool.execute({ action: 'add', title: '孤儿', parent: 'T-20000101-01' }, exec),
+    () => tool.execute({ action: 'add', type: 'feat', title: '孤儿', parent: 'T-20000101-01' }, exec),
     (error) => error.code === 'invalid' && /parent-not-found/.test(error.message),
   )
   await assert.rejects(
@@ -194,13 +194,13 @@ test('flow_task parent 归一：add/update 的 none/null/NONE/NULL 都清空为�
 
   // add：四种写法都应是根（core 本身只认 null/''，归一在这里发生）。
   for (const value of ['none', 'null', 'NONE', 'NULL']) {
-    const created = await tool.execute({ action: 'add', title: `根-${value}`, parent: value }, exec)
+    const created = await tool.execute({ action: 'add', type: 'feat', title: `根-${value}`, parent: value }, exec)
     assert.equal(created.task.parent, null, `add parent=${value} 应为根`)
   }
 
   // update：挂上父之后用四种写法清空，逐一验证并复原。
-  const parent = await tool.execute({ action: 'add', title: '工具父' }, exec)
-  const child = await tool.execute({ action: 'add', title: '工具子', parent: parent.task.id }, exec)
+  const parent = await tool.execute({ action: 'add', type: 'feat', title: '工具父' }, exec)
+  const child = await tool.execute({ action: 'add', type: 'feat', title: '工具子', parent: parent.task.id }, exec)
   assert.equal(child.task.parent, parent.task.id)
   for (const value of ['none', 'null', 'NONE', 'NULL']) {
     const cleared = await tool.execute({ action: 'update', id: child.task.id, parent: value }, exec)
@@ -213,8 +213,8 @@ test('flow_task parent 归一：add/update 的 none/null/NONE/NULL 都清空为�
 test('flow_task update（不带 parent）：父关系保持，不被清空', async () => {
   const root = freshProject('tool-keep')
   const { tool, exec } = await toolHarness(root)
-  const parent = await tool.execute({ action: 'add', title: '父' }, exec)
-  const child = await tool.execute({ action: 'add', title: '子', parent: parent.task.id }, exec)
+  const parent = await tool.execute({ action: 'add', type: 'feat', title: '父' }, exec)
+  const child = await tool.execute({ action: 'add', type: 'feat', title: '子', parent: parent.task.id }, exec)
   assert.equal(child.task.parent, parent.task.id)
 
   const updated = await tool.execute({ action: 'update', id: child.task.id, goal: '只改目标' }, exec)

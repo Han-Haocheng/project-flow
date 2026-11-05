@@ -486,7 +486,7 @@ check('flow_exp tree: one root', Array.isArray(treeExp.tree) && treeExp.tree.len
 // -------------------------------------------------------- flow_task chain
 
 const createdTask = await taskTool.execute(
-  { action: 'add', title: '工具注册', status: 'active', owner: 'agent', goal: '4 tools + 2 skills', acceptance: ['selftest green'] },
+  { action: 'add', type: 'feat', title: '工具注册', status: 'active', owner: 'agent', goal: '4 tools + 2 skills', acceptance: ['selftest green'] },
   exec,
 )
 const taskId = createdTask.task?.id
@@ -508,6 +508,7 @@ check('flow_task update: commits', Array.isArray(updatedTask.task?.commits) && u
 const activeDetail = await taskTool.execute(
   {
     action: 'add',
+    type: 'feat',
     title: '进行中任务',
     status: 'active',
     owner: 'panel',
@@ -800,8 +801,8 @@ if (skillFiles.length < SKILL_NAMES.length) {
 // Two drafts with fixed on-disk timestamps: the payload must surface them in FIFO
 // order (oldest `created_at` first), fill a missing owner with an empty string and
 // carry the whole (bounded) detail set of the newer one.
-const olderDraft = await taskTool.execute({ action: 'add', title: '草稿旧', status: 'draft', owner: 'alice' }, exec)
-const newerDraft = await taskTool.execute({ action: 'add', title: '草稿新', status: 'draft' }, exec)
+const olderDraft = await taskTool.execute({ action: 'add', type: 'feat', title: '草稿旧', status: 'draft', owner: 'alice' }, exec)
+const newerDraft = await taskTool.execute({ action: 'add', type: 'feat', title: '草稿新', status: 'draft' }, exec)
 const newerDraftDetail = await taskTool.execute(
   {
     action: 'update',
@@ -972,6 +973,7 @@ const capIds = []
 for (let index = 0; index < 55; index += 1) {
   const record = core.addTask(capRoot, capContract, {
     title: `草稿 ${index}`,
+    type: 'chore',
     status: 'draft',
     owner: 'cap',
     updated_at: `2026-10-30T00:00:${String(index).padStart(2, '0')}+08:00`,
@@ -1052,7 +1054,7 @@ const decAgent = mockAgent('session-dec-root', decRoot)
 registerRootAgent(decAgent)
 const decExec = { agent: decAgent }
 const decTask = await taskTool.execute(
-  { action: 'add', root: decRoot, title: '决策阻塞任务', status: 'active', owner: decAgent.id },
+  { action: 'add', type: 'feat', root: decRoot, title: '决策阻塞任务', status: 'active', owner: decAgent.id },
   decExec,
 )
 const decTaskId = decTask.task?.id

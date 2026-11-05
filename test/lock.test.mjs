@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   FlowError,
-  addTask,
+  addTask as addTaskCore,
   drainWarnings,
   initProject,
   loadContract,
@@ -22,6 +22,11 @@ import {
   storePaths,
   withLock,
 } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CORE_PATH = path.join(TEST_DIR, '..', 'lib', 'core.mjs')

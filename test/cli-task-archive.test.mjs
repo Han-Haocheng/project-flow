@@ -11,7 +11,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { addTask, initProject, loadContract } from '../lib/core.mjs'
+import { addTask as addTaskCore, initProject, loadContract } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')

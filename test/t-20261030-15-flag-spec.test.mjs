@@ -89,8 +89,8 @@ const UNDECLARED = [
   ['exp list', ['exp', 'list', '--status', 'open'], '--status'],
   ['exp list', ['exp', 'list', '--limit', '3'], '--limit'],
   ['exp add', ['exp', 'add', '--learned', 'L'], '--learned'],
-  ['task add', ['task', 'add', '--title', 'x', '--allow', 'src'], '--allow'],
-  ['task add', ['task', 'add', '--title', 'x', '--metrics', '{}'], '--metrics'],
+  ['task add', ['task', 'add', '--type', 'feat', '--title', 'x', '--allow', 'src'], '--allow'],
+  ['task add', ['task', 'add', '--type', 'feat', '--title', 'x', '--metrics', '{}'], '--metrics'],
   ['task list', ['task', 'list', '--title', 'x'], '--title'],
   ['gate run', ['gate', 'run', '--id', 'g', '--allow', 'src'], '--allow'],
   ['heartbeat status', ['heartbeat', 'status', '--title', 'x'], '--title'],
@@ -114,7 +114,7 @@ test('未声明 flag：每命令 exit 1、点名 flag、且在任何 core 写之
 test('未声明 flag（通过 = 提供的值）同样被拒；已初始化项目也不写盘', () => {
   const root = freshProject('reject-init')
   const before = fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')
-  const result = runCli(root, ['task', 'add', '--title', 'x', '--allow', 'src'])
+  const result = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'x', '--allow', 'src'])
   assert.equal(result.code, 1)
   assert.match(result.stderr, /task add 不支持 --allow/)
   assert.equal(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'), before, 'conflict/usage 前不得改写 manifest')
@@ -124,8 +124,8 @@ test('未声明 flag（通过 = 提供的值）同样被拒；已初始化项目
 test('已声明组合：task/exp/gate/heartbeat/decision/check 的合法 flag 仍 rc0', () => {
   const root = freshProject('accept', { noGates: false })
   const cases = [
-    ['task add', ['task', 'add', '--title', '任务一', '--id', 'T-20261105-01', '--owner', 'lead', '--goal', 'g', '--notes', 'n']],
-    ['task add parent', ['task', 'add', '--title', '子任务', '--parent', 'T-20261105-01']],
+    ['task add', ['task', 'add', '--type', 'feat', '--title', '任务一', '--id', 'T-20261105-01', '--owner', 'lead', '--goal', 'g', '--notes', 'n']],
+    ['task add parent', ['task', 'add', '--type', 'feat', '--title', '子任务', '--parent', 'T-20261105-01']],
     ['task update', ['task', 'update', 'T-20261105-01', '--status', 'active', '--notes', 'n2']],
     ['exp add', ['exp', 'add', '--id', 'E-20261105-01', '--title', '实验', '--hypothesis', 'H', '--direction', 'D',
       '--expected', 'E', '--primary-metric', 'M', '--guardrail', 'p95', '--guardrail', 'err', '--falsify', 'F',
@@ -165,11 +165,11 @@ test('全局 flag 放行；--help 优先于未知 flag / 未用 flag', () => {
 // ------------------------------------------------------------ id 对齐（验收）
 test('task add --id 与 exp add --id：显式 id 成功；冲突/非法 → exit 2', () => {
   const root = freshProject('ids')
-  const task = runCli(root, ['task', 'add', '--title', '显式', '--id', 'T-20261105-01', '--json'])
+  const task = runCli(root, ['task', 'add', '--type', 'feat', '--title', '显式', '--id', 'T-20261105-01', '--json'])
   assert.equal(task.code, 0, task.stdout + task.stderr)
   assert.match(task.stdout, /T-20261105-01/)
 
-  const dup = runCli(root, ['task', 'add', '--title', '重复', '--id', 'T-20261105-01', '--json'])
+  const dup = runCli(root, ['task', 'add', '--type', 'feat', '--title', '重复', '--id', 'T-20261105-01', '--json'])
   assert.equal(dup.code, 2, '重复 id 必须 conflict/invalid')
 
   const exp = runCli(root, ['exp', 'add', '--id', 'E-20261105-01', '--title', 'E', '--hypothesis', 'H',

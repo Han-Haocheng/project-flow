@@ -46,7 +46,7 @@ flow exp add --title T --direction '降低 tie 率' --expected E --primary-metri
              --guardrail G --falsify F --window-days 7 --stop-loss S
 flow exp review <id>            # 只读自查分流还缺什么（恒 exit 0）
 flow exp productize <id>        # 门禁通过后写产品化；失败实验用 flow exp cleanup <id> --flag …
-flow task add --title T [--status draft|active|done|archived] [--parent T-id]
+flow task add --title T --type feat [--status draft|active|done|archived] [--parent T-id]
                              # --parent ''|none|null 清空为根；task update 同
 flow task archive [--older-than N]   # 归档到期任务（默认 tasks.archiveAfterDays=7，0 关闭）
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'

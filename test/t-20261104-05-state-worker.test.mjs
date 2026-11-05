@@ -69,7 +69,7 @@ function makeProject(label, options = {}) {
   if (options.fifoTask === true) {
     execFileSync('mkfifo', [path.join(root, '.dsh/flow/tasks', 'T-20260101-01.json')])
   } else {
-    core.addTask(root, contract, { title: `${label} task`, status: 'active' })
+    core.addTask(root, contract, { type: 'feat', title: `${label} task`, status: 'active' })
   }
   return root
 }

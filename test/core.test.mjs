@@ -26,7 +26,7 @@ import {
   EXPERIMENT_SCHEMA,
   isLegacyExperiment,
   addGate,
-  addTask,
+  addTask as addTaskCore,
   answerDecision,
   archiveTasks,
   checkDecisions,
@@ -71,6 +71,11 @@ import {
   withLock,
   withdrawDecision,
 } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -1131,7 +1136,7 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   assert.equal(logs.code, 0)
   assert.equal(logs.json.data.length, 1)
 
-  const task = runCli(root, ['task', 'add', '--title', 'CLI 任务', '--owner', 'agent-a', '--json'])
+  const task = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'CLI 任务', '--owner', 'agent-a', '--json'])
   assert.equal(task.code, 0)
   assert.match(task.json.data.id, /^T-\d{14}(?:-\d{2})?$/)
   const taskUpdated = runCli(root, ['task', 'update', task.json.data.id, '--status', 'active', '--json'])
@@ -2425,7 +2430,7 @@ test('CLI decision：ask/list/show/answer/withdraw/gc 与冲突退出码', () =>
   const root = tempRoot('cli-decision')
   const init = runCli(root, ['init', '--name', 'cli-dec', '--no-gates', '--json'])
   assert.equal(init.code, 0)
-  const task = runCli(root, ['task', 'add', '--title', '被阻塞任务', '--json']).json.data.id
+  const task = runCli(root, ['task', 'add', '--type', 'feat', '--title', '被阻塞任务', '--json']).json.data.id
 
   const ask = runCli(root, [
     'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
@@ -2524,7 +2529,7 @@ test('CLI check decisions：阻塞决策命中暂存文件 exit 1，回答后 ex
   fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export {}\n')
   fs.writeFileSync(path.join(root, 'docs', 'x.md'), '# x\n')
 
-  const task = runCli(root, ['task', 'add', '--title', '被阻塞任务', '--json']).json.data.id
+  const task = runCli(root, ['task', 'add', '--type', 'feat', '--title', '被阻塞任务', '--json']).json.data.id
   const id = runCli(root, [
     'decision', 'ask', '--question', '是否接入门禁？', '--kind', 'approval',
     '--rationale', '门禁能强制拦截', '--recommendation', 'approve',
@@ -3658,7 +3663,7 @@ test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不�
   assert.equal(first.code, 0, first.stderr)
   const baseIds = []
   for (let index = 0; index < 30; index += 1) {
-    const added = runCli(root, ['task', 'add', '--title', `既有任务 ${index}`, '--json'])
+    const added = runCli(root, ['task', 'add', '--type', 'feat', '--title', `既有任务 ${index}`, '--json'])
     assert.equal(added.code, 0, added.stderr)
     baseIds.push(added.json.data.id)
   }
@@ -3669,7 +3674,7 @@ test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不�
   assert.equal(Object.keys(gatesBefore).length, 5)
 
   const adds = Array.from({ length: 30 }, (_, index) =>
-    runCliAsync(root, ['task', 'add', '--title', `并发任务 ${index}`, '--json']),
+    runCliAsync(root, ['task', 'add', '--type', 'feat', '--title', `并发任务 ${index}`, '--json']),
   )
   const init = runCliAsync(root, ['init', '--force', '--name', 'forced', '--json'])
   const [addResults, initResult] = await Promise.all([Promise.all(adds), init])
@@ -3691,7 +3696,7 @@ test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不�
     if (result.code === 0) continue
     assert.equal(result.code, 2, result.stderr)
     conflicts += 1
-    const retry = runCli(root, ['task', 'add', '--title', `并发任务 ${index}`, '--json'])
+    const retry = runCli(root, ['task', 'add', '--type', 'feat', '--title', `并发任务 ${index}`, '--json'])
     assert.equal(retry.code, 0, retry.stderr)
   }
 
@@ -3791,7 +3796,7 @@ test('时间戳 id：同秒 5 张 → -02..-05 连续且唯一', () => {
 test('时间戳 id：并发 10 路 add → 10 个唯一 id、无丢失', async () => {
   const { root } = freshProject('ts-id-concurrent')
   const results = await Promise.all(
-    Array.from({ length: 10 }, (_, index) => runCliAsync(root, ['task', 'add', '--title', `并发 ${index}`, '--json'])),
+    Array.from({ length: 10 }, (_, index) => runCliAsync(root, ['task', 'add', '--type', 'feat', '--title', `并发 ${index}`, '--json'])),
   )
   // 锁竞争下个别 add 可能合法 conflict（exit 2）；重试后必须 10/10 成功。
   const ids = []
@@ -3799,7 +3804,7 @@ test('时间戳 id：并发 10 路 add → 10 个唯一 id、无丢失', async (
     let settled = result
     if (settled.code !== 0) {
       assert.equal(settled.code, 2, settled.stderr)
-      settled = runCli(root, ['task', 'add', '--title', `并发 ${index}`, '--json'])
+      settled = runCli(root, ['task', 'add', '--type', 'feat', '--title', `并发 ${index}`, '--json'])
     }
     assert.equal(settled.code, 0, settled.stderr)
     ids.push(settled.json.data.id)

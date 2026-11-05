@@ -15,7 +15,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { addTask, initProject, loadContract } from '../lib/core.mjs'
+import { addTask as addTaskCore, initProject, loadContract } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 import { buildSnapshot, deriveTrend } from '../lib/state-snapshot.mjs'
 
 const NOW = new Date(2026, 10, 4, 12, 0, 0).getTime() // local 2026-11-04 12:00

@@ -46,10 +46,11 @@ const USAGE = `project-flow CLI（schema 2）
   exp rm <id> [--yes]
 
   task list | show <id>
-  task add --title T [--id T-YYYYMMDD-NN] [--status draft|active|done|archived]
+  task add --title T --type <t> [--id T-YYYYMMDDHHMMSS] [--status draft|active|done|archived]
            [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
-  task update <id> [--title T] [--status draft|active|done|archived]
+  task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
            [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+          type 必填（add）：feat|fix|docs|style|refactor|perf|test|chore|build|ci（commit 类型）
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
@@ -191,8 +192,8 @@ export const SPEC = Object.freeze({
   task: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
-    add: { flags: ['id', 'title', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
-    update: { flags: ['id', 'title', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
+    add: { flags: ['id', 'title', 'type', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
+    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
     archive: { flags: ['older-than', 'dry-run'] },
     rm: { flags: ['id', 'yes'] },
   }),
@@ -1175,7 +1176,7 @@ async function cmdTask(ctx, sub) {
 
   if (sub === 'add') {
     const input = {}
-    for (const key of ['title', 'status', 'owner', 'goal', 'notes']) {
+    for (const key of ['title', 'type', 'status', 'owner', 'goal', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) input[key] = value
     }
@@ -1194,7 +1195,7 @@ async function cmdTask(ctx, sub) {
   if (sub === 'update') {
     const id = requireString(flags, 'id', '用法: flow task update <id> [...]')
     const patch = {}
-    for (const key of ['title', 'status', 'owner', 'goal', 'notes']) {
+    for (const key of ['title', 'type', 'status', 'owner', 'goal', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) patch[key] = value
     }

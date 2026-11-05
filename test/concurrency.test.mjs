@@ -62,7 +62,7 @@ while (!fs.existsSync(goFile)) {
 
 try {
   const { contract } = loadContract(root)
-  const task = addTask(root, contract, { title: 'child ' + label })
+  const task = addTask(root, contract, { type: 'feat', title: 'child ' + label })
   process.stdout.write(JSON.stringify({ ok: true, id: task.id, warnings: drainWarnings() }) + '\\n')
 } catch (error) {
   process.stdout.write(
@@ -134,7 +134,7 @@ function waitFor(check, label, timeoutMs = 15_000) {
 async function raceRound({ label, children, staleLock }) {
   const { root, contract, paths } = freshProject(label)
   // A pre-existing record makes "file count == preset + successes" a real equation.
-  addTask(root, contract, { title: 'preset' })
+  addTask(root, contract, { type: 'feat', title: 'preset' })
   const lockPath = path.join(paths.store, '.lock')
   assert.equal(fs.existsSync(lockPath), false, 'seed writes must have released the lock')
   if (staleLock === true) {

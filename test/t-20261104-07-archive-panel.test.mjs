@@ -19,7 +19,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { addTask, archiveTasks, getTask, initProject, loadContract } from '../lib/core.mjs'
+import { addTask as addTaskCore, archiveTasks, getTask, initProject, loadContract } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 import { panelStateReader } from '../index.js'
 
 const DAY = 86_400_000

@@ -1265,6 +1265,7 @@ const EXP_UPDATE_FIELDS = Object.freeze([
 const TASK_ADD_FIELDS = Object.freeze([
   'id',
   'title',
+  'type',
   'status',
   'owner',
   'goal',
@@ -1277,6 +1278,7 @@ const TASK_ADD_FIELDS = Object.freeze([
 ])
 const TASK_UPDATE_FIELDS = Object.freeze([
   'title',
+  'type',
   'status',
   'owner',
   'goal',
@@ -2077,7 +2079,7 @@ function buildToolDefinitions(ctx) {
     {
       name: 'flow_task',
       description:
-        'List, inspect, add, update or remove project-flow tasks (title, status, owner, goal, parent tree, scope, acceptance, commits). All actions require the .dsh/flow store. `parent` links a subtask to an existing task (the parent must exist; self-reference and cycles are invalid; empty string/none/null makes it a root).',
+        'List, inspect, add, update or remove project-flow tasks (title, type, status, owner, goal, parent tree, scope, acceptance, commits). All actions require the .dsh/flow store. `type` is required on add and is one of feat/fix/docs/style/refactor/perf/test/chore/build/ci (conventional commit kinds). `parent` links a subtask to an existing task (the parent must exist; self-reference and cycles are invalid; empty string/none/null makes it a root).',
       parameters: {
         type: 'object',
         properties: {
@@ -2085,6 +2087,11 @@ function buildToolDefinitions(ctx) {
           root: ROOT_PROPERTY,
           id: ID_PROPERTY,
           title: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'chore', 'build', 'ci'],
+            description: 'Conventional commit type; required on add, optional on update.',
+          },
           status: { type: 'string', enum: ['draft', 'active', 'done', 'archived'] },
           owner: { type: 'string' },
           goal: { type: 'string' },

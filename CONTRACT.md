@@ -200,6 +200,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "schema": 1,
   "id": "T-20261028-57",
   "title": "任务标题",                  // 必填
+  "type": "feat",                       // 必填（add）：feat|fix|docs|style|refactor|perf|test|chore|build|ci
   "status": "draft",                    // draft | active | done | archived
   "owner": "",
   "goal": "",
@@ -231,6 +232,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   任务的 `parent`、实验的 `commits` 等；批量工具 `flow task renumber` 尚未提供，属后续可选卡。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
 - `created_at`/`id`/`schema` 不可改。
+- **`type`（必填，T-15）**：conventional commit 类型，枚举 `feat` / `fix` / `docs` / `style` /
+  `refactor` / `perf` / `test` / `chore` / `build` / `ci`。`task add` **必须**
+  提供（缺 → `invalid: type is required`），非法值 → `invalid: type must be one of …`；
+  `task update` 可选，给了才校验。**旧记录可缺**：读投影为 `type: null`（不迁移、不回填），
+  面板可按空/「未分类」显示；对旧记录做其它字段 update 不会补写 `type` 键。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则
   （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根；CLI 传
   `task add|update --parent <T-id>`，`--parent ''` / `none` / `null` 清空为根
@@ -651,10 +657,11 @@ flow exp cleanup <id> [--flag F]... [--code C]... [--data D]...
 flow exp rm <id> [--yes]
 
 flow task list | show <id>
-flow task add    --title T [--status draft|active|done|archived]
+flow task add    --title T --type <t> [--status draft|active|done|archived]
                  [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
-flow task update <id> [--title T] [--status draft|active|done|archived]
+flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
                  [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+                 # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
 flow task rm <id> [--yes]
 flow task archive [--older-than N] [--dry-run]
 

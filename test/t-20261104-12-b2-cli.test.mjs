@@ -202,15 +202,15 @@ test('task --experiment：格式非法 → 2；不存在 → warning 仍写入�
   const root = initRoot('task-link')
   const record = addExperiment(root)
 
-  const malformed = runCli(root, ['task', 'add', '--title', 'bad', '--experiment', '1bad'])
+  const malformed = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'bad', '--experiment', '1bad'])
   assert.equal(malformed.code, 2)
 
-  const missing = runCli(root, ['task', 'add', '--title', 'missing', '--experiment', 'E-20260101-99', '--json'])
+  const missing = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'missing', '--experiment', 'E-20260101-99', '--json'])
   assert.equal(missing.code, 0)
   assert.equal(missing.json.data.experiment, 'E-20260101-99')
   assert.ok(missing.json.warnings.some((line) => line.includes('task-experiment-missing')))
 
-  const linked = runCli(root, ['task', 'add', '--title', 'linked', '--experiment', record.id, '--json'])
+  const linked = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'linked', '--experiment', record.id, '--json'])
   assert.equal(linked.code, 0)
   assert.equal(linked.json.data.experiment, record.id)
 })

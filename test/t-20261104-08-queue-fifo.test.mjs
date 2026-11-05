@@ -12,7 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
-  addTask,
+  addTask as addTaskCore,
   initProject,
   listTasks,
   loadContract,
@@ -20,6 +20,11 @@ import {
   startHeartbeat,
   updateTask,
 } from '../lib/core.mjs'
+
+/** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
+function addTask(root, contract, input = {}, options) {
+  return addTaskCore(root, contract, { type: 'feat', ...input }, options)
+}
 import { buildSnapshot } from '../lib/state-snapshot.mjs'
 
 const TEMP_ROOTS = []
