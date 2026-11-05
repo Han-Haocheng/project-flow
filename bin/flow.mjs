@@ -1004,11 +1004,11 @@ function printArchiveResult(result, days, dryRun) {
  * `--parent <T-id>`：`''`/`none`/`null` 表示清空（根）。其余原样交给 core 校验
  * （宽引用/父须存在/禁自指/禁环 → invalid/退出码 2）。
  */
-function readParentFlag(flags) {
+function readParentFlag(flags, core) {
   const raw = readString(flags, 'parent')
   if (raw === undefined) return undefined
-  const value = raw.trim()
-  return value === '' || /^(none|null)$/i.test(value) ? null : value
+  // 归一规则与 `flow_task` 共用 core.normalizeParentInput（''/none/null → 根）。
+  return core.normalizeParentInput(raw)
 }
 
 async function cmdTask(ctx, sub) {
@@ -1053,7 +1053,7 @@ async function cmdTask(ctx, sub) {
     }
     const experiment = readString(flags, 'experiment')
     if (experiment !== undefined) input.experiment = experiment.trim() === '' ? null : experiment
-    const parent = readParentFlag(flags)
+    const parent = readParentFlag(flags, core)
     if (parent !== undefined) input.parent = parent
     if (!input.title) throw new CliError('usage', '用法: flow task add --title T [...]')
     const record = await core.addTask(ctx.root, contract, input)
@@ -1070,7 +1070,7 @@ async function cmdTask(ctx, sub) {
     }
     const experiment = readString(flags, 'experiment')
     if (experiment !== undefined) patch.experiment = experiment.trim() === '' ? null : experiment
-    const parent = readParentFlag(flags)
+    const parent = readParentFlag(flags, core)
     if (parent !== undefined) patch.parent = parent
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'task update 至少需要一个字段参数（如 --status）')

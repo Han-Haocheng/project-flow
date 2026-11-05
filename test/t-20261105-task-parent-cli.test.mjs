@@ -65,20 +65,22 @@ test('CLI task add --parent：合法父落盘，show/文件均可读', () => {
   assert.equal(JSON.parse(fs.readFileSync(taskFile(root, child.json.data.id), 'utf8')).parent, parent.json.data.id)
 })
 
-test("CLI task --parent ''/none/null：清空为根（add 与 update）", () => {
+test("CLI task --parent ''/none/null：清空为根（add 与 update，大小写不敏感）", () => {
   const root = freshProject('clear')
   const parent = runCli(root, ['task', 'add', '--title', '父', '--json']).json.data.id
   const child = runCli(root, ['task', 'add', '--title', '子', '--parent', parent, '--json']).json.data.id
-  for (const value of ['', 'none', 'null']) {
+  for (const value of ['', 'none', 'null', 'NULL', 'NONE']) {
     const cleared = runCli(root, ['task', 'update', child, '--parent', value, '--json'])
     assert.equal(cleared.code, 0, `${value}: ${cleared.stderr}`)
     assert.equal(cleared.json.data.parent, null, `--parent ${JSON.stringify(value)} 应清空`)
     // 重新挂上，供下一种写法使用。
     assert.equal(runCli(root, ['task', 'update', child, '--parent', parent, '--json']).json.data.parent, parent)
   }
-  const emptyAdd = runCli(root, ['task', 'add', '--title', '根', '--parent', '', '--json'])
-  assert.equal(emptyAdd.code, 0)
-  assert.equal(emptyAdd.json.data.parent, null)
+  for (const value of ['', 'none', 'NULL', 'NONE']) {
+    const emptyAdd = runCli(root, ['task', 'add', '--title', `根-${value || 'empty'}`, '--parent', value, '--json'])
+    assert.equal(emptyAdd.code, 0, `${value}: ${emptyAdd.stderr}`)
+    assert.equal(emptyAdd.json.data.parent, null, `task add --parent ${JSON.stringify(value)} 应为根`)
+  }
 })
 
 test('CLI task --parent：不存在 → 2 parent-not-found；自指 → 2；环 → 2 parent-cycle', () => {
@@ -169,4 +171,27 @@ test('flow_task 工具 parent 三态：add 生效 / update 清空 / 缺失与环
   )
   const after = await tool.execute({ action: 'show', id: parent.task.id }, exec)
   assert.equal(after.task.parent, null)
+})
+
+
+test('flow_task parent 归一：add/update 的 none/null/NONE/NULL 都清空为根', async () => {
+  const root = freshProject('tool-normalize')
+  const { tool, exec } = await toolHarness(root)
+
+  // add：四种写法都应是根（core 本身只认 null/''，归一在这里发生）。
+  for (const value of ['none', 'null', 'NONE', 'NULL']) {
+    const created = await tool.execute({ action: 'add', title: `根-${value}`, parent: value }, exec)
+    assert.equal(created.task.parent, null, `add parent=${value} 应为根`)
+  }
+
+  // update：挂上父之后用四种写法清空，逐一验证并复原。
+  const parent = await tool.execute({ action: 'add', title: '工具父' }, exec)
+  const child = await tool.execute({ action: 'add', title: '工具子', parent: parent.task.id }, exec)
+  assert.equal(child.task.parent, parent.task.id)
+  for (const value of ['none', 'null', 'NONE', 'NULL']) {
+    const cleared = await tool.execute({ action: 'update', id: child.task.id, parent: value }, exec)
+    assert.equal(cleared.task.parent, null, `update parent=${value} 应为根`)
+    const attached = await tool.execute({ action: 'update', id: child.task.id, parent: parent.task.id }, exec)
+    assert.equal(attached.task.parent, parent.task.id)
+  }
 })

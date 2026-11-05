@@ -1201,6 +1201,18 @@ function requireId(tool, action, value) {
   return value.trim()
 }
 
+/**
+ * `flow_task.parent` shares the CLI's clearing rule (`''`/`none`/`null`,
+ * case-insensitive → null) through core.normalizeParentInput, so the tool and
+ * `task --parent` can never diverge on what "root" means.
+ */
+function normalizeTaskParent(c, input) {
+  if (isPlainObject(input) && Object.hasOwn(input, 'parent')) {
+    input.parent = c.normalizeParentInput(input.parent)
+  }
+  return input
+}
+
 function pickFields(args, names) {
   const picked = {}
   for (const name of names) {
@@ -2079,7 +2091,7 @@ function buildToolDefinitions(ctx) {
             'experiment',
             'parent',
           ])
-          return { root, task: c.addTask(root, contract, input) }
+          return { root, task: c.addTask(root, contract, normalizeTaskParent(c, input)) }
         }
         if (action === 'update') {
           const id = requireId('flow_task', action, args.id)
@@ -2096,7 +2108,7 @@ function buildToolDefinitions(ctx) {
             'parent',
           ])
           if (Object.keys(patch).length === 0) throw new Error('flow_task update requires at least one field to change')
-          return { root, task: c.updateTask(root, contract, id, patch) }
+          return { root, task: c.updateTask(root, contract, id, normalizeTaskParent(c, patch)) }
         }
         if (action === 'remove') {
           const id = requireId('flow_task', action, args.id)
