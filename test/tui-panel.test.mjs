@@ -654,3 +654,102 @@ test('T-13 心跳可见性：stale 与 dead 默认隐藏，live/新鲜行保留�
   assert.ok(!texts.some((text) => text.includes('已结束 · ')), 'dead 行隐藏（标题不再作为行出现）');
   assert.ok(texts.some((text) => text.includes('+2 条已隐藏（--all 见 CLI）')), texts.join(' | '));
 });
+
+// ------------------------------------------------- T-13 A4：TUI 任务树前缀
+function taskTreePayload({ active = [], draft = [], recentDone = [] } = {}) {
+  const payload = fixture();
+  payload.tasks = {
+    total: active.length + draft.length + recentDone.length,
+    counts: { draft: draft.length, active: active.length, done: recentDone.length, archived: 0, other: 0 },
+    current: null,
+    active,
+    draft,
+    recentDone,
+  };
+  return payload;
+}
+
+function taskSectionRows(payload) {
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+  const section = model.sections.find((item) => item.title === '任务');
+  assert.ok(section, '任务段缺失');
+  return section.rows.map((entry) => entry.text);
+}
+
+test('T-13 A4：链 A→B→C 的层级前缀，深度截断 3', () => {
+  const texts = taskSectionRows(taskTreePayload({
+    active: [
+      { id: 'A', title: 'A', status: 'active', parent: null, depth: 0 },
+      { id: 'B', title: 'B', status: 'active', parent: 'A', depth: 1 },
+      { id: 'C', title: 'C', status: 'active', parent: 'B', depth: 2 },
+      { id: 'D', title: 'D', status: 'active', parent: 'C', depth: 4 }, // 截断到 3
+    ],
+    draft: [],
+  }));
+  assert.equal(texts[0], '▶ A');
+  assert.equal(texts[1], '▶ └─ B');
+  assert.equal(texts[2], '▶ │ └─ C', 'depth 2 = 一层可见缩进 + └─');
+  assert.equal(texts[3], '▶ │ │ └─ D', 'depth 4 截断到 3，与 depth 3 同缩进');
+})
+
+test('T-13 A4：跨组子任务按根行渲染并标 [父在{组}]', () => {
+  const texts = taskSectionRows(taskTreePayload({
+    active: [
+      { id: 'A1', title: '活跃根', status: 'active', parent: null, depth: 0 },
+      { id: 'A-child', title: '活跃子', status: 'active', parent: 'D1', depth: 1 },
+    ],
+    draft: [
+      { id: 'D1', title: '草稿根', status: 'draft', parent: null, depth: 0 },
+      { id: 'D-child', title: '草稿子', status: 'draft', parent: 'A1', depth: 1 },
+    ],
+  }));
+  const activeChild = texts.find((text) => text.includes('活跃子'));
+  assert.ok(activeChild.startsWith('▶ 活跃子'), '跨组子任务按根行渲染（无缩进前缀）: ' + activeChild);
+  assert.ok(activeChild.endsWith('[父在草稿]'), activeChild);
+  const draftChild = texts.find((text) => text.includes('草稿子'));
+  assert.ok(draftChild.startsWith('· 草稿子'), draftChild);
+  assert.ok(draftChild.endsWith('[父在进行中]'), draftChild);
+  // 同组根行不出现标记。
+  assert.ok(!texts.find((text) => text.includes('活跃根')).includes('[父在'));
+})
+
+test('T-13 A4：行数上限只计渲染行（含子行），超出显示还有 N 条', () => {
+  const active = [
+    { id: 'R1', title: '根一', status: 'active', parent: null, depth: 0 },
+    { id: 'C1', title: '子一', status: 'active', parent: 'R1', depth: 1 },
+    { id: 'R2', title: '根二', status: 'active', parent: null, depth: 0 },
+    { id: 'C2', title: '子二', status: 'active', parent: 'R2', depth: 1 },
+    { id: 'R3', title: '根三', status: 'active', parent: null, depth: 0 },
+  ];
+  const texts = taskSectionRows(taskTreePayload({
+    active,
+    draft: [
+      { id: 'D1', title: '草稿一', status: 'draft', parent: null, depth: 0 },
+      { id: 'D2', title: '草稿二', status: 'draft', parent: null, depth: 0 },
+      { id: 'D3', title: '草稿三', status: 'draft', parent: null, depth: 0 },
+      { id: 'D4', title: '草稿四', status: 'draft', parent: null, depth: 0 },
+    ],
+  }));
+  const taskLines = texts.filter((text) => text.startsWith('▶ ') || text.startsWith('· '));
+  assert.equal(taskLines.length, 4 + 3, 'MAX_ACTIVE=4 + MAX_DRAFT=3，按渲染行计');
+  assert.ok(texts.includes('…另有 1 条进行中'), texts.join(' | '));
+  assert.ok(texts.includes('…另有 1 条草稿'), texts.join(' | '));
+  // 子行被计入上限：第 4 行仍是子行（而不是第 4 个根）。
+  assert.equal(taskLines[3], '▶ └─ 子二');
+})
+
+test('T-13 A4：旧 payload（无 parent/depth）平铺、无前缀不崩', () => {
+  const texts = taskSectionRows(taskTreePayload({
+    active: [
+      { id: 'A', title: '旧活跃', status: 'active' },
+      { id: 'B', title: '旧活跃二', status: 'active' },
+    ],
+    draft: [{ id: 'D', title: '旧草稿', status: 'draft' }],
+  }));
+  assert.deepEqual(texts.filter((text) => text.startsWith('▶ ') || text.startsWith('· ')), [
+    '▶ 旧活跃',
+    '▶ 旧活跃二',
+    '· 旧草稿',
+  ]);
+  assert.ok(!texts.some((text) => text.includes('└─') || text.includes('[父在')));
+})

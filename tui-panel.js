@@ -101,6 +101,44 @@ function taskMark(task) {
   return ''
 }
 
+/** T-13 A4: task-tree depth cap and cross-group parent labels (web parity). */
+const TASK_TREE_MAX_DEPTH = 3
+const TASK_GROUP_LABEL = { active: '进行中', draft: '草稿', done: '已完成' }
+
+/** id → group (`active`/`draft`/`done`) for every row present in the payload. */
+function taskGroupMap(active, drafts, done) {
+  const groups = new Map()
+  for (const [group, list] of [['active', active], ['draft', drafts], ['done', done]]) {
+    for (const task of list) {
+      if (isObject(task) === false) continue
+      const id = asText(task.id)
+      if (id !== '' && groups.has(id) === false) groups.set(id, group)
+    }
+  }
+  return groups
+}
+
+/**
+ * Indent prefix + cross-group marker for one task row.
+ *
+ * Payload rows already carry `depth` (state-snapshot caps it) and `parent`.
+ * A child whose parent sits in another group is rendered as a root row with a
+ * `[父在{组}]` suffix instead of an orphaned indent; a dangling parent or an
+ * old payload without `depth`/`parent` stays flat/root (backward compatible).
+ */
+function taskTreeDecor(task, group, groups) {
+  const parent = asText(task.parent)
+  const parentGroup = parent === '' ? '' : groups.get(parent)
+  if (parentGroup !== '' && parentGroup !== group) {
+    return { prefix: '', suffix: ' [父在' + (TASK_GROUP_LABEL[parentGroup] || TASK_GROUP_LABEL.done) + ']' }
+  }
+  if (parent === '' || parentGroup !== group) return { prefix: '', suffix: '' }
+  const depth = Math.min(Math.max(0, asNumber(task.depth, 0)), TASK_TREE_MAX_DEPTH)
+  if (depth < 1) return { prefix: '', suffix: '' }
+  // 纯空格会被 finish()/clip() 的 `\\s+` 压成一个，改用可见的竖线保持层级。
+  return { prefix: '│ '.repeat(depth - 1) + '└─ ', suffix: '' }
+}
+
 function buildTaskRows(tasks) {
   const rows = []
   const current = tasks.current
@@ -114,14 +152,26 @@ function buildTaskRows(tasks) {
   const drafts = asArray(tasks.draft)
   const done = asArray(tasks.recentDone)
 
-  for (const task of active.slice(0, MAX_ACTIVE_ROWS)) {
+  const groups = taskGroupMap(active, drafts, done)
+  /* The caps count RENDERED rows (tree children included), not payload rows. */
+  const activeRows = []
+  for (const task of active) {
     const title = taskTitle(task)
-    if (title !== '') rows.push(row('▶ ' + title + taskMark(task), 'accent'))
+    if (title === '') continue
+    const decor = taskTreeDecor(task, 'active', groups)
+    activeRows.push(row('▶ ' + decor.prefix + title + taskMark(task) + decor.suffix, 'accent'))
   }
-  for (const task of drafts.slice(0, MAX_DRAFT_ROWS)) {
+  rows.push(...activeRows.slice(0, MAX_ACTIVE_ROWS))
+
+  const draftRows = []
+  for (const task of drafts) {
     const title = taskTitle(task)
-    if (title !== '') rows.push(row('· ' + title, 'normal'))
+    if (title === '') continue
+    const decor = taskTreeDecor(task, 'draft', groups)
+    draftRows.push(row('· ' + decor.prefix + title + decor.suffix, 'normal'))
   }
+  rows.push(...draftRows.slice(0, MAX_DRAFT_ROWS))
+
   for (const task of done.slice(0, MAX_DONE_ROWS)) {
     const title = taskTitle(task)
     if (title === '') continue
@@ -130,7 +180,9 @@ function buildTaskRows(tasks) {
     rows.push(row((failed ? '× ' : '✓ ') + title, failed ? 'error' : 'success'))
   }
 
-  const hiddenDrafts = drafts.length - MAX_DRAFT_ROWS
+  const hiddenActive = activeRows.length - MAX_ACTIVE_ROWS
+  if (hiddenActive > 0) rows.push(row('…另有 ' + hiddenActive + ' 条进行中', 'dim'))
+  const hiddenDrafts = draftRows.length - MAX_DRAFT_ROWS
   if (hiddenDrafts > 0) rows.push(row('…另有 ' + hiddenDrafts + ' 条草稿', 'dim'))
   const hiddenDone = done.length - MAX_DONE_ROWS
   if (hiddenDone > 0) rows.push(row('…另有 ' + hiddenDone + ' 条已完成', 'dim'))
