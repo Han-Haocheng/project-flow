@@ -246,6 +246,9 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   `archived_at`。`archiveTasks` 进入 `archived` 写 `archived_at = now`（`done_at` 原样保留）。
   两个字段都是可选 ISO 字符串；**旧记录缺字段不迁移、不批量写**，读路径（`listTasks`/
   `getTask`/state 投影）回退到 `updated_at`（归档记录无法还原真实完成日，只能近似）。
+  回填发生在**读投影副本**上：`done_at`/`archived_at` 取自 `updated_at` 时该行另带
+  `doneAtEstimated: true` / `archivedAtEstimated: true`（**只标记副本、不写回文件**），趋势
+  据此把对应日起标 `≈`（见 §9.1.4）。
   时间戳写入异常只记 `task-time-stamp` warning，不破坏任务主写入。
 - **归档判定仍按 `updated_at`**：`status === 'done'` 且
   `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（默认 **7**，边界含端点）。
@@ -1146,10 +1149,11 @@ agents 正向证据 → 宿主过滤」：`applyAgentLiveness` 先按宿主 `age
 `liveness:'live'`/`reason:'agent-live'`（`dead` 行不被覆盖），`applyHeartbeatVisibility` 再只留
 `live`，或 `unknown`/`foreign` 且 `ageSeconds ≤ 6h` 的行——**agents 点亮 stale 行的能力只在
 宿主侧保留**，读子进程不做最终过滤（否则 stale 行在标注前就消失）。因此面板/TUI 默认不渲染
-`dead`/`stale`/超龄行。**TUI 只对未经宿主过滤的旧 payload 自行按同一判据隐藏**，并在头部
-显示「已结束 D」、区段末「+N 条已隐藏（--all 见 CLI）」；新 payload 已由宿主过滤且带
-`heartbeatsHidden`，TUI 收不到隐藏行、**当前不消费**该计数（没有 `liveness` 字段的旧 payload
-按旧行为展示全部行）。`counts` 由面板读端从可见行自派生
+`dead`/`stale`/超龄行。**TUI 同时用宿主给的行与 `heartbeatsHidden`**：对旧 payload（含
+`liveness` 但未过滤）自行按同一判据隐藏，并与 `heartbeatsHidden` **合并计数**（宿主已过滤
+时可见行里无隐藏行，计数即宿主值）；头部「活跃 N · 已结束 D / 共 M」的 **M 含隐藏行**，区段
+末「+N 条已隐藏（--all 见 CLI）」。没有 `liveness` 字段的旧 payload 按旧行为展示全部行。
+`counts` 由面板读端从可见行自派生
 （`total`/`active`/`stale`/`dead`，**无 hidden**）；只有 CLI 的 `readHeartbeatSection` 才返回带
 `counts` 与 `hiddenByVisibility` 的富形状（见 §5.3/§3.5）。两者是不同实例：面板行不读 CLI
 进程的 warning 缓冲，也不写心跳文件。
@@ -1296,6 +1300,11 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   （`stroke-dasharray`、opacity 0.6），分界点画标记点，摘要前缀 `≈`；`estimatedFrom` 为
   `null` 时全实线。空窗显示「暂无趋势」不画 svg；旧 payload 没有 `tasks.trend` 时整块隐藏。
   图是 `role="img"` + `aria-label`（「近 N 天任务趋势」）。
+- **显示开关（A5）**：趋势块可被「显示设置」的**趋势开关**关闭（`display.showTrend`，按
+  workspace 持久化在本地 UI 设置 `project-flow.display:<root>`，**不写 `flow.json`**）；
+  同理心跳区段受 `display.showHeartbeats` 控制、实验卡受 `display.showExperiments` 控制——
+  后者在项目级 `experiments.enabled=false` 时**禁用**（置灰并提示「项目未开启实验区」）。
+  关闭某开关只是前端不渲染对应卡片/区段，payload 与数据不受影响。
 
 ### 9.2 心跳作用域：只面向主会话
 
