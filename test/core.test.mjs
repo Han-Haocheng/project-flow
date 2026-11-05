@@ -5,7 +5,7 @@
 
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -3510,4 +3510,185 @@ test('T-13 parent 归一：undefined/null/NONE/trim，且「未传 parent 不清
   const goalOnly = updateTask(root, contract, child.id, { goal: '新目标' })
   assert.equal(goalOnly.parent, parent.id, '只改 goal 不得清空 parent')
   assert.equal(getTask(root, contract, child.id).parent, parent.id)
+})
+
+
+// ===================================================== T-20261030-08 卡A：init 加锁
+//
+// `flow init` 的整段引导（flow.json + 5 目录 + 默认 gates）必须是同一个临界区；
+// 读路径（readStoreState/listTasks/getTask）必须零锁。
+
+/** Async CLI runner for real concurrency (parallel inits / adds). */
+function runCliAsync(cwd, args) {
+  return new Promise((resolve) => {
+    const env = { ...process.env }
+    delete env.DSH_SESSION_ID
+    const child = spawn(process.execPath, [BIN, ...args], { cwd, env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.on('close', (code) => {
+      let json = null
+      try { json = JSON.parse(stdout) } catch { json = null }
+      resolve({ code, stdout, stderr, json })
+    })
+  })
+}
+
+test('init 持锁：conflict 退出且不写 flow.json / gates（不再“持锁仍成功”）', () => {
+  const root = tempRoot('init-held-lock')
+  const store = path.join(root, '.dsh/flow')
+  withLock(root, undefined, () => {
+    expectFlowError(() => initProject(root, { name: 'locked' }), 'conflict', /locked by another writer/)
+    assert.equal(fs.existsSync(path.join(store, 'flow.json')), false, '冲突时不得写出 flow.json')
+    assert.equal(fs.existsSync(path.join(store, 'gates')), false, '冲突时不得建 gates')
+  })
+  assert.equal(fs.existsSync(path.join(store, 'flow.json')), false)
+  assert.deepEqual(
+    fs.readdirSync(store).filter((name) => name.endsWith('.json')),
+    [],
+    '锁释放后仍不应有半成品 flow.json',
+  )
+})
+
+test('init 持锁（CLI）：真实子进程持锁时 flow init = exit 2 conflict，不写盘', () => {
+  const root = tempRoot('init-held-lock-cli')
+  const store = path.join(root, '.dsh/flow')
+  let cli = null
+  withLock(root, undefined, () => {
+    cli = runCli(root, ['init', '--name', 'cli-locked', '--json'])
+  })
+  assert.equal(cli.code, 2, cli.stdout + cli.stderr)
+  assert.equal(cli.json?.error?.code, 'conflict')
+  assert.match(cli.json?.error?.message ?? '', /locked by another writer/)
+  assert.equal(fs.existsSync(path.join(store, 'flow.json')), false, '持锁时 CLI init 不得写盘')
+  assert.equal(fs.existsSync(path.join(store, 'gates')), false)
+})
+
+test('init 并行 ×8：单份合法 flow.json、gates 恰 5、无半成品/临时文件', async () => {
+  const root = tempRoot('init-race')
+  const results = await Promise.all(
+    Array.from({ length: 8 }, (_, index) => runCliAsync(root, ['init', '--name', `p${index}`, '--json'])),
+  )
+  const ok = results.filter((result) => result.code === 0)
+  assert.ok(ok.length >= 1, '至少一个 init 成功')
+  for (const result of results) {
+    assert.ok(result.code === 0 || result.code === 2, `init 退出码应为 0/2：${result.code} ${result.stderr}`)
+    if (result.code === 2) assert.equal(result.json?.error?.code, 'conflict', '竞争失败必须是 conflict→exit 2')
+  }
+  const store = path.join(root, '.dsh/flow')
+  const contract = JSON.parse(fs.readFileSync(path.join(store, 'flow.json'), 'utf8'))
+  assert.match(contract.name, /^p\d$/, 'flow.json 必须是某一个 init 写出的合法单份')
+  assert.equal(contract.schema, 2)
+  for (const dir of ['experiments', 'tasks', 'gates', 'logs', 'decisions']) {
+    assert.ok(fs.statSync(path.join(store, dir)).isDirectory(), `${dir} 目录缺失`)
+  }
+  const gates = fs.readdirSync(path.join(store, 'gates')).filter((name) => name.endsWith('.json'))
+  assert.equal(gates.length, 5, `gates 应恰 5 份，实际 ${gates.join(',')}`)
+  const leftovers = fs.readdirSync(store).filter((name) => name.includes('.tmp-') || name.includes('.lock') || name.includes('.takeover'))
+  assert.deepEqual(leftovers, [], '不得残留临时/锁文件')
+})
+
+test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不重复', async () => {
+  const root = tempRoot('init-force-race')
+  const first = runCli(root, ['init', '--name', 'seed', '--json'])
+  assert.equal(first.code, 0, first.stderr)
+  const baseIds = []
+  for (let index = 0; index < 30; index += 1) {
+    const added = runCli(root, ['task', 'add', '--title', `既有任务 ${index}`, '--json'])
+    assert.equal(added.code, 0, added.stderr)
+    baseIds.push(added.json.data.id)
+  }
+  const gateDir = path.join(root, '.dsh/flow/gates')
+  const gatesBefore = Object.fromEntries(
+    fs.readdirSync(gateDir).filter((name) => name.endsWith('.json')).map((name) => [name, fs.readFileSync(path.join(gateDir, name), 'utf8')]),
+  )
+  assert.equal(Object.keys(gatesBefore).length, 5)
+
+  const adds = Array.from({ length: 30 }, (_, index) =>
+    runCliAsync(root, ['task', 'add', '--title', `并发任务 ${index}`, '--json']),
+  )
+  const init = runCliAsync(root, ['init', '--force', '--name', 'forced', '--json'])
+  const [addResults, initResult] = await Promise.all([Promise.all(adds), init])
+  // force init 同样参与锁竞争：输给并发的 add 时是合法 conflict（exit 2），
+  // 数据安全由“锁内重算”保证，而不是靠 init 永远赢；重试一次拿锁后再验收。
+  let initConflicts = 0
+  let forced = initResult
+  while (forced.code !== 0) {
+    assert.equal(forced.code, 2, forced.stderr)
+    assert.equal(forced.json?.error?.code, 'conflict')
+    initConflicts += 1
+    assert.ok(initConflicts <= 3, 'force init 连续抢锁失败三次，环境异常')
+    forced = runCli(root, ['init', '--force', '--name', 'forced', '--json'])
+  }
+
+  // 锁竞争下 add 可能合法 conflict；重试直到写入（验证数据不丢，而不是“无竞争”）。
+  let conflicts = 0
+  for (const [index, result] of addResults.entries()) {
+    if (result.code === 0) continue
+    assert.equal(result.code, 2, result.stderr)
+    conflicts += 1
+    const retry = runCli(root, ['task', 'add', '--title', `并发任务 ${index}`, '--json'])
+    assert.equal(retry.code, 0, retry.stderr)
+  }
+
+  const listed = runCli(root, ['task', 'list', '--json']).json.data
+  const ids = new Set(listed.map((task) => task.id))
+  for (const id of baseIds) assert.ok(ids.has(id), `force init 后既有任务丢失：${id}`)
+  assert.equal(listed.length, 60, `既有 30 + 并发 30 都应保留，实际 ${listed.length}（conflict ${conflicts} 次）`)
+
+  const gatesAfter = fs.readdirSync(gateDir).filter((name) => name.endsWith('.json'))
+  assert.equal(gatesAfter.length, 5, 'force init 不得重复 seed gates')
+  for (const name of gatesAfter) {
+    assert.equal(fs.readFileSync(path.join(gateDir, name), 'utf8'), gatesBefore[name], `gate ${name} 内容被改写`)
+  }
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')).name, 'forced')
+})
+
+test('已初始化项目再 init：不重写 gates（字节+mtime 不变），只 warning', () => {
+  const root = tempRoot('init-reinit')
+  const first = initProject(root, { name: 'first' })
+  assert.equal(first.seededGates.length, 5)
+  const gateDir = path.join(root, '.dsh/flow/gates')
+  const snapshots = fs.readdirSync(gateDir).filter((name) => name.endsWith('.json')).map((name) => {
+    const file = path.join(gateDir, name)
+    const stats = fs.statSync(file)
+    return { name, bytes: fs.readFileSync(file, 'utf8'), mtimeMs: stats.mtimeMs }
+  })
+  const contractPath = path.join(root, '.dsh/flow/flow.json')
+  const contractBytes = fs.readFileSync(contractPath, 'utf8')
+
+  const second = initProject(root, { name: 'second' })
+  assert.deepEqual(second.created, [], '已初始化不得重写 flow.json')
+  assert.deepEqual(second.seededGates, [], 'gates 已存在，不得再 seed')
+  assert.ok(second.warnings.some((item) => item.startsWith('already-initialized:')), second.warnings.join('\n'))
+  assert.equal(fs.readFileSync(contractPath, 'utf8'), contractBytes)
+  for (const before of snapshots) {
+    const file = path.join(gateDir, before.name)
+    assert.equal(fs.readFileSync(file, 'utf8'), before.bytes, `${before.name} 被改写`)
+    assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs, `${before.name} mtime 被改写`)
+  }
+})
+
+test('读路径零锁：持锁时 readStoreState/listTasks/getTask 仍成功，且不产生 .lock', () => {
+  const { root, contract } = freshProject('read-no-lock')
+  const task = addTask(root, contract, { title: '读锁任务' })
+  const store = path.join(root, '.dsh/flow')
+
+  const before = fs.readdirSync(store).sort()
+  withLock(root, contract, () => {
+    // 若这些读路径取锁，会立即 conflict（同一把锁）——它们必须零锁。
+    const state = readStoreState(root, contract)
+    assert.equal(state.tasks.counts.total, 1)
+    assert.equal(listTasks(root, contract)[0].id, task.id)
+    assert.equal(getTask(root, contract, task.id).id, task.id)
+  })
+  assert.deepEqual(fs.readdirSync(store).sort(), before, '读路径不得留下锁/临时文件')
+  assert.equal(fs.readdirSync(store).some((name) => name.includes('.lock')), false)
+
+  // 非持锁的普通读同样不生成锁：再读一遍并检查目录项不变。
+  readStoreState(root, contract)
+  getTask(root, contract, task.id)
+  assert.deepEqual(fs.readdirSync(store).sort(), before)
 })
