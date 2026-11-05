@@ -83,6 +83,20 @@ test("CLI task --parent ''/none/null：清空为根（add 与 update，大小写
   }
 })
 
+test('CLI task update（不带 --parent）：父关系保持，不被清空', () => {
+  const root = freshProject('keep')
+  const parent = runCli(root, ['task', 'add', '--title', '父', '--json']).json.data.id
+  const child = runCli(root, ['task', 'add', '--title', '子', '--parent', parent, '--json']).json.data.id
+
+  const statusOnly = runCli(root, ['task', 'update', child, '--status', 'active', '--json'])
+  assert.equal(statusOnly.code, 0, statusOnly.stderr)
+  assert.equal(statusOnly.json.data.parent, parent, '只改 status 不得清空 parent')
+  const goalOnly = runCli(root, ['task', 'update', child, '--goal', '新目标', '--json'])
+  assert.equal(goalOnly.code, 0, goalOnly.stderr)
+  assert.equal(goalOnly.json.data.parent, parent, '只改 goal 不得清空 parent')
+  assert.equal(runCli(root, ['task', 'show', child, '--json']).json.data.parent, parent)
+})
+
 test('CLI task --parent：不存在 → 2 parent-not-found；自指 → 2；环 → 2 parent-cycle', () => {
   const root = freshProject('errors')
   const missing = runCli(root, ['task', 'add', '--title', '孤儿', '--parent', 'T-20000101-01', '--json'])
@@ -194,4 +208,17 @@ test('flow_task parent 归一：add/update 的 none/null/NONE/NULL 都清空为�
     const attached = await tool.execute({ action: 'update', id: child.task.id, parent: parent.task.id }, exec)
     assert.equal(attached.task.parent, parent.task.id)
   }
+})
+
+test('flow_task update（不带 parent）：父关系保持，不被清空', async () => {
+  const root = freshProject('tool-keep')
+  const { tool, exec } = await toolHarness(root)
+  const parent = await tool.execute({ action: 'add', title: '父' }, exec)
+  const child = await tool.execute({ action: 'add', title: '子', parent: parent.task.id }, exec)
+  assert.equal(child.task.parent, parent.task.id)
+
+  const updated = await tool.execute({ action: 'update', id: child.task.id, goal: '只改目标' }, exec)
+  assert.equal(updated.task.parent, parent.task.id, '工具 update 不带 parent 不得清空')
+  const shown = await tool.execute({ action: 'show', id: child.task.id }, exec)
+  assert.equal(shown.task.parent, parent.task.id)
 })

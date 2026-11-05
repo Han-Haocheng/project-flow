@@ -48,6 +48,7 @@ import {
   listDecisions,
   listGates,
   listTasks,
+  normalizeParentInput,
   livenessOf,
   loadContract,
   readHeartbeatSection,
@@ -3487,4 +3488,26 @@ test('T-13 心跳可见性：heartbeatStatus/--require-active 语义不变', () 
   assert.equal(dead.liveness, 'dead')
   const visible = readHeartbeatSection(root, contract)
   assert.equal(visible.counts.active, 1, '隐藏行不影响 active 计数')
+})
+
+
+test('T-13 parent 归一：undefined/null/NONE/trim，且「未传 parent 不清空」', () => {
+  // 归一函数本身（CLI 与 flow_task 共用；undefined 必须保持 undefined）。
+  assert.equal(normalizeParentInput(undefined), undefined)
+  assert.equal(normalizeParentInput(null), null)
+  assert.equal(normalizeParentInput(''), null)
+  assert.equal(normalizeParentInput('NONE'), null)
+  assert.equal(normalizeParentInput('  T-20260101-01  '), 'T-20260101-01')
+
+  // core API：patch 不含 parent 时，父子关系必须原样保留。
+  const { root, contract } = freshProject('t13-parent-keep')
+  const parent = addTask(root, contract, { title: '父' })
+  const child = addTask(root, contract, { title: '子', parent: parent.id })
+  assert.equal(getTask(root, contract, child.id).parent, parent.id)
+
+  const statusOnly = updateTask(root, contract, child.id, { status: 'active' })
+  assert.equal(statusOnly.parent, parent.id, '只改 status 不得清空 parent')
+  const goalOnly = updateTask(root, contract, child.id, { goal: '新目标' })
+  assert.equal(goalOnly.parent, parent.id, '只改 goal 不得清空 parent')
+  assert.equal(getTask(root, contract, child.id).parent, parent.id)
 })
