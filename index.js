@@ -1221,6 +1221,116 @@ function pickFields(args, names) {
   return picked
 }
 
+const EXP_ADD_FIELDS = Object.freeze([
+  'id',
+  'title',
+  'hypothesis',
+  'factor',
+  'parent',
+  'expected',
+  'scale',
+  'status',
+  'measured',
+  'metrics',
+  'commits',
+  'notes',
+  'direction',
+  'primaryMetric',
+  'guardrails',
+  'falsify',
+  'windowDays',
+  'stopLoss',
+  'learned',
+])
+const EXP_UPDATE_FIELDS = Object.freeze([
+  'title',
+  'hypothesis',
+  'factor',
+  'parent',
+  'expected',
+  'scale',
+  'status',
+  'measured',
+  'metrics',
+  'commits',
+  'notes',
+  'direction',
+  'primaryMetric',
+  'guardrails',
+  'falsify',
+  'windowDays',
+  'stopLoss',
+  'learned',
+])
+const TASK_ADD_FIELDS = Object.freeze([
+  'id',
+  'title',
+  'status',
+  'owner',
+  'goal',
+  'notes',
+  'commits',
+  'scope',
+  'acceptance',
+  'experiment',
+  'parent',
+])
+const TASK_UPDATE_FIELDS = Object.freeze([
+  'title',
+  'status',
+  'owner',
+  'goal',
+  'notes',
+  'commits',
+  'scope',
+  'acceptance',
+  'experiment',
+  'parent',
+])
+const GATE_ADD_FIELDS = Object.freeze([
+  'id',
+  'title',
+  'phase',
+  'enabled',
+  'steps',
+])
+const GATE_UPDATE_FIELDS = Object.freeze([
+  'title',
+  'phase',
+  'enabled',
+  'steps',
+])
+
+/**
+ * Per-action field whitelist for the flow_* tools (T-20261030-15). The JSON
+ * schema already rejects unknown properties; this rejects a **known** field
+ * passed to the wrong action (it used to be dropped silently). `root`, `action`
+ * and `id` are structural for every action. Throws before any core call.
+ */
+const STRUCTURAL_FIELDS = Object.freeze(['root', 'action', 'id'])
+
+function assertOnlyFields(name, action, args, allowed) {
+  const permitted = new Set([...STRUCTURAL_FIELDS, ...(Array.isArray(allowed) ? allowed : [])])
+  for (const key of Object.keys(args)) {
+    if (permitted.has(key)) continue
+    throw new Error(`invalid: ${name} ${String(action)} does not accept "${key}"`)
+  }
+}
+
+const EXP_ACTION_FIELDS = Object.freeze({
+  list: [], show: [], tree: [],
+  add: EXP_ADD_FIELDS, update: EXP_UPDATE_FIELDS,
+  review: [], productize: ['gate'], cleanup: ['flags', 'code', 'data'], remove: [],
+})
+const TASK_ACTION_FIELDS = Object.freeze({
+  list: [], show: [], add: TASK_ADD_FIELDS, update: TASK_UPDATE_FIELDS, remove: [],
+})
+const GATE_ACTION_FIELDS = Object.freeze({
+  list: [], show: [],
+  add: GATE_ADD_FIELDS, update: GATE_UPDATE_FIELDS,
+  remove: [], run: [], logs: ['limit'],
+})
+
 // --------------------------------------------------------------- heartbeats
 //
 // A heartbeat is the per-session registration that tells the panel and the
@@ -1872,6 +1982,7 @@ function buildToolDefinitions(ctx) {
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
         const action = args.action
+        assertOnlyFields('flow_exp', action, args, EXP_ACTION_FIELDS[action])
         if (action !== 'list') requireStore(root)
 
         const c = requireCore()
@@ -1921,51 +2032,12 @@ function buildToolDefinitions(ctx) {
           return { root, tree: c.experimentTree(c.listExperiments(root, contract)) }
         }
         if (action === 'add') {
-          const input = pickFields(args, [
-            'id',
-            'title',
-            'hypothesis',
-            'factor',
-            'parent',
-            'expected',
-            'scale',
-            'status',
-            'measured',
-            'metrics',
-            'commits',
-            'notes',
-            'direction',
-            'primaryMetric',
-            'guardrails',
-            'falsify',
-            'windowDays',
-            'stopLoss',
-            'learned',
-          ])
+          const input = pickFields(args, EXP_ADD_FIELDS)
           return { root, experiment: c.addExperiment(root, contract, input) }
         }
         if (action === 'update') {
           const id = requireId('flow_exp', action, args.id)
-          const patch = pickFields(args, [
-            'title',
-            'hypothesis',
-            'factor',
-            'parent',
-            'expected',
-            'scale',
-            'status',
-            'measured',
-            'metrics',
-            'commits',
-            'notes',
-            'direction',
-            'primaryMetric',
-            'guardrails',
-            'falsify',
-            'windowDays',
-            'stopLoss',
-            'learned',
-          ])
+          const patch = pickFields(args, EXP_UPDATE_FIELDS)
           if (Object.keys(patch).length === 0) throw new Error('flow_exp update requires at least one field to change')
           return { root, experiment: c.updateExperiment(root, contract, id, patch) }
         }
@@ -2045,6 +2117,7 @@ function buildToolDefinitions(ctx) {
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
         const action = args.action
+        assertOnlyFields('flow_task', action, args, TASK_ACTION_FIELDS[action])
         if (action !== 'list') requireStore(root)
 
         const c = requireCore()
@@ -2078,35 +2151,12 @@ function buildToolDefinitions(ctx) {
           return { root, task: c.getTask(root, contract, requireId('flow_task', action, args.id)) }
         }
         if (action === 'add') {
-          const input = pickFields(args, [
-            'id',
-            'title',
-            'status',
-            'owner',
-            'goal',
-            'notes',
-            'commits',
-            'scope',
-            'acceptance',
-            'experiment',
-            'parent',
-          ])
+          const input = pickFields(args, TASK_ADD_FIELDS)
           return { root, task: c.addTask(root, contract, normalizeTaskParent(c, input)) }
         }
         if (action === 'update') {
           const id = requireId('flow_task', action, args.id)
-          const patch = pickFields(args, [
-            'title',
-            'status',
-            'owner',
-            'goal',
-            'notes',
-            'commits',
-            'scope',
-            'acceptance',
-            'experiment',
-            'parent',
-          ])
+          const patch = pickFields(args, TASK_UPDATE_FIELDS)
           if (Object.keys(patch).length === 0) throw new Error('flow_task update requires at least one field to change')
           return { root, task: c.updateTask(root, contract, id, normalizeTaskParent(c, patch)) }
         }
@@ -2154,7 +2204,9 @@ function buildToolDefinitions(ctx) {
       async execute(args, exec) {
         const root = toolRoot(ctx, args, exec)
         const action = args.action
+        assertOnlyFields('flow_gate', action, args, GATE_ACTION_FIELDS[action])
         if (action === 'list' && hasStore(root) === false) {
+
           return {
             root,
             store: false,
@@ -2178,12 +2230,15 @@ function buildToolDefinitions(ctx) {
           return { root, gate: c.getGate(root, contract, id), lastRun: runs.length > 0 ? runs[0] : null }
         }
         if (action === 'add') {
-          const input = pickFields(args, ['id', 'title', 'phase', 'enabled', 'steps'])
+          if (typeof args.id !== 'string' || args.id.trim() === '') {
+            throw new Error('invalid: flow_gate add requires id (the gate slug)')
+          }
+          const input = pickFields(args, GATE_ADD_FIELDS)
           return { root, gate: c.addGate(root, contract, input) }
         }
         if (action === 'update') {
           const id = requireId('flow_gate', action, args.id)
-          const patch = pickFields(args, ['title', 'phase', 'enabled', 'steps'])
+          const patch = pickFields(args, GATE_UPDATE_FIELDS)
           if (Object.keys(patch).length === 0) throw new Error('flow_gate update requires at least one field to change')
           return { root, gate: c.updateGate(root, contract, id, patch) }
         }

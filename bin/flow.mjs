@@ -31,7 +31,7 @@ const USAGE = `project-flow CLI（schema 2）
   status    项目名、契约源、实验/任务/门禁/决策计数与最近记录
 
   exp list | show <id> | tree
-  exp add --title T --hypothesis H --direction TEXT --expected E
+  exp add [--id E-YYYYMMDD-NN] --title T --hypothesis H --direction TEXT --expected E
           --primary-metric M --guardrail G [--guardrail G]...
           --falsify F --window-days N --stop-loss S
           [--factor F] [--parent ID] [--scale S] [--notes N]
@@ -46,8 +46,8 @@ const USAGE = `project-flow CLI（schema 2）
   exp rm <id> [--yes]
 
   task list | show <id>
-  task add --title T [--status draft|active|done|archived] [--owner O]
-           [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+  task add --title T [--id T-YYYYMMDD-NN] [--status draft|active|done|archived]
+           [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
   task update <id> [--title T] [--status draft|active|done|archived]
            [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
@@ -156,6 +156,131 @@ const REPEAT_FLAGS = new Set([
   'guardrail', 'flag', 'code', 'data',
 ])
 
+/**
+ * Per-command accepted flags (T-20261030-15): `--help`/`--root`/`--json` are
+ * global, everything else must be declared here. A command with subcommands is
+ * keyed by action; single-command entries use `{ flags }` directly. `repeat`
+ * lists flags the parser collects into arrays (`--step`, `--claim`, ...).
+ *
+ * Keep this table in sync with the handlers: `test/t-20261030-15-flag-spec.test.mjs`
+ * cross-checks it against the literal flag reads in this file.
+ */
+export const SPEC = Object.freeze({
+  init: Object.freeze({ flags: ['name', 'force', 'no-gates'] }),
+  status: Object.freeze({ flags: [] }),
+  exp: Object.freeze({
+    list: { flags: [] },
+    show: { flags: ['id'] },
+    tree: { flags: [] },
+    add: {
+      flags: ['id', 'title', 'hypothesis', 'factor', 'parent', 'scale', 'notes',
+        'direction', 'expected', 'primary-metric', 'falsify', 'window-days', 'stop-loss'],
+      repeat: ['guardrail'],
+    },
+    update: {
+      flags: ['id', 'title', 'hypothesis', 'factor', 'parent', 'scale', 'notes', 'status',
+        'measured', 'metrics', 'commits', 'direction', 'expected', 'primary-metric',
+        'falsify', 'window-days', 'stop-loss', 'learned'],
+      repeat: ['guardrail'],
+    },
+    review: { flags: ['id'] },
+    productize: { flags: ['id', 'gate'] },
+    cleanup: { flags: ['id'], repeat: ['flag', 'code', 'data'] },
+    rm: { flags: ['id', 'yes'] },
+  }),
+  task: Object.freeze({
+    list: { flags: [] },
+    show: { flags: ['id'] },
+    add: { flags: ['id', 'title', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
+    update: { flags: ['id', 'title', 'status', 'owner', 'goal', 'notes', 'experiment', 'parent'] },
+    archive: { flags: ['older-than', 'dry-run'] },
+    rm: { flags: ['id', 'yes'] },
+  }),
+  gate: Object.freeze({
+    list: { flags: [] },
+    show: { flags: ['id'] },
+    add: { flags: ['id', 'title', 'phase'], repeat: ['step'] },
+    update: { flags: ['id', 'title', 'phase', 'enabled'], repeat: ['step'] },
+    enable: { flags: ['id'] },
+    disable: { flags: ['id'] },
+    rm: { flags: ['id', 'yes'] },
+    run: { flags: ['id', 'phase', 'timeout', 'force'] },
+    logs: { flags: ['id', 'limit'] },
+  }),
+  heartbeat: Object.freeze({
+    start: { flags: ['goal', 'task', 'agent', 'session', 'note'], repeat: ['claim'] },
+    update: { flags: ['status', 'note', 'goal', 'task', 'session'], repeat: ['claim'] },
+    end: { flags: ['status', 'note', 'session'] },
+    list: { flags: ['all'] },
+    status: { flags: ['require-active', 'session'] },
+    gc: { flags: ['dry-run'] },
+  }),
+  decision: Object.freeze({
+    ask: {
+      flags: ['question', 'kind', 'default', 'recommendation', 'rationale', 'supersedes'],
+      repeat: ['option', 'blocks', 'affects'],
+    },
+    list: { flags: ['open', 'all'] },
+    show: { flags: ['id'] },
+    answer: { flags: ['id', 'choice', 'note', 'by'] },
+    withdraw: { flags: ['id', 'reason', 'by'] },
+    gc: { flags: ['days', 'dry-run'] },
+  }),
+  check: Object.freeze({
+    list: { flags: [] },
+    staged: { flags: ['timeout'], repeat: ['allow'] },
+    'release-baseline': { flags: ['marker', 'threshold', 'timeout'] },
+    state: { flags: ['file', 'timeout'] },
+    doc: { flags: ['file', 'type', 'timeout'] },
+    decisions: { flags: [] },
+    experiments: { flags: [] },
+  }),
+})
+
+/** Flags every command accepts. `-h` is normalized to `help` in `parseArgv`. */
+const GLOBAL_FLAGS = Object.freeze(['root', 'json', 'help'])
+
+/** Resolve the accepted-flag spec; unknown command/action returns null. */
+function specOfSpec(command, action) {
+  if (typeof command !== 'string' || Object.hasOwn(SPEC, command) === false) return null
+  const entry = SPEC[command]
+  if (Object.hasOwn(entry, 'flags')) return action === undefined ? entry : null
+  if (typeof action !== 'string' || Object.hasOwn(entry, action) === false) return null
+  return entry[action]
+}
+
+/** Human-readable flag list for an error message. */
+function describeFlags(spec) {
+  const soft = Array.isArray(spec.flags) ? spec.flags : []
+  const repeat = Array.isArray(spec.repeat) ? spec.repeat : []
+  return [...soft.map((name) => `--${name}`), ...repeat.map((name) => `--${name}`)]
+    .concat(GLOBAL_FLAGS.map((name) => `--${name}`))
+    .join(' ')
+}
+
+/**
+ * Reject flags a command did not declare (T-20261030-15). Runs before dispatch,
+ * so an unsupported flag can never reach a core write. `--help` is handled
+ * earlier by `main` and wins over this check.
+ */
+function assertFlagsAllowed(parsed) {
+  const [command, action] = parsed.positional
+  const spec = specOfSpec(command, action)
+  if (spec === null) return
+  const allowed = new Set([...GLOBAL_FLAGS, ...(Array.isArray(spec.flags) ? spec.flags : [])])
+  const repeatAllowed = new Set(Array.isArray(spec.repeat) ? spec.repeat : [])
+  const label = action === undefined ? `flow ${command}` : `flow ${command} ${action}`
+  for (const name of Object.keys(parsed.flags)) {
+    if (name === 'help') continue
+    if (allowed.has(name)) continue
+    throw new CliError('usage', `${label} 不支持 --${name}（可用：${describeFlags(spec)}）`)
+  }
+  for (const name of Object.keys(parsed.repeated)) {
+    if (repeatAllowed.has(name)) continue
+    throw new CliError('usage', `${label} 不支持 --${name}（可用：${describeFlags(spec)}）`)
+  }
+}
+
 class CliError extends Error {
   constructor(code, message) {
     super(message)
@@ -239,6 +364,7 @@ function parseArgv(argv) {
     cleanupFlags: repeated.flag || [],
     cleanupCodes: repeated.code || [],
     cleanupData: repeated.data || [],
+    repeated,
     positional,
     errors,
   }
@@ -893,6 +1019,8 @@ async function cmdExp(ctx, sub) {
     }
     if (!input.title) throw new CliError('usage', '用法: flow exp add --title T [...]')
     Object.assign(input, experimentSeven(flags, ctx, { required: true }))
+    const explicitId = readString(flags, 'id')
+    if (explicitId !== undefined && explicitId.trim() !== '') input.id = explicitId.trim()
     const parent = readString(flags, 'parent')
     if (parent !== undefined) input.parent = parent === '' || parent === 'null' ? null : parent
     const record = await core.addExperiment(ctx.root, contract, input)
@@ -1053,6 +1181,8 @@ async function cmdTask(ctx, sub) {
     }
     const experiment = readString(flags, 'experiment')
     if (experiment !== undefined) input.experiment = experiment.trim() === '' ? null : experiment
+    const explicitId = readString(flags, 'id')
+    if (explicitId !== undefined && explicitId.trim() !== '') input.id = explicitId.trim()
     const parent = readParentFlag(flags, core)
     if (parent !== undefined) input.parent = parent
     if (!input.title) throw new CliError('usage', '用法: flow task add --title T [...]')
@@ -1998,6 +2128,8 @@ async function main() {
     out(USAGE)
     return 0
   }
+  // T-20261030-15：未声明的 flag 在这里失败（exit 1），早于任何 core 读写。
+  assertFlagsAllowed(parsed)
 
   const root = parsed.flags.root === undefined ? process.cwd() : path.resolve(String(parsed.flags.root))
   const core = await loadCore()
