@@ -86,7 +86,8 @@ writeJson('.agents/heartbeat/session-a.json', {
   goal: 'g',
   status: 'working',
   started_at: STAMP,
-  updated_at: STAMP,
+  // T-13 起默认只展示仍存活的心跳：fixture 用当前时间（无证据 → unknown，新鲜可见）。
+  updated_at: new Date().toISOString(),
   turn: 1,
   stats: { steps: 1 },
 })

@@ -1273,17 +1273,19 @@ function printHeartbeat(record) {
   for (const [label, value] of rows) out(`${pad(label, width)}  ${value}`)
 }
 
-function printHeartbeatList(section) {
+function printHeartbeatList(section, showAll = false) {
   const items = Array.isArray(section?.items) ? section.items : []
   const counts = section?.counts ?? { total: 0, active: 0, stale: 0, dead: 0 }
   const hidden = Number(counts.hidden) || 0
+  const hiddenByVisibility = Number(section?.hiddenByVisibility) || 0
   const dead = items.filter((item) => item.liveness === 'dead').length
   out(
     `心跳 ${counts.total} 条（active ${counts.active} · stale ${counts.stale} · dead ${Number(counts.dead) || dead}${hidden > 0 ? ` · 旧子会话隐藏 ${hidden}` : ''}）  目录 ${section?.dir ?? '-'}`,
   )
   if (hidden > 0) out('提示：agent=subagent 的旧心跳已隐藏；flow heartbeat gc 可清理。')
   if (items.length === 0) {
-    out('（没有心跳记录）')
+    out(hiddenByVisibility > 0 ? '（没有可见的心跳）' : '（没有心跳记录）')
+    if (hiddenByVisibility > 0) out(`已隐藏 ${hiddenByVisibility} 条（已结束/可能已停，--all 查看）`)
     return
   }
   out('')
@@ -1306,6 +1308,9 @@ function printHeartbeatList(section) {
   if (deadItems.length > 0) out(`已结束（dead）：${deadItems.map((item) => item.file).join(', ')}`)
   const stale = items.filter((item) => item.stale === true && item.liveness !== 'dead')
   if (stale.length > 0) out(`可能已停：${stale.map((item) => item.file).join(', ')}`)
+  if (hiddenByVisibility > 0 && showAll === false) {
+    out(`已隐藏 ${hiddenByVisibility} 条（已结束/可能已停，--all 查看）`)
+  }
 }
 
 async function cmdHeartbeat(ctx, sub) {
@@ -1383,8 +1388,9 @@ async function cmdHeartbeat(ctx, sub) {
   }
 
   if (sub === 'list') {
-    const section = core.readHeartbeatSection(root, contract)
-    if (!ctx.json) printHeartbeatList(section)
+    const showAll = flags.all === true
+    const section = core.readHeartbeatSection(root, contract, { visibility: showAll ? 'all' : 'active' })
+    if (!ctx.json) printHeartbeatList(section, showAll)
     return section
   }
 

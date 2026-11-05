@@ -195,14 +195,30 @@ function buildHeartbeatRows(heartbeats) {
   /* T-10：宿主已判定 dead 的会话不再算 working，行上给「已结束」标记。 */
   /* 与 web 面板同判据：既认 `liveness === 'dead'`，也认宿主只投影的布尔 `dead: true`。 */
   const dead = (beat) => beat.dead === true || asText(beat.liveness) === 'dead'
-  const working = list.filter((beat) => asText(beat.status) === 'working' && dead(beat) === false)
+  /* T-13：默认隐藏已失效行（dead 与 stale；unknown/foreign 超过 6h 也算失效）。
+     没有 liveness 字段的旧 payload 保持今日行为（无法判定就展示）。 */
+  const HIDE_AFTER_SECONDS = 6 * 60 * 60
+  const visible = (beat) => {
+    if (dead(beat)) return false
+    const liveness = asText(beat.liveness)
+    if (liveness === 'stale') return false
+    if (liveness === 'live') return true
+    if (liveness === 'unknown' || liveness === 'foreign') {
+      const age = asNumber(beat.ageSeconds, null)
+      return age !== null && age <= HIDE_AFTER_SECONDS
+    }
+    return true
+  }
+  const shown = list.filter(visible)
+  const hiddenCount = list.length - shown.length
+  const working = shown.filter((beat) => asText(beat.status) === 'working')
   const deadCount = list.filter(dead).length
   const header =
     list.length === 0
       ? '没有心跳文件'
-      : '活跃 ' + working.length + ' · 已结束 ' + deadCount + ' / 共 ' + list.length
+      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + list.length
   const rows = [row(header, working.length > 0 ? 'normal' : 'dim')]
-  const ordered = working.concat(list.filter((beat) => asText(beat.status) !== 'working' || dead(beat)))
+  const ordered = working.concat(shown.filter((beat) => asText(beat.status) !== 'working'))
   for (const beat of ordered.slice(0, MAX_BEAT_ROWS)) {
     const status = asText(beat.status)
     const goal = asText(beat.goal) || asText(beat.title) || asText(beat.statusLine) || asText(beat.session)
@@ -213,8 +229,9 @@ function buildHeartbeatRows(heartbeats) {
     const tone = isDead ? 'error' : beat.stale === true ? 'warning' : status === 'working' ? 'accent' : 'dim'
     rows.push(row(glyph + ' ' + goal + (isDead ? ' · 已结束' : '') + (age === '' ? '' : ' · ' + age), tone))
   }
-  const hidden = list.length - Math.min(list.length, MAX_BEAT_ROWS)
+  const hidden = shown.length - Math.min(shown.length, MAX_BEAT_ROWS)
   if (hidden > 0) rows.push(row('…另有 ' + hidden + ' 条心跳', 'dim'))
+  if (hiddenCount > 0) rows.push(row('+' + hiddenCount + ' 条已隐藏（--all 见 CLI）', 'dim'))
   return rows
 }
 

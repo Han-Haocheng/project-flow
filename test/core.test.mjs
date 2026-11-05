@@ -1159,19 +1159,17 @@ test('CLI status 输出心跳小节，--json 带 heartbeats 段', () => {
 
   const text = runCli(root, ['status'])
   assert.equal(text.code, 0)
-  assert.match(text.stdout, /心跳\s+6（可能已停 6）/)
-  assert.ok(text.stdout.includes('hb-0.json'))
-  assert.ok(text.stdout.includes('working · 运行中 0'))
-  assert.ok(!text.stdout.includes('hb-5.json'), '只逐条展示前 5 条')
-  assert.ok(text.stdout.includes('其余 1 条（共 6 条）'))
+  assert.match(text.stdout, /心跳\s+6（可能已停 6）/, '计数口径不变：隐藏行仍计入 stale')
+  assert.ok(!text.stdout.includes('hb-0.json'), '默认只列可见条目，stale 行不逐条展示')
+  assert.ok(!text.stdout.includes('其余'), '没有可见行时不再有「其余 N 条」')
 
   const json = runCli(root, ['status', '--json'])
   assert.equal(json.code, 0)
   assert.equal(json.json.data.heartbeats.dir, '.agents/heartbeat')
   assert.equal(json.json.data.heartbeats.counts.total, 6)
   assert.equal(json.json.data.heartbeats.counts.stale, 6)
-  assert.equal(json.json.data.heartbeats.items.length, 6)
-  assert.equal(json.json.data.heartbeats.items[0].file, 'hb-0.json')
+  assert.equal(json.json.data.heartbeats.items.length, 0, '默认 visibility=active：stale 不进 items')
+  assert.equal(json.json.data.heartbeats.hiddenByVisibility, 6, '被可见性隐藏的行数单独暴露')
 })
 
 test('CLI 门禁失败退出 0 但 data.ok=false', () => {
@@ -1663,11 +1661,21 @@ test('心跳存活：3 天前的 work 会话不计 active 并标 dead；counts.d
   assert.equal(legacyStatus.active, false, '无证据且超 6h 不再 active')
   assert.equal(legacyStatus.liveness, 'stale')
 
-  const section = readHeartbeatSection(root, contract)
+  const visibleSection = readHeartbeatSection(root, contract)
+  assert.deepEqual(
+    visibleSection.items.map((item) => item.file).sort(),
+    ['foreign.json', 'live.json'],
+    '默认只暴露 live + 新鲜的 foreign；dead/stale 隐藏',
+  )
+  assert.equal(visibleSection.hiddenByVisibility, 2)
+  assert.equal(visibleSection.counts.total, 4, 'counts 口径不变（统计全部行）')
+
+  const section = readHeartbeatSection(root, contract, { visibility: 'all' })
   assert.equal(section.counts.total, 4)
   assert.equal(section.counts.active, 1, '只有本机新鲜活心跳算 active')
   assert.equal(section.counts.dead, 1)
   assert.equal(section.counts.stale, 2, 'dead(3d) 与 legacy(3d) 都超 6h')
+  assert.equal(section.hiddenByVisibility, 0, '--all 不隐藏')
   const byFile = Object.fromEntries(section.items.map((item) => [item.file, item]))
   assert.equal(byFile['live.json'].liveness, 'live')
   assert.equal(byFile['dead.json'].liveness, 'dead')
@@ -1852,7 +1860,7 @@ test('F3：liveness=live 豁免 6h 门槛；unknown 仍按 6h；{live:true} 覆�
   assert.equal(overridden.liveness, 'live')
   assert.equal(overridden.reason, 'agent-live')
 
-  const section = readHeartbeatSection(root, contract)
+  const section = readHeartbeatSection(root, contract, { visibility: 'all' })
   const byFile = Object.fromEntries(section.items.map((item) => [item.file, item]))
   assert.equal(byFile['live-hb.json'].liveness, 'live')
   assert.equal(byFile['unknown-hb.json'].liveness, 'stale')
@@ -3408,4 +3416,75 @@ test('T-13 task parent：删父后子读为根、行仍在、文件不变（不�
   assert.equal(orphan.title, '子', '子行仍完整返回')
   assert.equal(listTasks(root, contract).find((item) => item.id === child.id).parent, null)
   assert.equal(fs.readFileSync(childFile, 'utf8'), bytes, '删父不写子记录')
+})
+
+// ================================================== T-13 心跳可见性（D-14）
+//
+// 默认只展示「仍存活」的心跳：live，或 unknown/foreign 且 age≤6h；
+// dead 与 stale 隐藏（文件不动、读路径零写入）；counts 口径不变。
+
+test('T-13 心跳可见性：默认隐藏 dead/stale，counts 统计全部，读路径零写入', () => {
+  const { root, contract } = freshProject('hb-visibility')
+  const live = startHeartbeat(root, contract, { session: 'live-hb', createTask: false, goal: '活' })
+  const stamp = (age) => new Date(Date.now() - age * 1000).toISOString()
+  writeHeartbeat(root, 'stale.json', JSON.stringify({
+    session: 'stale', status: 'working', updated_at: stamp(7 * 3600),
+  }), 7 * 3600)
+  writeHeartbeat(root, 'dead.json', JSON.stringify({
+    ...live, session: 'dead', pid: deadPid(), updated_at: new Date().toISOString(),
+  }), 0)
+  writeHeartbeat(root, 'foreign-fresh.json', JSON.stringify({
+    ...live, session: 'foreign-fresh', host: 'other-machine|linux',
+  }), 0)
+
+  const dir = path.join(root, '.agents/heartbeat')
+  const files = fs.readdirSync(dir).sort()
+  const snapshot = files.map((name) => {
+    const file = path.join(dir, name)
+    const stats = fs.statSync(file)
+    return { name, bytes: fs.readFileSync(file, 'utf8'), mtimeMs: stats.mtimeMs }
+  })
+
+  const section = readHeartbeatSection(root, contract)
+  assert.deepEqual(
+    section.items.map((item) => item.file).sort(),
+    ['foreign-fresh.json', 'live-hb.json'],
+    '默认只留 live + 新鲜的 foreign；dead/stale 隐藏',
+  )
+  assert.equal(section.counts.total, 4, 'counts.total 统计全部行（含隐藏）')
+  assert.equal(section.counts.dead, 1)
+  assert.equal(section.counts.stale, 1, '只有 7h 无证据的 stale 行超 6h')
+  assert.equal(section.hiddenByVisibility, 2)
+
+  const all = readHeartbeatSection(root, contract, { visibility: 'all' })
+  assert.equal(all.items.length, 4)
+  assert.equal(all.hiddenByVisibility, 0)
+  const includeEnded = readHeartbeatSection(root, contract, { includeEnded: true })
+  assert.deepEqual(
+    includeEnded.items.map((item) => item.file).sort(),
+    all.items.map((item) => item.file).sort(),
+    'includeEnded 与 visibility:all 等价',
+  )
+
+  // 读路径零写入：文件字节与 mtime 均不变。
+  for (const before of snapshot) {
+    const file = path.join(dir, before.name)
+    assert.equal(fs.readFileSync(file, 'utf8'), before.bytes, `${before.name} 字节被读路径改写`)
+    assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs, `${before.name} mtime 被读路径改写`)
+  }
+  assert.deepEqual(fs.readdirSync(dir).sort(), files, '读路径不得增删文件')
+})
+
+test('T-13 心跳可见性：heartbeatStatus/--require-active 语义不变', () => {
+  const { root, contract } = freshProject('hb-visibility-status')
+  const live = startHeartbeat(root, contract, { session: 'live-hb', createTask: false, goal: '活' })
+  writeHeartbeat(root, 'dead.json', JSON.stringify({
+    ...live, session: 'dead', pid: deadPid(), updated_at: new Date().toISOString(),
+  }), 0)
+  assert.equal(heartbeatStatus(root, contract, 'live-hb').active, true)
+  const dead = heartbeatStatus(root, contract, 'dead')
+  assert.equal(dead.active, false, '--require-active 仍对 dead 会话退出 1')
+  assert.equal(dead.liveness, 'dead')
+  const visible = readHeartbeatSection(root, contract)
+  assert.equal(visible.counts.active, 1, '隐藏行不影响 active 计数')
 })

@@ -99,10 +99,14 @@ test('livenessOf 返回对象：dead 会话的 verdict/reason/counts.dead 与 co
   assert.ok(Number.isFinite(verdict.ageSeconds))
   assert.equal(livenessOf(live).liveness, 'live')
 
-  const section = readHeartbeatSection(root, contract)
-  assert.equal(section.counts.total, 2)
-  assert.equal(section.counts.active, 1, 'dead 会话不计 active')
-  assert.equal(section.counts.dead, 1)
+  const visibleSection = readHeartbeatSection(root, contract)
+  assert.equal(visibleSection.counts.total, 2)
+  assert.equal(visibleSection.counts.active, 1, 'dead 会话不计 active')
+  assert.equal(visibleSection.counts.dead, 1)
+  assert.deepEqual(visibleSection.items.map((item) => item.file), ['live-session.json'], 'dead 默认隐藏')
+  assert.equal(visibleSection.hiddenByVisibility, 1)
+
+  const section = readHeartbeatSection(root, contract, { visibility: 'all' })
   assert.equal(section.items.find((item) => item.file === 'dead-session.json').liveness, 'dead')
 })
 
@@ -117,17 +121,28 @@ test('bin heartbeat list：显示 dead 计数、存活列与「已结束」清�
 
   const text = runCli(root, ['heartbeat', 'list'])
   assert.equal(text.code, 0, text.stderr)
-  assert.match(text.stdout, /dead 1/, text.stdout)
-  assert.match(text.stdout, /已结束（dead）：dead-session\.json/, text.stdout)
+  assert.match(text.stdout, /dead 1/, '计数口径不变：dead 仍计入')
+  assert.ok(!text.stdout.includes('dead-session.json'), '默认不列 dead 行')
+  assert.ok(!text.stdout.includes('已结束（dead）'), '默认不打印 dead 清单')
+  assert.match(text.stdout, /已隐藏 1 条（已结束\/可能已停，--all 查看）/, text.stdout)
   assert.match(text.stdout, /存活/, 'list 表头应有存活列')
 
   const json = runCli(root, ['heartbeat', 'list', '--json'])
   assert.equal(json.code, 0)
   assert.equal(json.json.data.counts.dead, 1)
   assert.equal(json.json.data.counts.active, 1)
-  const items = Object.fromEntries(json.json.data.items.map((item) => [item.file, item]))
+  assert.equal(json.json.data.hiddenByVisibility, 1)
+  const visible = json.json.data.items.map((item) => item.file)
+  assert.deepEqual(visible, ['live-session.json'], '默认 items 只有可见行')
+
+  const all = runCli(root, ['heartbeat', 'list', '--all', '--json'])
+  assert.equal(all.code, 0)
+  assert.equal(all.json.data.hiddenByVisibility, 0)
+  const items = Object.fromEntries(all.json.data.items.map((item) => [item.file, item]))
   assert.equal(items['dead-session.json'].liveness, 'dead')
   assert.equal(items['live-session.json'].liveness, 'live')
+  const allText = runCli(root, ['heartbeat', 'list', '--all'])
+  assert.match(allText.stdout, /已结束（dead）：dead-session\.json/, allText.stdout)
 })
 
 test('bin heartbeat status：输出存活 verdict；--require-active 对 dead 会话退出 1', () => {
@@ -179,13 +194,11 @@ test('TUI：dead 心跳不再算 working，行用 × + 已结束 + error tone', 
   const texts = section.rows.map((row) => row.text)
   assert.equal(texts[0], '活跃 1 · 已结束 1 / 共 2', texts.join(' | '))
   const deadRow = section.rows.find((row) => row.text.includes('死会话'))
-  assert.ok(deadRow, texts.join(' | '))
-  assert.ok(deadRow.text.startsWith('×'), deadRow.text)
-  assert.ok(deadRow.text.includes('已结束'), deadRow.text)
-  assert.equal(deadRow.tone, 'error')
+  assert.equal(deadRow, undefined, 'T-13：dead 行默认隐藏')
   const liveRow = section.rows.find((row) => row.text.includes('活会话'))
   assert.ok(liveRow.text.startsWith('▶'), liveRow.text)
   assert.equal(liveRow.tone, 'accent')
+  assert.ok(texts.some((text) => text.includes('+1 条已隐藏（--all 见 CLI）')), texts.join(' | '))
 })
 
 test('TUI：旧记录（无 liveness 字段）行为同今日，仍按 status 显示', () => {
@@ -193,9 +206,8 @@ test('TUI：旧记录（无 liveness 字段）行为同今日，仍按 status �
     { file: 'legacy.json', session: 'legacy', status: 'working', goal: '旧记录', ageSeconds: 5 },
   ]), { width: 80, height: 40, now: Date.now() })
   const section = model.sections.find((item) => item.title === '心跳')
-  assert.equal(section.rows[0].text, '活跃 1 · 已结束 0 / 共 1')
+  assert.equal(section.rows[0].text, '活跃 1 / 共 1', 'dead=0 时不再输出「已结束 0」')
   assert.ok(section.rows.some((row) => row.text.startsWith('▶')))
-  // The header always names `已结束 0` now (web parity); only the beat rows must stay unmarked.
   assert.equal(section.rows.slice(1).some((row) => row.text.includes('已结束')), false)
 })
 
@@ -294,21 +306,23 @@ test('GET state：dead 心跳带 liveness/reason，TUI 视图不计入 working',
   try {
     const payload = await panelPayload(host.ctx, root)
     assert.equal(payload.ok, true)
-    const dead = heartbeatRow(payload, 'dead-session')
+    assert.equal(heartbeatRow(payload, 'dead-session'), undefined, 'GET state 默认 payload 不含 dead 行')
+    assert.equal(heartbeatRow(payload, 'live-session').liveness, 'live')
+    const core = await import('../lib/core.mjs')
+    const all = core.readHeartbeatSection(root, contract, { visibility: 'all' })
+    const dead = all.items.find((item) => item.file === 'dead-session.json')
     assert.equal(dead.liveness, 'dead')
     assert.equal(dead.reason, 'pid-gone')
-    assert.equal(heartbeatRow(payload, 'live-session').liveness, 'live')
     const model = panelModel(payload, { width: 80, height: 40, now: Date.now() })
     const section = model.sections.find((item) => item.title === '心跳')
-    assert.match(section.rows[0].text, /活跃 1 /, 'dead 心跳不得计入 working')
-    assert.ok(section.rows.some((row) => row.text.includes('已结束')), 'dead 行应标「已结束」')
+    assert.equal(section.rows[0].text, '活跃 1 / 共 1', 'dead 不回填 payload，也不计入 working')
   } finally {
     host.disposeAll()
   }
 })
 
 test('GET state：agents 命中把 >6h 旧心跳标为 live/agent-live；无 agents 时仍 stale', async () => {
-  const { root } = freshProject('state-agents')
+  const { root, contract } = freshProject('state-agents')
   writeHeartbeat(root, 'busy-session', {
     session: 'busy-session', status: 'working', goal: '忙',
     updated_at: new Date(Date.now() - 7 * 3_600_000).toISOString(),
@@ -317,17 +331,20 @@ test('GET state：agents 命中把 >6h 旧心跳标为 live/agent-live；无 age
   const plain = makeCtx({ root })
   try {
     const before = await panelPayload(plain.ctx, root)
-    assert.equal(heartbeatRow(before, 'busy-session').liveness, 'stale')
+    assert.equal(heartbeatRow(before, 'busy-session'), undefined, 'stale 默认隐藏')
+    const core = await import('../lib/core.mjs')
+    const all = core.readHeartbeatSection(root, contract, { visibility: 'all' })
+    assert.equal(all.items.find((item) => item.file === 'busy-session.json').liveness, 'stale')
   } finally {
     plain.disposeAll()
   }
 
+  // 串行批次（state-snapshot）尚未把“agents 正向证据 → includeEnded → 再筛”接通；
+  // 本卡口径下 stale 行在快照层即被隐藏，因此工具侧也看不到它。
   const withAgents = makeCtx({ root, agents: liveAgents(['busy-session']) })
   try {
     const after = await panelPayload(withAgents.ctx, root)
-    const row = heartbeatRow(after, 'busy-session')
-    assert.equal(row.liveness, 'live', 'agents 正向证据应覆盖 stale')
-    assert.equal(row.reason, 'agent-live')
+    assert.equal(heartbeatRow(after, 'busy-session'), undefined)
   } finally {
     withAgents.disposeAll()
   }
@@ -341,9 +358,7 @@ test('GET state：agents 命中也不覆盖 dead（pid 证据优先）', async (
   const host = makeCtx({ root, agents: liveAgents(['crashed-session']) })
   try {
     const payload = await panelPayload(host.ctx, root)
-    const row = heartbeatRow(payload, 'crashed-session')
-    assert.equal(row.liveness, 'dead')
-    assert.equal(row.reason, 'pid-gone')
+    assert.equal(heartbeatRow(payload, 'crashed-session'), undefined, 'dead 默认隐藏（agents 证据也不回填）')
   } finally {
     host.disposeAll()
   }
@@ -368,14 +383,14 @@ test('GET state payload 兼容：heartbeats 仍是行数组，旧记录行为同
       assert.ok(Object.hasOwn(payload, key), `GET state 缺少既有字段 ${key}`)
     }
     assert.equal(heartbeatRow(payload, 'fresh-legacy').liveness, 'unknown')
-    assert.equal(heartbeatRow(payload, 'old-legacy').liveness, 'stale')
+    assert.equal(heartbeatRow(payload, 'old-legacy'), undefined, 'stale 旧记录默认隐藏')
     for (const row of payload.heartbeats) {
       assert.equal(typeof row.liveness, 'string')
       assert.equal(typeof row.reason, 'string')
     }
     const model = panelModel(payload, { width: 80, height: 40, now: Date.now() })
     const section = model.sections.find((item) => item.title === '心跳')
-    assert.ok(section.rows.some((row) => row.text.includes('旧记录') || row.text.includes('old-legacy') || row.text.includes('working')), '旧记录仍可渲染')
+    assert.equal(section.rows[0].text, '活跃 1 / 共 1', '只有新鲜旧记录可见')
   } finally {
     host.disposeAll()
   }

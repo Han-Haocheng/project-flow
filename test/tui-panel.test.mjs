@@ -138,11 +138,15 @@ test('心跳计数行用「活跃」，dead 判据同时认 liveness 与布尔 d
   const header = heartbeat.rows[0].text;
   assert.equal(header, '活跃 1 · 已结束 2 / 共 3', 'the count line must use the web panel wording');
   assert.ok(!header.includes('working'), 'the count line must not mix English: ' + header);
-  assert.equal(heartbeat.rows.filter((entry) => entry.text.startsWith('×')).length, 2, 'dead rows need the × glyph');
+  assert.equal(heartbeat.rows.filter((entry) => entry.text.startsWith('×')).length, 0, 'T-13：dead 行默认隐藏');
   assert.equal(heartbeat.rows.filter((entry) => entry.text.startsWith('▶')).length, 1, 'only the live beat is working');
   assert.ok(
-    heartbeat.rows.some((entry) => entry.text.includes('只有布尔标记') && entry.text.includes('已结束')),
-    'a beat with only `dead: true` must render as ended, not working'
+    !heartbeat.rows.some((entry) => entry.text.includes('只有布尔标记')),
+    'a beat with only `dead: true` must be hidden too'
+  );
+  assert.ok(
+    heartbeat.rows.some((entry) => entry.text.includes('+2 条已隐藏（--all 见 CLI）')),
+    'hidden count must be disclosed'
   );
 });
 
@@ -176,10 +180,10 @@ test('实验区可选：enabled 非 strict-true 时无「实验」计数与区�
   for (const entry of rows) assert.equal(entry.tone, 'accent', 'inconclusive/pivoted must fall back to the accent tone');
 });
 
-test('心跳计数行恒带「已结束 D」：dead=0 时也输出 已结束 0（与 web 文案对齐）', () => {
+test('心跳计数行：dead=0 时不再输出「已结束 0」', () => {
   const model = panelModel(fixture(), { width: 80, height: 40, now: NOW });
   const heartbeat = model.sections.find((section) => section.title === '心跳');
-  assert.equal(heartbeat.rows[0].text, '活跃 1 · 已结束 0 / 共 1');
+  assert.equal(heartbeat.rows[0].text, '活跃 1 / 共 1');
 });
 
 test('every line is clipped to the requested width (CJK counted as one)', () => {
@@ -556,7 +560,7 @@ test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 
   // task-99（T-12 B3）：心跳计数行恒带「已结束 D」（与 web 的 hb.counts 对齐），
   // 其余字段未变；单参调用仍然不产出 `staleNote`。
   const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
-  assert.equal(digest, 'd0bd484e2a7add14118e54625e71faccd226b2022875d4c7aafeff5d767eea2c')
+  assert.equal(digest, 'fd33740145839eba22e47b82fb5899ec5e01ce36c6b3a2a8a78028516857aab7')
   assert.equal(Object.hasOwn(single, 'staleNote'), false)
 
   const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })
@@ -613,3 +617,21 @@ test('web 零回归：client.js 的 stale/错误面未被 TUI 改动波及', () 
   // TUI 的 stale 只在客户端：不得把 TUI 概念/模块塞进 web 源码。
   assert.equal(/tui-panel|staleNote/.test(webSource), false, 'TUI stale 概念不得泄漏到 web client')
 })
+
+
+test('T-13 心跳可见性：stale 与 dead 默认隐藏，live/新鲜行保留，计数口径不变', () => {
+  const payload = fixture();
+  payload.heartbeats = [
+    { session: 'live', goal: '活着', status: 'working', liveness: 'live', ageSeconds: 5 },
+    { session: 'stale', goal: '可能已停', status: 'working', liveness: 'stale', stale: true, ageSeconds: 7 * 3600 },
+    { session: 'dead', goal: '已结束', status: 'working', liveness: 'dead', dead: true, ageSeconds: 60 },
+  ];
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW });
+  const heartbeat = model.sections.find((section) => section.title === '心跳');
+  const texts = heartbeat.rows.map((row) => row.text);
+  assert.equal(texts[0], '活跃 1 · 已结束 1 / 共 3', 'counts 仍统计全部行');
+  assert.ok(texts.some((text) => text.includes('活着')));
+  assert.ok(!texts.some((text) => text.includes('可能已停')), 'stale 行隐藏');
+  assert.ok(!texts.some((text) => text.includes('已结束 · ')), 'dead 行隐藏（标题不再作为行出现）');
+  assert.ok(texts.some((text) => text.includes('+2 条已隐藏（--all 见 CLI）')), texts.join(' | '));
+});
