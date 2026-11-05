@@ -825,16 +825,19 @@ FIFO 队列；patch 刷新 `updated_at` 不会改变队列位次），最近完�
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
 其中 `heartbeats` 为
-`{ dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime, liveness, reason }], counts: { total, active, stale, dead, hidden } }`
+`{ root, dir, items: [{ file, session, agent, goal, task, claims, status, last_action, started_at, updated_at, ended_at, ageSeconds, stale, turn, stats, mtime, liveness, reason }], counts: { total, active, stale, dead, hidden }, hiddenByVisibility }`
 （富形状来自 `readHeartbeatSection`；`readHeartbeats` 仍返回旧的
 `{file,title,statusLine,ageSeconds,mtime}` 以免破坏既有调用，同样只读 json）。
 `counts` 是**五键**：`active` 只算 live 或「fresh 且非 dead/foreign/stale」；`stale` =
 `ageSeconds > 6h`，可与 `dead` 重叠；`dead` 计 `liveness === 'dead'`；**没有 `foreign` 键**
-（跨机记录计入 `total`/`stale`，不计 `active`/`dead`）。
+（跨机记录计入 `total`/`stale`，不计 `active`/`dead`）。`hiddenByVisibility` 是**默认可见性**
+隐藏掉的行数（`visibility:'active'` 时；`--all`/`visibility:'all'` 为 0，见 §3.5）。
 
 `flow heartbeat list` 用同一份富形状输出表格（session 短名 / agent / status / **存活** / 年龄 /
-task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 reason），并额外打印
-一条汇总与可能已停的文件名。
+task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 reason）：默认只列
+**可见行**，并在末尾打印「已隐藏 N 条（已结束/可能已停，`--all` 查看）」；`--all` 列出全量并
+恢复「已结束（dead）/可能已停」清单。`flow status` 的心跳明细同样只含可见行，摘要按全量
+`counts` 报（见 §5.3 上文）。
 
 ## 6 机械检查（`flow check`）
 
@@ -1142,8 +1145,10 @@ agents 正向证据 → 宿主过滤」：`applyAgentLiveness` 先按宿主 `age
 `liveness:'live'`/`reason:'agent-live'`（`dead` 行不被覆盖），`applyHeartbeatVisibility` 再只留
 `live`，或 `unknown`/`foreign` 且 `ageSeconds ≤ 6h` 的行——**agents 点亮 stale 行的能力只在
 宿主侧保留**，读子进程不做最终过滤（否则 stale 行在标注前就消失）。因此面板/TUI 默认不渲染
-`dead`/`stale`/超龄行：TUI 头部保留「已结束 D」计数、区段末「+N 条已隐藏（--all 见 CLI）」，
-没有 `liveness` 字段的旧 payload 按旧行为展示全部行。`counts` 由面板读端从可见行自派生
+`dead`/`stale`/超龄行。**TUI 只对未经宿主过滤的旧 payload 自行按同一判据隐藏**，并在头部
+显示「已结束 D」、区段末「+N 条已隐藏（--all 见 CLI）」；新 payload 已由宿主过滤且带
+`heartbeatsHidden`，TUI 收不到隐藏行、**当前不消费**该计数（没有 `liveness` 字段的旧 payload
+按旧行为展示全部行）。`counts` 由面板读端从可见行自派生
 （`total`/`active`/`stale`/`dead`，**无 hidden**）；只有 CLI 的 `readHeartbeatSection` 才返回带
 `counts` 与 `hiddenByVisibility` 的富形状（见 §5.3/§3.5）。两者是不同实例：面板行不读 CLI
 进程的 warning 缓冲，也不写心跳文件。
@@ -1267,6 +1272,29 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   容忍、按空节兜底（与 §9.4 决策节同一纪律）；`items` 截断与 `tree` 组装沿用 §9.1.1 的
   一次枚举/投影纪律。面板仍**只读**：开关只改 `flow.json`，没有开关 POST，实验写操作只走
   CLI / `flow_exp`。
+
+#### 9.1.4 面板任务区：行形状、视觉树与趋势
+
+- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行在 T-13 A3 后增加
+  `parent: string|null`（父任务 id；父失效/成环时读投影为 `null`）与 `depth: 0..3`
+  （相对根的深度，超过 3 截断），其余字段不变；数组仍按各自既有顺序（active/draft FIFO、
+  `recentDone` 按 `updated_at` 倒序）——树只由行上的 `parent`/`depth` 表达，**不改数组顺序、
+  不新增 `children` 数组**，前端据此嵌套渲染。
+- **视觉树（a11y 口径）**：任务树是**视觉树**，**没有**采用严格的 `role="tree"`/`role="treeitem"`
+  ——行是 `<li>`，按 `aria-level` = `min(depth,3)+1`（1..4）标注层级，配 12px/级缩进
+  （`calc(var(--d) * 12px)`）与左侧连接线；行头是 `role="button"`（`aria-expanded` 控制详情）。
+  有子行的父行另有一个**独立** caret `<button>`（`aria-expanded`/`aria-controls` 指向
+  `role="group"` 的子 `<ul>`），点击 caret 不冒泡开详情。严格 tree 语义属于后续增强，
+  需要时另立卡。
+- **趋势图**：`tasks.trend` = `{from,to,days,estimatedFrom,created[],done[],archived[]}`
+  （`state-snapshot.mjs` 的 `deriveTrend` 按本地日分桶；默认 **14 天**、上限 **60 天**）。
+  面板画**双折线**（`created` 用品牌色、`done` 用成功色，图例两个色点）：两条线**共享同一
+  峰值刻度**（按单线峰值、不是当日合计），0 值落在基线；每天一根透明热区 `<rect>` 内嵌
+  `<title>`，给出该日 `created`/`done`/`archived` 三项数字——`archived` **不画第三条线**，
+  只在摘要与 tooltip 保留。`estimatedFrom` 当天起（含）的线段改为**虚线**
+  （`stroke-dasharray`、opacity 0.6），分界点画标记点，摘要前缀 `≈`；`estimatedFrom` 为
+  `null` 时全实线。空窗显示「暂无趋势」不画 svg；旧 payload 没有 `tasks.trend` 时整块隐藏。
+  图是 `role="img"` + `aria-label`（「近 N 天任务趋势」）。
 
 ### 9.2 心跳作用域：只面向主会话
 
