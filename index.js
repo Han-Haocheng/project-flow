@@ -61,6 +61,28 @@ import {
 } from './lib/state-snapshot.mjs'
 export const inject = ['webServer']
 
+import {
+  assertOnlyFields,
+  EMPTY_STORE_NOTE,
+  EXP_ACTION_FIELDS,
+  EXP_ADD_FIELDS,
+  EXP_UPDATE_FIELDS,
+  GATE_ACTION_FIELDS,
+  GATE_ADD_FIELDS,
+  GATE_UPDATE_FIELDS,
+  ID_PROPERTY,
+  makeRequireStore,
+  makeToolRoot,
+  normalizeTaskParent,
+  pickFields,
+  requireDirectory,
+  requireId,
+  ROOT_PROPERTY,
+  TASK_ACTION_FIELDS,
+  TASK_ADD_FIELDS,
+  TASK_UPDATE_FIELDS,
+  toolOutput,
+} from './lib/plugin/shared.mjs'
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
 const ROUTE_PATH = '/api/project-flow/state'
 const INIT_ROUTE_PATH = '/api/project-flow/init'
@@ -1136,202 +1158,11 @@ async function handleGate(ctx, request, response) {
 //  isConcurrencySafe, timeoutMs, execute}. Root resolution is shared with the
 // endpoint: explicit arg, then the session working directory, then session.cwd.
 
-const ROOT_PROPERTY = {
-  type: 'string',
-  description: 'Project root (absolute or relative). Defaults to the session working directory.',
-}
-const ID_PROPERTY = { type: 'string', description: 'Record id, e.g. E-20261028-01 or T-20261028-01.' }
-const EMPTY_STORE_NOTE = 'no flow store in this workspace; run: node bin/flow.mjs init'
-
-/** Registry-ready output contract: render the result value as pretty JSON text. */
-function toolOutput() {
-  return {
-    schema: { type: 'object' },
-    render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
-  }
-}
-
-function toolRoot(ctx, args, exec) {
-  const explicit = args !== null && typeof args === 'object' ? args.root : undefined
-  if (typeof explicit === 'string' && explicit.trim().length > 0) {
-    return requireDirectory(resolve(explicit))
-  }
-
-  const session = exec !== null && exec !== undefined && exec.agent !== undefined ? exec.agent.session : undefined
-  const workingDirectory = service(ctx, 'workingDirectory')
-  if (workingDirectory !== undefined && typeof workingDirectory.get === 'function' && session !== undefined) {
-    try {
-      const value = workingDirectory.get(session)
-      if (typeof value === 'string' && value.trim().length > 0) return requireDirectory(resolve(value))
-    } catch {
-      // Fall through to the session header cwd.
-    }
-  }
-  let cwd
-  try {
-    cwd = session === undefined || session === null ? undefined : session.cwd
-  } catch {
-    cwd = undefined
-  }
-  if (typeof cwd === 'string' && cwd.trim().length > 0) return requireDirectory(resolve(cwd))
-  throw new Error('no project root: pass root, or call this tool inside a workspace session')
-}
-
-function requireDirectory(candidate) {
-  let stats
-  try {
-    stats = statSync(candidate)
-  } catch {
-    throw new Error(`root does not exist: ${candidate}`)
-  }
-  if (stats.isDirectory() !== true) throw new Error(`root is not a directory: ${candidate}`)
-  return candidate
-}
-
-function requireStore(root) {
-  if (hasStore(root) === false) {
-    throw new Error(`project flow store not found in ${root}; run: node bin/flow.mjs init`)
-  }
-}
-
-function requireId(tool, action, value) {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${tool} ${action} requires id`)
-  }
-  return value.trim()
-}
-
-/**
- * `flow_task.parent` shares the CLI's clearing rule (`''`/`none`/`null`,
- * case-insensitive → null) through core.normalizeParentInput, so the tool and
- * `task --parent` can never diverge on what "root" means.
- */
-function normalizeTaskParent(c, input) {
-  if (isPlainObject(input) && Object.hasOwn(input, 'parent')) {
-    input.parent = c.normalizeParentInput(input.parent)
-  }
-  return input
-}
-
-function pickFields(args, names) {
-  const picked = {}
-  for (const name of names) {
-    if (Object.hasOwn(args, name) && args[name] !== undefined) picked[name] = args[name]
-  }
-  return picked
-}
-
-const EXP_ADD_FIELDS = Object.freeze([
-  'id',
-  'title',
-  'hypothesis',
-  'factor',
-  'parent',
-  'expected',
-  'scale',
-  'status',
-  'measured',
-  'metrics',
-  'commits',
-  'notes',
-  'direction',
-  'primaryMetric',
-  'guardrails',
-  'falsify',
-  'windowDays',
-  'stopLoss',
-  'learned',
-])
-const EXP_UPDATE_FIELDS = Object.freeze([
-  'title',
-  'hypothesis',
-  'factor',
-  'parent',
-  'expected',
-  'scale',
-  'status',
-  'measured',
-  'metrics',
-  'commits',
-  'notes',
-  'direction',
-  'primaryMetric',
-  'guardrails',
-  'falsify',
-  'windowDays',
-  'stopLoss',
-  'learned',
-])
-const TASK_ADD_FIELDS = Object.freeze([
-  'id',
-  'title',
-  'type',
-  'status',
-  'owner',
-  'goal',
-  'notes',
-  'commits',
-  'scope',
-  'acceptance',
-  'experiment',
-  'parent',
-])
-const TASK_UPDATE_FIELDS = Object.freeze([
-  'title',
-  'type',
-  'status',
-  'owner',
-  'goal',
-  'notes',
-  'commits',
-  'scope',
-  'acceptance',
-  'experiment',
-  'parent',
-])
-const GATE_ADD_FIELDS = Object.freeze([
-  'id',
-  'title',
-  'phase',
-  'enabled',
-  'steps',
-])
-const GATE_UPDATE_FIELDS = Object.freeze([
-  'title',
-  'phase',
-  'enabled',
-  'steps',
-])
-
-/**
- * Per-action field whitelist for the flow_* tools (T-20261030-15). The JSON
- * schema already rejects unknown properties; this rejects a **known** field
- * passed to the wrong action (it used to be dropped silently). `root`, `action`
- * and `id` are structural for every action. Throws before any core call.
- */
-const STRUCTURAL_FIELDS = Object.freeze(['root', 'action', 'id'])
-
-function assertOnlyFields(name, action, args, allowed) {
-  const permitted = new Set([...STRUCTURAL_FIELDS, ...(Array.isArray(allowed) ? allowed : [])])
-  for (const key of Object.keys(args)) {
-    if (permitted.has(key)) continue
-    throw new Error(`invalid: ${name} ${String(action)} does not accept "${key}"`)
-  }
-}
-
-const EXP_ACTION_FIELDS = Object.freeze({
-  list: [], show: [], tree: [],
-  add: EXP_ADD_FIELDS, update: EXP_UPDATE_FIELDS,
-  review: [], productize: ['gate'], cleanup: ['flags', 'code', 'data'], remove: [],
-})
-const TASK_ACTION_FIELDS = Object.freeze({
-  list: [], show: [], add: TASK_ADD_FIELDS, update: TASK_UPDATE_FIELDS, remove: [],
-})
-const GATE_ACTION_FIELDS = Object.freeze({
-  list: [], show: [],
-  add: GATE_ADD_FIELDS, update: GATE_UPDATE_FIELDS,
-  remove: [], run: [], logs: ['limit'],
-})
+// Tool plumbing lives in lib/plugin/shared.mjs so the per-module sub-plugins
+// (tasks.js / gates.js / experiments.js) reuse exactly these rules instead of
+// re-deriving the field whitelists. The two service-bound helpers are factories.
+const toolRoot = makeToolRoot({ service })
+const requireStore = makeRequireStore({ hasStore })
 
 // --------------------------------------------------------------- heartbeats
 //
