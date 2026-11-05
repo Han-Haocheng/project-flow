@@ -118,10 +118,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - 唯一例外：`store.root` 写成绝对路径时，若 `realpath` 后仍在项目根内则照常使用
   （兼容旧 manifest）；否则回退 `.dsh/flow` 并 warning。
 - **面板 `tasks.current` 的派生**：manifest 声明了合法相对路径时原样作为 `current` 回显；
-  未声明（`null`）时，Host 的面板投影把它派生为**队列头**——`active` 里 `created_at` 最老的
-  一条任务的 `id`（只读投影，不回写 `flow.json`，manifest 仍是 `null`）；没有 `active` 时为
-  `null`。manifest 声明了但被 containment 拒绝时 `current` 保持 `null`（记原 warning），
-  **不回退**队列头。
+  未声明（`null`）时，Host 的面板投影把它派生为**队列头**——`active` 中**父不在 `active`
+  集合内的根任务**（`parent` 为空或指向非 active 任务，失效即按根）里 `created_at` 最老
+  的一条的 `id`（同刻按 id 升序；只读投影，不回写 `flow.json`，manifest 仍是 `null`）；
+  没有根（例如 active 全部成环）时退回 `active[0]`，没有 `active` 时为 `null`。manifest
+  声明了但被 containment 拒绝时 `current` 保持 `null`（记原 warning），**不回退**队列头。
 
 合法相对路径的解析结果与旧行为完全一致。
 
