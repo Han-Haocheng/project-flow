@@ -331,7 +331,8 @@ test('GET state：agents 命中把 >6h 旧心跳标为 live/agent-live；无 age
   const plain = makeCtx({ root })
   try {
     const before = await panelPayload(plain.ctx, root)
-    assert.equal(heartbeatRow(before, 'busy-session'), undefined, 'stale 默认隐藏')
+    assert.equal(heartbeatRow(before, 'busy-session'), undefined, 'stale 且无 agents 证据 → 隐藏')
+    assert.equal(before.heartbeatsHidden, 1, '被隐藏条数要暴露给面板')
     const core = await import('../lib/core.mjs')
     const all = core.readHeartbeatSection(root, contract, { visibility: 'all' })
     assert.equal(all.items.find((item) => item.file === 'busy-session.json').liveness, 'stale')
@@ -339,15 +340,25 @@ test('GET state：agents 命中把 >6h 旧心跳标为 live/agent-live；无 age
     plain.disposeAll()
   }
 
-  // 串行批次（state-snapshot）尚未把“agents 正向证据 → includeEnded → 再筛”接通；
-  // 本卡口径下 stale 行在快照层即被隐藏，因此工具侧也看不到它。
+  // T-13（task-143）：快照取全量 → agents 标注 → 宿主过滤。stale 行在 agents 命中
+  // 后变成 live/agent-live，必须**保留**（这是旧串行批次的语义缺口）。
+  const file = heartbeatFile(root, 'busy-session')
+  const bytesBefore = fs.readFileSync(file, 'utf8')
+  const mtimeBefore = fs.statSync(file).mtimeMs
   const withAgents = makeCtx({ root, agents: liveAgents(['busy-session']) })
   try {
     const after = await panelPayload(withAgents.ctx, root)
-    assert.equal(heartbeatRow(after, 'busy-session'), undefined)
+    const row = heartbeatRow(after, 'busy-session')
+    assert.ok(row !== undefined, 'agents 命中的 stale 行不能被隐藏')
+    assert.equal(row.liveness, 'live')
+    assert.equal(row.reason, 'agent-live')
+    assert.equal(after.heartbeatsHidden, 0)
+    assert.ok(after.heartbeats.every((item) => item.liveness !== 'dead'), 'dead 行仍不得出现')
   } finally {
     withAgents.disposeAll()
   }
+  assert.equal(fs.readFileSync(file, 'utf8'), bytesBefore, '读路径不得改写心跳文件')
+  assert.equal(fs.statSync(file).mtimeMs, mtimeBefore, '读路径不得触碰 mtime')
 })
 
 test('GET state：agents 命中也不覆盖 dead（pid 证据优先）', async () => {
@@ -359,6 +370,8 @@ test('GET state：agents 命中也不覆盖 dead（pid 证据优先）', async (
   try {
     const payload = await panelPayload(host.ctx, root)
     assert.equal(heartbeatRow(payload, 'crashed-session'), undefined, 'dead 默认隐藏（agents 证据也不回填）')
+    assert.equal(payload.heartbeatsHidden, 1, 'dead 行计入隐藏条数')
+    assert.ok(payload.heartbeats.every((item) => item.liveness !== 'dead'), 'payload 不得携带 dead 行')
   } finally {
     host.disposeAll()
   }
@@ -384,6 +397,7 @@ test('GET state payload 兼容：heartbeats 仍是行数组，旧记录行为同
     }
     assert.equal(heartbeatRow(payload, 'fresh-legacy').liveness, 'unknown')
     assert.equal(heartbeatRow(payload, 'old-legacy'), undefined, 'stale 旧记录默认隐藏')
+    assert.equal(payload.heartbeatsHidden, 1, 'stale 旧记录计入隐藏条数')
     for (const row of payload.heartbeats) {
       assert.equal(typeof row.liveness, 'string')
       assert.equal(typeof row.reason, 'string')

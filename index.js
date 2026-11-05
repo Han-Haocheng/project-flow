@@ -47,6 +47,7 @@ import {
   decisionCountsOf,
   decisionRemindMax,
   emptyDecisionCounts,
+  heartbeatRowVisible,
   isPlainObject,
   isoLocal,
   pickInteger,
@@ -837,7 +838,10 @@ async function collectPanelState(ctx, root, workspaces) {
     payload.root = root
     payload.roots = [{ path: entry.path, name: entry.name }]
     // Host agents 正向证据：live 会话打 liveness:'live'/reason:'agent-live'（dead 不覆盖）。
-    return applyAgentLiveness(ctx, payload)
+    // 顺序是「全量行 → agents 标注 → 宿主过滤」：快照层不做最终过滤，否则 stale 行
+    // 在 agents 看到之前就消失了（task-143 修的语义缺口）。
+    applyAgentLiveness(ctx, payload)
+    return applyHeartbeatVisibility(payload)
   }
   return {
     ok: false,
@@ -1310,6 +1314,21 @@ function applyAgentLiveness(ctx, payload) {
     item.liveness = 'live'
     item.reason = 'agent-live'
   }
+  return payload
+}
+
+/**
+ * Final heartbeat visibility on the host side: `heartbeats` stays a row array
+ * (old clients keep working), hidden rows are dropped, and the count is exposed
+ * as the optional `heartbeatsHidden` field. Pure in-memory filtering — the read
+ * path never writes or deletes heartbeat files.
+ */
+function applyHeartbeatVisibility(payload) {
+  if (isPlainObject(payload) === false || Array.isArray(payload.heartbeats) === false) return payload
+  const rows = payload.heartbeats
+  const kept = rows.filter((item) => heartbeatRowVisible(item))
+  payload.heartbeats = kept
+  payload.heartbeatsHidden = rows.length - kept.length
   return payload
 }
 
