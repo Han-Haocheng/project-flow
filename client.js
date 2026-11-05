@@ -3652,7 +3652,7 @@ window.__ModuleLoader__.load({
 .project-flow-btn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;}
 .project-flow-chips{display:flex;flex-wrap:wrap;gap:5px;}
 .project-flow-displayRow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:8px 0 2px;}
-.project-flow-displayAll,.project-flow-displayToggle{border:1px solid var(--dsw-alias-border-l);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:1px 8px;font-size:11px;line-height:18px;cursor:pointer;}
+.project-flow-displayAll,.project-flow-displayToggle{border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);border-radius:6px;padding:1px 8px;font-size:11px;line-height:18px;cursor:pointer;}
 .project-flow-displayAll{color:var(--dsw-alias-label-primary);}
 .project-flow-displayToggle--off{opacity:.55;text-decoration:line-through;}
 .project-flow-displayToggle[disabled]{opacity:.4;cursor:not-allowed;text-decoration:none;}
@@ -3662,8 +3662,8 @@ window.__ModuleLoader__.load({
 .project-flow-ready .project-flow-cardHead .project-flow-cardTitle{display:inline-flex;align-items:center;gap:2px;}
 .project-flow-cardBody{min-width:0;}
 .project-flow-taskRow{position:relative;}
-.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px);border-left:1px solid var(--dsw-alias-border-l);margin-left:8px;}
-.project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l);margin-left:12px;}
+.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px);border-left:1px solid var(--dsw-alias-border-l2);margin-left:8px;}
+.project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l2);margin-left:12px;}
 .project-flow-taskCaret{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:1;}
 .project-flow-taskCaret:hover{color:var(--dsw-alias-label-primary);}
 .project-flow-taskBadge{flex:none;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap;}

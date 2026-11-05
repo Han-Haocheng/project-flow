@@ -1161,7 +1161,7 @@ check('TasksCard tree: A→B→C nest with 12px indent, connector class and aria
   // The connector/indent rules exist and are 12px based.
   assert.ok(source.includes('.project-flow-taskNested{padding-left:calc(var(--d,1) * 12px)'), 'indent rule missing');
   assert.ok(source.includes('.project-flow-taskChildren{'), 'child list rule missing');
-  assert.ok(source.includes('border-left:1px solid var(--dsw-alias-border-l)'), 'connector line missing');
+  assert.ok(source.includes('border-left:1px solid var(--dsw-alias-border-l2)'), 'connector line missing (border-l2)');
 
   // Expanding B reveals C at the next level; the child <ul> is a group.
   const bCaret = caretOf(card, 'project-flow-taskChildren-T-B');
@@ -1624,6 +1624,55 @@ for (const project of [realLegacyTrend, realExactTrend]) {
     /* a leftover temp dir is harmless */
   }
 }
+
+// -------------------------------- CSS alias hygiene (T-20261030-07 / task-182)
+//
+// A `var(--dsw-alias-…)` that does not exist resolves to nothing at computed-value
+// time, so the whole declaration silently disappears — that is how the task-tree
+// connector (`--dsw-alias-border-l`, absent from the theme) shipped invisible.
+//
+// Whitelist source: `@deepseek-ai/dsh-client-ui-theme/lib/client.js`, the aliases
+// declared in its `body` and `body[data-ds-dark-theme]` blocks (114 names). To
+// regenerate: `grep -o '--dsw-alias-[a-z0-9-]*:' <that file> | sort -u`.
+const THEME_ALIAS_NAMES = `
+  bg-base bg-document-preview bg-document-selection bg-layer-1 bg-layer-2 bg-layer-3 bg-mask-1 bg-mask-2
+  bg-mask-3 bg-mask-drop bg-mask-photo bg-module-platform bg-multi-select bg-overlay bg-skeleton border-inverted
+  border-inverted2 border-l1 border-l2 border-l2-darkmode-thin border-l3 border-l4 brand-primary brand-primary-invert
+  brand-primary-new-colorprimary-new-color brand-text button-contrast-fill button-elevated-fill button-floating-fill button-floating-hover button-ghost-active-border button-ghost-active-fill
+  button-ghost-active-hover button-info-fill button-info-hover button-primary-dimmed button-primary-fill button-primary-hover button-tool-bar-fill button-tool-bar-fill-invisible
+  button-tool-bar-hover code-diff-added code-diff-deleted file-diff-added-bg file-diff-added-gutter file-diff-added-marker file-diff-deleted-bg file-diff-deleted-gutter
+  file-diff-deleted-marker illustration-background illustration-backing illustration-detail illustration-inset illustration-shadow illustration-surface interactive-bg-active
+  interactive-bg-hover interactive-bg-hover-accent interactive-bg-hover-danger interactive-bg-hover-solid label-caption label-deep-diving label-deep-diving-shimmer label-dimmed
+  label-document-preview label-primary label-primary-bluish label-primary-dimmed label-primary-foreground label-primary-inverted label-secondary label-shimmer
+  label-tertiary link markdown-citation markdown-code-block markdown-code-block-banner markdown-code-segment-selected markdown-code-segment-unselected markdown-inline-code
+  markdown-placeholder markdown-tag menu-group-header-fill menu-icon onboarding-accent onboarding-card-fill onboarding-checkbox-border onboarding-secondary-fill
+  scrollbar-bg-l1 scrollbar-bg-l2 scrollbar-hover-l1 scrollbar-hover-l2 settings-card-fill settings-card-stroke state-business-primary state-business-tertiary
+  state-done-primary state-error-primary state-error-secondary state-idle-primary state-success-primary state-success-secondary state-success-tertiary state-warn-label
+  state-warn-primary state-warn-secondary state-warn-tertiary switch-thumb toast-bg toast-label tooltip-bg tooltip-key-bg
+  turn-trigger-bg turn-trigger-bg-hover
+`.trim()
+const THEME_ALIASES = new Set(THEME_ALIAS_NAMES.split(/\s+/).map((name) => '--dsw-alias-' + name))
+
+check('CSS: every var(--dsw-…) / var(--project-flow-…) reference resolves', () => {
+  const text = readFileSync(SRC, 'utf8');
+  const used = new Set();
+  for (const match of text.matchAll(/var\((--[a-z0-9-]+)/g)) {
+    if (match[1].startsWith('--dsw-') || match[1].startsWith('--project-flow-')) used.add(match[1]);
+  }
+  assert.ok(used.size > 0, 'no design-token references found at all');
+
+  const undefinedAliases = [...used].filter((name) => name.startsWith('--dsw-') && !THEME_ALIASES.has(name));
+  assert.deepEqual(undefinedAliases, [], 'undefined host alias (its declaration silently drops): ' + undefinedAliases.join(', '));
+
+  /* Plugin-local properties must be declared in this file before use. */
+  const declared = new Set([...text.matchAll(/(--project-flow-[a-z0-9-]+)\s*:/g)].map((match) => match[1]));
+  const localUndefined = [...used].filter((name) => name.startsWith('--project-flow-') && !declared.has(name));
+  assert.deepEqual(localUndefined, [], 'plugin property used without a declaration: ' + localUndefined.join(', '));
+
+  /* The exact regression this card fixes: no bare `border-l` (only l1..l4 exist). */
+  assert.ok(!/--dsw-alias-border-l(?!\d)/.test(text), '--dsw-alias-border-l is not a theme alias; use l1..l4');
+  assert.ok(text.includes('var(--dsw-alias-border-l2)'), 'the tree connector / display buttons must use border-l2');
+});
 
 // ------------------------------------------------ display row (T-13 A5)
 const DISPLAY_DEFAULTS = { allCollapsed: false, showExperiments: true, showTrend: true, showHeartbeats: true };
