@@ -1424,21 +1424,76 @@ check('PanelView: 全部收起 wins over a per-card caret, and the preferences s
   });
 });
 
+check('PanelView: the widened static guard forbids any transport inside the whole view component', () => {
+  /* Static first line of defence; the runtime interceptors above are the proof.
+     The scope is the entire PanelView body, so a transport smuggled into
+     updateDisplay / foldCard / toggleCard is caught even if no test clicks it. */
+  const start = source.indexOf('function PanelView(props)');
+  const end = source.indexOf('function Panel(props)', start);
+  assert.ok(start > 0 && end > start, 'PanelView region not found');
+  const region = source.slice(start, end);
+  const forbidden = [
+    [/fetch\s*\(/, 'fetch('],
+    [/\bwriteFile|appendFile|createWriteStream|execFile|\bspawn\s*\(/, 'a file/process write'],
+    [/\/api\//, '/api/'],
+    [/\/state\//, '/state/'],
+    [/XMLHttpRequest/, 'XMLHttpRequest'],
+    [/WebSocket/, 'WebSocket'],
+    [/sendBeacon/, 'sendBeacon'],
+  ];
+  for (const [pattern, label] of forbidden) {
+    assert.ok(!pattern.test(region), 'PanelView must not reference ' + label);
+  }
+  for (const name of ['updateDisplay', 'foldCard', 'toggleCard']) {
+    assert.ok(region.includes(name), name + ' must stay inside PanelView');
+  }
+});
+
 check('PanelView: switches and folds never call fetch and never touch the fixture store', () => {
   const view = probe.normalize(panelViewPayload());
   const before = { bytes: readFileSync(FIXTURE_STORE), mtimeMs: fs.statSync(FIXTURE_STORE).mtimeMs };
   const calls = [];
+  const beaconCalls = [];
+  const xhrCalls = [];
+  const wsCalls = [];
   const previousWindowFetch = typeof window !== 'undefined' && window ? window.fetch : undefined;
   const previousGlobalFetch = globalThis.fetch;
+  const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const previousXhr = globalThis.XMLHttpRequest;
+  const previousWs = globalThis.WebSocket;
   if (typeof window === 'undefined') globalThis.window = {};
   const recorder = (...args) => {
     calls.push(String(args[0]));
     return Promise.reject(new Error('the display switches must not reach the network'));
   };
-  /* Both surfaces: panel code may reach for window.fetch, a test double for the
-     global one — either way a switch must not produce a network call. */
+  /* Every transport a careless switch could reach for, both surfaces: panel code
+     may use window.fetch, a test double the global one, and a "write the server"
+     mutation has four other doors (beacon / XHR / WebSocket / fetch). */
   window.fetch = recorder;
   globalThis.fetch = recorder;
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    writable: true,
+    value: {
+      sendBeacon: (url) => {
+        beaconCalls.push(String(url));
+        return true;
+      },
+    },
+  });
+  globalThis.XMLHttpRequest = class FakeXhr {
+    open(method, url) {
+      xhrCalls.push('open:' + String(url));
+    }
+    send() {
+      xhrCalls.push('send');
+    }
+  };
+  globalThis.WebSocket = class FakeWebSocket {
+    constructor(url) {
+      wsCalls.push(String(url));
+    }
+  };
   try {
     withStorage({}, () => {
       const mounted = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
@@ -1452,8 +1507,17 @@ check('PanelView: switches and folds never call fetch and never touch the fixtur
     if (previousWindowFetch === undefined) delete window.fetch;
     else window.fetch = previousWindowFetch;
     globalThis.fetch = previousGlobalFetch;
+    if (navigatorDescriptor === undefined) delete globalThis.navigator;
+    else Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+    if (previousXhr === undefined) delete globalThis.XMLHttpRequest;
+    else globalThis.XMLHttpRequest = previousXhr;
+    if (previousWs === undefined) delete globalThis.WebSocket;
+    else globalThis.WebSocket = previousWs;
   }
   assert.deepEqual(calls, [], 'display switches must not call fetch at all: ' + calls.join(', '));
+  assert.deepEqual(beaconCalls, [], 'display switches must not call sendBeacon: ' + beaconCalls.join(', '));
+  assert.deepEqual(xhrCalls, [], 'display switches must not open an XHR: ' + xhrCalls.join(', '));
+  assert.deepEqual(wsCalls, [], 'display switches must not open a WebSocket: ' + wsCalls.join(', '));
   const after = readFileSync(FIXTURE_STORE);
   assert.ok(before.bytes.equals(after), 'the fixture store must stay byte-identical');
   assert.equal(fs.statSync(FIXTURE_STORE).mtimeMs, before.mtimeMs, 'the fixture store mtime must not change');
