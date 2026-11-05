@@ -54,7 +54,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { zh, en, normalize, readDisplayPrefs, writeDisplayPrefs, cardCollapsed, applyFold, DisplayBar, DisplayRow: DisplayBar, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { zh, en, normalize, PanelView, readDisplayPrefs, writeDisplayPrefs, cardCollapsed, FoldCard, DisplayBar, DisplayRow: DisplayBar, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -1316,6 +1316,158 @@ check('TasksCard tree: an older payload without parent renders flat (no caret, n
   }
 });
 
+// ------------------------------------- PanelView: switches, folds, no writes
+//
+// `PanelView` is the data-state body of the panel, split out of `Panel` so it can
+// be mounted without the polling effect. These checks click the real control row
+// and assert: a switch removes exactly its own card, 「全部收起」wins over a
+// per-card caret, the preferences survive a remount, and nothing — switch, fold or
+// remount — performs a network call or writes a byte.
+const FIXTURE_STORE = fileURLToPath(new URL('./state-store.json', import.meta.url));
+
+/** The captured Host payload plus a trend section (captured before the trend existed). */
+function panelViewPayload() {
+  const payload = JSON.parse(readFileSync(FIXTURE_STORE, 'utf8'));
+  payload.experiments = Object.assign({}, payload.experiments, { enabled: true });
+  payload.tasks = Object.assign({}, payload.tasks, {
+    trend: {
+      from: '2026-10-22',
+      to: '2026-11-04',
+      days: 14,
+      estimatedFrom: null,
+      created: [0, 1, 0, 0, 2, 0, 0, 1, 0, 0, 0, 1, 0, 1],
+      done: [1, 0, 0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 0, 0],
+      archived: [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    },
+  });
+  return payload;
+}
+
+function panelViewProps(view, extra = {}) {
+  return Object.assign({ view, t, now: NOW, workspaceRoot: '/tmp/pf-view', sessionId: 'view-session' }, extra);
+}
+
+const cardTitleTexts = (tree) => collect(tree, 'project-flow-cardTitle').map((title) => textOf(title));
+const PREF_KEY = (view) => 'project-flow.display:' + String((view && view.root) || '');
+const bodyHidden = (tree) => collect(tree, 'project-flow-cardBody').map((body) => body.props.hidden === true);
+
+check('PanelView: each switch removes exactly its own card (and the grid re-flows)', () => {
+  const payload = panelViewPayload();
+  const view = probe.normalize(payload);
+  withStorage({}, (store) => {
+    const full = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.equal(collect(full, 'project-flow-cardFold').length, 5, 'every card needs a fold caret');
+    assert.equal(collect(full, 'project-flow-trend').length, 1, 'the trend row starts visible');
+    const titles = cardTitleTexts(full);
+    for (const wanted of ['任务进度', '实验树', '实时信号', '待决策']) {
+      assert.ok(titles.some((text) => text.includes(wanted)), 'missing card: ' + wanted + ' in ' + titles.join(' | '));
+    }
+    const gridFull = collect(full, 'project-flow-grid')[0];
+    assert.equal(String(gridFull.props.className).includes('project-flow-grid--single'), false, 'two columns by default');
+
+    // heartbeats off
+    store.setItem(PREF_KEY(view), JSON.stringify({ v: 1, showHeartbeats: false }));
+    const noBeats = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.ok(!cardTitleTexts(noBeats).some((text) => text.includes('实时信号')), 'the heartbeat card must disappear');
+    assert.equal(collect(noBeats, 'project-flow-cardFold').length, 4);
+    assert.equal(collect(noBeats, 'project-flow-trend').length, 1, 'the other cards stay');
+
+    // trend off
+    store.setItem(PREF_KEY(view), JSON.stringify({ v: 1, showTrend: false }));
+    const noTrend = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.equal(collect(noTrend, 'project-flow-trend').length, 0, 'the trend row must vanish, not render zeros');
+    assert.ok(cardTitleTexts(noTrend).some((text) => text.includes('实时信号')), 'heartbeat card stays');
+
+    // experiments off (local switch) → single column, no experiment card
+    store.setItem(PREF_KEY(view), JSON.stringify({ v: 1, showExperiments: false }));
+    const noExp = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.ok(!cardTitleTexts(noExp).some((text) => text.includes('实验树')), 'the experiment card must vanish');
+    assert.equal(String(collect(noExp, 'project-flow-grid')[0].props.className).includes('project-flow-grid--single'), true, 'the grid must collapse to one column');
+
+    // project switch wins over the local one
+    const closed = probe.normalize(Object.assign({}, payload, { experiments: { enabled: false, total: 0 } }));
+    store.setItem(PREF_KEY(closed), JSON.stringify({ v: 1, showExperiments: true }));
+    const projectOff = renderWithState(probe.PanelView, panelViewProps(closed), { reset: true });
+    assert.ok(!cardTitleTexts(projectOff).some((text) => text.includes('实验树')), 'experiments.enabled=false must keep the card out');
+    assert.equal(String(collect(projectOff, 'project-flow-grid')[0].props.className).includes('project-flow-grid--single'), true);
+    const expSwitch = collect(projectOff, 'project-flow-displayToggle')[0];
+    assert.equal(expSwitch.props.disabled, true, 'the experiment switch is disabled for this project');
+  });
+});
+
+check('PanelView: 全部收起 wins over a per-card caret, and the preferences survive a remount', () => {
+  const view = probe.normalize(panelViewPayload());
+  withStorage({}, (store) => {
+    const mounted = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.deepEqual(bodyHidden(mounted), new Array(5).fill(false), 'every card starts open');
+
+    collect(mounted, 'project-flow-displayAll')[0].props.onClick({});
+    const collapsed = renderWithState(probe.PanelView, panelViewProps(view));
+    assert.deepEqual(bodyHidden(collapsed), new Array(5).fill(true), 'collapse-all folds every card');
+
+    // A per-card caret cannot punch a hole in the 总控 mode (D-13).
+    collect(collapsed, 'project-flow-cardFold')[0].props.onClick({});
+    const afterCaret = renderWithState(probe.PanelView, panelViewProps(view));
+    assert.deepEqual(bodyHidden(afterCaret), new Array(5).fill(true), 'a caret click must not open one card while all are collapsed');
+    assert.equal(collect(afterCaret, 'project-flow-cardFold')[0].props['aria-expanded'], false);
+
+    // Only 「全部展开」 resets the mode.
+    collect(afterCaret, 'project-flow-displayAll')[0].props.onClick({});
+    const expanded = renderWithState(probe.PanelView, panelViewProps(view));
+    assert.deepEqual(bodyHidden(expanded), new Array(5).fill(false), 'expand-all reopens every card');
+
+    // Persistence: a switch survives an unmount + remount of the component.
+    collect(expanded, 'project-flow-displayToggle')[1].props.onClick({}); // trend off
+    const remounted = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    assert.equal(collect(remounted, 'project-flow-trend').length, 0, 'the trend switch must survive a remount');
+    assert.equal(JSON.parse(store.getItem(PREF_KEY(view))).showTrend, false, 'the preference is stored under the workspace root');
+  });
+});
+
+check('PanelView: switches and folds never call fetch and never touch the fixture store', () => {
+  const view = probe.normalize(panelViewPayload());
+  const before = { bytes: readFileSync(FIXTURE_STORE), mtimeMs: fs.statSync(FIXTURE_STORE).mtimeMs };
+  const calls = [];
+  const previousWindowFetch = typeof window !== 'undefined' && window ? window.fetch : undefined;
+  const previousGlobalFetch = globalThis.fetch;
+  if (typeof window === 'undefined') globalThis.window = {};
+  const recorder = (...args) => {
+    calls.push(String(args[0]));
+    return Promise.reject(new Error('the display switches must not reach the network'));
+  };
+  /* Both surfaces: panel code may reach for window.fetch, a test double for the
+     global one — either way a switch must not produce a network call. */
+  window.fetch = recorder;
+  globalThis.fetch = recorder;
+  try {
+    withStorage({}, () => {
+      const mounted = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+      for (const button of collect(mounted, 'project-flow-displayToggle')) button.props.onClick({});
+      collect(mounted, 'project-flow-displayAll')[0].props.onClick({});
+      const collapsed = renderWithState(probe.PanelView, panelViewProps(view));
+      for (const caret of collect(collapsed, 'project-flow-cardFold')) caret.props.onClick({});
+      renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    });
+  } finally {
+    if (previousWindowFetch === undefined) delete window.fetch;
+    else window.fetch = previousWindowFetch;
+    globalThis.fetch = previousGlobalFetch;
+  }
+  assert.deepEqual(calls, [], 'display switches must not call fetch at all: ' + calls.join(', '));
+  const after = readFileSync(FIXTURE_STORE);
+  assert.ok(before.bytes.equals(after), 'the fixture store must stay byte-identical');
+  assert.equal(fs.statSync(FIXTURE_STORE).mtimeMs, before.mtimeMs, 'the fixture store mtime must not change');
+  assert.deepEqual(probe.normalize(panelViewPayload()), view, 'normalize must stay pure (the payload is unchanged)');
+  // The display helpers own exactly one storage write and no I/O surface at all.
+  const region = source.slice(source.indexOf('const DISPLAY_KEY'), source.indexOf('function PanelView'));
+  assert.ok(region.length > 0);
+  assert.ok(!/fetch\s*\(/.test(region), 'display helpers must not call fetch');
+  assert.ok(!/writeFile|appendFile|createWriteStream|execFile|\bspawn\s*\(/.test(region), 'display helpers must not write files or spawn');
+  assert.ok(!/\/state\/|\/api\//.test(region), 'display helpers must not reference a Host endpoint');
+  assert.ok(!/XMLHttpRequest|WebSocket|sendBeacon/.test(region), 'display helpers must not use another transport');
+  assert.ok(region.includes("'project-flow.display:'"), 'the one storage write must stay namespaced');
+});
+
 // ------------------------------ real-payload trend end-to-end (task-165)
 //
 // The approximation marker has to survive the WHOLE chain: core reads the ledger,
@@ -1510,9 +1662,10 @@ check('fold: 全部收起 wins over a manual expand, every card gets a resolvabl
   assert.equal(probe.cardCollapsed({ allCollapsed: false }, true), true);
   assert.equal(probe.cardCollapsed({ allCollapsed: false }, false), false);
 
+  /* FoldCard is the real wrapper: it owns the title row and hides the card. */
   const card = probe.TasksCard({ tasks: view.tasks, t, now: NOW });
-  const fold = { collapsed: false, onToggle: () => {}, controlsId: 'project-flow-cardBody-tasks' };
-  const folded = probe.applyFold(card, t, fold);
+  const fold = { t, collapsed: false, onToggle: () => {}, controlsId: 'project-flow-cardBody-tasks', titleKey: 'tasks.title', card };
+  const folded = probe.FoldCard(fold);
   const caret = collect(folded, 'project-flow-cardFold')[0];
   const body = collect(folded, 'project-flow-cardBody')[0];
   assert.ok(caret, 'the card title needs a fold caret');
@@ -1520,20 +1673,16 @@ check('fold: 全部收起 wins over a manual expand, every card gets a resolvabl
   assert.equal(caret.props['aria-controls'], 'project-flow-cardBody-tasks');
   assert.equal(body.props.id, 'project-flow-cardBody-tasks', 'the aria-controls target must resolve');
   assert.equal(body.props.hidden, undefined, 'an open card is not hidden');
-  const collapsed = probe.applyFold(card, t, { ...fold, collapsed: true });
+  const collapsed = probe.FoldCard({ ...fold, collapsed: true });
   assert.equal(collect(collapsed, 'project-flow-cardBody')[0].props.hidden, true);
   assert.equal(collect(collapsed, 'project-flow-cardFold')[0].props['aria-expanded'], false);
-  // A card whose title has no head row (SignalsCard) still gets one.
-  const signals = probe.applyFold(
-    probe.SignalsCard({ heartbeats: view.heartbeats, heartbeatCounts: view.heartbeatCounts, t, now: NOW }),
-    t,
-    { collapsed: false, onToggle: () => {}, controlsId: 'project-flow-cardBody-signals' }
-  );
-  assert.equal(collect(signals, 'project-flow-cardFold').length, 1);
-  assert.equal(collect(signals, 'project-flow-cardBody')[0].props.id, 'project-flow-cardBody-signals');
-  // The Panel routes all five cards through the same fold helper.
+  // The fold bar carries the card title, so the card itself drops its copy.
+  assert.ok(textOf(collect(folded, 'project-flow-cardTitle')[0]).length > 0, 'the fold bar needs the title');
+  assert.equal(collect(probe.TasksCard({ tasks: view.tasks, t, now: NOW, showTitle: false }), 'project-flow-cardTitle').length, 0, 'showTitle:false must drop the card copy');
+  // PanelView routes all five cards through FoldCard.
+  const viewStart = source.indexOf('function PanelView(props)');
   for (const key of ['decisions', 'experiments', 'tasks', 'gates', 'signals']) {
-    assert.ok(new RegExp("foldCard\\(\\s*'" + key + "'").test(source), 'card not folded: ' + key);
+    assert.ok(new RegExp("foldCard\\(\\s*'" + key + "'").test(source.slice(viewStart)), 'card not folded: ' + key);
   }
 });
 
@@ -2294,9 +2443,10 @@ check('DecisionsCard: the new stylesheet rules use theme tokens', () => {
 
 check('Panel: the decision card mounts above the two-column grid', () => {
   const text = readFileSync(SRC, 'utf8');
-  const card = text.indexOf('React.createElement(DecisionsCard, { decisions: view.decisions, t, now })');
-  const grid = text.indexOf("className: 'project-flow-grid'");
-  assert.ok(card > 0, 'the Panel does not mount DecisionsCard');
+  const viewStart = text.indexOf('function PanelView(props)');
+  const card = text.indexOf("foldCard(\n          'decisions'", viewStart);
+  const grid = text.indexOf("' project-flow-grid--single'", viewStart);
+  assert.ok(card > viewStart, 'PanelView does not mount DecisionsCard');
   assert.ok(grid > card, 'the decision card must render before the grid');
 });
 

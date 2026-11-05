@@ -1522,7 +1522,7 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { className: 'project-flow-cardHead' },
-          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('exp.title')),
+          props.showTitle === false ? null : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('exp.title')),
           React.createElement('div', { className: 'project-flow-chips' }, chips)
         ),
         total === 0
@@ -2053,7 +2053,7 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { className: 'project-flow-cardHead' },
-          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('tasks.title')),
+          props.showTitle === false ? null : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('tasks.title')),
           React.createElement('span', { className: 'project-flow-muted' }, t('tasks.total', { n: asNumber(tasks.total, 0) }))
         ),
         React.createElement(
@@ -2204,7 +2204,7 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { className: 'project-flow-cardHead' },
-          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('decisions.title', { n: open })),
+          props.showTitle === false ? null : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('decisions.title', { n: open })),
           blocking > 0
             ? React.createElement(
                 'span',
@@ -2413,7 +2413,7 @@ window.__ModuleLoader__.load({
         React.createElement(
           'div',
           { className: 'project-flow-cardHead' },
-          React.createElement('h2', { className: 'project-flow-cardTitle' }, t('gates.title')),
+          props.showTitle === false ? null : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('gates.title')),
           React.createElement(
             'span',
             { className: 'project-flow-muted' },
@@ -2542,7 +2542,7 @@ window.__ModuleLoader__.load({
       return React.createElement(
         'section',
         { className: 'project-flow-card' },
-        React.createElement('h2', { className: 'project-flow-cardTitle project-flow-cardTitle--spaced' }, t('signals.title')),
+        props.showTitle === false ? null : React.createElement('h2', { className: 'project-flow-cardTitle project-flow-cardTitle--spaced' }, t('signals.title')),
         React.createElement(
           Section,
           {
@@ -2995,77 +2995,46 @@ window.__ModuleLoader__.load({
       return asObject(prefs).allCollapsed === true || manual === true;
     }
 
-    /** Children of an element in both the real React and the selftest stub shape. */
-    function elementChildren(element) {
-      if (!element || typeof element !== 'object') return [];
-      if (Array.isArray(element.children)) return element.children;
-      const fromProps = element.props ? element.props.children : undefined;
-      if (Array.isArray(fromProps)) return fromProps;
-      return fromProps === undefined ? [] : [fromProps];
-    }
-
-    function hasClass(element, name) {
-      if (!element || !element.props) return false;
-      const value = element.props.className;
-      return typeof value === 'string' && value.split(/\s+/).includes(name);
-    }
-
     /**
-     * In-place card fold: the caret joins the card's own title row and the rest
-     * of the card is wrapped so `hidden` can collapse it. Done centrally so all
-     * five cards fold identically without five copies of the markup.
+     * A card with an in-place fold (D-20261113): the caret lives in the title row
+     * and the card itself is hidden while folded. Implemented as a wrapper
+     * component — the panel cannot see a child component's markup, so a
+     * post-processing pass over the card element would be a silent no-op.
      */
-    function applyFold(element, t, fold) {
-      if (!element || typeof element !== 'object' || fold === null) return element;
-      const children = elementChildren(element);
+    function FoldCard(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
+      const collapsed = props.collapsed === true;
+      const controlsId = asText(props.controlsId);
+      const label = t(collapsed ? 'display.expandCard' : 'display.collapseCard');
       const caret = React.createElement(
         'button',
         {
           type: 'button',
           className: 'project-flow-cardFold',
-          'aria-expanded': fold.collapsed ? false : true,
-          'aria-controls': fold.controlsId,
-          'aria-label': t(fold.collapsed ? 'display.expandCard' : 'display.collapseCard'),
-          title: t(fold.collapsed ? 'display.expandCard' : 'display.collapseCard'),
-          onClick: fold.onToggle,
+          'aria-expanded': collapsed ? false : true,
+          'aria-controls': controlsId,
+          'aria-label': label,
+          title: label,
+          onClick: () => {
+            if (typeof props.onToggle === 'function') props.onToggle();
+          },
         },
-        fold.collapsed ? '\u25B8' : '\u25BE'
+        collapsed ? '\u25B8' : '\u25BE'
       );
-      const body = (rest) =>
-        React.createElement(
-          'div',
-          { key: 'body', id: fold.controlsId, className: 'project-flow-cardBody', hidden: fold.collapsed ? true : undefined },
-          rest
-        );
-      const headIndex = children.findIndex((child) => hasClass(child, 'project-flow-cardHead'));
-      if (headIndex >= 0) {
-        const head = children[headIndex];
-        const nextHead = React.createElement(
-          head.type,
-          head.props,
-          elementChildren(head).map((child) =>
-            hasClass(child, 'project-flow-cardTitle')
-              ? React.createElement(child.type, child.props, caret, ...elementChildren(child))
-              : child
-          )
-        );
-        const next = children.slice();
-        next.splice(headIndex, 1, nextHead);
-        next.splice(headIndex + 1, next.length - headIndex - 1, body(children.filter((child, index) => index !== headIndex)));
-        return React.createElement(element.type, element.props, ...next);
-      }
-      const titleIndex = children.findIndex((child) => hasClass(child, 'project-flow-cardTitle'));
-      if (titleIndex < 0) return element;
-      const title = children[titleIndex];
       return React.createElement(
-        element.type,
-        element.props,
+        'div',
+        { className: 'project-flow-cardWrap' },
         React.createElement(
           'div',
-          { className: 'project-flow-cardHead' },
-          React.createElement(title.type, title.props, caret, ...elementChildren(title))
+          { className: 'project-flow-cardHead project-flow-cardHead--fold' },
+          caret,
+          React.createElement('h2', { className: 'project-flow-cardTitle' }, t(props.titleKey))
         ),
-        body(children.filter((child, index) => index !== titleIndex))
+        React.createElement(
+          'div',
+          { id: controlsId, className: 'project-flow-cardBody', hidden: collapsed ? true : undefined },
+          collapsed ? null : props.card
+        )
       );
     }
 
@@ -3117,6 +3086,124 @@ window.__ModuleLoader__.load({
       );
     }
     // #endregion
+
+    /**
+     * The data-state body of the panel: display control row, the five cards and
+     * the footer. Split out of `Panel` (which owns the poll) so the layout and
+     * the switches can be rendered and clicked without a fetch — the selftest
+     * mounts this component directly.
+     */
+    function PanelView(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
+      const view = props.view;
+      const now = props.now;
+      const workspaceRoot = props.workspaceRoot;
+      const sessionId = props.sessionId;
+
+      /* Display preferences (D-20261113): persisted per workspace root, read on
+         every render so a root switch simply picks up that root's file. */
+      const [displayTick, setDisplayTick] = useState(0);
+      const [foldedCards, setFoldedCards] = useState({});
+      const display = readDisplayPrefs(view ? view.root : '');
+      const updateDisplay = (patch) => {
+        writeDisplayPrefs(view ? view.root : '', Object.assign({}, display, patch));
+        setDisplayTick((value) => value + 1);
+      };
+      const toggleCard = (key) => {
+        /* D-13「总控权威」: while 「全部收起」is on the per-card carets are inert;
+           only 「全部展开」leaves that mode. Clicking one must not secretly record
+           a per-card state that would resurrect a closed card afterwards. */
+        if (display.allCollapsed === true) return;
+        setFoldedCards((current) => {
+          const table = asObject(current);
+          const next = Object.assign({}, table);
+          /* D-13「总控权威」: while 「全部收起」is on a per-card caret does nothing —
+             only 「全部展开」 resets the mode (the caret cannot punch a hole in it). */
+          next[key] = table[key] === true ? false : true;
+          return next;
+        });
+      };
+      /* Local switch vs project switch: a hidden experiment area disables the
+         toggle instead of letting the user "show" a card that must not exist. */
+      const expVisible = view !== null && view.exp.enabled === true && display.showExperiments !== false;
+      const heartbeatsVisible = display.showHeartbeats !== false;
+      /* Every card is wrapped the same way: FoldCard owns the title row + caret,
+         the card supplies the body, and 「全部收起」overrides the per-card state. */
+      const foldCard = (key, titleKey, card) =>
+        React.createElement(FoldCard, {
+          key,
+          t,
+          collapsed: cardCollapsed(display, asObject(foldedCards)[key] === true),
+          onToggle: () => toggleCard(key),
+          controlsId: 'project-flow-cardBody-' + key,
+          titleKey,
+          card,
+        });
+
+      return React.createElement(
+        React.Fragment,
+        null,
+        React.createElement(DisplayBar, {
+          t,
+          display,
+          experimentsEnabled: view.exp.enabled === true,
+          onAllCollapsed: (next) => updateDisplay({ allCollapsed: next }),
+          onToggle: (key) => updateDisplay({ [key]: display[key] === false }),
+        }),
+        /* Pending decisions sit above both columns, full width. */
+        foldCard(
+          'decisions',
+          'decisions.title',
+          React.createElement(DecisionsCard, { decisions: view.decisions, t, now, showTitle: false })
+        ),
+        React.createElement(
+          'div',
+          /* The base class stays a literal (a selftest pins it); a closed
+             experiment area only adds the single-column modifier. */
+          { className: 'project-flow-grid' + (expVisible ? '' : ' project-flow-grid--single') },
+          expVisible
+            ? React.createElement(
+                'div',
+                { className: 'project-flow-col' },
+                foldCard(
+                  'experiments',
+                  'exp.title',
+                  React.createElement(ExperimentTree, { exp: view.exp, t, now, showTitle: false })
+                )
+              )
+            : null,
+          React.createElement(
+            'div',
+            { className: 'project-flow-col' },
+            foldCard(
+              'tasks',
+              'tasks.title',
+              React.createElement(TasksCard, { tasks: view.tasks, t, now, showTitle: false, showTrend: display.showTrend !== false })
+            ),
+            /* Gate definitions sit between tasks and live signals. */
+            view.gates
+              ? foldCard('gates', 'gates.title', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot, showTitle: false }))
+              : null,
+            heartbeatsVisible
+              ? foldCard(
+                  'signals',
+                  'signals.title',
+                  React.createElement(SignalsCard, {
+                    heartbeats: view.heartbeats,
+                    heartbeatCounts: view.heartbeatCounts,
+                    heartbeatsHidden: view.heartbeatsHidden,
+                    showTitle: false,
+                    t,
+                    now,
+                    sessionId,
+                  })
+                )
+              : null
+          )
+        ),
+        React.createElement(Footer, { view, t })
+      );
+    }
 
     function Panel(props) {
       const t = typeof props.t === 'function' ? props.t : (key) => key;
@@ -3296,36 +3383,6 @@ window.__ModuleLoader__.load({
 
       const view = useMemo(() => (data ? normalize(data) : null), [data]);
 
-      /* Display preferences (D-20261113): persisted per workspace root, read on
-         every render so a root switch simply picks up that root's file. */
-      const [displayTick, setDisplayTick] = useState(0);
-      const [foldedCards, setFoldedCards] = useState({});
-      const display = readDisplayPrefs(view ? view.root : '');
-      const updateDisplay = (patch) => {
-        writeDisplayPrefs(view ? view.root : '', Object.assign({}, display, patch));
-        setDisplayTick((value) => value + 1);
-      };
-      const toggleCard = (key) => {
-        setFoldedCards((current) => {
-          const table = asObject(current);
-          const next = Object.assign({}, table);
-          /* Toggling while 「全部收起」is on would look broken: the first manual
-             expand drops the all-collapsed mode so the card can actually open. */
-          next[key] = table[key] === true ? false : true;
-          return next;
-        });
-      };
-      /* Local switch vs project switch: a hidden experiment area disables the
-         toggle instead of letting the user "show" a card that must not exist. */
-      const expVisible = view !== null && view.exp.enabled === true && display.showExperiments !== false;
-      const heartbeatsVisible = display.showHeartbeats !== false;
-      const foldCard = (key, element) =>
-        applyFold(element, t, {
-          collapsed: cardCollapsed(display, asObject(foldedCards)[key] === true),
-          onToggle: () => toggleCard(key),
-          controlsId: 'project-flow-cardBody-' + key,
-        });
-
       const refresh = useCallback(() => {
         setReloadKey((value) => value + 1);
       }, []);
@@ -3345,58 +3402,13 @@ window.__ModuleLoader__.load({
                   onInitialized: refresh,
                 })
               : React.createElement(LoadingState, { t })
-            : React.createElement(
-                React.Fragment,
-                null,
-                React.createElement(DisplayBar, {
-                  t,
-                  display,
-                  experimentsEnabled: view.exp.enabled === true,
-                  onAllCollapsed: (next) => updateDisplay({ allCollapsed: next }),
-                  onToggle: (key) => updateDisplay({ [key]: display[key] === false }),
-                }),
-                /* Pending decisions sit above both columns, full width. */
-                foldCard('decisions', React.createElement(DecisionsCard, { decisions: view.decisions, t, now })),
-                React.createElement(
-                  'div',
-                  /* The base class stays a literal (a selftest pins it); a closed
-                     experiment area only adds the single-column modifier. */
-                  { className: 'project-flow-grid' + (expVisible ? '' : ' project-flow-grid--single') },
-                  expVisible
-                    ? React.createElement(
-                        'div',
-                        { className: 'project-flow-col' },
-                        foldCard('experiments', React.createElement(ExperimentTree, { exp: view.exp, t, now }))
-                      )
-                    : null,
-                  React.createElement(
-                    'div',
-                    { className: 'project-flow-col' },
-                    foldCard(
-                      'tasks',
-                      React.createElement(TasksCard, { tasks: view.tasks, t, now, showTrend: display.showTrend !== false })
-                    ),
-                    /* Gate definitions sit between tasks and live signals. */
-                    view.gates
-                      ? foldCard('gates', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot }))
-                      : null,
-                    heartbeatsVisible
-                      ? foldCard(
-                          'signals',
-                          React.createElement(SignalsCard, {
-                            heartbeats: view.heartbeats,
-                            heartbeatCounts: view.heartbeatCounts,
-                            heartbeatsHidden: view.heartbeatsHidden,
-                            t,
-                            now,
-                            sessionId,
-                          })
-                        )
-                      : null
-                  )
-                ),
-                React.createElement(Footer, { view, t })
-              );
+            : React.createElement(PanelView, {
+                view,
+                t,
+                now,
+                workspaceRoot,
+                sessionId,
+              });
 
       return React.createElement(
         'div',
@@ -3644,6 +3656,7 @@ window.__ModuleLoader__.load({
 .project-flow-displayAll{color:var(--dsw-alias-label-primary);}
 .project-flow-displayToggle--off{opacity:.55;text-decoration:line-through;}
 .project-flow-displayToggle[disabled]{opacity:.4;cursor:not-allowed;text-decoration:none;}
+.project-flow-cardHead--fold{align-items:center;gap:2px;justify-content:flex-start;}
 .project-flow-cardFold{flex:none;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;margin-right:2px;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;line-height:1;}
 .project-flow-cardFold:hover{color:var(--dsw-alias-label-primary);}
 .project-flow-ready .project-flow-cardHead .project-flow-cardTitle{display:inline-flex;align-items:center;gap:2px;}
