@@ -350,12 +350,13 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 - **证据**：项目任务 `commits` 由中心合并后回填（合并提交与纳入的贡献提交）；实现者与审查者都不写项目台账。
 - **禁止双写**：status / commits / 验收结论只以项目台账为权威值；Team 卡状态只是执行视图，不把同一进度叙事两边各写一份。
 - **队友不写台账、不写心跳**：心跳只面向主会话；队友的进度经 Team 卡 + 申请/结论回中心，由中心登记。
+- **心跳可见性（多会话同工作区）**：面板与 `flow heartbeat list` **默认只列在跑的心跳**——已结束 / 超龄未刷新（`dead`/`stale`）条目默认隐藏并提示「已隐藏 N 条」，`--all` 看全部；旧子会话（`agent: "subagent"`）记录单独计入 `counts.hidden`、不显示。
 
 ### 10.6 拆分、派工与并发（写死）
 
 1. 读 `flow_task list` / `flow_task show <id>`（或 `flow task ... --root <主工作区>`）拿项目任务、依赖与验收。
 2. **先分析后派单**：`role: analyst` 卡先出任务书（目标/base/文件域切分/验收/验证命令/风险/依赖），中心确认后才是拆分依据；不拿"边想边派"的卡开工。
-3. 按**文件域与依赖**拆卡：一实现者 = 一条分支/worktree = 一片 `domain:`；`write_scopes` 预声明文件域（**协调信息，不是锁**）；`blocked_by` 表达依赖（审查卡依赖实现卡；依赖未完成时 readiness 不会自动开跑，完成后仍要 `send_message`）；**blocker 全 `completed` 而卡仍 `ready:false`** 时，owner 先 `team_task_get` 取最新 revision，再 `set_dependencies` 清空已完成项后 claim（不要重建卡或绕开依赖，见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.3）。
+3. 按**文件域与依赖**拆卡：一实现者 = 一条分支/worktree = 一片 `domain:`；`write_scopes` 预声明文件域（**协调信息，不是锁**）；`blocked_by` 表达依赖（审查卡依赖实现卡；依赖未完成时 readiness 不会自动开跑，完成后仍要 `send_message`）；**任务的拆分层级用 `parent`**（子任务挂父任务：单向、不存 `children`；父完成不自动完成子、子完成不自动完成父，**rollup 本版没有**；写入口目前只有 core API，`task --parent` 与 `flow_task` 未暴露，面板投影已有 `parent`/`depth` 而树形嵌套渲染待后续；schema 3 合并进度树 `T-20261030-13` 属未来方向）；**blocker 全 `completed` 而卡仍 `ready:false`** 时，owner 先 `team_task_get` 取最新 revision，再 `set_dependencies` 清空已完成项后 claim（不要重建卡或绕开依赖，见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.3）。
 4. **关键路径与满编调度**（判据写死）：**卡 X 是关键路径 ⟺ ∃Y，Y.status≠completed 且 Y.`blocked_by` ∋ X.id**（X 不完成，Y 起不来；`blocked_by` 完成后不清理，所以判据必须带 `status≠completed`）；依赖只写 Team 卡——**flow 任务没有 `blocked_by` 字段**；`depth` = 卡的后继链最长长度（有后继 ⇔ `depth>0`）。规则：① **允许空转 = 该槽的卡被 `blocked_by` 挡住**（不论是否关键路径）；关键路径卡的 owner **不接新的写卡**（可接只读核验）；② `depth=0` 的尾卡（无后继）优先满编，可并行多张；③ **空转判定**（合法性只看三分法（表见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.3），**没有数量上限**）：`pending` 里有卡**不在 `ready: true` 名单**（= 被 `blocked_by` 挡住，且上游卡仍在板上）⇒ 空转合法，在卡 notes 记 `waiting on <上游卡 id>`；**`pending` 为空、或全部 `pending` 都在 `ready: true` 名单里 ⇒ backlog 枯竭（缺口）**，当场拆卡 / 补只读卡，**不得判为合法空转**；`ready: true` 名单非空而无人负责 ⇒ 不许空转，立刻填空闲槽（**无人负责 ⇒ `team_task_update action=reassign`**；**owner `inactive` ⇒ `send_message` 唤醒**）。
 5. `team_task_create` 建卡：`subject` 按 §10.2.1（`<feat|fix|chore>: <范围>`），`description` 按 §10.4 标注（`flow:` / `role:` / 实现者 `domain:`）；正文写任务书路径、允许写域、交付格式、验证命令与停止条件。
 6. 项目任务 notes 回记 `team: <taskId>`（Lead 写，§10.5）。

@@ -449,13 +449,20 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   `{file,title,statusLine,ageSeconds,mtime}`（隐藏旧子会话记录）；`readHeartbeatSection`
   返回富形状 `{root,dir,items,counts}`，item 含
   `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime,liveness,reason}`，
-  计数 `{total, active, stale, dead, hidden}`（total/active/stale/dead 只统计可见项；
+  计数 `{total, active, stale, dead, hidden}`（total/active/stale/dead 统计
+  `heartbeats.max` 截断后的**全部行**，与 visibility 无关；
   `active` 口径见上：status active 且（live 或 fresh 且非 dead/foreign/stale）；`dead` 计
-  `liveness === "dead"`；`stale` 计 `ageSeconds > HEARTBEAT_STALE_SECONDS`（6h）的可见项，
+  `liveness === "dead"`；`stale` 计 `ageSeconds > HEARTBEAT_STALE_SECONDS`（6h）的行，
   **可与 `dead` 重叠**（一条记录可同时 stale 与 dead）；**没有 `foreign` 计数键**——跨机记录
   计入 `total`/`stale`，但不计 `active`、不计 `dead`；存活判定只读，GET state 读路径不写
   心跳文件；`root` 是解析后的
   主工作区绝对路径，降级时另带 `degraded: true` 与 `reason`）。
+- **读侧可见性（T-13）**：`readHeartbeatSection(root, contract, {visibility:'active'|'all'})`，
+  默认 `'active'`——`items` 只含 `live`，或 `unknown`/`foreign` 且 `ageSeconds ≤ 6h` 的行；
+  `dead` 与 `stale` 整行隐藏（`--all` 或等价的 `includeEnded:true` 即 `visibility:'all'`，
+  返回全量）。`counts` 口径**不变**（仍统计全部行），另带 `hiddenByVisibility` = 被隐藏行数
+  （`visibility:'all'` 时为 0；空目录/`source:'none'` 也是 0）。读路径**零写入**：不删文件、
+  不改内容、不动 mtime——隐藏只发生在内存投影里。
 
 ### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`
 
@@ -651,7 +658,7 @@ flow heartbeat start  [--goal G] [--task ID] [--claim PATH]... [--agent A]
 flow heartbeat update [--status working|idle] [--note T] [--goal G]
                       [--task ID] [--claim PATH]... [--session S]
 flow heartbeat end    [--note T] [--status done|missed] [--session S]
-flow heartbeat list
+flow heartbeat list [--all]
 flow heartbeat status [--require-active] [--session S]
 flow heartbeat gc [--dry-run]
 
@@ -696,7 +703,12 @@ flow check experiments
 - `heartbeat end` 默认 `status: done`，写 `ended_at`，`--note` 并入 `last_action`；文件保留。
 - `heartbeat status` 无 `--require-active` 时永远退出 0（只打印状态）；带
   `--require-active` 且没有 active 心跳（无文件，或 status 不是 working/idle）→ 退出 **1**，
-  供 `session-open` 这类门禁直接使用。
+  供 `session-open` 这类门禁直接使用。`heartbeat status` 只打印**单会话摘要**
+  （active/liveness/reason/ageSeconds），不做可见性过滤。
+- `heartbeat list` 默认只列**可见行**（`visibility:'active'`，口径见 §3.5）：`live`，或
+  `unknown`/`foreign` 且 `ageSeconds ≤ 6h`；被隐藏的 `dead`/`stale` 折叠为末行
+  「已隐藏 N 条（已结束/可能已停，`--all` 查看）」。`--all` 用 `visibility:'all'` 列出全量，
+  并恢复「已结束（dead）/可能已停」清单；两种模式的头部计数始终是全量 `counts`。
 - `decision list` 默认只列 `open`；`--open` 是显式同义写法，`--all` 列全部（closed 按
   `updated_at` 倒序，排在 open 之后）。排序全局唯一：升级优先，其次 `asked_at` 旧的在前。
 - `decision ask` 的 `--option` 格式 `id=label>>impact`，可重复；`choice` 至少两个。
@@ -805,6 +817,9 @@ FIFO 队列；patch 刷新 `updated_at` 不会改变队列位次），最近完�
 证明已死」；跨机 → `foreign`「只在别处活跃」）。
 目录不存在按空集处理，不报错。`agent: "subagent"` 的旧记录不展示
 （只提示隐藏条数，`flow heartbeat gc` 可清理）。心跳目录下的 `.md` 不再读取。
+**默认可见性（T-13）**：明细只含可见行（`visibility:'active'`，见 §3.5）；`flow status` 的
+人类摘要仍按**全量** `counts` 报
+`N（可能已停 S · 已结束 D · 旧子会话隐藏 H）`，隐藏行数另见 `hiddenByVisibility`。
 
 `--json` 的 `data` 含 `root/name/initialized/contractSource/schema/store/counts/heartbeats/recent`，
 其中 `heartbeats` 为
@@ -1117,12 +1132,19 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
-`heartbeats` 节由读子进程投影为**行数组**（`lib/state-snapshot.mjs` 的 `panelHeartbeats`）：行 =
-CLI section item + `title`/`statusLine`，**没有** `counts`/`root`/`dir`；排序（mtime 倒序）与
-截断（`heartbeats.max`）与 CLI 一致。`counts` 由面板读端自派生（`total`/`active`/`stale`/
-`dead`，**无 hidden**，见 `client.js`）；只有 CLI 的 `readHeartbeatSection` 才返回
-`{root, dir, items, counts{total,active,stale,dead,hidden}}`（见 §5.3/§3.5）。两者是不同实例：
-面板行不读 CLI 进程的 warning 缓冲，也不写心跳文件。
+`heartbeats` 节由读子进程取**全量行**（`lib/state-snapshot.mjs` 调
+`readHeartbeatSection(…, {visibility:'all'})`），再由**宿主侧**做最终可见性过滤；payload 里
+`heartbeats` 是**行数组**（item = CLI section item + `title`/`statusLine`，**没有**
+`counts`/`root`/`dir`），另带 `heartbeatsHidden`（被隐藏行数）。顺序固定为「全量行 →
+agents 正向证据 → 宿主过滤」：`applyAgentLiveness` 先按宿主 `agents` 服务把 live 会话标成
+`liveness:'live'`/`reason:'agent-live'`（`dead` 行不被覆盖），`applyHeartbeatVisibility` 再只留
+`live`，或 `unknown`/`foreign` 且 `ageSeconds ≤ 6h` 的行——**agents 点亮 stale 行的能力只在
+宿主侧保留**，读子进程不做最终过滤（否则 stale 行在标注前就消失）。因此面板/TUI 默认不渲染
+`dead`/`stale`/超龄行：TUI 头部保留「已结束 D」计数、区段末「+N 条已隐藏（--all 见 CLI）」，
+没有 `liveness` 字段的旧 payload 按旧行为展示全部行。`counts` 由面板读端从可见行自派生
+（`total`/`active`/`stale`/`dead`，**无 hidden**）；只有 CLI 的 `readHeartbeatSection` 才返回带
+`counts` 与 `hiddenByVisibility` 的富形状（见 §5.3/§3.5）。两者是不同实例：面板行不读 CLI
+进程的 warning 缓冲，也不写心跳文件。
 
 #### 9.1.1 state 的根解析与文件系统纪律
 

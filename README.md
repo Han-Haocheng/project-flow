@@ -146,6 +146,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   重启或 pid 消失记 **dead**（可证明已死），跨机记 **foreign**（只在别处活跃），
   `ageSeconds > 6h` 记 **stale**（可能已停，可与 dead 重叠）。`flow heartbeat list` 有「存活」
   列；`flow heartbeat status --require-active` 对 dead/stale/foreign 退出 1（见 `CONTRACT.md` §3.5）。
+- **心跳默认只显示活跃/新鲜条目**：`dead` 与超 6h 无证据的 `stale` 折叠为计数（CLI 末行「已隐藏
+  N 条」，`flow heartbeat list --all` 可看全部，文件不删）；面板/TUI 同样默认隐藏，只在区末提示
+  「+N 条已隐藏」（见 `CONTRACT.md` §3.5/§5.1）。
 - 实验默认关闭（见「实验（可选）」）；开启后只示「最近」切片（实验 400 条、心跳 20 条）；门禁示最近一次运行。
 
 ## 自测

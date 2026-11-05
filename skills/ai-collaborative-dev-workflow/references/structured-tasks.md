@@ -33,7 +33,12 @@
 | `checkpoints` | 否 | 追加式：`{at, files[], gate, note}`；只增不改 |
 | `commits` | 否 | 关联提交 sha；done 时 ≥1 |
 | `notes` | 否 | ≤20 行/2000 字；只放判断性说明，超出链接设计文档 |
+| `parent` | 否 | **任务拆分层级**：父任务 id，宽引用 `^[A-Za-z][A-Za-z0-9_.-]{1,60}$`（字母开头、2..61）；`null`/空串 = 根。写路径要求父**已存在**（`parent-not-found`）、**禁自指**、**禁环**（`parent-cycle`）；读路径父失效/成环**按根**（投影 `parent: null`，不迁移、不写回）；**单向 child→parent，不存 `children` 数组** |
 | `experiment` | 否 | 实验型项目用：`E-YYYYMMDD-NN`，**应指向已存在实验**（格式非法才拒；不存在只记 warning、不拒绝写入）；**实验记录不存 tasks 列表**（单向引用，不双写） |
+
+**两种 `parent` 别混**：实验 `parent` = 后继/派生关系（`pivoted` 的新实验指向旧实验，硬规则里「有后继」即指它）；任务 `parent` = 拆分层级（子任务挂父任务）。两者都**单向**——记录只存自己的 `parent`，父记录不回写子 id。
+
+**任务 `parent` 的落地面（T-20261030-13 之前）**：core `addTask`/`updateTask` 已校验并可写；**`task add|update --parent` 与 `flow_task` 工具尚未暴露该参数**（当前写层级只能走 core API 或直接改 JSON）。state 投影已带 `parent`/`depth`、队列头取根；**面板树形嵌套与跨组徽标尚未落地**（client 仍按 active/draft/recentDone 平铺）。`T-20261030-13`（schema 3 实验+任务合并进度树）是未来方向——本版只做任务的 `parent` 子集，**没有 rollup、没有统一状态机**。
 
 ## 2.1 实验记录字段（`experiments/E-*.json`，schema 2 约定）
 
