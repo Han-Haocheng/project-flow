@@ -14,7 +14,9 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "",
+  "notes": "2026-11-05 决策 D-20261105-10 = single-pkg（M1，用户原话「其他的插件通常都是多组件构成的」）。第 1 步已完成并提交 244f1d2（lib/plugin/shared.mjs 抽共享管道，零行为变化，316/316 + selftest 全绿）。第 2-3 步派 team task-196（工具模块化 + tasks/gates/experiments 三个入口 + patch 三行）。布局：保留 project-flow(shared：store/锁/契约/ID/树/trend/决策/心跳/check/state 端点/面板 shell) + 新增 tasks/gates/experiments 三行；CLI 单二进制；state 端点不拆；client/TUI 本轮不拆。",
   "created_at": "2026-11-05T22:44:27+08:00",
-  "updated_at": "2026-11-05T22:44:27+08:00"
+  "updated_at": "2026-11-05T22:52:09+08:00",
+  "done_at": null,
+  "archived_at": null
 }
