@@ -30,16 +30,21 @@
   "schema": 1,
   "id": "D-20261105-03",
   "default": null,
-  "status": "open",
+  "status": "answered",
   "blocks": [],
   "affects": [],
   "supersedes": null,
-  "answer": null,
-  "answered_at": null,
+  "answer": {
+    "choice": "slim",
+    "note": "用户原话「init 加锁，id自动累加」→ 取 slim：init 加锁（已提交 dd8139a）；保留 T-YYYYMMDD-NN 自动累加、不换 ULID；补「不复用已删除编号」与跨分支冲突文档（禁 -X ours/theirs）",
+    "at": "2026-11-05T21:12:09+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-05T21:12:09+08:00",
   "withdraw": null,
   "superseded_by": null,
   "fingerprint": "b6ee15c4788b174e",
   "asked_at": "2026-11-05T21:02:54+08:00",
   "created_at": "2026-11-05T21:02:54+08:00",
-  "updated_at": "2026-11-05T21:02:54+08:00"
+  "updated_at": "2026-11-05T21:12:09+08:00"
 }

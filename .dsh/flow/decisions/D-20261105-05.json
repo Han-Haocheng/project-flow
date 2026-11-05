@@ -1,0 +1,50 @@
+{
+  "question": "id 用永久序号还是时间戳？你说的「和时间无关」与时间戳有冲突，需要定一个。",
+  "kind": "choice",
+  "rationale": "你前面要「永久累加、和时间无关」，又说「实在不行用时间戳」——两者互斥（时间戳与时间强相关）。ID 要写进所有文档、正则与 40+ 条历史记录，必须先定一个，否则卡片实现会反复翻工。",
+  "options": [
+    {
+      "id": "seq",
+      "label": "全局永久序号 T-0001",
+      "impact": "新 id `T-0001`、`T-0002`（4 位补零，上限 9999）：真正「与时间无关」的永久序号，字典序=创建序；需在 flow.json 存全局高水位，旧 id 保留可读。"
+    },
+    {
+      "id": "timestamp",
+      "label": "时间戳 T-YYYYMMDDHHMMSS",
+      "impact": "新 id `T-20261105211530`（Y/M/D/H/M/S）：不改格式就天然单调不重复、无需计数器；但本质仍与时间相关，且 12 位较长。"
+    },
+    {
+      "id": "unix",
+      "label": "unix 秒时间戳",
+      "impact": "新 id `T-1762611330`（unix 秒）：短、单调，但可读性差、难与旧 id 共存辨认。"
+    },
+    {
+      "id": "keep-seq",
+      "label": "保持现状 T-YYYYMMDD-NN",
+      "impact": "保留 `T-YYYYMMDD-NN` 按日序号（现状），只修删号不复用；不做永久累加。"
+    }
+  ],
+  "recommendation": "seq",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 4,
+  "schema": 1,
+  "id": "D-20261105-05",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "timestamp",
+    "note": "用户回「timestamp」→ 新任务 id 用时间戳：T-YYYYMMDDHHMMSS（不用计数器、天然不重复）；旧 T-YYYYMMDD-NN 保留可读",
+    "at": "2026-11-05T21:20:25+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-05T21:20:25+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "66648b090aa39463",
+  "asked_at": "2026-11-05T21:16:41+08:00",
+  "created_at": "2026-11-05T21:16:41+08:00",
+  "updated_at": "2026-11-05T21:20:25+08:00"
+}
