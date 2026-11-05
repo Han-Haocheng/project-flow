@@ -1,0 +1,45 @@
+{
+  "question": "心跳「随会话消失」是隐藏还是删除？",
+  "kind": "choice",
+  "rationale": "删除心跳文件不可逆、且与现有「读路径零写入」契约冲突；隐藏与 gc 的组合方式需要你定。",
+  "options": [
+    {
+      "id": "hide",
+      "label": "默认隐藏 dead 条目，不删文件（推荐）",
+      "impact": "面板与 CLI 默认不列 dead/已结束条目（只显示计数「隐藏 N 条已结束」），`--all` 可看全部；心跳文件保留不删，读路径不写。可逆、零风险。"
+    },
+    {
+      "id": "hide-gc",
+      "label": "隐藏 + 提供手动 gc 命令",
+      "impact": "默认隐藏 + 新增 `flow heartbeat gc --dead --older-than N` 手动清理（不自动删），需要时手动执行。"
+    },
+    {
+      "id": "autodelete",
+      "label": "自动删除失效条目",
+      "impact": "面板读到 dead 且超过 N 天就自动删文件（读路径写盘，不可逆；与「读路径不得写」的契约冲突，需改契约）。"
+    }
+  ],
+  "recommendation": "hide-gc",
+  "asked_session": "session-0c1d5f11-3527-4088-b7cc-09800fd76a98",
+  "asked_turn": 3,
+  "schema": 1,
+  "id": "D-20261104-14",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "hide",
+    "note": "用户选「默认隐藏 dead、不删文件」：面板与 CLI 默认不列 dead/已结束条目，只显示「隐藏 N 条已结束」，--all 可看全部；文件保留、读路径不写；不要求 gc 命令",
+    "at": "2026-11-04T21:56:16+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-04T21:56:16+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "d4cb52c048941fa6",
+  "asked_at": "2026-11-04T21:55:43+08:00",
+  "created_at": "2026-11-04T21:55:43+08:00",
+  "updated_at": "2026-11-04T21:56:16+08:00"
+}

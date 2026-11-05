@@ -11,3 +11,6 @@ test/.tmp/
 # 原子写/接管中间产物：进程在任何阶段崩溃都不该把它们带进仓库
 *.tmp-*
 .dsh/flow/.lock.takeover-*
+
+# 桌面端运行日志（本地）
+dsh-desktop.log

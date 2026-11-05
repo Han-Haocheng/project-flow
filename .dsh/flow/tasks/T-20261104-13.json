@@ -1,0 +1,31 @@
+{
+  "title": "feat: 任务树形结构/侧栏开关/趋势双折线/心跳随会话消失",
+  "goal": "用户 2026-11-04 21:54 四项优化：①处理任务时若存在子任务，任务进度上呈现树形结构；②侧栏上优化相关的开关和功能；③趋势图改用双折线图；④当前工作区只有一个会话但心跳显示 5 个，心跳条目应随会话消失而消失。",
+  "scope": {
+    "allow": [
+      "lib/",
+      "index.js",
+      "client.js",
+      "tui-panel.js",
+      "bin/",
+      "CONTRACT.md",
+      "README.md",
+      "test/",
+      ".selftest/",
+      "skills/"
+    ],
+    "deny": [
+      ".git/"
+    ]
+  },
+  "schema": 1,
+  "id": "T-20261104-13",
+  "status": "draft",
+  "owner": "",
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-04T21:54:43+08:00",
+  "updated_at": "2026-11-04T21:54:43+08:00"
+}
