@@ -238,7 +238,7 @@ metadata:
 
 | 面 | 持久性 | 存什么 | 谁写 |
 |---|---|---|---|
-| **项目台账** `.dsh/flow/tasks/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | status、goal、scope、acceptance、notes、commits | 中心（Lead）；队友不写 |
+| **项目台账** `.dsh/flow/tasks/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | `title`、`type`、`status`、`owner`、`notes`、`scope`、`acceptance`、`commits`（`title` 兼目标；`goal` 已合并，旧记录由 `normalizeTaskFormat` 迁移） | 中心（Lead）；队友不写 |
 | **Team 共享任务板**（`team_task_*`） | **随 Lead 会话消失** | 执行卡片、owner、依赖、write_scopes、完成状态 | 队友 claim/complete；Lead 建卡/回收 |
 | **原生 Agent Teams UI** | 随会话 | 实时观察成员与卡 | 只展示，不是真源；项目流面板**不做** Team 投影（T-26 已删） |
 
