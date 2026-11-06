@@ -1,0 +1,47 @@
+{
+  "question": "还有一处：D-20261106-03 决策记录本身（question/options 文字里）带着 /mnt/d/Project/project-flow。要一起处理吗？",
+  "kind": "choice",
+  "rationale": "D-20261106-03 选了 clean-first，但这条决策记录自身写进了被清理的路径；它会被一并推送到公开仓库，需用户决定是否连它一起脱敏。",
+  "options": [
+    {
+      "id": "redact",
+      "label": "改措辞后推送",
+      "impact": "把 D-20261106-03 的 question/options 里的绝对路径改成描述性表述（只改这条决策记录），再 push；内容一致、只是不出现路径"
+    },
+    {
+      "id": "keep",
+      "label": "保持原样推送",
+      "impact": "决策台账就是公开内容，路径一并在内；你已经批准过推送"
+    },
+    {
+      "id": "hold",
+      "label": "先不推",
+      "impact": "保留现状，B-6 CI 延期"
+    }
+  ],
+  "recommendation": "redact",
+  "affects": [
+    ".dsh/flow/decisions/D-20261106-03.json"
+  ],
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 12,
+  "schema": 1,
+  "id": "D-20261106-04",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "redact",
+    "note": "用户答\"处理\" → 脱敏 D-20261106-03 决策记录后再推",
+    "at": "2026-11-06T19:46:21+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-06T19:46:21+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "415612fd682d1a94",
+  "asked_at": "2026-11-06T19:44:45+08:00",
+  "created_at": "2026-11-06T19:44:45+08:00",
+  "updated_at": "2026-11-06T19:46:21+08:00"
+}

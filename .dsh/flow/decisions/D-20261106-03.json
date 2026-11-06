@@ -1,12 +1,12 @@
 {
-  "question": "推送前扫描发现 test/tui-panel.test.mjs:25 含本机绝对路径 /mnt/d/Project/project-flow（当作 fixture 的 root 值）。公开前要处理吗？",
+  "question": "推送前扫描发现 test/tui-panel.test.mjs:25 含本机绝对路径（当作 fixture 的 root 值）。公开前要处理吗？",
   "kind": "choice",
   "rationale": "D-20261106-02 已批准推送，但推送前扫描发现一处本机路径会随之上线 GitHub；推送后二十分钟内不可撤回，需用户在三条路里定一条。",
   "options": [
     {
       "id": "push-asis",
       "label": "照现状推送",
-      "impact": "立刻 push；test/tui-panel.test.mjs:25 的 '/mnt/d/Project/project-flow' 夹具会公开，但那是你自己的仓库名，无凭据、无隐私"
+      "impact": "立刻 push；test/tui-panel.test.mjs:25 的夹具会公开，但那是仓库名，无凭据、无隐私"
     },
     {
       "id": "clean-first",
