@@ -286,6 +286,44 @@ function json(res) {
   return JSON.parse(res.body)
 }
 
+/**
+ * 同轮延迟基线（毫秒）：在**同一进程、同一时刻**对一个健康 root 连发 `count` 次
+ * 顺序请求，取中位数。它衡量的完全是「本机现在的调度水平」——空载 ~10–20ms，
+ * 4 个队友并发跑测试时能到 300ms+。
+ *
+ * 为什么要有它：这些用例原本写死 `<100ms` / `≤500ms`。绝对阈值在空载下很宽裕，
+ * 但机器一忙就必然红——**红的原因不是被测路径变慢，而是主机变慢**。用「场景耗时 ÷
+ * 同轮基线」判断，只有在被测路径**相对本机正常水平**退化时才会红，也就是真正想
+ * 抓的那类回归（失联挂载把事件循环卡死 6.4s、并发时抢同一个子进程）。
+ *
+ * 注意：结构断言（`root` 各自正确、`tasks.total`、`error.code`、`children≥2`）
+ * 是**确定性**的，它们不参与这里任何放宽，仍然是这些用例的主判据。
+ */
+async function baselineLatency(routes, root, count = 3) {
+  const samples = []
+  for (let index = 0; index < count; index += 1) {
+    const start = Date.now()
+    const res = await startState(routes, root).done
+    samples.push(Date.now() - start)
+    assert.equal(json(res).ok, true, `基线采样失败：${res.body}`)
+  }
+  return samples.slice().sort((left, right) => left - right)[Math.floor(samples.length / 2)]
+}
+
+/**
+ * 比值上限。稳态单请求相对同轮基线的正常比值约 1–1.5（两者都是同一个子进程处理
+ * 同一种请求）；并发/冷池场景因为要额外 fork 一个子进程，实测在 2–4 倍。取 8 倍
+ * 留足余量，同时仍能在「抢同一个子进程导致串行」这类回归上显著超标（那种情况是
+ * 基线 × 假死根的超时预算，量级完全不同）。
+ *
+ * 分母下限：空载基线可能只有 3–5ms，全在噪声里；`max(baseline, 40ms)` 让分母稳定，
+ * 又远小于任何真实退化。
+ */
+const LATENCY_RATIO_MAX = 8
+/** 冷池首轮专用：要额外 fork 一个子进程，状态与基线不对称（见该用例注释）。 */
+const COLD_POOL_RATIO_MAX = 20
+const BASELINE_FLOOR_MS = 40
+
 // -------------------------------------------------------------------- cases
 test('假死 root（FIFO）：200 + state-timeout ≤2s，主线程同步 fs = 0，子进程 ≤300ms 消失', { skip: POSIX === false }, async () => {
   const root = makeProject('hung', { fifoTask: true })
@@ -353,6 +391,8 @@ test('正常 root：预热后延迟 <100ms，payload 正常', async () => {
   // 首次请求可能仍在等 fork 完成；预热一次后再测稳态延迟。
   const first = startState(routes, root)
   await first.done
+  // 同轮基线：稳态同一请求在本机的正常耗时。判定用比值而不是死的 100ms。
+  const baseline = await baselineLatency(routes, root)
   const start = Date.now()
   const res = await startState(routes, root).done
   const elapsed = Date.now() - start
@@ -361,7 +401,13 @@ test('正常 root：预热后延迟 <100ms，payload 正常', async () => {
   assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
   assert.equal(payload.tasks.total, 1)
   assert.equal(payload.root, fs.realpathSync(root))
-  assert.ok(elapsed < 100, `预热后的正常请求应 <100ms，实际 ${elapsed}ms`)
+  const denominator = Math.max(baseline, BASELINE_FLOOR_MS)
+  assert.ok(
+    elapsed / denominator <= LATENCY_RATIO_MAX,
+    `预热后的正常请求应 ≤${LATENCY_RATIO_MAX}×同轮基线，实际 ${elapsed}ms / 基线 ${baseline}ms = ${(elapsed / denominator).toFixed(1)}×`,
+  )
+  // 保底绝对上限：比值正常但两侧一起慢到事故量级（整机卡死/读路径退回同步 IO）。
+  assert.ok(elapsed < 2000, `预热后的正常请求应 <2000ms（保底），实际 ${elapsed}ms`)
 })
 
 test('并发：假死 root 与正常 root 同飞，正常请求 ≤500ms 且 root 各自正确', { skip: POSIX === false }, async () => {
@@ -369,6 +415,8 @@ test('并发：假死 root 与正常 root 同飞，正常请求 ≤500ms 且 roo
   const normal = makeProject('normal-concurrent')
   const { routes } = await mount([hung, normal])
   await warmWorker()
+  // 同轮基线：健康 root 在**无假死邻居**时的稳态耗时，作为并发场景的对照分母。
+  const baseline = await baselineLatency(routes, normal)
 
   const hungRequest = startState(routes, hung)
   await sleep(50)
@@ -378,14 +426,20 @@ test('并发：假死 root 与正常 root 同飞，正常请求 ≤500ms 且 roo
   const normalPayload = json(normalRes)
   assert.equal(normalPayload.ok, true, JSON.stringify(normalPayload.error ?? null))
   assert.equal(normalPayload.root, fs.realpathSync(normal), '并发请求的 payload.root 必须各归各')
-  assert.ok(elapsed <= 500, `并发时的正常请求应 ≤500ms，实际 ${elapsed}ms`)
+  const denominator = Math.max(baseline, BASELINE_FLOOR_MS)
+  assert.ok(
+    elapsed / denominator <= LATENCY_RATIO_MAX,
+    `并发时的正常请求应 ≤${LATENCY_RATIO_MAX}×同轮基线，实际 ${elapsed}ms / 基线 ${baseline}ms = ${(elapsed / denominator).toFixed(1)}×`,
+  )
+  // 保底：假死邻居若真的拖住了正常请求，它会逼近假死请求的超时预算（秒级）。
+  assert.ok(elapsed < TIMEOUT_BUDGET_MS, `并发时的正常请求应 <${TIMEOUT_BUDGET_MS}ms（保底），实际 ${elapsed}ms`)
 
   const hungPayload = json(await hungRequest.done)
   assert.equal(hungPayload.error.code, 'state-timeout')
   assert.equal(hungPayload.root, fs.realpathSync(hung))
 })
 
-test('冷池首轮两并发（hung+normal）：normal 必须成功且 <500ms，hung 超时，children≥2', { skip: POSIX === false }, async () => {
+test('冷池首轮两并发（hung+normal）：normal 必须成功且 ≤20×同轮基线，hung 超时，children≥2', { skip: POSIX === false }, async () => {
   const hung = makeProject('cold-hung', { fifoTask: true })
   const normal = makeProject('cold-normal')
   // `mount` 只 apply（预热 fork 已在途）就返回：立刻并发请求，触发「await starting 后
@@ -404,7 +458,6 @@ test('冷池首轮两并发（hung+normal）：normal 必须成功且 <500ms，h
 
   assert.equal(normalPayload.ok, true, JSON.stringify(normalPayload.error ?? normalPayload.warnings ?? null))
   assert.equal(normalPayload.root, fs.realpathSync(normal), '并发时 payload.root 必须各归各')
-  assert.ok(normalElapsed < 500, `冷池并发下 normal 应 <500ms，实际 ${normalElapsed}ms`)
 
   // The hung request is still in flight: the pool must hold two children (its own
   // busy one + the finished normal request's idle spare), not one shared child.
@@ -412,6 +465,23 @@ test('冷池首轮两并发（hung+normal）：normal 必须成功且 <500ms，h
   const hungPayload = json(await hungRequest.done)
   assert.equal(hungPayload.error.code, 'state-timeout')
   assert.equal(overlapped, true, '两个并发请求在重叠窗口内应各占一个子进程')
+
+  // 同轮基线：本用例**不能**提前测基线（提前发请求会把池烤热，破坏「冷池首轮」这个
+  // 前提），所以基线放在结构断言之后取——此时池已热、假死请求已回收，测的是本机此刻
+  // 稳态下同一 root 的耗时。冷池首轮允许比它慢（要 fork 一个额外子进程），给 8 倍。
+  // 真正的回归（两个请求抢同一个子进程 → 串行 → 正常请求要等满假死超时）会到秒级。
+  const baseline = await baselineLatency(routes, normal)
+  const denominator = Math.max(baseline, BASELINE_FLOOR_MS)
+  // 冷池用例的比值上限单独放宽到 20：它要 fork **一个额外子进程**，且基线是在池已热、
+  // 假死请求已回收之后测的，两者的系统状态本来就不对称。负载实测（16 忙进程）比值
+  // 9–10 倍，空载 2–4 倍；真正的回归（两请求抢同一子进程）是「正常请求等满假死超时」，
+  // 比值 ≥30 且绝对耗时直奔秒级，两条判据都会红。
+  assert.ok(
+    normalElapsed / denominator <= COLD_POOL_RATIO_MAX,
+    `冷池并发下 normal 应 ≤${COLD_POOL_RATIO_MAX}×同轮基线，实际 ${normalElapsed}ms / 基线 ${baseline}ms = ${(normalElapsed / denominator).toFixed(1)}×`,
+  )
+  // 保底：抢同一个子进程时正常请求要等假死超时预算，量级完全不同。
+  assert.ok(normalElapsed < TIMEOUT_BUDGET_MS, `冷池并发下 normal 应 <${TIMEOUT_BUDGET_MS}ms（保底），实际 ${normalElapsed}ms`)
 })
 
 test('冷池 5 路并发正常 root：5/5 ok、root 各自正确、无 unavailable', async () => {
