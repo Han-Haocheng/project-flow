@@ -1,0 +1,24 @@
+{
+  "title": "fix: 面板剩余裸 state-primary 正文对比度",
+  "type": "fix",
+  "status": "done",
+  "goal": "同一 CSS 块里仍有 10.5–11px 的裸 `--dsw-alias-state-*-primary` 正文，浅色主题不达 WCAG AA 4.5:1：`.project-flow-stale`（11px warn，浅 2.15:1）、`.project-flow-verdict--open`、`.project-flow-gateError`（4.50:1 压线）、`.project-flow-decisionMark`、`.project-flow-gateRun--ok/--fail`。统一改用插件内 `--project-flow-{ok,warn,error}-text` token（86c14bb 的 P1-2 只修了 chip 整族，这几处是既有的同族问题，不是那次改动引入的）。",
+  "notes": "2026-11-06 完成并 accept（Lead 独立复核：diff 读全、四门禁自跑、变异证据采信）。commit ec3c72b。\n\n交付：client.js 6 处正文 color → --project-flow-{ok,warn,error}-text（浅色 2.15/2.28/4.50/4.50/2.15/2.15 → 6.00/6.22/10.26/10.26/6.00/6.00；深色 8.20–10.25 全过）。client-render 守卫扩到 6 条规则 + 裸 token 专项断言（三次变异均红）；DecisionsCard theme-token 断言最小扩为「宿主 alias 或插件 text token」。\n\n遗留（同族既有，未修，另立卡候选）：.project-flow-gateMark--ok/verdict--confirmed 浅色 2.28:1、gateMark--error/verdict--refuted 4.50 压线、staleCode（opacity .8 合成 3.90:1）、staleMark 1px 边框 2.15:1（非文本 3:1 也不足）。",
+  "schema": 1,
+  "id": "T-20261106101937",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "ec3c72b"
+  ],
+  "created_at": "2026-11-06T10:19:37+08:00",
+  "updated_at": "2026-11-06T11:42:21+08:00",
+  "done_at": "2026-11-06T11:42:21+08:00",
+  "archived_at": null
+}

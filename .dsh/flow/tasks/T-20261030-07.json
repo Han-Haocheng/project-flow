@@ -1,8 +1,8 @@
 {
   "id": "T-20261030-07",
   "title": "客户端：主题、可访问性、稳定 key、keepMounted",
-  "status": "draft",
-  "owner": "",
+  "status": "done",
+  "owner": "client-p1",
   "goal": "浅色主题下日志/运行输出/chip 有可辨底色；状态色不再承担正文对比度；补齐读屏与命中区；列表 key 改业务键；tab 支持 keepMounted 与可见性轮询。",
   "scope": {
     "allow": [
@@ -22,8 +22,11 @@
   ],
   "checkpoints": [],
   "commits": [],
-  "notes": "来源：审查 P2-18/19/20/21。\n\n第四路补充：面板 chip 现在写死「只读」，但已有门禁开关写操作，文案需同步。",
+  "notes": "2026-11-06：86c14bb 已完成 chip ok/warn + trend done 对比度、aria-busy、sr-only live、按 root 缓存 UI 并通过验收（bdbf463 修的主题别名 P0 也在内）。对 86c14bb 的只读审查已完成，报告 .dsh-ops/briefs/review-86c14bb.md（P0 0 / P1 3 / P2 9）。P1 三条（phase 优先级 client.js:3144、chip 整族 hb-* 浅色 2.15–3.72:1、live region 位于 aria-busy 子树内）已修并提交 72d2ae6，reviewer-panel 独立复核 accept（报告 review-task5-86c14bb-p1fix.md，WCAG 18/18 ≥4.5，7 变异全抓）。\nP2 九条全部未动（UI_STATE 上限、空 root 折叠死开关、函数式 setState 回退、announced 存文案、缓存键与挂载键不同源、自检硬编码宿主调色板、正则禁全量 #rrggbb、恒真空断言、失败抖动播报）， plus 审查时新点出的同族裸 state-primary 正文（.project-flow-stale / verdict--open / gateError / decisionMark / gateRun--ok/--fail）已另开卡 T-20261106101937。\n用户四项需求里③（面板任务行 type:title/notes/id）已派片 B（team task-10，owner client-p1，blocked_by task-9），任务书 .dsh-ops/briefs/brief-task-module-2-3-4.md §3。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-10-30T20:34:07+08:00",
-  "schema": 1
+  "updated_at": "2026-11-06T11:16:47+08:00",
+  "schema": 1,
+  "parent": null,
+  "done_at": "2026-11-06T11:16:47+08:00",
+  "archived_at": null
 }

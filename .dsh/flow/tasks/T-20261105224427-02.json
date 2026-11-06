@@ -1,12 +1,12 @@
 {
   "title": "插件拆分为任务/门禁/实验等子插件",
   "type": "refactor",
-  "status": "active",
+  "status": "done",
   "goal": "把单体 @local/project-flow（index 2897 / client 4076 / core 4592 / bin 2211 / tui 721）拆成按模块子插件：任务管理、门禁管理、实验管理 + 共享层；每模块独立插件 id/tools/CLI 子命令/面板卡片/TUI 区段；一次 link: 安装不退化、state 端点与轮询不翻倍、旧 id 有迁移路径。",
   "schema": 1,
   "id": "T-20261105224427-02",
   "parent": null,
-  "owner": "",
+  "owner": "plugin-split",
   "scope": {
     "allow": [],
     "deny": []
@@ -14,9 +14,9 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "2026-11-05 决策 D-20261105-10 = single-pkg（M1，用户原话「其他的插件通常都是多组件构成的」）。第 1 步已完成并提交 244f1d2（lib/plugin/shared.mjs 抽共享管道，零行为变化，316/316 + selftest 全绿）。第 2-3 步派 team task-196（工具模块化 + tasks/gates/experiments 三个入口 + patch 三行）。布局：保留 project-flow(shared：store/锁/契约/ID/树/trend/决策/心跳/check/state 端点/面板 shell) + 新增 tasks/gates/experiments 三行；CLI 单二进制；state 端点不拆；client/TUI 本轮不拆。",
+  "notes": "2026-11-06 第 2 步完成并 accept。**team: task-1**（实现者 plugin-split），**team: task-7**（审查者 reviewer-split，accept，报告 review-split-step2.md）。\n产出：新增 lib/plugin/mount.mjs（唯一挂载层：service/warnMount/mountWarnings/provide/wrapToolDefinition/toolDeps/registerToolDefinitions/mountModule）+ lib/tools/{experiments,tasks,gates}.mjs（各 buildDefinition(deps) 产出一个工具，字面量按行切片原样搬运）+ 包根 tasks.js/gates.js/experiments.js（各 export apply 只注册自己一个工具）。index.js 2728→2256，只留 flow_status/flow_heartbeat/flow_decision 与全部非工具副作用（三条 HTTP 路由、state worker 池、技能、system prompt、心跳提醒、写守卫）。package.json 加 3 个 exports + 3 个 files；cordis.patch.yml 原两行不动、同 insert 块追加 project-flow-tasks/-gates/-experiments。\ndeps 设计：只有 { ctx, toolRoot }——被搬走的字面量写的是 toolRoot(ctx,args,exec)，故三段字面量无需改一个字符；其余规则（hasStore/core 访问器/字段白名单/常量）全部模块级 import，**故意不可注入**，避免子入口分叉实现。\nLead 复跑门禁（不是采信自述）：`node --test test/` 334 tests / 334 pass / 0 fail（连跑两轮）；五个 .selftest 全 PASS（host2-tools / harness / client-render 97/97 / client-poll 25/25 / client-registration 31/31）。**6 个 flow_* 工具的 name/description/parameters/output.schema/isConcurrencySafe/timeoutMs 逐字节一致**：用 .dsh-ops/tools/schema-snapshot.mjs 对 `git archive HEAD` 纯净树与当前树各生成快照，diff 为空。\n遗留：README / CONTRACT.md 未记录子插件入口（写域外，留文档卡）。",
   "created_at": "2026-11-05T22:44:27+08:00",
-  "updated_at": "2026-11-05T22:52:09+08:00",
-  "done_at": null,
+  "updated_at": "2026-11-06T11:16:52+08:00",
+  "done_at": "2026-11-06T11:16:36+08:00",
   "archived_at": null
 }
