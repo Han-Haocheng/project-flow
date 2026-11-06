@@ -424,6 +424,9 @@ function textWidth(value) {
   return width
 }
 
+// ⚠ 与 `lib/util.mjs` 的 `pad` **同名不同物，绝不可去重**：这里是 CLI 表格列补齐
+// （按显示宽度 `textWidth` 算、支持左右对齐）；util 那个是 `padStart(width,'0')`
+// 的时间戳补零。按名字合并会把 CLI 表格整列对齐改坏。
 function pad(value, width, align = 'left') {
   const text = String(value ?? '')
   const diff = width - textWidth(text)
