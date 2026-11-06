@@ -353,3 +353,44 @@ test('SPEC 白名单放行 --type-map（VALUE_FLAGS 已收录），未声明参�
   assert.equal(rejected.code, 2)
   assert.match(rejected.json.error.message, /未知参数 --fix|不支持 --fix/)
 })
+
+// ------------------------------------------------- D6：type-map 的两条 warning
+
+test('D6：type-map 里台账不存在的 id → type-map-unknown-id warning（不阻断）', () => {
+  const root = freshProject('d6-unknown')
+  seedLegacyPair(root)
+  const mapFile = writeJson(root, 'map.json', { 'T-20990101-01': 'docs' })
+  const result = runCli(root, ['--root', root, 'check', 'tasks', '--type-map', mapFile, '--json'])
+  // warning 不改变退出码：该 root 自身有 issue，所以仍是 1；关键是 warning 通道出现。
+  assert.ok(
+    JSON.stringify(result.json.warnings).includes('type-map-unknown-id: T-20990101-01'),
+    `warnings 缺 type-map-unknown-id：${JSON.stringify(result.json.warnings)}`
+  )
+})
+
+test('D6：type-map 覆盖已有 type 且不同 → type-map-unused warning（记录不被改）', () => {
+  const root = freshProject('d6-unused')
+  seedLegacyPair(root)
+  const before = fs.readFileSync(path.join(root, '.dsh/flow/tasks/T-20260101-02.json'), 'utf8')
+  const mapFile = writeJson(root, 'map.json', { 'T-20260101-02': 'chore' })
+  const result = runCli(root, ['--root', root, 'check', 'tasks', '--type-map', mapFile, '--json'])
+  assert.ok(
+    JSON.stringify(result.json.warnings).includes('type-map-unused: T-20260101-02'),
+    `warnings 缺 type-map-unused：${JSON.stringify(result.json.warnings)}`
+  )
+  assert.equal(
+    fs.readFileSync(path.join(root, '.dsh/flow/tasks/T-20260101-02.json'), 'utf8'),
+    before,
+    'check 只读：已有 type 的记录一个字节都不许变'
+  )
+})
+
+test('D6：map 里既有未知 id 又有已有 type 的键 → 两条 warning 都出现', () => {
+  const root = freshProject('d6-both')
+  seedLegacyPair(root)
+  const mapFile = writeJson(root, 'map.json', { 'T-20260101-02': 'chore', 'T-20990101-01': 'docs' })
+  const result = runCli(root, ['--root', root, 'check', 'tasks', '--type-map', mapFile, '--json'])
+  const flat = JSON.stringify(result.json.warnings)
+  assert.ok(flat.includes('type-map-unused: T-20260101-02'), flat)
+  assert.ok(flat.includes('type-map-unknown-id: T-20990101-01'), flat)
+})

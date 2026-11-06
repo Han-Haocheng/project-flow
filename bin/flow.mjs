@@ -2011,6 +2011,34 @@ function loadTypeMap(root, mapPath) {
 }
 
 /**
+ * D6 warnings for a `--type-map`: a key the ledger does not have, or one whose
+ * record already carries a (different) type. Both are advisory only — the map is
+ * allowed to be wider than what is missing (an AI-produced candidate list is),
+ * and an already-typed record is never rewritten (CONTRACT §3.2 rule 3).
+ * Read-only: `listTasks` uses the `{ unreadable }` collector so a broken file is
+ * counted as a warning instead of being mistaken for "id absent".
+ */
+function warnTypeMapExtras(core, root, contract, typeById) {
+  const known = new Map()
+  const unreadable = []
+  for (const record of core.listTasks(root, contract, { unreadable })) {
+    if (typeof record?.id === 'string') known.set(record.id, record)
+  }
+  for (const file of unreadable) core.noteWarning(`unreadable: ${file}`)
+  for (const [id, type] of Object.entries(typeById)) {
+    const record = known.get(id)
+    if (record === undefined) {
+      core.noteWarning(`type-map-unknown-id: ${id}`)
+      continue
+    }
+    const current = typeof record.type === 'string' ? record.type.trim() : ''
+    if (current !== '' && current !== type) {
+      core.noteWarning(`type-map-unused: ${id} 已有 type "${current}"`)
+    }
+  }
+}
+
+/**
  * `flow check tasks`: legacy task-format gate. Read-only (`fix: false`, no lock,
  * no write); issues exit 1, a malformed `--type-map` exits 2, and the type is
  * never guessed — a missing `type` stays an issue until the map supplies one.
@@ -2021,9 +2049,13 @@ function runCheckTasks(ctx) {
   collectWarnings(loaded.warnings)
   const mapPath = readString(ctx.flags, 'type-map')
   const typeById = mapPath === undefined ? {} : loadTypeMap(ctx.root, mapPath)
+  if (mapPath !== undefined) warnTypeMapExtras(core, ctx.root, loaded.contract, typeById)
   const started = Date.now()
   const result = core.normalizeTaskFormat(ctx.root, loaded.contract, { fix: false, typeById })
   const durationMs = Date.now() - started
+  // D6 map diagnostics + `unreadable:` land in the core log; surface them now so
+  // they reach the envelope even on the check-failed path.
+  drainCoreWarnings()
   const ratio = (kind) => result.issues.filter((item) => item.kind === kind).length
   const counts = { 'legacy-goal': ratio('legacy-goal'), 'missing-type': ratio('missing-type') }
   const typeMap = mapPath ?? null

@@ -1039,6 +1039,10 @@ warning（不影响退出码，`--json` 给 `warnings[]`）：`status === 'open'
   `--root` 下解析（相对路径以项目根为基准）。**任何坏形态都是用法错误（exit 2 / `usage`）**：
   路径不存在、非法 JSON、顶层不是对象/是数组、值为非字符串或不属十个枚举、空串路径。
   把配置错误报成 `check-failed` 会让「台账脏」和「map 写错」混在一起，故分开。
+- `--type-map` 的两条 **advisory warning**（不影响退出码，走 §5.1 的 warnings 通道）：
+  `type-map-unknown-id: <id>`（map 里的 id 台账里没有）与
+  `type-map-unused: <id> 已有 type "<当前>"`（该记录已有 type 且与 map 不同——迁移永远不
+  改写已有 type，见 §3.2 规则 3）。之所以只 warn 不报错：AI 产出的候选清单允许宽于实际需要。
 - 退出码：无 issue → 0；有 issue → 1（`error.code = "check-failed"`）；map 坏 / 未初始化 → 2；
   沿用 §6.2。`--json` 成功：
   `{ok:true,data:{check:"tasks",exitCode:0,stdout,stderr,durationMs,ok:true,counts:{...},issues:[],typeMap}}`；
