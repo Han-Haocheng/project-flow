@@ -5,6 +5,8 @@ test/.tmp/
 
 # 运行时产物：宿主写的心跳文件（本地、每会话变化）
 .agents/
+# 运营草稿/交接/会话日志（本地，不入库；CONTRACT §3.2 的 --type-map 草稿也放这里）
+.dsh-ops/
 # 台账 store 入库，但锁与门禁运行记录不提交（避免每次运行产生提交噪音）
 .dsh/flow/.lock
 .dsh/flow/logs/
