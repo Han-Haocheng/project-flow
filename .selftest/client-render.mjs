@@ -1485,7 +1485,11 @@ check('CSS: the plugin-local ok/warn/error text tokens clear WCAG on both themes
     ['.project-flow-gateRun--ok', 'ok'],
     ['.project-flow-gateRun--fail', 'error'],
     ['.project-flow-gateError', 'error'],
+    ['.project-flow-gateMark--ok', 'ok'],
+    ['.project-flow-gateMark--error', 'error'],
     ['.project-flow-verdict--open', 'warn'],
+    ['.project-flow-verdict--confirmed', 'ok'],
+    ['.project-flow-verdict--refuted', 'error'],
     ['.project-flow-decisionMark', 'warn']
   ];
   for (const [selector, expected] of textRules) {
@@ -1504,6 +1508,40 @@ check('CSS: the plugin-local ok/warn/error text tokens clear WCAG on both themes
       const ruleRatio = contrastRatio(text, theme.card);
       assert.ok(ruleRatio >= 4.5, `${theme.name} ${selector} text ${text} is ${ruleRatio.toFixed(2)}:1 (needs 4.5)`);
     }
+  }
+  /* The two remaining stale-block details are not `color` declarations:
+     `staleCode` used to dim 10.5px text with opacity (light 3.90:1), and the
+     1px `staleMark` ring is a non-text graphic whose host warn primary is
+     2.15:1. Both must use the secondary label colour (>=4.5 text / >=3 ring). */
+  const staleCode = source.split('\n').find((line) => line.startsWith('.project-flow-staleCode{'));
+  assert.ok(staleCode, '.project-flow-staleCode rule missing');
+  assert.ok(!/opacity\s*:/.test(staleCode), '.project-flow-staleCode must not dim its text with opacity');
+  assert.ok(
+    staleCode.includes('color:var(--dsw-alias-label-secondary);'),
+    '.project-flow-staleCode must use the secondary label colour'
+  );
+  const staleMark = source.split('\n').find(
+    (line) => line.startsWith('.project-flow-staleMark{') && line.includes('border:')
+  );
+  assert.ok(staleMark, '.project-flow-staleMark rule missing');
+  assert.ok(
+    !/--dsw-alias-state-[a-z]+-primary/.test(staleMark),
+    '.project-flow-staleMark ring must not use a bare host state primary'
+  );
+  assert.ok(
+    staleMark.includes('border:1px solid var(--dsw-alias-label-secondary);'),
+    '.project-flow-staleMark ring must use the secondary label colour'
+  );
+  for (const theme of themes) {
+    const secondaryRatio = contrastRatio(theme.secondary, theme.card);
+    assert.ok(
+      secondaryRatio >= 4.5,
+      `${theme.name} staleCode text ${theme.secondary} is ${secondaryRatio.toFixed(2)}:1 (needs 4.5)`
+    );
+    assert.ok(
+      secondaryRatio >= 3,
+      `${theme.name} staleMark ring ${theme.secondary} is ${secondaryRatio.toFixed(2)}:1 (needs 3)`
+    );
   }
 });
 
