@@ -378,6 +378,87 @@ test('A10：type 仅在缺失时按 typeById 补齐，已有 type 不被穿透',
   assert.equal(Object.hasOwn(raw, 'type'), false, '非法枚举不得写进 type')
 })
 
+// ------------------------------------------- P2 边界：非法 type / 空 title / 非字符串 goal
+
+test('P2-3：记录上已是非法 type 串时必须报出来，否则是「只读僵尸 + 门禁说没问题」', () => {
+  const { root, contract } = freshProject('p2-3')
+  writeLegacy(root, 'T-20260101-09', { title: '非法 type', type: 'nope' })
+
+  // ① 只读：非法串必须算待迁移项。修复前这里是 ok:true —— 门禁报绿而 update 全 exit 2。
+  const readOnly = normalizeTaskFormat(root, contract, {})
+  assert.equal(readOnly.ok, false, '非法 type 串必须算待迁移项（修复前 ok:true）')
+  const issue = readOnly.issues.find((item) => item.id === 'T-20260101-09' && item.kind === 'missing-type')
+  assert.ok(issue, '非法 type 串必须产生 missing-type issue')
+  assert.match(issue.suggestion, /is not one of the ten values/, '非法串要有区别于「缺键」的文案')
+
+  // ② CLI 门禁必须 exit 1（修复前是 exit 0）。
+  const checked = runCli(root, ['--root', root, 'check', 'tasks', '--json'])
+  assert.equal(checked.code, 1, 'check tasks 对非法 type 必须 exit 1（修复前 exit 0）')
+  assert.equal(checked.json.ok, false)
+  assert.ok(
+    checked.json.error.issues.some((item) => item.id === 'T-20260101-09' && item.kind === 'missing-type'),
+    `issue 里必须含该 id：${JSON.stringify(checked.json.error.issues)}`,
+  )
+
+  // ③ 带合法 map 能改成正确值，且 update 恢复可用（只读僵尸解除）。
+  const mapped = normalizeTaskFormat(root, contract, { fix: true, typeById: { 'T-20260101-09': 'fix' } })
+  assert.equal(mapped.ok, true)
+  assert.equal(readTaskFile(root, 'T-20260101-09').type, 'fix', '非法串被映射值覆盖')
+  const updated = updateTask(root, contract, 'T-20260101-09', { notes: '僵尸解除' })
+  assert.equal(updated.notes, '僵尸解除', '修好之后 update 必须可用（修复前恒 exit 2: type must be one of …）')
+  assert.equal(updated.type, 'fix')
+})
+
+test('P2-2：title 为空且 goal 有值时，goal 顶替 title 并真正写盘（不再永久死循环）', () => {
+  const { root, contract } = freshProject('p2-2')
+  writeLegacy(root, 'T-20260101-02', { title: '', goal: '目标当标题', type: 'feat' })
+
+  const finalised = normalizeTaskFormat(root, contract, { fix: true })
+  assert.deepEqual(finalised.fixed, ['T-20260101-02'], '该条必须真的写盘（修复前被 validateTaskFields 跳过）')
+  assert.equal(finalised.ok, true)
+  const raw = readTaskFile(root, 'T-20260101-02')
+  assert.equal(raw.title, '目标当标题', '空 title 由 goal 顶上')
+  assert.equal(Object.hasOwn(raw, 'goal'), false, 'goal 键已删除')
+  // 再次只读必须干净——这就是「不再死循环」的直接证据。
+  const again = normalizeTaskFormat(root, contract, {})
+  assert.equal(again.ok, true, '归一后再查必须无 issue（修复前 issue 永久留存）')
+})
+
+test('P2-1：goal 是非字符串时既不删除也不丢值，且文案说明原因', () => {
+  const { root, contract } = freshProject('p2-1')
+  writeLegacy(root, 'T-20260101-01', { title: '非字符串 goal', goal: 42 })
+
+  // 只读：issue 必须说清「不是字符串」，而不是误报成「空或与 title 相同」。
+  const readOnly = normalizeTaskFormat(root, contract, {})
+  const issue = readOnly.issues.find((item) => item.id === 'T-20260101-01' && item.kind === 'legacy-goal')
+  assert.ok(issue, '非字符串 goal 仍要报 legacy-goal')
+  assert.match(issue.suggestion, /not a string/, `文案必须说明原因：${issue.suggestion}`)
+
+  // 真跑：不删键、不丢值（修复前会静默 delete 并 ok:true）。
+  const report = normalizeTaskFormat(root, contract, { fix: true })
+  assert.deepEqual(report.fixed, [], '非字符串 goal 的记录不得被改写')
+  const raw = readTaskFile(root, 'T-20260101-01')
+  assert.equal(Object.hasOwn(raw, 'goal'), true, 'goal 键必须保留')
+  assert.equal(raw.goal, 42, '原值必须原样留在盘上')
+  assert.equal(raw.title, '非字符串 goal', 'title 不受影响')
+})
+
+test('P2-3 反向护栏：type 合法串时 taskTypeMissing 必须为 false（好记录不许被误报）', () => {
+  const { root, contract } = freshProject('p2-3-guard')
+  // 没有 goal 键、type 合法 → 完全干净的记录。
+  writeLegacy(root, 'T-20260101-10', { title: '正常记录', type: 'feat' })
+  const raw = readTaskFile(root, 'T-20260101-10')
+  delete raw.goal
+  fs.writeFileSync(taskFile(root, 'T-20260101-10'), `${JSON.stringify(raw, null, 2)}\n`)
+
+  const report = normalizeTaskFormat(root, contract, {})
+  assert.equal(report.ok, true, '合法 type + 无 goal 的记录必须零 issue')
+  assert.deepEqual(report.issues, [])
+  const checked = runCli(root, ['--root', root, 'check', 'tasks', '--json'])
+  assert.equal(checked.code, 0, 'check tasks 对正常台账必须 exit 0')
+  assert.equal(checked.json.ok, true, 'P2-3 的修复不得把合法 type 误判成缺失')
+})
+
 // -------------------------------------------------------------------- A12
 
 test('A12：CONTRACT 文本同步（记录块无 goal、命令树无 --goal、§7 有迁移 API）', () => {

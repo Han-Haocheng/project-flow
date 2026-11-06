@@ -672,6 +672,9 @@ test('task update 白名单：title/type 不可改，未列白名单的键一律
   assert.equal(readJson(file).type, 'feat')
 
   // A7：显式白名单逐字段可写，scope 仍逐键合并。
+  // P2-5：白名单是 8 个键（status/owner/notes/commits/scope/acceptance/experiment/parent），
+  // 早先这里只覆盖 7 个、漏了 experiment——若将来有人把它从 TASK_UPDATABLE_KEYS 拿掉，
+  // 这条断言不会红。补上它，让「逐字段可写」名副其实。
   const patched = updateTask(root, contract, created.id, {
     status: 'active',
     owner: 'agent-b',
@@ -679,6 +682,7 @@ test('task update 白名单：title/type 不可改，未列白名单的键一律
     commits: ['abc1234'],
     scope: { allow: ['lib/'] },
     acceptance: ['node --test test/'],
+    experiment: 'E-20260101-01',
     parent: null,
   })
   assert.equal(patched.status, 'active')
@@ -687,6 +691,7 @@ test('task update 白名单：title/type 不可改，未列白名单的键一律
   assert.deepEqual(patched.commits, ['abc1234'])
   assert.deepEqual(patched.scope, { allow: ['lib/'], deny: [] }, 'scope 仍逐键合并')
   assert.deepEqual(patched.acceptance, ['node --test test/'])
+  assert.equal(patched.experiment, 'E-20260101-01', 'experiment 是白名单键，必须可写')
   assert.equal(patched.parent, null)
   assert.equal(patched.title, '原标题', '未传 title 时原值不变')
   assert.equal(patched.type, 'feat', '未给 type 时原值不变')
