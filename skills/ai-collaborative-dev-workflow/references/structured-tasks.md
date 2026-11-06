@@ -83,6 +83,8 @@
 ## 4 已定决策
 - schema 入仓：`.agents/task-schema.json`。
 - 锁：`mkdir .agents/tasks/.lock` + 5 分钟 TTL；过期自动清理并告警。
+  （`.agents/tasks/` 是协作技能自带的独立存储，**flow 插件不读**；project-flow 的写锁是
+  `.dsh/flow/.lock`，两套互不相认。）
 - scope 求交：纯前缀匹配（统一补尾斜杠），deny 优先；Phase 2 再评估 glob。
 - `done`：要求 commits ≥1 且至少一个 checkpoint.gate=pass。
 - 迁移：旧 `.md` 关闭时用 `legacy_id` 转换，不批量重写。
