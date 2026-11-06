@@ -176,6 +176,11 @@ test('archived 不进 active/draft/recentDone，行形状与 client 期望一致
     assert.deepEqual(Object.keys(row), ROW_KEYS, `行键序/字段不符：${JSON.stringify(row)}`)
     assert.equal(typeof row.id, 'string')
     assert.equal(typeof row.type, 'string')
+    // P2-1：type 必须是**记录自己的 type**，不是别的字符串字段——M1 = `clip(record.title)`
+    // 曾让四个门禁（含本文件的 typeof 断言）全绿逃逸。夹具由 addTask({type:'feat'}) 建，
+    // 且 title 与 'feat' 不同值，才有杀伤力（type===title 时 M1 假绿）。
+    assert.equal(row.type, 'feat', `active 行 type 必须是记录 type（got ${JSON.stringify(row.type)}）`)
+    assert.notEqual(row.type, row.title, 'type 与 title 必须可区分，否则取值断言无杀伤力')
     assert.equal(typeof row.title, 'string')
   }
   for (const row of payload.tasks.recentDone) {
@@ -183,6 +188,8 @@ test('archived 不进 active/draft/recentDone，行形状与 client 期望一致
     assert.deepEqual(Object.keys(row), [...ROW_KEYS, 'gate'], `recentDone 行键序/字段不符：${JSON.stringify(row)}`)
     assert.equal(typeof row.id, 'string')
     assert.equal(typeof row.type, 'string')
+    assert.equal(row.type, 'feat', `recentDone 行 type 必须是记录 type（got ${JSON.stringify(row.type)}）`)
+    assert.notEqual(row.type, row.title, 'type 与 title 必须可区分，否则取值断言无杀伤力')
     assert.equal(typeof row.title, 'string')
   }
   assert.equal(payload.tasks.active[0].status, 'active')
@@ -243,4 +250,60 @@ test('读路径不归档：sweep 后新到期的 done 两次 /state 仍是 done�
   assert.ok(!ids([...first.tasks.active, ...first.tasks.recentDone]).includes(oldDone.id), 'archived 仍出现在行数组里')
   // 迟到的到期记录在 sweep 之后才到期，因此计数里仍是 done，不是 archived。
   assert.ok(ids(first.tasks.recentDone).includes(late.id), '未 sweep 的到期 done 应仍作为 done 行出现')
+})
+
+// ------------------------------------------------- P2-1: 行 type 的取值契约
+
+/**
+ * P2-1：`row.type` 的**取值**断言（不只 `typeof`）。
+ *
+ * 背景（brief-p2-assertions §1）：M1 = `type: clip(record.title)` 曾让四个门禁全绿逃逸——
+ * `typeof row.type === 'string'` 对 `title`/`notes`/`status` 同样成立，任何一次"投影到别的
+ * 字符串字段"都能满足它。取值等值才是语义。本用例刻意造四种形态，分别钉死：
+ *   1. 两种**不同** type（feat/fix）→ 杀掉"恒返回某个常量"的变异；
+ *   2. 旧记录**无 type 键** → `''`（CONTRACT「缺失 → ''」）；
+ *   3. `type: 42`（非字符串）→ `''`（CONTRACT「非字符串 → ''」）。
+ * `addTask` 已强制 type（T-15），所以 2/3 两类只能手写记录文件（brief §2.3）。
+ */
+test('P2-1 行 type 取值：按记录投影，两种 type 可区分，缺失/非字符串降级为 ""', async () => {
+  const { root, contract } = freshProject('type-values')
+  const stamp = new Date().toISOString()
+  // 1) 两种不同 type，均走真实写路径；title 与 type 不同值（否则 M1 假绿）。
+  const featTask = addTask(root, contract, { type: 'feat', title: '甲：功能', status: 'active' })
+  const fixTask = addTask(root, contract, { type: 'fix', title: '乙：修复', status: 'active' })
+  assert.notEqual(featTask.type, featTask.title)
+  assert.notEqual(fixTask.type, fixTask.title)
+  assert.notEqual(featTask.type, fixTask.type, '夹具必须是两种不同 type，才能杀常量变异')
+
+  // 2)/3) 手写记录：无 type 键、type 为非字符串。字段齐全以满足读路径。
+  const tasksDir = path.join(root, '.dsh', 'flow', 'tasks')
+  const legacy = { id: 'T-20200101-01', title: '旧记录无 type', status: 'active', created_at: stamp, updated_at: stamp, schema: 1 }
+  const numeric = { id: 'T-20200101-02', title: 'type 是数字', type: 42, status: 'active', created_at: stamp, updated_at: stamp, schema: 1 }
+  fs.writeFileSync(path.join(tasksDir, `${legacy.id}.json`), `${JSON.stringify(legacy, null, 2)}\n`)
+  fs.writeFileSync(path.join(tasksDir, `${numeric.id}.json`), `${JSON.stringify(numeric, null, 2)}\n`)
+
+  const payload = await panelStateReader(fixtureCtx())(root)
+  assert.equal(payload.ok, true, `读取失败：${JSON.stringify(payload).slice(0, 400)}`)
+
+  const rowOf = (id) => payload.tasks.active.find((row) => row.id === id)
+  const featRow = rowOf(featTask.id)
+  const fixRow = rowOf(fixTask.id)
+  const legacyRow = rowOf(legacy.id)
+  const numericRow = rowOf(numeric.id)
+  assert.ok(featRow && fixRow && legacyRow && numericRow, '四个夹具都要出现在 active 行里')
+
+  // 1) 取值等值：行上就是记录自己的 type，两种 type 各自可辨（恒常量变异会红在这里）。
+  assert.equal(featRow.type, 'feat', `feat 行 type 错（got ${JSON.stringify(featRow.type)}）`)
+  assert.equal(fixRow.type, 'fix', `fix 行 type 错（got ${JSON.stringify(fixRow.type)}）`)
+  // 反 M1/M2：type 绝不能是 title / status / notes / id 里的任何一个。
+  for (const [row, record] of [[featRow, featTask], [fixRow, fixTask]]) {
+    for (const field of ['title', 'status', 'notes', 'id']) {
+      const other = field === 'id' ? record.id : record[field]
+      if (typeof other !== 'string' || other === '') continue
+      assert.notEqual(row.type, other, `行 type 落到了记录的 ${field} 上（M1/M2 型回归）`)
+    }
+  }
+  // 2)/3) 降级契约：缺失或非字符串一律投影为 ''（不是 null、不是 '42'、不是 undefined）。
+  assert.equal(legacyRow.type, '', `无 type 键的记录必须投影为 ''（got ${JSON.stringify(legacyRow.type)}）`)
+  assert.equal(numericRow.type, '', `type:42 必须投影为 ''（got ${JSON.stringify(numericRow.type)}）`)
 })

@@ -887,6 +887,15 @@ check(
 )
 
 const activeRow = store.tasks?.active?.[0] ?? {}
+// P2-1：type 必须是**记录自己的 type**，不是别的字符串字段（M1 = clip(record.title)
+// 曾让四门禁全绿逃逸）。夹具由 flow_task add 以 type:'feat' 建，title 与 type 不同值；
+// 两种不同 type 的分布夹具在 test/t-20261104-07-archive-panel.test.mjs 的 P2-1 用例里。
+eq('store payload: active type projected', activeRow.type, 'feat')
+check(
+  'store payload: active type distinct from title/status',
+  activeRow.type !== activeRow.title && activeRow.type !== activeRow.status && activeRow.type !== activeRow.id,
+  JSON.stringify({ type: activeRow.type, title: activeRow.title, status: activeRow.status, id: activeRow.id }),
+)
 eq('store payload: active notes projected', activeRow.notes, '展开详情可读')
 check(
   'store payload: active scope projected',
@@ -903,6 +912,13 @@ check('store payload: active created_at projected', typeof activeRow.created_at 
 eq('store payload: active status projected', activeRow.status, 'active')
 
 const doneRow = store.tasks?.recentDone?.[0] ?? {}
+// P2-1：同上——recentDone 行也必须投影记录自己的 type（该夹具由 flow_task add 以 feat 建）。
+eq('store payload: done type projected', doneRow.type, 'feat')
+check(
+  'store payload: done type distinct from title/status',
+  doneRow.type !== doneRow.title && doneRow.type !== doneRow.status && doneRow.type !== doneRow.id,
+  JSON.stringify({ type: doneRow.type, title: doneRow.title, status: doneRow.status, id: doneRow.id }),
+)
 eq('store payload: done notes empty', doneRow.notes, '')
 check(
   'store payload: done scope empty',
@@ -920,6 +936,13 @@ check('store payload: done gate null without checkpoints', doneRow.gate === null
 
 // The newer draft is long on purpose: the row must stay bounded.
 const detailedDraft = store.tasks?.draft?.find((row) => row.id === newerDraft.task?.id) ?? {}
+// P2-1：draft 行同样要投影记录自己的 type（大字段夹具最容易在裁剪时串字段）。
+eq('store payload: draft type projected', detailedDraft.type, 'feat')
+check(
+  'store payload: draft type distinct from title/status',
+  detailedDraft.type !== detailedDraft.title && detailedDraft.type !== detailedDraft.status && detailedDraft.type !== detailedDraft.id,
+  JSON.stringify({ type: detailedDraft.type, title: detailedDraft.title, status: detailedDraft.status, id: detailedDraft.id }),
+)
 eq('store payload: draft notes clipped', detailedDraft.notes?.length, 400)
 eq('store payload: draft scope.allow capped', detailedDraft.scope?.allow?.length, 10)
 check(
