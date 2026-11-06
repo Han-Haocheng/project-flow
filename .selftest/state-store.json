@@ -8,11 +8,11 @@
   },
   "roots": [
     {
-      "path": "/tmp/tmp.9eYBmSazrZ",
+      "path": "/tmp/proj-flow-fixture",
       "name": "TmpProj"
     }
   ],
-  "root": "/tmp/tmp.9eYBmSazrZ",
+  "root": "/tmp/proj-flow-fixture",
   "head": {
     "sha": "432243c",
     "subject": "exp(learning): [待验证] 竞争性信用分配能让预测分化",
