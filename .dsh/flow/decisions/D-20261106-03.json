@@ -1,0 +1,49 @@
+{
+  "question": "推送前扫描发现 test/tui-panel.test.mjs:25 含本机绝对路径 /mnt/d/Project/project-flow（当作 fixture 的 root 值）。公开前要处理吗？",
+  "kind": "choice",
+  "rationale": "D-20261106-02 已批准推送，但推送前扫描发现一处本机路径会随之上线 GitHub；推送后二十分钟内不可撤回，需用户在三条路里定一条。",
+  "options": [
+    {
+      "id": "push-asis",
+      "label": "照现状推送",
+      "impact": "立刻 push；test/tui-panel.test.mjs:25 的 '/mnt/d/Project/project-flow' 夹具会公开，但那是你自己的仓库名，无凭据、无隐私"
+    },
+    {
+      "id": "clean-first",
+      "label": "先清理再推",
+      "impact": "先把 test/tui-panel.test.mjs:25 的 root 改成通用路径并跑测试，再 push；多一笔提交"
+    },
+    {
+      "id": "abort",
+      "label": "不推",
+      "impact": "B-6 CI 继续延期，其余卡照常推进"
+    }
+  ],
+  "recommendation": "push-asis",
+  "affects": [
+    "origin/main",
+    "test/tui-panel.test.mjs",
+    ".dsh/flow/tasks"
+  ],
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 12,
+  "schema": 1,
+  "id": "D-20261106-03",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "clean-first",
+    "note": "用户答“处理，这种内容别公开” → 先清理 G 本机路径再推",
+    "at": "2026-11-06T19:43:18+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-06T19:43:18+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "0908dbd0c29b5289",
+  "asked_at": "2026-11-06T19:42:13+08:00",
+  "created_at": "2026-11-06T19:42:13+08:00",
+  "updated_at": "2026-11-06T19:43:18+08:00"
+}
