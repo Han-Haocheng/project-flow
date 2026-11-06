@@ -121,7 +121,7 @@ const STATE_VALID = [
 
 // -------------------------------------------------------------------- list
 
-test('check list --json 暴露六项检查：四项脚本检查 + 内置 decisions/experiments', () => {
+test('check list --json 暴露七项检查：四项脚本检查 + 内置 decisions/experiments/tasks', () => {
   const root = tempRoot('list')
   const result = runCli(root, ['check', 'list', '--json'])
   assert.equal(result.code, 0)
@@ -129,7 +129,7 @@ test('check list --json 暴露六项检查：四项脚本检查 + 内置 decisio
   const checks = result.json.data.checks
   assert.deepEqual(
     checks.map((item) => item.name),
-    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments'],
+    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks'],
   )
   // 第 1-4 项是随包脚本检查：断言一条不减，解释器只允许 bash/python3、脚本必须带 skills/ 前缀。
   const scriptChecks = checks.slice(0, 4)
@@ -139,19 +139,38 @@ test('check list --json 暴露六项检查：四项脚本检查 + 内置 decisio
     assert.ok(item.description.length > 0)
     assert.ok(item.args.length > 0)
   }
-  // 第 5 项是内置检查：core 实现，脚本是包根相对路径（不是 skills/ 前缀），单独断言不放宽正则。
-  const builtin = checks[4]
-  assert.deepEqual(Object.keys(builtin), ['name', 'interpreter', 'script', 'description', 'args'])
-  assert.deepEqual(builtin, {
-    name: 'decisions',
-    interpreter: 'core',
-    script: 'lib/core.mjs#checkDecisions',
-    description: '阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）',
-    args: '（无额外参数）',
-  })
+  // 第 5-7 项是内置检查：core 实现，脚本是包根相对路径（不是 skills/ 前缀），
+  // 逐项整体断言，不改成 includes、不放宽正则。
+  const builtins = checks.slice(4)
+  for (const item of builtins) {
+    assert.deepEqual(Object.keys(item), ['name', 'interpreter', 'script', 'description', 'args'])
+  }
+  assert.deepEqual(builtins, [
+    {
+      name: 'decisions',
+      interpreter: 'core',
+      script: 'lib/core.mjs#checkDecisions',
+      description: '阻塞决策的 affects 命中暂存文件时失败（内置检查：bin 特判路由 core，只读）',
+      args: '（无额外参数）',
+    },
+    {
+      name: 'experiments',
+      interpreter: 'core',
+      script: 'lib/core.mjs#checkExperiments',
+      description: '实验分流未闭环（schema2 缺字段/confirmed 未产品化/refuted·pivoted 缺 learned·cleanup）时失败（内置检查，只读）',
+      args: '（无额外参数；experiments.enabled=false 时跳过）',
+    },
+    {
+      name: 'tasks',
+      interpreter: 'core',
+      script: 'lib/core.mjs#normalizeTaskFormat',
+      description: '旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）',
+      args: '[--type-map <file.json>]',
+    },
+  ])
   // 防假绿：前四项不许混入 core，内置项也不许被当成 scripts/ 脚本。
   for (const item of scriptChecks) assert.notEqual(item.interpreter, 'core')
-  assert.doesNotMatch(builtin.script, /^skills\//)
+  for (const item of builtins) assert.doesNotMatch(item.script, /^skills\//)
 })
 
 test('check list 纯文本列出用法（不 spawn 脚本）', () => {

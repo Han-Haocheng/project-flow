@@ -89,9 +89,11 @@ const USAGE = `project-flow CLI（schema 2）
   check staged --allow <path> [--allow <path> ...]
   check release-baseline --marker <text> [--threshold <N>]
   check decisions | check experiments
+  check tasks [--type-map <file.json>]
   check state [--file <path>]
   check doc --file <path> --type task|design|incident|release
   check decisions                内置检查：阻塞决策命中暂存文件时失败（core 实现）
+  check tasks                    内置检查：旧任务记录未归一（残留 goal 键 / 缺 type）时失败
 
   心跳只面向主会话（同一项目的多个主会话互相避让）：子会话不登记心跳，
   在子会话里运行 heartbeat start/update/end 会被明确拒绝；list/status 只读，
@@ -99,8 +101,12 @@ const USAGE = `project-flow CLI（schema 2）
 
   机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
   scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
-  check decisions 是唯一内置检查：bin 特判路由到 core.checkDecisions（只读），
+  check decisions / check experiments / check tasks 是内置检查：bin 特判路由到
+  core.checkDecisions / core.checkExperiments / core.normalizeTaskFormat（只读），
   不跑 scripts/；lib/checks.mjs 仍不 import core、不读写 store。
+  check tasks 的 --type-map <file.json> 是 { "<T-id>": "<type>" } 草稿文件，只用来
+  判断 missing-type 是否可消；值必须是十个 type 之一，否则按用法错误退 2。
+  check tasks 永远不会替你猜 type，也不能写盘；归一由 flow task normalize 执行。
 
   决策只面向主会话：需要用户拍板的问题先 ask 建记录再提问，用户回答当轮 answer；
   open 同题复用、已关闭同题必须 --supersedes；阻塞决策（blocks 非空）影响暂存文件时
@@ -143,7 +149,7 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -236,6 +242,7 @@ export const SPEC = Object.freeze({
     doc: { flags: ['file', 'type', 'timeout'] },
     decisions: { flags: [] },
     experiments: { flags: [] },
+    tasks: { flags: ['type-map'] },
   }),
 })
 
@@ -1618,13 +1625,21 @@ const BUILTIN_CHECKS = Object.freeze([
     description: '实验分流未闭环（schema2 缺字段/confirmed 未产品化/refuted·pivoted 缺 learned·cleanup）时失败（内置检查，只读）',
     args: '（无额外参数；experiments.enabled=false 时跳过）',
   }),
+  Object.freeze({
+    name: 'tasks',
+    interpreter: 'core',
+    script: 'lib/core.mjs#normalizeTaskFormat',
+    description: '旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）',
+    args: '[--type-map <file.json>]',
+  }),
 ])
 
 async function cmdCheck(ctx, sub) {
   // 内置检查（bin 特判路由到 core，不经过 scripts/ 目录）：
-  // `decisions` 与 T-12 的 `experiments`。
+  // `decisions`、T-12 的 `experiments`，以及任务格式门禁 `tasks`。
   if (sub === 'decisions') return runCheckDecisions(ctx)
   if (sub === 'experiments') return runCheckExperiments(ctx)
+  if (sub === 'tasks') return runCheckTasks(ctx)
   const checks = await loadChecks()
   const names = checks.CHECKS.map((entry) => entry.name)
   // usage 与未知检查提示共用完整目录（脚本检查 + 内置检查），不再漏列内置项。
@@ -1949,6 +1964,105 @@ function runCheckExperiments(ctx) {
     legacy: result.legacy,
     failed: result.failed,
     warnings: result.warnings,
+  }
+  throw error
+}
+
+/**
+ * Read and validate `--type-map` (a CLI input channel, hence bin-side rather
+ * than core: core only ever sees an already-validated `typeById` object). Every
+ * malformed shape is a `usage` error (exit 2), never a check failure: a wrong
+ * config must not be mistaken for a dirty ledger. Runs before the core call, so
+ * it never takes the store lock and never writes.
+ */
+function loadTypeMap(root, mapPath) {
+  if (mapPath.trim() === '') {
+    throw new CliError('usage', '--type-map 需要一个文件路径（形如 .dsh-ops/type-map.json）')
+  }
+  const file = path.resolve(root, mapPath)
+  let text
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (error) {
+    throw new CliError('usage', `--type-map 文件不存在：${mapPath}（${error.code ?? error.message}）`)
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    throw new CliError('usage', `--type-map 不是合法 JSON：${mapPath}`)
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new CliError('usage', `--type-map 顶层必须是对象 { "<T-id>": "<type>" }：${mapPath}`)
+  }
+  const types = coreRef.TASK_TYPES
+  const out = {}
+  for (const [id, value] of Object.entries(parsed)) {
+    const type = typeof value === 'string' ? value.trim() : ''
+    if (types.includes(type) === false) {
+      throw new CliError(
+        'usage',
+        `--type-map 里 ${id} 的值 ${JSON.stringify(value)} 不是合法 type（可用 ${types.join('|')}）：${mapPath}`,
+      )
+    }
+    out[id] = type
+  }
+  return out
+}
+
+/**
+ * `flow check tasks`: legacy task-format gate. Read-only (`fix: false`, no lock,
+ * no write); issues exit 1, a malformed `--type-map` exits 2, and the type is
+ * never guessed — a missing `type` stays an issue until the map supplies one.
+ */
+function runCheckTasks(ctx) {
+  const { core } = ctx
+  const loaded = core.loadContract(ctx.root)
+  collectWarnings(loaded.warnings)
+  const mapPath = readString(ctx.flags, 'type-map')
+  const typeById = mapPath === undefined ? {} : loadTypeMap(ctx.root, mapPath)
+  const started = Date.now()
+  const result = core.normalizeTaskFormat(ctx.root, loaded.contract, { fix: false, typeById })
+  const durationMs = Date.now() - started
+  const ratio = (kind) => result.issues.filter((item) => item.kind === kind).length
+  const counts = { 'legacy-goal': ratio('legacy-goal'), 'missing-type': ratio('missing-type') }
+  const typeMap = mapPath ?? null
+  const lines = []
+  if (result.ok) {
+    lines.push(`✓ tasks：legacy-goal 0 · missing-type 0${mapPath === undefined ? '' : ` · type-map ${mapPath}`}`)
+  } else {
+    for (const item of result.issues) lines.push(`✗ ${item.id} [${item.kind}] ${item.suggestion}`)
+    lines.push(`合计 ${result.issues.length} 条：legacy-goal ${counts['legacy-goal']} · missing-type ${counts['missing-type']}`)
+    if (counts['missing-type'] > 0) {
+      lines.push('先确认 type：flow task normalize --type-map <file.json>（check tasks 只读，不会替你猜 type）')
+    } else {
+      lines.push('可以先归一：flow task normalize --dry-run 复查，再 flow task normalize')
+    }
+    // 给了 map 但记录仍在盘上缺 type：map 只是被校验通过，写盘要另跑 task normalize。
+    if (mapPath !== undefined) {
+      lines.push(`--type-map ${mapPath} 已校验（合法 type），但 check 不写盘；跑 flow task normalize --type-map ${mapPath} 才会真正补 type`)
+    }
+  }
+  const stdout = lines.join('\n')
+  if (!ctx.json) {
+    for (const line of lines) out(line)
+  }
+  if (result.ok) {
+    return { check: 'tasks', exitCode: 0, stdout, stderr: '', durationMs, ok: true, counts, issues: [], typeMap }
+  }
+  const error = new Error('检查未通过：tasks（旧任务记录未归一）')
+  error.code = 'check-failed'
+  error.silent = true
+  error.payload = {
+    check: 'tasks',
+    exitCode: 1,
+    stdout,
+    stderr: '',
+    durationMs,
+    ok: false,
+    counts,
+    issues: result.issues,
+    typeMap,
   }
   throw error
 }

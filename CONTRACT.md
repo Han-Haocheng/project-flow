@@ -749,6 +749,7 @@ flow check state [--file <path>]
 flow check doc --file <path> --type task|design|incident|release
 flow check decisions
 flow check experiments
+flow check tasks [--type-map <file.json>]
 ```
 
 - `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
@@ -792,6 +793,9 @@ flow check experiments
 - `flow check decisions` 是内置检查（bin 特判路由 core，见 §6.1.1），语义与退出码按检查
   词汇归一；`flow check experiments` 是第二个内置检查（见 §6.1.2）：`experiments.enabled`
   为 `false` 时 **exit 0 跳过**并打印原因，失败 exit 1（`failed[]`），warnings 不阻断。
+- `flow check tasks` 是第三个内置检查（见 §6.1.3）：只读地报告旧任务记录的结构问题
+  （残留 `goal` 键 / 缺 `type`），有 issue 即 exit 1。**它不写盘、也不提供 `--fix`**；
+  `--type-map <file.json>` 只用于校验与预演 type，真正补 type 要跑 `flow task normalize`。
 - `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
 - `exp add` 的七个规范字段（`--direction`/`--expected`/`--primary-metric`/`--guardrail`/
@@ -922,12 +926,13 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 `<pkg>/skills/ai-collaborative-dev-workflow/scripts/`），与 `--root` 指向的项目无关；
 解释器固定为 `bash`（`.sh`）与 `python3`（`doc_check.py`）。
 
-**内置例外（两个）**：`flow check decisions` 与 `flow check experiments` 不来自脚本目录，
-而由 `bin/flow.mjs` 特判路由到 `core.checkDecisions()` / `core.checkExperiments()`（只读，
+**内置例外（三个）**：`flow check decisions` / `flow check experiments` / `flow check tasks`
+不来自脚本目录，而由 `bin/flow.mjs` 特判路由到 `core.checkDecisions()` /
+`core.checkExperiments()` / `core.normalizeTaskFormat({fix:false})`（只读，
 复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
 保持**不 import core、不读写 `.dsh/flow`** 的纪律：内置项由 bin 侧追加，不进
-`checks.CHECKS`/`listChecks()`。所以 **`check list` 共六项** = 四项脚本检查
-（`staged`/`release-baseline`/`state`/`doc`）+ 两个内置项 `decisions` / `experiments`：
+`checks.CHECKS`/`listChecks()`。所以 **`check list` 共七项** = 四项脚本检查
+（`staged`/`release-baseline`/`state`/`doc`）+ 三个内置项 `decisions` / `experiments` / `tasks`：
 
 ```json
 {"name":"decisions","interpreter":"core","script":"lib/core.mjs#checkDecisions",
@@ -936,6 +941,9 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 {"name":"experiments","interpreter":"core","script":"lib/core.mjs#checkExperiments",
  "description":"实验分流未闭环（schema2 缺字段/confirmed 未产品化/refuted·pivoted 缺 learned·cleanup）时失败（内置检查，只读）",
  "args":"（无额外参数；experiments.enabled=false 时跳过）"}
+{"name":"tasks","interpreter":"core","script":"lib/core.mjs#normalizeTaskFormat",
+ "description":"旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）",
+ "args":"[--type-map <file.json>]"}
 ```
 
 `interpreter: "core"` 是唯一非 `bash`/`python3` 的合法值，`script` 是包根相对的 POSIX 路径
@@ -954,6 +962,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 | `doc` | `flow check doc --file <path> --type task\|design\|incident\|release` | `python3 doc_check.py <file> --type <type> --root <项目根>` |
 | `decisions` | `flow check decisions [--json]` | **不 spawn**：bin 特判路由 `core.checkDecisions()`（只读内置项，见 §6.1.1） |
 | `experiments` | `flow check experiments [--json]` | **不 spawn**：bin 特判路由 `core.checkExperiments()`（只读内置项，见 §6.1.2） |
+| `tasks` | `flow check tasks [--type-map <file.json>] [--json]` | **不 spawn**：bin 特判路由 `core.normalizeTaskFormat({fix:false})`（只读内置项，见 §6.1.3） |
 
 - 所有子命令都吃全局 `--root <dir>`（默认 cwd）与 `--json`。脚本以 `--root` 为 cwd 执行，
   所以脚本里的 `git diff --cached` / `git log` / `git rev-list` 落在项目根。
@@ -1013,6 +1022,35 @@ warning（不影响退出码，`--json` 给 `warnings[]`）：`status === 'open'
 结果由人判定）；`inconclusive`/`abandoned` 缺 `learned`；`task.experiment` 指向不存在实验
 （`task-experiment-missing`）。退出码沿用 §6.2：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
 4 IO。
+
+### 6.1.3 `check tasks`（任务格式门禁）
+
+只读、不写 store、不取锁（`normalizeTaskFormat({fix:false})`）。检查的是**旧任务记录的
+结构**，不是业务规则；旧的两种形态各成一类 issue（形状见 §3.2「旧格式迁移」）：
+
+1. `legacy-goal`：记录仍带 `goal` 键（`goal` 已并入 `title`）；suggestion 给出合并后的
+   title 或「只删键」。
+2. `missing-type`：记录缺 `type`（键不存在或 `null`/`''`）。**门禁永不替你猜 type**：
+   没给 `--type-map` 时 suggestion 是「supply type…」；给了合法 map 时变成
+   `type = "<mapped>"`，但**该 issue 仍然计数**——`check` 只读，盘上缺 `type` 只能由
+   `flow task normalize`（§5.1）写盘消除。因此本检查带 map 时也可能红，这是设计而不是缺陷。
+
+- `--type-map <file.json>`：`{ "<T-id>": "<type>" }`，值是 §3.2 的十个枚举之一。文件在
+  `--root` 下解析（相对路径以项目根为基准）。**任何坏形态都是用法错误（exit 2 / `usage`）**：
+  路径不存在、非法 JSON、顶层不是对象/是数组、值为非字符串或不属十个枚举、空串路径。
+  把配置错误报成 `check-failed` 会让「台账脏」和「map 写错」混在一起，故分开。
+- 退出码：无 issue → 0；有 issue → 1（`error.code = "check-failed"`）；map 坏 / 未初始化 → 2；
+  沿用 §6.2。`--json` 成功：
+  `{ok:true,data:{check:"tasks",exitCode:0,stdout,stderr,durationMs,ok:true,counts:{...},issues:[],typeMap}}`；
+  失败错误对象同形但 `ok:false`、`issues[]` 非空，每项
+  `{id,kind,title,goal,suggestion}`；`counts` 是 `{"legacy-goal":N,"missing-type":M}`；
+  `typeMap` 是 map 路径或 `null`。
+- 人类输出：通过 `✓ tasks：legacy-goal 0 · missing-type 0`；失败逐行 `✗ <id> [<kind>] <suggestion>`，
+  末行 `合计 N 条：legacy-goal X · missing-type Y` 加一条可复制提示（缺 type 时指向
+  `flow task normalize --type-map <file.json>`；只差 goal 时指向 `flow task normalize`）。
+  带 map 但盘上仍缺 type 时额外提示「map 已校验但不写盘」。
+- 本检查**不提供 `--fix`**：`check` 家族只读（§6 开头、§6.1 开头）；写盘归 `flow task normalize`。
+  不留「基线计数」之类的豁免参数——豁免等于把欠账变成长期合法状态。
 
 ### 6.2 退出码
 
