@@ -18,7 +18,9 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `l
 （`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发
 （`skills/ai-collaborative-dev-workflow/`，含 `references/`、`assets/`、`scripts/`，
 注册时带 `resourceBase` 目录），它的机械检查同时可由
-`flow check staged|release-baseline|state|doc|decisions` 触发（T-12 上线后再加 `experiments`）。
+`flow check staged|release-baseline|state|doc|decisions|experiments|tasks` 触发（共七项，
+`flow check list` 是权威清单；`experiments` 在项目关闭实验区时直接 exit 0 跳过，`tasks`
+只读报告旧任务记录未归一）。
 
 ## 初始化一个项目
 
@@ -49,6 +51,8 @@ flow exp productize <id>        # 门禁通过后写产品化；失败实验用 
 flow task add --title T --type feat [--status draft|active|done|archived] [--parent T-id]
                              # --parent ''|none|null 清空为根；task update 同
 flow task archive [--older-than N]   # 归档到期任务（默认 tasks.archiveAfterDays=7，0 关闭）
+flow task normalize [--type-map <file.json>] [--dry-run]
+                             # 旧记录归一：goal 并入 title、按 map 补 type（不猜 type；--dry-run 只报告不写盘）
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
 flow gate run smoke             # 顺序执行步骤、首个失败即停、写运行记录
 flow gate logs smoke            # 最近运行记录
@@ -102,7 +106,9 @@ flow exp productize <id>        # 门禁通过后写产品化；失败实验用 
 plugin_manager install_bundle  target=<仓库根目录>
 ```
 
-`cordis.patch.yml` 会 insert 条目 `project-flow`。安装后刷新页面；卸载用
+`cordis.patch.yml` 会 insert 五个条目：`project-flow`（面板）、`project-flow-tui`（TUI 侧栏）、
+`project-flow-tasks` / `project-flow-gates` / `project-flow-experiments`（三个子插件入口）——
+安装即五个一起装载，不提供逐条启用。安装后刷新页面；卸载用
 `plugin_manager remove_bundle target=@local/project-flow`。
 
 ## TUI 侧栏面板
@@ -160,7 +166,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：227 用例（14 个文件）
+node --test test/                        # core + CLI + check：389 用例（29 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

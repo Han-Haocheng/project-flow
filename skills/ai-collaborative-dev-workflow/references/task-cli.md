@@ -3,6 +3,21 @@
 > 通用契约；参考实现 `scripts/task`（复制到 `.agents/scripts/`）。先做 `new/show/check`，不接 hooks/CI。
 > 配套：字段与校验规则见 `structured-tasks.md`；接线见 `enforcement.md`。
 
+> ## ⚠️ 范围声明：本文描述的是 `scripts/task`（通用技能参考实现），**不是** `flow task` 子命令
+>
+> 下文所有 `task new|show|check` 都指**通用技能自带的 Python 参考实现**
+> `skills/ai-collaborative-dev-workflow/scripts/task`（复制到 `.agents/scripts/task` 后的调用名）：
+> 它有自己的 `.agents/tasks/` 存储，以及 `--fields`、`task check --all-active`、
+> `SYNC_MISSING` / `PREFLIGHT_PENDING` 等能力。
+>
+> **本插件 `bin/flow.mjs` 的 `flow task` 是另一套实现**，只有
+> `list|show|add|update|archive|normalize|rm` 七个动作：没有 `--fields`，没有 `task check`
+> （`check` 属于 `flow check staged|…|tasks`），也没有 `SYNC_MISSING` / `PREFLIGHT_PENDING`
+> 这类错误码。对 `.dsh/flow/` 台账做同类动作请用 `flow check tasks`（只读体检）与
+> `flow task normalize`（旧记录归一），见 `CONTRACT.md` §5.1。
+>
+> **引用本文时，不要把 `task ...` 原样敲成 `flow task ...`。**
+
 ## 1 范围
 - 写入仅 `task new`；`show/check` 必须只读，不改文件、不改 mtime。
 - 存储：`.agents/tasks/<id>.json`；锁：`.agents/tasks/.lock`（目录锁 + 5 分钟 TTL）。
