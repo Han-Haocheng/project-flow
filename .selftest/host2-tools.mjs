@@ -1427,7 +1427,7 @@ function remindableAgent(label, id) {
     nextEscaped = error
   }
   check(
-    'H19 catch: a rejecting next() propagates (upstream contract, documented)',
+    'H19 propagate: a rejecting next() escapes the hook by design (CONTRACT §9.2.1)',
     nextEscaped !== null && String(nextEscaped.message).includes('next() rejected by fixture'),
     nextEscaped === null ? 'swallowed' : 'propagated as expected',
   )

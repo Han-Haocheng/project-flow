@@ -1494,6 +1494,38 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 - 子代理的进度通过**最终报告**回到主会话，由主会话统一登记/收尾心跳；这与 Agent Teams
   的任务板 + 最终报告模型一致。
 
+#### 9.2.1 `agent/pre-step` 钩子的宿主契约（只读遵守，本插件不改）
+
+下面的形状是**宿主声明的事件契约**，不是本项目定义的语义；本插件的 `agent/pre-step`
+监听器（`index.js` 的 `registerHeartbeatReminder`）只能**按它遵守**，无权扩展或兜底。
+
+- **`agent/pre-step` 的 mode 是 `waterfall`**：监听器是链上的一环，**必须返回一个
+  `PreStepDecision`** 才能让链继续推进，不存在"不返回也能通过"的形态。
+- **签名返回 `Promise<PreStepDecision>`**，且**宿主会 await 它**：
+  `(this: Scoped<Agent>, payload: { agent; messages: UserMessage[]; turn; step; signal;
+  modelSelection }, next: () => Promise<PreStepDecision>) => Promise<PreStepDecision>`。
+- **`next()` 的语义是「保留当前消息」**（宿主原文：*calling `next()` preserves the current
+  messages*）。即：调用 `next()` ＝ 同意按 `payload.messages` 进入本 step。
+- **`PreStepDecision` 是封闭联合**，只有两种形态、**没有 `null`**：
+  `{ kind: 'reject' }` 或 `{ kind: 'enter'; messages: UserMessage[]; startsRequestSeries?: true }`。
+- **宿主契约未定义「监听器自身抛错」的语义**：契约只规定监听器返回什么样的 decision，
+  没有规定它抛错时宿主如何呈现。
+
+**因此本插件的处置（§9.2 的执行口径）**：`await next()` 故意**位于插件自己的 `try`
+之外**，`next()` 的 rejection **原样传播给宿主**，插件不兜底。
+
+理由不是"传播更优雅"，而是**兜底在契约层面做不到无损**：`next()` 抛错时插件拿不到任何
+可合法返回的 decision——返回 `null` 违反封闭联合；返回 `{ kind: 'enter', messages: [] }`
+会**静默丢弃 `payload.messages`**（用户本轮的输入从该 step 消失），比报错更难排查；
+而"返回原 decision"恰好需要 `next()` 的返回值，正是拿不到的那个。**同一块里方向相反是刻意的**：
+handler（插件自身逻辑）抛错必须被 `catch` 吞掉并返回原 decision（最多少一条提醒），
+而 `next()`（宿主链）抛错必须传播。
+
+> **诚实边界**：本节描述的契约来自宿主运行时导出的 Event 接口声明；**宿主的 agent 实现
+> 源码本项目读不到**，因此"`next()` 抛错后在宿主内部如何呈现（step 被拒 / turn 中断 /
+> 会话 error / 进程级失败）"**未经实测**，本节不对其作任何断言。该边界不影响上面的
+> 处置结论——无论宿主如何呈现，兜底都比传播更差。
+
 ### 9.3 与工具的关系
 
 模型侧另有 6 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`、

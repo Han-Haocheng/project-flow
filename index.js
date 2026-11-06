@@ -1567,6 +1567,11 @@ function registerHeartbeatReminder(ctx) {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
       const dispose = ctx.on('agent/pre-step', async (payload, next) => {
+        // `next()` 抛错**故意不兜底**：waterfall 必须交出合法的 PreStepDecision
+        // （封闭联合，无 null），而 next() 已经 reject、拿不到原 decision；兜底只能
+        // 返回空 enter，那会静默丢弃 payload.messages（用户本轮输入）——比报错更隐蔽。
+        // 方向相反是刻意的：下面 handler 抛错必须 catch 吞掉（最多少一条提醒），
+        // 而 next()（宿主链）抛错必须传播。见 CONTRACT §9.2.1。
         const decision = await next()
         try {
           if (decision === null || decision === undefined || decision.kind !== 'enter') return decision
