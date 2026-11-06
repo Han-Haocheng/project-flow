@@ -3,3 +3,9 @@
       name: '@local/project-flow'
     - id: project-flow-tui
       name: '@local/project-flow/tui-host'
+    - id: project-flow-tasks
+      name: '@local/project-flow/tasks'
+    - id: project-flow-gates
+      name: '@local/project-flow/gates'
+    - id: project-flow-experiments
+      name: '@local/project-flow/experiments'

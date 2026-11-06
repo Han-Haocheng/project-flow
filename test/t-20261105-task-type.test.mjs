@@ -22,6 +22,8 @@ import {
   updateTask,
 } from '../lib/core.mjs'
 import { apply } from '../index.js'
+// `flow_task` is mounted by its own module entry since the plugin split.
+import { apply as applyTasks } from '../tasks.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -199,7 +201,9 @@ test('type：flow_task schema enum/必填 + SPEC↔handler 白名单含 type', a
   const root = freshProject('tool')
   const { ctx, registeredTools } = pluginCtx({ root })
   apply(ctx)
+  applyTasks(ctx)
   const taskTool = registeredTools.get('flow_task')
+  assert.ok(taskTool, 'flow_task 应注册（由 tasks.js 模块入口注册）')
   const typeSchema = taskTool.parameters.properties.type
   assert.equal(typeSchema.type, 'string')
   assert.deepEqual(typeSchema.enum, ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'chore', 'build', 'ci'])

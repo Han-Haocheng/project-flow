@@ -9,6 +9,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, after } from 'node:test'
 import { initProject, loadContract } from '../lib/core.mjs'
+// `flow_task` is mounted by its own module entry since the plugin split.
+import { apply as applyTasks } from '../tasks.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -159,6 +161,7 @@ async function toolHarness(root) {
     logger: { warn() {} },
   }
   mod.apply(ctx, {})
+  applyTasks(ctx, {})
   const exec = { agent: { session: { cwd: root } } }
   return { tool: tools.get('flow_task'), exec }
 }

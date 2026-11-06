@@ -14,6 +14,9 @@
   },
   "exports": {
     ".": "./index.js",
+    "./tasks": "./tasks.js",
+    "./gates": "./gates.js",
+    "./experiments": "./experiments.js",
     "./tui-host": "./tui-host.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
@@ -21,6 +24,9 @@
   },
   "files": [
     "index.js",
+    "tasks.js",
+    "gates.js",
+    "experiments.js",
     "client.js",
     "tui-host.js",
     "tui-panel.js",

@@ -34,6 +34,9 @@ function addTask(root, contract, input = {}, options) {
   return addTaskCore(root, contract, { type: 'feat', ...input }, options)
 }
 import { apply, panelStateReader } from '../index.js'
+// The module tools live in their own mountable entries since the plugin split:
+// `flow_task` is registered by tasks.js over the same shared mount plumbing.
+import { apply as applyTasks } from '../tasks.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -465,9 +468,10 @@ test('插件：工具成功结果附加 core warnings，失败时 logger.warn �
   const logger = { warn(message) { loggerMessages.push(String(message)) } }
   const { ctx, registeredTools } = pluginCtx({ root, logger })
   apply(ctx)
+  applyTasks(ctx)
 
   const taskTool = registeredTools.get('flow_task')
-  assert.ok(taskTool, 'flow_task 应注册')
+  assert.ok(taskTool, 'flow_task 应注册（由 tasks.js 模块入口注册）')
 
   const listed = await taskTool.execute({ action: 'list', root }, { agent: { session: { cwd: root } } })
   assert.ok(Array.isArray(listed.warnings), '成功结果应带 warnings')

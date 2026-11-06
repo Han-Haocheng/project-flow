@@ -57,6 +57,31 @@ test('package.json keeps the web client and publishes the manifest', () => {
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.equal(pkg.dsh.profile, undefined)
   assert.equal(pkg.dsh.bundle.patch, './cordis.patch.yml')
+
+  // Single package, several independently mountable entries (D-20261105-10):
+  // the module sub-plugins are package-root files with their own export paths.
+  for (const [subpath, file] of [
+    ['./tasks', './tasks.js'],
+    ['./gates', './gates.js'],
+    ['./experiments', './experiments.js'],
+  ]) {
+    assert.equal(pkg.exports[subpath], file, `${subpath} 应指向包根入口`)
+    assert.ok(pkg.files.includes(file.slice(2)), `${file.slice(2)} 应随包发布`)
+  }
+
+  // The bundle patch gains the three rows without dropping or replacing the
+  // original two.
+  const patch = fs.readFileSync(path.join(ROOT, 'cordis.patch.yml'), 'utf8')
+  assert.ok(patch.includes("name: '@local/project-flow'\n"), '共享层那一行必须保留')
+  assert.ok(patch.includes('id: project-flow-tui'), 'TUI 那一行必须保留')
+  for (const [id, name] of [
+    ['project-flow-tasks', '@local/project-flow/tasks'],
+    ['project-flow-gates', '@local/project-flow/gates'],
+    ['project-flow-experiments', '@local/project-flow/experiments'],
+  ]) {
+    assert.ok(patch.includes(`id: ${id}`), `补丁缺少 ${id}`)
+    assert.ok(patch.includes(`name: '${name}'`), `补丁缺少 ${name}`)
+  }
 })
 
 test('index.js exposes the shared state projection and does not mount the panel itself', () => {
@@ -74,6 +99,15 @@ test('index.js exposes the shared state projection and does not mount the panel 
   // free of it: web and desktop would otherwise wait forever.
   assert.equal(/tui-panel/.test(source), false)
   assert.match(source, /export const inject = \['webServer'\]/)
+
+  // The split: the module tools are defined/registered by their own entries, so
+  // the shared host half must not define or mount them itself.
+  assert.equal(/name: 'flow_exp'/.test(source), false)
+  assert.equal(/name: 'flow_task'/.test(source), false)
+  assert.equal(/name: 'flow_gate'/.test(source), false)
+  for (const file of ['tasks.js', 'gates.js', 'experiments.js']) {
+    assert.equal(fs.existsSync(path.join(ROOT, file)), true, `${file} 必须存在`)
+  }
 })
 
 test('the TUI row is a separate bundle entry with the tuiPanels dependency', () => {

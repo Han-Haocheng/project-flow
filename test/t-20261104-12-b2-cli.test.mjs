@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url'
 
 import { initProject } from '../lib/core.mjs'
 import { apply } from '../index.js'
+// `flow_exp` is mounted by its own module entry since the plugin split.
+import { apply as applyExperiments } from '../experiments.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -313,6 +315,7 @@ test('flow_exp list（工具层）：counts 六态齐全（含 inconclusive/pivo
 
   const { ctx, registeredTools } = pluginCtx({ root })
   apply(ctx)
+  applyExperiments(ctx)
   const expTool = registeredTools.get('flow_exp')
   assert.ok(expTool, 'flow_exp 应注册')
   const exec = { agent: { session: { cwd: root } } }

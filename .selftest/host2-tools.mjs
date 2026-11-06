@@ -24,6 +24,20 @@ try {
 }
 
 const { apply } = await import(pathToFileURL(join(pkgRoot, 'index.js')).href)
+// The module sub-plugins: each mounts exactly one more tool over the same
+// shared plumbing. A host profile that wants the full six-tool surface mounts
+// the shared entry plus these three (single package, separate entries).
+const { apply: applyTasks } = await import(pathToFileURL(join(pkgRoot, 'tasks.js')).href)
+const { apply: applyGates } = await import(pathToFileURL(join(pkgRoot, 'gates.js')).href)
+const { apply: applyExperiments } = await import(pathToFileURL(join(pkgRoot, 'experiments.js')).href)
+
+/** Mount the shared plugin plus the three module sub-plugins, in host order. */
+function applyAll(ctx, config) {
+  apply(ctx, config)
+  applyExperiments(ctx, config)
+  applyTasks(ctx, config)
+  applyGates(ctx, config)
+}
 
 // --------------------------------------------------------------- assertions
 
@@ -307,9 +321,10 @@ const ctx = makeCtx({
   registryPaths: [storeRoot, noStoreRoot],
 })
 
-apply(ctx)
+applyAll(ctx)
 
 check('store fixture initialized', initResult.created.includes('.dsh/flow/flow.json'), JSON.stringify(initResult))
+// The three sub-plugins add tools only; every route stays on the shared entry.
 eq('routes registered', routes.length, 3)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
 const initRoute = routes.find((entry) => entry.path === '/api/project-flow/init')
@@ -1518,13 +1533,33 @@ const injectCtx = {
   },
 }
 
-apply(injectCtx)
+applyAll(injectCtx)
 eq('inject path: six tools registered', injectedTools.size, 6)
 eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()
 eq('inject path: disposal unregisters tools', injectedTools.size, 0)
 eq('inject path: disposal unregisters skills', injectedSkills.size, 0)
+
+// ------------------------------------------------------ bare host tolerance
+//
+// A host double without tools/skills/systemPrompt/workingDirectory must be a
+// no-op for the module entries, exactly like the shared plugin's provide().
+
+for (const [label, entry] of [
+  ['tasks', applyTasks],
+  ['gates', applyGates],
+  ['experiments', applyExperiments],
+  ['shared', apply],
+]) {
+  let bareError = null
+  try {
+    entry({}, {})
+  } catch (error) {
+    bareError = error
+  }
+  check(`bare host: ${label} apply does not throw`, bareError === null, String(bareError))
+}
 
 // ------------------------------------------------------------- cleanup
 

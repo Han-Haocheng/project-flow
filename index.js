@@ -11,10 +11,14 @@
 // lists another project, and there is no legacy ledger mode.
 // Neither write endpoint touches the store directly: after the same root
 // scoping they hand the directory to lib/core.mjs, the one writer shared with
-// the CLI, so the same validation and atomic write apply. Five agent tools plus
-// three skills expose the store to the model; a system-prompt section, a
-// per-turn pre-step reminder and an optional edit/write guard keep the heartbeat
-// discipline visible. The heartbeat discipline serves *main* sessions only:
+// the CLI, so the same validation and atomic write apply. Three agent tools
+// (flow_status / flow_heartbeat / flow_decision) plus three skills expose the
+// store to the model; the module tools flow_exp / flow_task / flow_gate live in
+// their own mountable entries (experiments.js / tasks.js / gates.js) over the
+// same lib/core.mjs writer and the same shared plumbing (lib/plugin/). A
+// system-prompt section, a per-turn pre-step reminder and an optional edit/write
+// guard keep the heartbeat discipline visible. The heartbeat discipline serves
+// *main* sessions only:
 // subagent sessions neither create heartbeats nor face the reminder or the write
 // guard, and the ledger lives in the project's main worktree so linked-worktree
 // sessions share one ledger. Root resolution happens per request; there are no
@@ -33,7 +37,7 @@
 // request. The host assembles no payload and performs no store filesystem call.
 
 import { fork } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -50,39 +54,41 @@ import {
   heartbeatRowVisible,
   isPlainObject,
   isoLocal,
-  pickInteger,
   readManifestName,
   requireCore,
   storeContractPath,
   takeCoreWarnings,
-  taskCountsOf,
   timeValue,
   toPosix,
 } from './lib/state-snapshot.mjs'
 export const inject = ['webServer']
 
 import {
-  assertOnlyFields,
   EMPTY_STORE_NOTE,
-  EXP_ACTION_FIELDS,
-  EXP_ADD_FIELDS,
-  EXP_UPDATE_FIELDS,
-  GATE_ACTION_FIELDS,
-  GATE_ADD_FIELDS,
-  GATE_UPDATE_FIELDS,
-  ID_PROPERTY,
-  makeRequireStore,
+  hasStore,
   makeToolRoot,
-  normalizeTaskParent,
+  MAX_TOOL_ITEMS,
   pickFields,
-  requireDirectory,
   requireId,
+  requireStore,
   ROOT_PROPERTY,
-  TASK_ACTION_FIELDS,
-  TASK_ADD_FIELDS,
-  TASK_UPDATE_FIELDS,
   toolOutput,
+  WRITE_TIMEOUT_MS,
 } from './lib/plugin/shared.mjs'
+// The one mount implementation: service lookup, ctx.effect registration, the
+// core-warning wrapper and the mount-warning channel are shared with the three
+// module sub-plugins (tasks.js / gates.js / experiments.js).
+import {
+  mountWarnings,
+  provide,
+  registerToolDefinitions,
+  service,
+  toolDeps,
+  warnMount,
+} from './lib/plugin/mount.mjs'
+// Root resolver for the heartbeat/decision hooks, which only ever hold a ctx:
+// the same factory the tool definitions are mounted with, bound once here.
+const toolRoot = makeToolRoot({ service })
 const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url))
 const ROUTE_PATH = '/api/project-flow/state'
 const INIT_ROUTE_PATH = '/api/project-flow/init'
@@ -93,23 +99,6 @@ const MAX_INIT_WARNINGS = 20
 const HEARTBEAT_GATE_TOOLS = new Set(['edit', 'write'])
 const HEARTBEAT_SESSION_MAX = 80
 const HEARTBEAT_SESSION_PATTERN = /^[A-Za-z0-9._:-]+$/
-const MAX_TOOL_ITEMS = 200
-const WRITE_TIMEOUT_MS = 30_000
-/** Non-fatal problems detected while mounting; surfaced in every payload's warnings. */
-const mountWarnings = []
-
-/** One warning per distinct mount problem: apply may run more than once per process. */
-function warnMount(message, ctx) {
-  if (typeof message !== 'string' || message.length === 0) return
-  if (mountWarnings.includes(message) === false) mountWarnings.push(message)
-  try {
-    if (ctx !== undefined && ctx !== null && ctx.logger !== undefined && typeof ctx.logger.warn === 'function') {
-      ctx.logger.warn(`project-flow: ${message}`)
-    }
-  } catch {
-    // Logging is best-effort only.
-  }
-}
 
 
 const SUBAGENT_ORIGIN = 'subagent'
@@ -117,15 +106,6 @@ const SUBAGENT_ORIGIN = 'subagent'
 
 // ------------------------------------------------------- workspace inspection
 
-
-/** Whether the root owns a `.dsh/flow/flow.json` store contract. */
-function hasStore(root) {
-  try {
-    return statSync(storeContractPath(root)).isFile()
-  } catch {
-    return false
-  }
-}
 
 /** Async `hasStore` for the HTTP/panel request path. */
 async function hasStoreAsync(root) {
@@ -279,22 +259,6 @@ function sendError(response, status, code, message) {
   const error = { code }
   if (typeof message === 'string' && message.length > 0) error.message = message
   sendJson(response, status, { ok: false, error })
-}
-
-function service(ctx, name) {
-  try {
-    const value = ctx.get(name)
-    if (value !== undefined && value !== null) return value
-  } catch {
-    // fall through to the property lookup below
-  }
-  try {
-    const value = ctx[name]
-    if (value !== undefined && value !== null) return value
-  } catch {
-    // missing service
-  }
-  return undefined
 }
 
 function originAllowed(ctx, request) {
@@ -1151,18 +1115,22 @@ async function handleGate(ctx, request, response) {
 
 // ------------------------------------------------------------------- tools
 //
-// Six model-facing tools over the same lib/core.mjs writer the CLI uses. They
+// Three model-facing tools over the same lib/core.mjs writer the CLI uses. They
 // are declared as plain objects (this package has no node_modules resolution
 // for @deepseek-ai/dsh-tools); the registry accepts
 // {name, description, parameters:<JSON Schema>, output:{schema, render},
 //  isConcurrencySafe, timeoutMs, execute}. Root resolution is shared with the
 // endpoint: explicit arg, then the session working directory, then session.cwd.
+//
+// The module tools (flow_exp / flow_task / flow_gate) are defined once — in
+// lib/tools/{experiments,tasks,gates}.mjs — and mounted by the sub-plugin
+// entries (experiments.js / tasks.js / gates.js), so this file neither imports
+// nor redefines them.
 
-// Tool plumbing lives in lib/plugin/shared.mjs so the per-module sub-plugins
-// (tasks.js / gates.js / experiments.js) reuse exactly these rules instead of
-// re-deriving the field whitelists. The two service-bound helpers are factories.
-const toolRoot = makeToolRoot({ service })
-const requireStore = makeRequireStore({ hasStore })
+// Tool plumbing lives in lib/plugin/shared.mjs (root/id resolution, the store
+// probe, field whitelists, caps and timeouts) and lib/plugin/mount.mjs (service
+// lookup, effect registration, core-warning wrapper); the sub-plugins import
+// the same two modules, so the rules exist once.
 
 // --------------------------------------------------------------- heartbeats
 //
@@ -1732,7 +1700,8 @@ function decisionAskInput(args, c, root, contract, session) {
   return input
 }
 
-function buildToolDefinitions(ctx) {
+function buildToolDefinitions(deps) {
+  const { ctx, toolRoot } = deps
   return [
     {
       name: 'flow_status',
@@ -1761,339 +1730,6 @@ function buildToolDefinitions(ctx) {
             at: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.started_at,
           })),
         }
-      },
-    },
-    {
-      name: 'flow_exp',
-      description:
-        'List, inspect, add, update, review, productize, clean up or remove project-flow experiments. New experiments are schema 2 and require the seven judging fields (direction, expected, primaryMetric, guardrails, falsify, windowDays, stopLoss). `review` is a read-only self-check returning verdict/branch/missing; `productize` marks a confirmed experiment after a passing release gate run; `cleanup` records the flags/code/data removed for a refuted one. `tree` returns the parent/child forest.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['list', 'show', 'tree', 'add', 'update', 'review', 'productize', 'cleanup', 'remove'],
-          },
-          root: ROOT_PROPERTY,
-          id: ID_PROPERTY,
-          title: { type: 'string' },
-          hypothesis: { type: 'string' },
-          factor: { type: 'string' },
-          parent: { type: 'string', description: 'Parent experiment id, or empty for a root experiment.' },
-          expected: { type: 'string' },
-          scale: { type: 'string' },
-          status: {
-            type: 'string',
-            enum: ['open', 'confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted'],
-          },
-          direction: { type: 'string', description: 'Direction of the change (free text, at most 120 characters).' },
-          primaryMetric: { type: 'string', description: 'The single primary metric the hypothesis is judged on.' },
-          guardrails: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Guardrail metric names (at least one).',
-          },
-          falsify: { type: 'string', description: 'Falsification condition: the hypothesis is refuted when it holds.' },
-          windowDays: { type: 'integer', description: 'Observation window in days (positive integer; core validates).' },
-          stopLoss: { type: 'string', description: 'Stop-loss line; crossing it ends the experiment.' },
-          learned: { type: 'string', description: 'What was learned (required to close refuted/pivoted).' },
-          gate: { type: 'string', description: 'Gate id used by `productize` (default "release").' },
-          flags: { type: 'array', items: { type: 'string' }, description: 'Cleanup: feature flags removed by `cleanup`.' },
-          code: { type: 'array', items: { type: 'string' }, description: 'Cleanup: code paths removed by `cleanup`.' },
-          data: { type: 'array', items: { type: 'string' }, description: 'Cleanup: data artifacts removed by `cleanup`.' },
-          measured: { type: 'string' },
-          metrics: { type: 'object', description: 'Free-form measured metrics.' },
-          commits: { type: 'array', items: { type: 'string' }, description: 'Short commit shas.' },
-          notes: { type: 'string' },
-        },
-        required: ['action'],
-        additionalProperties: false,
-      },
-      output: toolOutput(),
-      isConcurrencySafe: false,
-      timeoutMs: WRITE_TIMEOUT_MS,
-      async execute(args, exec) {
-        const root = toolRoot(ctx, args, exec)
-        const action = args.action
-        assertOnlyFields('flow_exp', action, args, EXP_ACTION_FIELDS[action])
-        if (action !== 'list') requireStore(root)
-
-        const c = requireCore()
-        const { contract } = c.loadContract(root)
-        if (action === 'list' && hasStore(root) === false) {
-          return {
-            root,
-            store: false,
-            source: 'store',
-            total: 0,
-            counts: {
-              total: 0,
-              open: 0,
-              confirmed: 0,
-              refuted: 0,
-              abandoned: 0,
-              inconclusive: 0,
-              pivoted: 0,
-            },
-            items: [],
-            note: EMPTY_STORE_NOTE,
-          }
-        }
-        if (action === 'list') {
-          // Counts come from the same aggregate the CLI/panel use (`readStoreState`),
-          // so the six experiment states (open/confirmed/refuted/abandoned/
-          // inconclusive/pivoted) can never drift apart again.
-          const state = c.readStoreState(root, contract)
-          const records = Array.isArray(state.experiments.items) ? state.experiments.items : []
-          const aggregate = state.experiments.counts ?? {}
-          const counts = {
-            total: Number.isInteger(aggregate.total) ? aggregate.total : records.length,
-            open: aggregate.open ?? 0,
-            confirmed: aggregate.confirmed ?? 0,
-            refuted: aggregate.refuted ?? 0,
-            abandoned: aggregate.abandoned ?? 0,
-            inconclusive: aggregate.inconclusive ?? 0,
-            pivoted: aggregate.pivoted ?? 0,
-          }
-          const items = records.slice(0, MAX_TOOL_ITEMS)
-          return { root, store: true, source: 'store', total: counts.total, counts, items, ...(items.length < records.length ? { truncated: true } : {}) }
-        }
-        if (action === 'show') {
-          return { root, experiment: c.getExperiment(root, contract, requireId('flow_exp', action, args.id)) }
-        }
-        if (action === 'tree') {
-          return { root, tree: c.experimentTree(c.listExperiments(root, contract)) }
-        }
-        if (action === 'add') {
-          const input = pickFields(args, EXP_ADD_FIELDS)
-          return { root, experiment: c.addExperiment(root, contract, input) }
-        }
-        if (action === 'update') {
-          const id = requireId('flow_exp', action, args.id)
-          const patch = pickFields(args, EXP_UPDATE_FIELDS)
-          if (Object.keys(patch).length === 0) throw new Error('flow_exp update requires at least one field to change')
-          return { root, experiment: c.updateExperiment(root, contract, id, patch) }
-        }
-        if (action === 'review') {
-          const id = requireId('flow_exp', action, args.id)
-          const record = c.getExperiment(root, contract, id)
-          const records = c.listExperiments(root, contract)
-          const hasSuccessor = (experimentId) =>
-            records.some((item) => item.id !== experimentId && item.parent === experimentId)
-          return { root, review: c.reviewExperimentRecord(record, { hasSuccessor }) }
-        }
-        if (action === 'productize') {
-          const id = requireId('flow_exp', action, args.id)
-          const options = typeof args.gate === 'string' && args.gate.trim() !== '' ? { gateId: args.gate.trim() } : {}
-          return { root, ...c.productizeExperiment(root, contract, id, options) }
-        }
-        if (action === 'cleanup') {
-          const id = requireId('flow_exp', action, args.id)
-          const list = (value) =>
-            Array.isArray(value) ? value.filter((entry) => typeof entry === 'string' && entry.trim() !== '') : []
-          return {
-            root,
-            ...c.cleanupExperiment(root, contract, id, {
-              flags: list(args.flags),
-              code: list(args.code),
-              data: list(args.data),
-            }),
-          }
-        }
-        if (action === 'remove') {
-          const id = requireId('flow_exp', action, args.id)
-          return { root, ...c.removeExperiment(root, contract, id) }
-        }
-        throw new Error(`unknown flow_exp action: ${String(action)}`)
-      },
-    },
-    {
-      name: 'flow_task',
-      description:
-        'List, inspect, add, update or remove project-flow tasks (title, type, status, owner, goal, parent tree, scope, acceptance, commits). All actions require the .dsh/flow store. `type` is required on add and is one of feat/fix/docs/style/refactor/perf/test/chore/build/ci (conventional commit kinds). `parent` links a subtask to an existing task (the parent must exist; self-reference and cycles are invalid; empty string/none/null makes it a root).',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['list', 'show', 'add', 'update', 'remove'] },
-          root: ROOT_PROPERTY,
-          id: ID_PROPERTY,
-          title: { type: 'string' },
-          type: {
-            type: 'string',
-            enum: ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'chore', 'build', 'ci'],
-            description: 'Conventional commit type; required on add, optional on update.',
-          },
-          status: { type: 'string', enum: ['draft', 'active', 'done', 'archived'] },
-          owner: { type: 'string' },
-          goal: { type: 'string' },
-          notes: { type: 'string' },
-          experiment: {
-            type: 'string',
-            description: 'Linked experiment id (optional; an unknown id only warns, a malformed one is invalid).',
-          },
-          parent: {
-            type: 'string',
-            description: '父任务 id（可选；空串/none/null = 根）。父须存在，禁自指/禁环。',
-          },
-          commits: { type: 'array', items: { type: 'string' }, description: 'Short commit shas.' },
-          scope: {
-            type: 'object',
-            properties: {
-              allow: { type: 'array', items: { type: 'string' } },
-              deny: { type: 'array', items: { type: 'string' } },
-            },
-            additionalProperties: false,
-          },
-          acceptance: { type: 'array', items: { type: 'string' } },
-        },
-        required: ['action'],
-        additionalProperties: false,
-      },
-      output: toolOutput(),
-      isConcurrencySafe: false,
-      timeoutMs: WRITE_TIMEOUT_MS,
-      async execute(args, exec) {
-        const root = toolRoot(ctx, args, exec)
-        const action = args.action
-        assertOnlyFields('flow_task', action, args, TASK_ACTION_FIELDS[action])
-        if (action !== 'list') requireStore(root)
-
-        const c = requireCore()
-        const { contract } = c.loadContract(root)
-        if (action === 'list' && hasStore(root) === false) {
-          return {
-            root,
-            store: false,
-            source: 'store',
-            total: 0,
-            counts: { draft: 0, active: 0, done: 0, archived: 0, other: 0 },
-            current: null,
-            items: [],
-            note: EMPTY_STORE_NOTE,
-          }
-        }
-        if (action === 'list') {
-          const records = c.listTasks(root, contract)
-          return {
-            root,
-            store: true,
-            source: 'store',
-            total: records.length,
-            counts: taskCountsOf(records),
-            current: typeof contract.tasks.current === 'string' ? contract.tasks.current : null,
-            items: records.slice(0, MAX_TOOL_ITEMS),
-            ...(records.length > MAX_TOOL_ITEMS ? { truncated: true } : {}),
-          }
-        }
-        if (action === 'show') {
-          return { root, task: c.getTask(root, contract, requireId('flow_task', action, args.id)) }
-        }
-        if (action === 'add') {
-          const input = pickFields(args, TASK_ADD_FIELDS)
-          return { root, task: c.addTask(root, contract, normalizeTaskParent(c, input)) }
-        }
-        if (action === 'update') {
-          const id = requireId('flow_task', action, args.id)
-          const patch = pickFields(args, TASK_UPDATE_FIELDS)
-          if (Object.keys(patch).length === 0) throw new Error('flow_task update requires at least one field to change')
-          return { root, task: c.updateTask(root, contract, id, normalizeTaskParent(c, patch)) }
-        }
-        if (action === 'remove') {
-          const id = requireId('flow_task', action, args.id)
-          return { root, ...c.removeTask(root, contract, id) }
-        }
-        throw new Error(`unknown flow_task action: ${String(action)}`)
-      },
-    },
-    {
-      name: 'flow_gate',
-      description:
-        'List, inspect, add, update, remove, run or read logs of project-flow gates (ordered shell steps with expect rules). All actions except list require a .dsh/flow store. `run` executes the steps in the project root; a non-zero step stops the run.',
-      parameters: {
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['list', 'show', 'add', 'update', 'remove', 'run', 'logs'] },
-          root: ROOT_PROPERTY,
-          id: { type: 'string', description: 'Gate id, e.g. precommit.' },
-          title: { type: 'string' },
-          phase: { type: 'string', enum: ['commit', 'release', 'manual'] },
-          enabled: { type: 'boolean' },
-          steps: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                run: { type: 'string', description: 'Shell command, executed with the project root as cwd.' },
-                expect: { type: 'string', description: 'exit N (default exit 0) or contains: TEXT.' },
-                timeoutSeconds: { type: 'integer', description: 'Per-step timeout in seconds (default 600).' },
-              },
-              required: ['run'],
-              additionalProperties: false,
-            },
-          },
-          limit: { type: 'integer', description: 'Maximum run records to return (default 5, capped at 50).' },
-        },
-        required: ['action'],
-        additionalProperties: false,
-      },
-      output: toolOutput(),
-      isConcurrencySafe: false,
-      async execute(args, exec) {
-        const root = toolRoot(ctx, args, exec)
-        const action = args.action
-        assertOnlyFields('flow_gate', action, args, GATE_ACTION_FIELDS[action])
-        if (action === 'list' && hasStore(root) === false) {
-
-          return {
-            root,
-            store: false,
-            gates: [],
-            note: 'gate definitions live in the .dsh/flow store; run: node bin/flow.mjs init',
-          }
-        }
-        requireStore(root)
-        const c = requireCore()
-        const { contract } = c.loadContract(root)
-        if (action === 'list') {
-          const gates = c.listGates(root, contract).map((gate) => {
-            const runs = c.listGateRuns(root, contract, gate.id, 1)
-            return { ...gate, lastRun: runs.length > 0 ? runs[0] : null }
-          })
-          return { root, store: true, gates }
-        }
-        if (action === 'show') {
-          const id = requireId('flow_gate', action, args.id)
-          const runs = c.listGateRuns(root, contract, id, 1)
-          return { root, gate: c.getGate(root, contract, id), lastRun: runs.length > 0 ? runs[0] : null }
-        }
-        if (action === 'add') {
-          if (typeof args.id !== 'string' || args.id.trim() === '') {
-            throw new Error('invalid: flow_gate add requires id (the gate slug)')
-          }
-          const input = pickFields(args, GATE_ADD_FIELDS)
-          return { root, gate: c.addGate(root, contract, input) }
-        }
-        if (action === 'update') {
-          const id = requireId('flow_gate', action, args.id)
-          const patch = pickFields(args, GATE_UPDATE_FIELDS)
-          if (Object.keys(patch).length === 0) throw new Error('flow_gate update requires at least one field to change')
-          return { root, gate: c.updateGate(root, contract, id, patch) }
-        }
-        if (action === 'remove') {
-          const id = requireId('flow_gate', action, args.id)
-          return { root, ...c.removeGate(root, contract, id) }
-        }
-        if (action === 'run') {
-          const id = requireId('flow_gate', action, args.id)
-          return { root, run: await c.runGate(root, contract, id, {}) }
-        }
-        if (action === 'logs') {
-          const id = requireId('flow_gate', action, args.id)
-          const limit = pickInteger(args.limit, 5, 1, 50)
-          return { root, gate: id, runs: c.listGateRuns(root, contract, id, limit) }
-        }
-        throw new Error(`unknown flow_gate action: ${String(action)}`)
       },
     },
     {
@@ -2384,127 +2020,19 @@ function buildToolDefinitions(ctx) {
 }
 
 /**
- * Register through an optional service. With Cordis, `ctx.inject` defers the
- * callback until the service exists; registration is an effect so unload
- * unregisters everything. Without an injection facility (plain test doubles or
- * an older host) the service is used only when already present.
+ * Mount this plugin's three tools. The registration semantics (optional
+ * service, one effect, core-warning wrapper, unload) are the shared ones in
+ * lib/plugin/mount.mjs, so the sub-plugins mount theirs the same way.
  */
-function provide(ctx, name, label, setup) {
-  const install = (scoped) => {
-    try {
-      scoped.effect(() => setup(scoped), `project-flow: ${label}`)
-    } catch (error) {
-      warnMount(`${label}: registration failed: ${brief(error)}`, ctx)
-    }
-  }
-
-  if (typeof ctx.inject !== 'function') {
-    if (service(ctx, name) === undefined) return
-    try {
-      ctx.effect(() => setup(ctx), `project-flow: ${label}`)
-    } catch (error) {
-      warnMount(`${label}: registration failed: ${brief(error)}`, ctx)
-    }
-    return
-  }
-
-  try {
-    ctx.effect(() => {
-      const fiber = ctx.inject([name], install)
-      return () => {
-        try {
-          if (fiber !== undefined && fiber !== null && typeof fiber.dispose === 'function') {
-            const pending = fiber.dispose()
-            if (pending !== undefined && pending !== null && typeof pending.catch === 'function') pending.catch(() => {})
-          }
-        } catch {
-          // Disposal must never throw into the host.
-        }
-      }
-    }, `project-flow: ${label} inject`)
-  } catch (error) {
-    warnMount(`${label}: injection failed: ${brief(error)}`, ctx)
-  }
-}
-
-/**
- * Wrap a tool's `execute` so core diagnostics reach the caller. On success they
- * are appended to `warnings`; on failure they go to the logger and the error
- * itself stays untouched (callers match on its message).
- */
-function wrapToolDefinition(definition, ctx) {
-  const execute = definition.execute
-  if (typeof execute !== 'function') return definition
-  const warningSink = () => {
-    try {
-      if (ctx !== null && ctx !== undefined && ctx.logger !== undefined && typeof ctx.logger.warn === 'function') {
-        return ctx.logger
-      }
-    } catch {
-      // logging is best-effort
-    }
-    return null
-  }
-  return {
-    ...definition,
-    async execute(args, exec) {
-      try {
-        const result = await execute.call(this, args, exec)
-        const warnings = takeCoreWarnings()
-        if (warnings.length === 0 || isPlainObject(result) === false) return result
-        const existing = Array.isArray(result.warnings) ? result.warnings : []
-        return { ...result, warnings: [...existing, ...warnings] }
-      } catch (error) {
-        const warnings = takeCoreWarnings()
-        if (warnings.length > 0) {
-          const logger = warningSink()
-          try {
-            if (logger !== null) logger.warn(`project-flow: ${definition.name}: ${warnings.join(' | ')}`)
-          } catch {
-            // logging is best-effort
-          }
-        }
-        throw error
-      }
-    },
-  }
-}
-
 function registerTools(ctx, settings) {
-  provide(ctx, 'tools', 'tools', (scoped) => {
-    const tools = service(scoped, 'tools')
-    if (tools === undefined || typeof tools.register !== 'function') return () => {}
-    const disposers = []
-    for (const definition of buildToolDefinitions(scoped)) {
-      try {
-        const dispose = tools.register(wrapToolDefinition(definition, scoped))
-        if (typeof dispose === 'function') disposers.push(dispose)
-      } catch (error) {
-        warnMount(`tools: cannot register ${definition.name}: ${brief(error)}`, scoped)
-      }
-    }
+  const heartbeatGate = settings !== null && typeof settings === 'object' && settings.heartbeatGate === true
+  registerToolDefinitions(ctx, {
+    label: 'tools',
+    build: (scoped) => buildToolDefinitions(toolDeps(scoped)),
     // Hard gate: a session that never registered a `working` heartbeat may not
     // write files. Only edit/write are denied, so read/bash/diagnostics keep
     // working; every failure inside the guard itself allows the call.
-    if (settings !== null && typeof settings === 'object' && settings.heartbeatGate === true) {
-      try {
-        if (typeof tools.guard === 'function') {
-          const dispose = tools.guard((execution) => heartbeatGuardReason(scoped, execution))
-          if (typeof dispose === 'function') disposers.push(dispose)
-        }
-      } catch (error) {
-        warnMount(`tools: heartbeat guard not registered: ${brief(error)}`, scoped)
-      }
-    }
-    return () => {
-      for (const dispose of disposers) {
-        try {
-          dispose()
-        } catch {
-          // A tool disposer must never break plugin unload.
-        }
-      }
-    }
+    guard: heartbeatGate ? (scoped) => (execution) => heartbeatGuardReason(scoped, execution) : undefined,
   })
 }
 
