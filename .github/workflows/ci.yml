@@ -1,0 +1,104 @@
+# project-flow 最小 CI。
+#
+# 设计原则（见 .dsh-ops/briefs/brief-b6-ci.md）：
+#   - 零依赖仓库 → 没有 npm install，也不需要任何缓存。
+#   - 单 job、单 OS、单 Node 版本：win32 逻辑已由 t-20261030-09-win-compat.test.mjs
+#     用注入式（platform: 'win32'）在 Linux 上覆盖；真跑 Windows 矩阵反而会因为
+#     state-worker 的 { skip: POSIX === false } 净跳过 9 条、多跑 0 条。
+#   - 不引 lint / 覆盖率：那会引入依赖，破坏"随包分发、无构建步骤"的定位。
+#
+# ⚠️ 刻意**不跑**任何 `flow` CLI 门禁，原因逐条如下（都是实测结论，不是猜测）：
+#   1. `flow gate run precommit` —— 第 3 步 `tasks-archive` 会把到期的 done 任务
+#      改写成 archived **并写盘**（实测：seed 一条 2020 年的 done 任务，跑门禁后
+#      变成 archived）。CI 里每次跑都在改台账，绝不可接受。
+#   2. `flow check decisions` —— 它用 `git diff --cached` 找暂存文件；没有暂存区
+#      （或 git 报错）时**兜底成空集、仍然 exit 0**。在 CI 里它永远绿 = 没有断言。
+#   3. `flow check state` —— 本仓库没有 COLLAB_STATE.md，必红。
+#   4. `flow check staged` —— 需要 --allow 与暂存区语义，CI 里无意义。
+#   台账格式门禁（check tasks）已由本地 precommit 第 4 步拦截，CI 不必重复。
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支连续推送时取消旧跑，省额度。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # 实测全套约 40s（unit ~12s + 6 个 selftest ~20s）；15 分钟是防挂死，不是性能指标。
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 代码只用 Object.hasOwn（Node 16.9+）、node:test（18+）、randomUUID（14.17+），
+          # 20 是安全下界。不锁小版本，跟随 20.x 最新补丁。
+          node-version: '20'
+
+      # 只用语法检查，不执行任何模块：bin/flow.mjs 顶层会跑 main()，import 它会真的调 CLI。
+      # 文件用 find 自动发现（不硬编码清单），新增模块不会静默漏检。
+      #
+      # 为什么不用 `git ls-files`：在没有 .git 的目录里它**静默返回空**（exit 0），
+      # 会让整步变成"检查了 0 个文件"的假绿。find + 空集守卫没有这个陷阱。
+      - name: syntax (node --check)
+        run: |
+          set -euo pipefail
+          count=0
+          while IFS= read -r f; do
+            node --check "$f"
+            count=$((count + 1))
+          done < <(find . -type f \( -name '*.js' -o -name '*.mjs' \) \
+                     -not -path './node_modules/*' \
+                     -not -path './test/*' \
+                     -not -path './.selftest/*' \
+                     -not -path './.dsh-ops/*' | sort)
+          echo "checked $count source files"
+          # 守卫：路径过滤写错时会匹配到 0 个文件，那一步其实什么也没查。
+          if [ "$count" -lt 10 ]; then
+            echo "::error::only $count source files matched - the path filter is probably wrong (false green)"
+            exit 1
+          fi
+        # 红在这里 = 某个 .js/.mjs 有语法错（未闭合括号、TS 语法混入、hashbang 位置不对）。
+        # 日志里会打印具体文件与行列。
+
+      # test/ 下全部用例。node --test 在有失败时自己退 1，不需要额外判断。
+      #
+      # 关于 skipped：真实台账体检用例（task-26）在没有真实 .dsh 台账的环境里会
+      # 主动 t.skip —— 那是**设计行为，不是失败**。CI 只要退出码为 0，skipped 多少都放过。
+      - name: unit (node --test)
+        run: node --test test/
+        # 红在这里 = test/ 里某条用例失败。日志有 `✖ <用例名>`，本地 `node --test test/` 可复现同一条。
+
+      # .selftest/ 六套宿主/客户端自测。用 ::group:: 折叠，红了能一眼看出是哪个文件；
+      # 单个文件失败不中断其余文件（先全部跑完再统一 exit 1），避免"只看到第一个红"。
+      - name: selftest (.selftest/*.mjs)
+        run: |
+          set -uo pipefail
+          failed=0
+          for f in .selftest/*.mjs; do
+            echo "::group::$f"
+            if node "$f"; then
+              echo "::endgroup::"
+            else
+              rc=$?
+              echo "::error file=$f::selftest failed (exit $rc)"
+              echo "::endgroup::"
+              failed=1
+            fi
+          done
+          exit "$failed"
+        # 红在这里 = 六套自测之一失败，::error file= 直接指向出问题的 .mjs。
