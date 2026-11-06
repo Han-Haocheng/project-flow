@@ -1611,6 +1611,79 @@ function registerHeartbeatReminder(ctx) {
   }
 }
 
+/**
+ * `agent/turn-stopping` (serial, awaited before the turn boundary commits):
+ * refresh `updated_at` on this session's **existing working** heartbeat. Without
+ * it a long turn lets `updated_at` age past the 6 h freshness window, so
+ * `heartbeatStatus` reports stale/dead and {@link heartbeatGuardReason} wrongly
+ * denies `edit`/`write`.
+ *
+ * One derivable fact only: no heartbeat is created, no semantic field is
+ * written, `agent.steer()` is never called (that would keep the turn open) and
+ * every failure is swallowed — a serial listener that throws reaches the host.
+ * Existence and ownership reuse {@link heartbeatWorking}, the same verdict the
+ * write gate uses, so only this session's beat can be refreshed; a lock conflict
+ * becomes one mount warning and is never retried.
+ */
+function heartbeatKeepalive(ctx, payload) {
+  try {
+    if (payload === null || typeof payload !== 'object') return
+    const signal = payload.signal
+    if (signal !== null && signal !== undefined && signal.aborted === true) return
+    const agent = payload.agent
+    if (agent === undefined || agent === null) return
+    // Heartbeats are a main-session discipline; a subagent must never be kept
+    // alive (it does not register one, and a legacy record must not be revived).
+    if (rootSessionVerdict(ctx, agent) !== true) return
+    const session = usableSessionId(agent.id)
+    if (session === '') return
+    const root = agentRoot(ctx, agent)
+    if (root === undefined) return
+    // The record is resolved by THIS session id and must already be working:
+    // `heartbeatWorking` is the gate's own existence/ownership/liveness verdict,
+    // so another session's file is structurally out of reach.
+    if (heartbeatWorking(root, session, sessionIsLive(ctx, session)) !== true) return
+    const c = coreModule()
+    if (c === null || typeof c.updateHeartbeat !== 'function') return
+    const loaded = c.loadContract(root)
+    if (loaded === null || typeof loaded !== 'object') return
+    // Empty patch: core only refreshes `updated_at` (plus its host evidence) and
+    // keeps `status`/`goal`/`task`/`claims`/`turn`/`stats` untouched.
+    c.updateHeartbeat(root, loaded.contract, session, {})
+  } catch (error) {
+    // A dropped keepalive is harmless; a throw on the serial path is not.
+    warnMount(`heartbeat keepalive skipped: ${brief(error)}`, ctx)
+  }
+}
+
+/**
+ * Register the keepalive listener through `ctx.effect` so unload disposes it.
+ * A host without the event API is a no-op, never an error.
+ */
+function registerHeartbeatKeepalive(ctx) {
+  try {
+    if (typeof ctx.on !== 'function') return
+    ctx.effect(() => {
+      const dispose = ctx.on('agent/turn-stopping', (payload) => {
+        try {
+          heartbeatKeepalive(ctx, payload)
+        } catch {
+          // Defence in depth: heartbeatKeepalive already swallows everything.
+        }
+      })
+      return () => {
+        try {
+          if (typeof dispose === 'function') dispose()
+        } catch {
+          // A listener disposer must never break plugin unload.
+        }
+      }
+    }, 'project-flow: heartbeat keepalive')
+  } catch (error) {
+    warnMount(`heartbeat keepalive unavailable: ${brief(error)}`, ctx)
+  }
+}
+
 /** Default-on hard gate; disable with `config.heartbeatGate: false` or `PROJECT_FLOW_HEARTBEAT_GATE=off`. */
 function heartbeatGateEnabled(config) {
   if (config !== null && typeof config === 'object') {
@@ -2257,5 +2330,10 @@ export function apply(ctx, config) {
     registerHeartbeatReminder(ctx)
   } catch (error) {
     warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
+  }
+  try {
+    registerHeartbeatKeepalive(ctx)
+  } catch (error) {
+    warnMount(`heartbeat keepalive: registration failed: ${brief(error)}`, ctx)
   }
 }
