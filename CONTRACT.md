@@ -1538,6 +1538,57 @@ handler（插件自身逻辑）抛错必须被 `catch` 吞掉并返回原 decisi
 > 会话 error / 进程级失败）"**未经实测**，本节不对其作任何断言。该边界不影响上面的
 > 处置结论——无论宿主如何呈现，兜底都比传播更差。
 
+#### 9.2.2 `agent/turn-stopping` 钩子的宿主契约（只读遵守，本插件不改）
+
+下面的形状是**宿主声明的事件契约**，不是本项目定义的语义；本插件的 `agent/turn-stopping`
+监听器（`index.js` 的 `registerHeartbeatKeepalive`）只能**按它遵守**，无权扩展或兜底。
+本节内容取自宿主运行时导出的 Event 接口声明（Inspect Provider `Event.listEvents`），
+**不是**从插件注释转抄。
+
+- **mode 是 `serial`**：宿主在 turn 边界提交前**会 await** 每个监听器，监听器抛错会传到
+  host。与 §9.2.1 的 `waterfall` 不同，这里**不需要、也没有**返回 decision 的义务。
+- **签名**（逐字）：
+  `'agent/turn-stopping'(this: Scoped<Agent>, payload: { agent: Agent; turn: number;
+  signal: AbortSignal }): Promise<void> | void`。
+  `Agent` 只有 `readonly id: SessionId` 一个字段；`SessionId` 是 `string` 的品牌类型。
+- **`this` 带 `Scoped<Agent>` 作用域**：agent-scoped 监听器**只收到该 agent** 的派发
+  （宿主原文：*Scope-filtered dispatch: agent-scoped listeners receive only that agent*），
+  插件因此不需要自己再按 agent 过滤。
+- **`payload.signal` = 当前 turn 的显式中止信号**（宿主原文：*the current turn's explicit
+  abort signal*）。已 `aborted` 的 turn 上做保活没有意义，插件据此提前返回。
+- **语义**：turn 即将关闭——模型不再欠响应（没有在途工具调用、没有新 steering）。宿主
+  **在边界提交前 await**；监听器完成后**无 steering 就关闭 turn**。
+
+**⚠️ 在这个事件上写盘的硬约束**：监听器**可以调用 `agent.steer(...)` 让 turn 不结束**
+（宿主原文：*a listener that objects steers (`agent.steer(...)`) and the machine re-reads
+its inbox: fresh steering runs another step, none closes the turn*）。因此：
+
+1. **绝不调用 `agent.steer()`**——那会把本该关闭的 turn 重新打开，制造无法收敛的循环；
+2. **不在慢 IO 上久留**——宿主 await 本监听器，长耗时会**直接推迟 turn 边界提交**
+   （不是后台延迟，是前台阻塞）；
+3. **绝不抛错**——serial 链上抛错会传到 host，一个可丢的保活不值得冒这个险。
+
+宿主还声明了两条对本事件同等重要的性质，插件不依赖它们但**不得违反**：*listener order
+cannot change the outcome*（数据决定结果，监听器顺序不影响）；结论**不会短路已提交的
+下一步工作**（同 step 的 `additionalContexts` 或竞态 steering 仍会跑，turn 只在 inbox
+排空后关闭）。
+
+**因此本插件的处置**：`heartbeatKeepalive` 只刷**本会话既有 working 心跳**的 `updated_at`
+（`updateHeartbeat(root, contract, session, {})` 空 patch），**不建心跳、不写任何语义字段**
+（`status`/`goal`/`task`/`claims`/`turn` 原样）；不 steer；全程包在 `try/catch` 里，
+任何失败只留一条 mount warning。存在性与归属复用 `heartbeatWorking`——**与写门禁同一个
+判定**，所以别的会话的心跳文件结构上够不着。
+
+目的很具体：长 turn 会让 `updated_at` 老化超过 `HEARTBEAT_STALE_SECONDS`（6 小时）的
+新鲜度窗口，`heartbeatStatus` 会报 stale/dead，`heartbeatGuardReason` 就会**错误地
+拒绝 `edit`/`write`**。保活解决的是这个误判，不改变"是否该拒绝写入"的任何语义。
+
+> **诚实边界**：本节契约来自宿主运行时导出的 Event 接口声明；**宿主的 agent 实现源码本
+> 项目读不到**，因此(a) turn 边界提交之后宿主内部如何记账、(b) `signal` 在何种时序下被
+> abort、(c) 同一 turn 上多个 serial 监听器的相对顺序**均未经实测**，本节不作断言。
+> 该边界不影响上面的处置：无论宿主内部如何实现，"不 steer、不久留、不抛错"都是唯一
+> 安全的写法。
+
 ### 9.3 与工具的关系
 
 模型侧另有 6 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`、
