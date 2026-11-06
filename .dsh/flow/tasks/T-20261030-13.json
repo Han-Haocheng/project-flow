@@ -1,7 +1,7 @@
 {
   "id": "T-20261030-13",
   "title": "设计：实验与任务合并为进度树（schema 3） — 统一节点模型与状态机（含 failed），实验/任务共用一棵 parent 树与 rollup；保留 kind 专有字段语义，提供迁移与兼容层。",
-  "status": "draft",
+  "status": "archived",
   "owner": "",
   "scope": {
     "allow": [
@@ -25,8 +25,10 @@
   "commits": [],
   "notes": "来源：用户 2026-10-30 提出实验树与任务合并。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-10-30T20:30:40+08:00",
+  "updated_at": "2026-11-06T20:13:53+08:00",
   "schema": 1,
   "type": "docs",
-  "parent": null
+  "parent": null,
+  "done_at": null,
+  "archived_at": "2026-11-06T20:13:53+08:00"
 }
