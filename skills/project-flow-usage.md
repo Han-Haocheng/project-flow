@@ -2,9 +2,8 @@
 
 技能名：`project-flow-usage`。用 `flow` CLI 维护 `.dsh/flow/` 里的实验、任务与门禁；
 面板读同一份 store（唯一写动作是未初始化空态上的「初始化」按钮，同样走 core）。
-所有命令都接受全局 `--root <dir>` 与 `--json`，但**必须写在子命令之前**：
-`flow --root /path/to/proj task list`，不是 `flow task list --root ...`（放后面会被当成
-子命令参数丢掉，命令随即报「未初始化」）。
+所有命令都接受全局 `--root <dir>` 与 `--json`，**位置不限**（`parseArgv` 全位置扫描，
+`flow --root P task list` 与 `flow task list --root P` 等价）。
 
 ## 实验：生命周期与谱系
 
