@@ -2145,8 +2145,12 @@ function displayWidthOf(text) {
  */
 async function runTaskNormalize(ctx) {
   const { core } = ctx
-  const contract = loadContractFor(ctx, ctx.root)
   const dryRun = ctx.flags['dry-run'] === true
+  // P1-1（review-core task-17）：`--dry-run` 也必须在未初始化 root 上走 usage。
+  // `normalizeTaskFormat({fix:false})` 对空目录返回 `{ok:true, issues:[]}`，"读不到台账"
+  // 与"台账很干净"会输出成同一句话——复查 §3.3③ 时会被当成"已归零"（静默假绿）。
+  core.assertInitialized(ctx.root)
+  const contract = loadContractFor(ctx, ctx.root)
   const mapPath = readString(ctx.flags, 'type-map')
   const typeById = mapPath === undefined ? {} : loadTypeMap(ctx.root, mapPath)
   if (mapPath !== undefined) warnTypeMapExtras(core, ctx.root, contract, typeById)

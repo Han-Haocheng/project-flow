@@ -323,3 +323,20 @@ test('真实台账体检：--dry-run 报告可读且 .dsh/flow 零改动（环�
   )
   assert.equal(fingerprint(), before, '真实台账 --dry-run 不得改动 .dsh/flow/tasks（size+mtime）')
 })
+
+// ------------------------------------------ P1-1：--dry-run 也必须拦截未初始化
+
+test('P1-1：--dry-run 在未初始化 root 上走 usage(1)，不把「没有台账」报成「已归零」', () => {
+  // review-core 在 task-17 审查里发现：`normalizeTaskFormat({fix:false})` 对空目录返回
+  // `{ok:true, issues:[]}`，dry-run 会输出「（没有待迁移的旧记录）」——与真正的"已归零"
+  // 一模一样。复查 §3.3③ 时会把"台账从未归一"当成"已完成"（静默假绿）。
+  // task 族走 EXIT_BY_CODE（usage→1），check 族才是 2。
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-task-normalize-uninit-dry-'))
+  TEMP_ROOTS.push(bare)
+  const result = runCli(bare, ['--root', bare, 'task', 'normalize', '--dry-run', '--json'])
+  assert.equal(result.code, 1, `未初始化的 --dry-run 应为 exit 1，实际 ${result.code}`)
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.error.code, 'usage')
+  assert.match(result.json.error.message, /run flow init first/)
+  assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
+})
