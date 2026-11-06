@@ -78,10 +78,12 @@ test('active 队列按 created_at 升序：patch 一条老任务不会把它顶�
   assert.deepEqual(ids(before.tasks.active), ['T-20260101-01', 'T-20260101-02', 'T-20260101-03'])
 
   // patch 最老的任务：updated_at 被刷新到最新，但 created_at 不变 → 队列位次不变。
-  updateTask(root, contract, 'T-20260101-01', { title: '最老（刚改过）' })
+  // ④ 之后 `title` 不可改，用可写的 `notes` 证明「字段变了但位次没变」。
+  updateTask(root, contract, 'T-20260101-01', { notes: '刚改过' })
   const after = await snapshotOf(root)
   assert.deepEqual(ids(after.tasks.active), ['T-20260101-01', 'T-20260101-02', 'T-20260101-03'])
-  assert.equal(after.tasks.active[0].title, '最老（刚改过）')
+  assert.equal(after.tasks.active[0].notes, '刚改过')
+  assert.equal(after.tasks.active[0].title, '最老', '④ 之后 title 不可改，patch 后仍是原标题')
 })
 
 test('draft 队列同样按 created_at 升序；最近完成仍按 updated_at 倒序', async () => {

@@ -203,7 +203,6 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "type": "feat",                       // 必填（add）：feat|fix|docs|style|refactor|perf|test|chore|build|ci
   "status": "draft",                    // draft | active | done | archived
   "owner": "",
-  "goal": "",
   "parent": null,                        // 可选（T-13）：父任务 id；null/空串 = 根
   "experiment": null,                    // 可选：关联实验 id（可省略，新建任务默认不写该键）
   "scope": { "allow": [], "deny": [] },  // 数组元素必须为字符串
@@ -231,12 +230,46 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   丢掉一条任务或实验）。重编号需同步文本引用：`decisions` 的 `blocks`、heartbeat 的 `task`、
   任务的 `parent`、实验的 `commits` 等；批量工具 `flow task renumber` 尚未提供，属后续可选卡。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
-- `created_at`/`id`/`schema` 不可改。
+- **不可改字段（`applyTaskPatch` 单点拦截）**：`id`、`schema`、`created_at`、`title`、`type`。
+  任何一条出现在 update patch 里都抛
+  `FlowError('invalid', 'task <key> cannot be changed')`（CLI 映射 `exit 2`，`flow_task` 工具
+  冒泡同一句，两端文案一字不差）。理由：`id` 被台账/`parent`/`decisions.blocks`/心跳 `task`
+  引用；`title` 是任务身份，且面板标题是 `type: title` 的展示面；`type` 参与按类型统计，
+  可改则历史漂移。**唯一例外**是 core 内部迁移函数 `normalizeTaskFormat()`（见下方「旧格式
+  迁移」），`updateTask` 对外零例外。
+- **可更新白名单（显式）**：`status`、`owner`、`notes`、`commits`、`scope`、`acceptance`、
+  `experiment`、`parent`。白名单之外的自造键一律 `invalid`（同一条「cannot be changed」文案），
+  不做静默写入。
+- **系统维护键例外**：`updated_at`（每次 patch 恒刷新）、`done_at`、`archived_at`
+  （`stampTaskTimes` 权威管理）**接受**写入但被写路径覆盖，**不**列入不可改清单。
+  `checkpoints` 本版不动：不在白名单、无 CLI flag/工具参数，写入属未定义行为，仅供存量只读。
 - **`type`（必填，T-15）**：conventional commit 类型，枚举 `feat` / `fix` / `docs` / `style` /
   `refactor` / `perf` / `test` / `chore` / `build` / `ci`。`task add` **必须**
   提供（缺 → `invalid: type is required`），非法值 → `invalid: type must be one of …`；
-  `task update` 可选，给了才校验。**旧记录可缺**：读投影为 `type: null`（不迁移、不回填），
-  面板可按空/「未分类」显示；对旧记录做其它字段 update 不会补写 `type` 键。
+  `task update` **不接受** `type`（见上「不可改字段」）。**旧记录可缺**：读投影为
+  `type: null`（读路径不迁移、不回填），面板降级只显示 `title`；对旧记录做其它字段 update
+  不会补写 `type` 键，补写只走 `normalizeTaskFormat({fix:true, typeById})`。
+- **`title` 承载标题与目标（goal 已合并，D-1/D-2）**：`goal` **不再是任务字段**——
+  `TASK_DEFAULTS` 不写、`task add`/`flow_task add` 不收（`--goal` 是未声明参数 → 用法错误
+  `exit 1`；工具侧 `invalid: flow_task add does not accept "goal"`），`task update` 不能复活
+  （`invalid: task goal cannot be changed`）。**旧记录磁盘上的 `goal` 键原样保留**：读路径
+  （`listTasks`/`getTask`/`flow task show`）**照原样返回、不拼进 `title`、不删不清空**，
+  因为它是格式门禁与 AI 的迁移素材；面板行与详情**不显示** `goal`（行形状见 §9.1.4，由 ③ 落地）。
+  更新其它字段时 `goal` 既不删也不搬。迁移完成前，旧记录的「目标」文本只在 CLI/门禁可见，**这不是数据丢失**。
+- **旧格式迁移（`normalizeTaskFormat`）**：`title`/`type` 不可改之后，旧记录的唯一修复通道
+  是 core 内部函数（不进 CLI flag、不进 `flow_task` 参数表）：
+  `normalizeTaskFormat(root, contract, {fix?, typeById?})`。
+  `fix:false`（默认）**只读零写盘**（不取锁），返回
+  `{ok, issues:[{id, kind:'legacy-goal'|'missing-type', title, goal, suggestion}], fixed:[]}`；
+  `fix:true` 在写锁内逐条迁移并原子写，返回同样的 `issues`（本次发现的问题）与
+  `fixed:[id]`，`ok` = 是否已无待迁移项。迁移规则（**幂等**，第二遍写 0 字节）：
+  1. `goal` 非空且 `title` 非空且两者不同 → `title = "<旧 title> — <旧 goal>"`
+     （半角破折号 + 两侧空格，单行），然后删 `goal` 键；
+  2. `goal` 为空/缺失/等于 `title` → 只删 `goal` 键；
+  3. `type` **仅在当前缺失**（键不存在，或手写为 `null`/`''`）且 `typeById[id]` 是上面 10 个
+     枚举之一时补齐；已有 `type` 的记录**永不改动**（迁移函数不穿透 ④ 的语义）。
+  迁移**不刷新** `updated_at`（格式归一不是编辑，不得重排「最近完成」），也不动 `done_at`/
+  `archived_at`。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则
   （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根；CLI 传
   `task add|update --parent <T-id>`，`--parent ''` / `none` / `null` 清空为根
@@ -662,10 +695,12 @@ flow exp rm <id> [--yes]
 
 flow task list | show <id>
 flow task add    --title T --type <t> [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
 flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
-                 [--owner O] [--goal G] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
                  # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
+                 # title 承载标题与目标：--goal 已删除（旧记录由 normalizeTaskFormat 迁移）；
+                 # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
 flow task rm <id> [--yes]
 flow task archive [--older-than N] [--dry-run]
 
@@ -1078,6 +1113,13 @@ checkExperiments(root, contract, {now?})
                                      // {ok, checked, legacy, failed[], warnings[]}
                                      // enabled=false → {ok:true, checked:0}（不读目录）
 listTasks       / getTask       / addTask       / updateTask       / removeTask
+normalizeTaskFormat(root, contract, {fix?=false, typeById?={}})
+                                     // 旧格式迁移的唯一通道（非契约 API：不进 CLI flag、
+                                     // 不进 flow_task 参数表）：{ok, issues[], fixed[]}
+                                     // fix:false 只读零写盘（不取锁）；fix:true 锁内迁移：
+                                     // goal 非空且 title 非空 → title = "<title> — <goal>"，
+                                     // 否则只删 goal 键；type 仅在缺失时按 typeById 补齐
+                                     // （10 枚举之一）。幂等；不刷新 updated_at。见 §3.2
 listGates       / getGate       / addGate       / updateGate       / removeGate
                                      // list* 第三个可选参数 {unreadable?: string[]}
                                      // 收走不可读文件的绝对路径，供调用方计数

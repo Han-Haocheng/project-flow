@@ -24,6 +24,7 @@ import {
 import { apply } from '../index.js'
 // `flow_task` is mounted by its own module entry since the plugin split.
 import { apply as applyTasks } from '../tasks.js'
+import { TASK_ADD_FIELDS, TASK_UPDATE_FIELDS } from '../lib/plugin/shared.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -125,13 +126,14 @@ test('type：10 个合法值逐一可建，且读回一致', () => {
   assert.equal(listTasks(root, contract).length, TASK_TYPES.length)
 })
 
-test('type：update 提供时校验并生效，非法值 invalid；不给 type 不改变原值', () => {
+test('type：update 一律拒绝（④ 不可改），非法值也让位同一条不可改文案', () => {
   const root = freshProject('update')
   const { contract } = loadContract(root)
   const task = addTaskCore(root, contract, { type: 'feat', title: '改类型' })
-  assert.equal(updateTask(root, contract, task.id, { type: 'fix' }).type, 'fix')
-  expectInvalid(() => updateTask(root, contract, task.id, { type: 'bogus' }), /type must be one of/)
-  assert.equal(updateTask(root, contract, task.id, { status: 'active' }).type, 'fix', '未给 type 保留原值')
+  // ④：type 参与统计，改了历史就漂移；core 单点拦截，文案与 id/schema/created_at 同句式。
+  expectInvalid(() => updateTask(root, contract, task.id, { type: 'fix' }), /task type cannot be changed/)
+  expectInvalid(() => updateTask(root, contract, task.id, { type: 'bogus' }), /task type cannot be changed/)
+  assert.equal(updateTask(root, contract, task.id, { status: 'active' }).type, 'feat', '未给 type 保留原值')
 })
 
 test('type：旧记录（无 type）读投影为 null、不迁移；update 其它字段不补写 type', () => {
@@ -182,13 +184,16 @@ test('type：CLI 退出码矩阵（缺 type / 非法 / 合法 / update）', () =
   assert.equal(ok.code, 0, ok.stderr)
   assert.equal(ok.json?.data?.type, 'feat')
 
+  // ④：--type 仍声明（走 core 的统一文案），但 update 一律 exit 2 invalid。
   const updated = runCli(root, ['task', 'update', ok.json.data.id, '--type', 'fix', '--json'])
-  assert.equal(updated.code, 0, updated.stderr)
-  assert.equal(updated.json?.data?.type, 'fix')
+  assert.equal(updated.code, 2, updated.stdout + updated.stderr)
+  assert.equal(updated.json?.error?.code, 'invalid')
+  assert.equal(updated.json?.error?.message, 'task type cannot be changed')
 
   const badUpdate = runCli(root, ['task', 'update', ok.json.data.id, '--type', 'nope', '--json'])
   assert.equal(badUpdate.code, 2)
   assert.equal(badUpdate.json?.error?.code, 'invalid')
+  assert.equal(badUpdate.json?.error?.message, 'task type cannot be changed', '不可改拦截先于枚举校验')
 
   const help = runCli(root, ['task', 'add', '--help'])
   assert.equal(help.code, 0)
@@ -216,11 +221,26 @@ test('type：flow_task schema enum/必填 + SPEC↔handler 白名单含 type', a
   )
   const created = await taskTool.execute({ action: 'add', type: 'feat', title: '工具建' }, exec)
   assert.equal(created.task.type, 'feat')
-  const updated = await taskTool.execute({ action: 'update', id: created.task.id, type: 'chore' }, exec)
-  assert.equal(updated.task.type, 'chore')
+  await assert.rejects(
+    taskTool.execute({ action: 'update', id: created.task.id, type: 'chore' }, exec),
+    (error) => error instanceof FlowError && error.code === 'invalid' && error.message === 'task type cannot be changed',
+    '工具侧与 core 同一句文案（白名单放行 type，由 core 拦）',
+  )
 
   // SPEC 与 handler 同步：task add/update 都声明了 type，help/用法列出 10 值。
   assert.match(BIN_SOURCE, /add: \{ flags: \['id', 'title', 'type'/)
   assert.match(BIN_SOURCE, /update: \{ flags: \['id', 'title', 'type'/)
   assert.match(BIN_SOURCE, /feat\|fix\|docs\|style\|refactor\|perf\|test\|chore\|build\|ci/)
+
+  // A11：`goal` 已从工具 schema/白名单里删除（②），只在"已合并"说明里出现。
+  assert.equal(taskTool.parameters.properties.goal, undefined, 'flow_task 不再暴露 goal 参数')
+  assert.equal(taskTool.parameters.additionalProperties, false)
+  assert.deepEqual(Object.keys(taskTool.parameters.properties).includes('goal'), false)
+  assert.match(taskTool.description, /`goal` was merged into `title`/)
+  assert.deepEqual(TASK_ADD_FIELDS.includes('goal'), false)
+  assert.deepEqual(TASK_UPDATE_FIELDS.includes('goal'), false)
+  // ④：title/type 仍透传给 core（白名单不另造第二种错误形态）。
+  assert.equal(TASK_UPDATE_FIELDS.includes('title'), true)
+  assert.equal(TASK_UPDATE_FIELDS.includes('type'), true)
+  assert.match(BIN_SOURCE, /update: \{ flags: \['id', 'title', 'type', 'status', 'owner', 'notes'/)
 })

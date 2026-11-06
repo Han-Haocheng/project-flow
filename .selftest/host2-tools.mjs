@@ -501,7 +501,7 @@ check('flow_exp tree: one root', Array.isArray(treeExp.tree) && treeExp.tree.len
 // -------------------------------------------------------- flow_task chain
 
 const createdTask = await taskTool.execute(
-  { action: 'add', type: 'feat', title: '工具注册', status: 'active', owner: 'agent', goal: '4 tools + 2 skills', acceptance: ['selftest green'] },
+  { action: 'add', type: 'feat', title: '工具注册', status: 'active', owner: 'agent', acceptance: ['selftest green'] },
   exec,
 )
 const taskId = createdTask.task?.id
@@ -519,7 +519,7 @@ eq('flow_task update: status', updatedTask.task?.status, 'done')
 check('flow_task update: commits', Array.isArray(updatedTask.task?.commits) && updatedTask.task.commits[0] === 'abc1234')
 
 // An active task carrying the full detail set: the panel payload must project
-// goal/notes/scope/acceptance/commits/timestamps for the active group too.
+// notes/scope/acceptance/commits/timestamps for the active group too.
 const activeDetail = await taskTool.execute(
   {
     action: 'add',
@@ -527,7 +527,6 @@ const activeDetail = await taskTool.execute(
     title: '进行中任务',
     status: 'active',
     owner: 'panel',
-    goal: '看见目标而不是编号',
     notes: '展开详情可读',
     scope: { allow: ['client.js'], deny: ['lib/'] },
     acceptance: ['node --check client.js'],
@@ -822,7 +821,6 @@ const newerDraftDetail = await taskTool.execute(
   {
     action: 'update',
     id: newerDraft.task?.id,
-    goal: '草稿目标'.repeat(200),
     notes: '备注'.repeat(300),
     scope: {
       allow: Array.from({ length: 12 }, (_, index) => `src/allow-${index}.js`),
@@ -878,7 +876,7 @@ eq('store payload: tasks draft missing owner empty', newerDraftRow.owner, '')
 eq('store payload: tasks draft owner kept', olderDraftRow.owner, 'alice')
 eq('store payload: tasks draft updated_at kept', olderDraftRow.updated_at, '2026-10-28T09:00:00+08:00')
 
-// ---- three row groups carry goal + bounded detail fields -------------------
+// ---- three row groups carry bounded detail fields -------------------------
 check(
   'store payload: active/draft/recentDone row shapes',
   store.tasks?.active?.every((row) => taskRowOk(row)) &&
@@ -888,7 +886,6 @@ check(
 )
 
 const activeRow = store.tasks?.active?.[0] ?? {}
-eq('store payload: active goal projected', activeRow.goal, '看见目标而不是编号')
 eq('store payload: active notes projected', activeRow.notes, '展开详情可读')
 check(
   'store payload: active scope projected',
@@ -905,7 +902,6 @@ check('store payload: active created_at projected', typeof activeRow.created_at 
 eq('store payload: active status projected', activeRow.status, 'active')
 
 const doneRow = store.tasks?.recentDone?.[0] ?? {}
-eq('store payload: done goal projected', doneRow.goal, '4 tools + 2 skills')
 eq('store payload: done notes empty', doneRow.notes, '')
 check(
   'store payload: done scope empty',
@@ -923,8 +919,6 @@ check('store payload: done gate null without checkpoints', doneRow.gate === null
 
 // The newer draft is long on purpose: the row must stay bounded.
 const detailedDraft = store.tasks?.draft?.find((row) => row.id === newerDraft.task?.id) ?? {}
-eq('store payload: draft goal clipped', detailedDraft.goal?.length, 400)
-check('store payload: draft goal is the clipped prefix', detailedDraft.goal === '草稿目标'.repeat(100))
 eq('store payload: draft notes clipped', detailedDraft.notes?.length, 400)
 eq('store payload: draft scope.allow capped', detailedDraft.scope?.allow?.length, 10)
 check(
@@ -938,7 +932,6 @@ check('store payload: draft created_at projected', typeof detailedDraft.created_
 
 // Empty detail fields degrade to '' / [] instead of disappearing.
 const emptyDraft = store.tasks?.draft?.find((row) => row.id === olderDraft.task?.id) ?? {}
-eq('store payload: bare draft goal empty', emptyDraft.goal, '')
 eq('store payload: bare draft notes empty', emptyDraft.notes, '')
 check(
   'store payload: bare draft scope empty',

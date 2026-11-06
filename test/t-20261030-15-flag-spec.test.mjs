@@ -120,11 +120,26 @@ test('未声明 flag（通过 = 提供的值）同样被拒；已初始化项目
   assert.equal(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'), before, 'conflict/usage 前不得改写 manifest')
 })
 
+test('task add/update 不再声明 --goal：usage 失败（exit 1）且不写盘', () => {
+  const root = freshProject('task-no-goal')
+  const before = fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')
+  const add = runCli(root, ['task', 'add', '--type', 'feat', '--title', '甲', '--goal', '乙'])
+  assert.equal(add.code, 1, add.stdout + add.stderr)
+  assert.match(add.stderr, /task add 不支持 --goal/)
+  assert.match(add.stderr, /可用：/)
+  const update = runCli(root, ['task', 'update', 'T-20261105-01', '--goal', '乙'])
+  assert.equal(update.code, 1, update.stdout + update.stderr)
+  assert.match(update.stderr, /task update 不支持 --goal/)
+  // usage 失败早于任何 core 读写：manifest 与任务目录都不得变化。
+  assert.equal(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'), before)
+  assert.deepEqual(fs.readdirSync(path.join(root, '.dsh/flow/tasks')), [])
+})
+
 // ------------------------------------------------------------ 已声明组合回归
 test('已声明组合：task/exp/gate/heartbeat/decision/check 的合法 flag 仍 rc0', () => {
   const root = freshProject('accept', { noGates: false })
   const cases = [
-    ['task add', ['task', 'add', '--type', 'feat', '--title', '任务一', '--id', 'T-20261105-01', '--owner', 'lead', '--goal', 'g', '--notes', 'n']],
+    ['task add', ['task', 'add', '--type', 'feat', '--title', '任务一', '--id', 'T-20261105-01', '--owner', 'lead', '--notes', 'n']],
     ['task add parent', ['task', 'add', '--type', 'feat', '--title', '子任务', '--parent', 'T-20261105-01']],
     ['task update', ['task', 'update', 'T-20261105-01', '--status', 'active', '--notes', 'n2']],
     ['exp add', ['exp', 'add', '--id', 'E-20261105-01', '--title', '实验', '--hypothesis', 'H', '--direction', 'D',

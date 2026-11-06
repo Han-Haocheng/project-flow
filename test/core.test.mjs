@@ -648,6 +648,50 @@ test('task CRUD：状态流转、scope 合并、不可变字段与 not-found', (
   expectFlowError(() => removeTask(root, contract, created.id), 'not-found')
 })
 
+// ④ 收紧可更新字段（T-20261105225848 / A4 A5 A7）：`title`/`type` 与既有三条
+// 身份字段同一句文案，其余「未列入白名单的键」一律 invalid；显式白名单仍全绿。
+test('task update 白名单：title/type 不可改，未列白名单的键一律 invalid', () => {
+  const { root, contract } = freshProject('task-immutable')
+  const created = addTask(root, contract, { title: '原标题', type: 'feat' })
+
+  for (const key of ['id', 'schema', 'created_at', 'title', 'type']) {
+    expectFlowError(
+      () => updateTask(root, contract, created.id, { [key]: key === 'type' ? 'fix' : 'x' }),
+      'invalid',
+      new RegExp(`task ${key} cannot be changed`),
+    )
+  }
+  // `goal` 不再是字段：经 update 复活必须被同一机制挡住，磁盘上不出现该键。
+  expectFlowError(() => updateTask(root, contract, created.id, { goal: '复活目标' }), 'invalid', /task goal cannot be changed/)
+  // 白名单之外的自造键同样拒绝，而不是静默写入。
+  expectFlowError(() => updateTask(root, contract, created.id, { bogus: 1 }), 'invalid', /task bogus cannot be changed/)
+
+  const file = path.join(root, '.dsh/flow/tasks', `${created.id}.json`)
+  assert.equal(Object.hasOwn(readJson(file), 'goal'), false, 'update 不得把 goal 写回磁盘')
+  assert.equal(readJson(file).title, '原标题')
+  assert.equal(readJson(file).type, 'feat')
+
+  // A7：显式白名单逐字段可写，scope 仍逐键合并。
+  const patched = updateTask(root, contract, created.id, {
+    status: 'active',
+    owner: 'agent-b',
+    notes: '备注',
+    commits: ['abc1234'],
+    scope: { allow: ['lib/'] },
+    acceptance: ['node --test test/'],
+    parent: null,
+  })
+  assert.equal(patched.status, 'active')
+  assert.equal(patched.owner, 'agent-b')
+  assert.equal(patched.notes, '备注')
+  assert.deepEqual(patched.commits, ['abc1234'])
+  assert.deepEqual(patched.scope, { allow: ['lib/'], deny: [] }, 'scope 仍逐键合并')
+  assert.deepEqual(patched.acceptance, ['node --test test/'])
+  assert.equal(patched.parent, null)
+  assert.equal(patched.title, '原标题', '未传 title 时原值不变')
+  assert.equal(patched.type, 'feat', '未给 type 时原值不变')
+})
+
 // -------------------------------------------------------------- tasks archive
 
 test('archiveTasks：done 超阈值转 archived，字段保留、updated_at 刷新、记录仍在', () => {
@@ -3513,8 +3557,8 @@ test('T-13 parent 归一：undefined/null/NONE/trim，且「未传 parent 不清
 
   const statusOnly = updateTask(root, contract, child.id, { status: 'active' })
   assert.equal(statusOnly.parent, parent.id, '只改 status 不得清空 parent')
-  const goalOnly = updateTask(root, contract, child.id, { goal: '新目标' })
-  assert.equal(goalOnly.parent, parent.id, '只改 goal 不得清空 parent')
+  const notesOnly = updateTask(root, contract, child.id, { notes: '新备注' })
+  assert.equal(notesOnly.parent, parent.id, '只改 notes 不得清空 parent')
   assert.equal(getTask(root, contract, child.id).parent, parent.id)
 })
 
