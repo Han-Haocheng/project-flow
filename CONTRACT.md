@@ -425,8 +425,12 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   在子会话里**明确拒绝**（工具报错、CLI 退出 1），list/status 只读放行。
   **注意**：`lib/core.mjs` 不感知会话类型，拒绝发生在 Host 工具与 CLI 层；直接调 core
   API 的脚本自行负责只从主会话写入。
-- `session` 缺省取 `DSH_SESSION_ID`；仍为空 → `FlowError('usage')`。session 会当文件名用：
-  禁止 `/`、`\`、`..`、控制字符，长度上限 80，否则 `FlowError('invalid')`。
+- `session` 缺省取 `DSH_SESSION_ID`；仍为空 → `FlowError('usage')`。session 会当文件名用，
+  因此按 Windows 与 POSIX 的交集校验，任一不满足 → `FlowError('invalid')`：长度上限 80；
+  禁止 `/`、`\`、`..`、控制字符与 `[<>:"|?*]`（`:` 同时挡掉 NTFS ADS `name:stream`）；
+  禁止**结尾点或空格**（Windows 会静默去掉，导致 `a.` / `a ` 与 `a` 同名碰撞）；禁止
+  Windows 保留设备名 `CON`/`PRN`/`AUX`/`NUL`/`COM1`-`COM9`/`LPT1`-`LPT9`——大小写不
+  敏感，带扩展名同样拒绝（`con.txt`、`nul.tar.gz`），按第一个点之前的词干判定。
 - `status` 只有 `working` / `idle` 算 active；`done` / `missed` 是结束态。
   `ageSeconds` 按 `updated_at` 计算（解析失败回退文件 mtime），`> 6h`
   （`HEARTBEAT_STALE_SECONDS`）记 `stale`。
@@ -774,6 +778,10 @@ flow check experiments
 - `--step` 格式 `id=命令>>expect`，可重复；`expect` 可为 `exit 0`、`exit 2`、
   `contains:文本`；未写 `>>expect` 时为 `exit 0`。
 - `gate run --timeout SECONDS` 覆盖该次运行所有步骤的超时（默认按步骤的 600 秒）。
+  步骤超时后 core 终止**整个进程树**：POSIX 杀以 detached 启动的进程组；win32 先
+  `taskkill /PID <pid> /T /F`（`/T` 含子进程、`/F` 强制），再直接杀子进程兜底。win32 上
+  `taskkill` 之后仍可能收不到 `close`（孙进程占着 stdio），因此再等 2 秒 grace 就 resolve
+  并把该步骤记为失败（`exit: null`），不再挂死；非 win32 行为不变（仍只等 `close`）。
 - `gate logs --limit N` 默认 5，按 `started_at` 新→旧。
 - `rm` 不带 `--yes`：TTY 下交互确认；非 TTY 或 `--json` 模式下直接用法错误（不会误删）。
 - `task archive` 把 `status === 'done'` 且**已满** `tasks.archiveAfterDays` 天（默认 **7**；
@@ -921,7 +929,11 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
   `<root>/.agents/gate-config.json` 的 `doc_standard`（默认 `.agents/doc-standard.json`，
   内含 required_sections / max_lines / vague_words）与任务目录配置；注意
   `precision_common.repo_root` 优先读环境变量 `TASK_ROOT`，若设置了它会覆盖 `--root`。
-- 每项检查默认超时 **120 秒**，`--timeout <seconds>` 覆盖（正整数）。
+- 每项检查默认超时 **120 秒**，`--timeout <seconds>` 覆盖（正整数）。超时同样终止
+  **进程树**：win32 先 `taskkill /PID <pid> /T /F`，再给 2 秒 grace 兜底 resolve 并报
+  `check-io`（不会因为孙进程占着管道而挂死）；非 win32 沿用 detached 进程组 SIGKILL。
+  `lib/checks.mjs` 的 `killProcessTree` / `superviseCheckChild` 与 core 的同名实现是同一套
+  语义的导出测试位（非契约 API，用 `{platform, killImpl, taskkillImpl, graceMs}` 注入）。
 
 ### 6.1.1 `check decisions`（决策门禁）
 
@@ -1041,6 +1053,14 @@ releaseTakeoverClaim(claimPath, token)
 renameWithRetrySync(from, to, {renameImpl?, sleepImpl?, delays?})
                                      // rename 退避重试（EPERM/EBUSY/EACCES，10/50/150ms，
                                      // 共 4 次），最终抛 FlowError('io')（非契约 API，仅供测试注入）
+writeJsonAtomic(file, data, {renameImpl?, sleepImpl?, delays?})
+                                     // 原子写；retryOptions 只透传给 renameWithRetrySync，
+                                     // 供测试在真实目录上制造瞬时/耗尽失败（非契约 API）
+killProcessTree(child, {platform?, killImpl?, taskkillImpl?})
+                                     // 杀子进程树：POSIX 进程组 SIGKILL，win32 taskkill /T /F
+                                     // （非契约 API，仅供测试注入）
+runStep(root, step, timeoutMs, tailLines, {platform?, spawnImpl?, killImpl?, taskkillImpl?, graceMs?})
+                                     // 执行一个门禁步骤；注入位为覆盖 win32 分支（非契约 API）
 
 listExperiments / getExperiment / addExperiment / updateExperiment / removeExperiment
                                      // add/update 只写 schema2；legacy（schema!==2）读写规则见 §3.1

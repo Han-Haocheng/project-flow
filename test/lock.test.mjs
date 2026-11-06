@@ -375,7 +375,10 @@ test('原子写：fsync 在 rename 之前（源码断言；黑盒不可观测）
   const end = source.indexOf('\nfunction ', start + 1)
   const body = source.slice(start, end === -1 ? undefined : end)
   const fsyncAt = body.indexOf('fsyncSync(fd)')
-  const renameAt = body.indexOf('renameWithRetrySync(temp, file)')
+  // 只认到第二个参数：T-20261030-09 给 rename 加了可注入的第三参（retryOptions），
+  // 针脚不能要求以 `)` 结尾，否则实现加注入点就假红；不变量是 fsync 在 rename 之前。
+  const renameAt = body.indexOf('renameWithRetrySync(temp, file')
+  assert.ok(renameAt > 0, 'writeJsonAtomic 必须通过 renameWithRetrySync 落盘')
   assert.ok(fsyncAt > 0, 'writeJsonAtomic 必须 fsync 临时文件')
   assert.ok(renameAt > fsyncAt, 'fsync 必须发生在 rename 之前')
   assert.ok(body.includes('fsyncDirBestEffort(dirname(file))'), 'rename 后应对父目录 best-effort fsync')
