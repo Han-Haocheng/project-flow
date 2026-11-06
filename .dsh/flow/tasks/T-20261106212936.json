@@ -1,7 +1,7 @@
 {
   "title": "docs: 技能文档与 flow 实现不符两处（exp add 必填字段 / --root 位置）",
   "type": "docs",
-  "notes": "2026-11-06 按 `project-flow-init` / `project-flow-usage` 技能验收时实测发现，两处文档与实现不符。\n\n## 1 `exp add` 的技能示例缺 6 个必填字段（P1，照做必失败）\n\n`skills/project-flow-usage.md:14-15` 的示例：\n```\nflow exp add --title \"focus 归一化降 tie\" --hypothesis \"归一化后 tie_mean<=1.0\" \\\n  --factor focus/normalize --expected \"tie_mean<=1.0\" --scale small\n```\n实测报错：\n```\n{\"ok\":false,\"error\":{\"code\":\"invalid\",\"message\":\"exp add 缺少 schema-2 必填字段：direction, primaryMetric, guardrails, falsify, windowDays, stopLoss\"}}\n```\n`CONTRACT §3.1` 与技能自己的「任务」段都没列出这七个必填（技能 §5 只说了 `--parent` 不存在会 invalid）。\n正确示例应是：\n```\nflow exp add --title \"...\" --direction D --hypothesis H --expected E \\\n  --primary-metric M --window-days 7 --stop-loss S --guardrail G --falsify F\n```\n\n## 2 `--root` 的\"全局\"表述与实际不符（P2）\n\n`skills/project-flow-usage.md:5` 写「所有命令都接受全局 `--root <dir>`」，但实测：\n- `flow exp add ... --root <dir>`（放子命令**后**）→ 报「未初始化」，`--root` 被当作子命令参数丢弃；\n- `flow --root <dir> exp add ...`（放**前**）→ 正常。\n即 `--root`/`--json` 必须放在**子命令之前**。技能该句应改成\"必须写在子命令之前（全局位置）\"。\n\n## 已通过的部分（供对照）\n- `flow init` 幂等：重复执行只给 `already-initialized` warning，不覆盖 ✓\n- `--json status` 的 `data.initialized === true` ✓\n- 临时项目最小闭环（init → exp add → exp update → task add → gate add → gate run → status）全通 ✓\n- `exp add` 给全七字段后返回 `schema:2`、id `E-YYYYMMDD-NN` ✓\n\n## 注\n顺带发现 `flow init --json` 的 `data` 里没有 `store` 字段（技能验收清单说 `data.initialized === true` 指的是 `--json status`，不算错；但 `init` 的 `data` 形状技能未描述，可顺手补）。",
+  "notes": "2026-11-06 按 project-flow-init/usage 技能验收时实测发现两处文档与实现不符（原报告见 git show dd9bf0a）。\n\n【已修复并推送】 技能示例缺 6 个必填字段（direction/primaryMetric/guardrails/falsify/windowDays/stopLoss）——照抄必失败。已在 skills/project-flow-usage.md 补全七字段说明 + 完整示例（主示例与子实验示例），实测照抄 ok:true。见 0dab4e4。\n\n【已撤回】原报告第 2 条说「--root 必须写在子命令之前，放后面会被丢弃」——**这是误诊**。exec-check（task-45）实测 + Lead 复跑确认：parseArgv 是全位置扫描，三种位置全部生效。误诊根因：临时目录建在 /tmp，跨 bash 调用不持久（dispatch-discipline.md 第 5 条自己记录的坑），第二次调用时目录已被清掉，把「目录不存在」读成了「--root 没生效」。已撤回错误说法，改为「位置不限」。见 adfc2af。\n\n教训：这次的假红和之前抓到的假绿是同一个病——「以为在验 A，其实跑的是 B」。以后验证路径类参数必须把 root 与子命令写在同一条命令内。",
   "schema": 1,
   "id": "T-20261106212936",
   "status": "done",
@@ -15,7 +15,7 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-11-06T21:29:36+08:00",
-  "updated_at": "2026-11-06T21:31:50+08:00",
+  "updated_at": "2026-11-06T21:55:41+08:00",
   "done_at": "2026-11-06T21:31:50+08:00",
   "archived_at": null
 }
