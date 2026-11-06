@@ -275,6 +275,15 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
      实测边界（与规则 3 的「缺失」定义相关）：`type` 键**不存在**时 `validateTaskFields` 放行、
      不抛错，此时 `goal` 的合并/删除照常写盘而 `type` 仍缺，跳过分支走不到；只有 `type` 写成
      `null`/`''` 时才会抛错并被跳过。两条路径都是 `fixed` 无该条 + `ok:false`。
+  **parent 等缺省键的默认化是既有行为，不属于规则 1–4**：迁移写盘前会过一遍
+  `validateTaskFields`，它顺带补齐记录缺省的键——`parent: null`、`owner: ''`、`notes: ''`、
+  `scope: {allow:[],deny:[]}`、`acceptance: []`、`checkpoints: []`、`commits: []`——这是所有
+  写路径共有的行为，不是本次迁移引入的语义变更。P3 归一时 49 条里有 **36 条**因此多出
+  `parent: null`，属正常。`done_at`/`archived_at` **不**由它默认化（归 `stampTaskTimes`
+  权威管理，见上「系统维护键例外」）。
+  **P3/P4 必须成对 revert**：`check tasks` 一旦接入 precommit，台账归一（P3）与门禁接入（P4）
+  **必须成对 revert**——只 revert 台账归一会让 `check tasks` 立刻 exit 1，此后每次提交都被
+  门禁挡住。
   迁移**不刷新** `updated_at`（格式归一不是编辑，不得重排「最近完成」），也不动 `done_at`/
   `archived_at`。
   **CLI 通道**：写盘只走 `flow task normalize [--type-map <file.json>] [--dry-run]`（§5.1），
