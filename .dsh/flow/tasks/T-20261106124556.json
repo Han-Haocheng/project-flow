@@ -1,10 +1,10 @@
 {
   "title": "fix: type:null/'' 旧记录的 update 被 validateTaskFields 拒绝（与 CONTRACT 口径不符）",
   "type": "fix",
-  "notes": "2026-11-06 由 exec-docs 实测发现（该卡只做文档，越界未改）。\n\n现象：`applyTaskPatch` 末尾 `validateTaskFields` 对 `type !== undefined` 的记录校验枚举，于是手写 `type: null` / `type: ''` 的旧记录**任何 update 都抛** `invalid: type must be one of …`；而 `type` 键**不存在**的记录可以正常 update（不补写）。\n与 CONTRACT §3.2 的「旧记录可缺：读投影 type:null，对旧记录做其它字段 update 不会补写 type 键」字面不符（那句只对\"键不存在\"成立）。\n影响：迁移期这类记录的 status/owner/notes 全部写不动，只能先跑 normalizeTaskFormat（且必须给 typeById）；真实台账当前 0 例（review-core 实测）。\n候选修法：`validateTaskFields` 的 type 校验改成与 `taskTypeMissing()` 同一判定（null/'' 视为缺失放行，读投影保持 null），或 CONTRACT 明确\"null/'' 必须先迁移\"。属 core 语义变更，需评估对 t-20261105-task-type 既有断言（:137-168）的影响。\n相关：review-core P2 中「type 已是非法串不报不修（ok:true）但任何 update 都 invalid」是同族问题，可并入本卡。",
+  "notes": "2026-11-06 完成（c2e4af2，已推送 origin/main）。\n\n问题：手写 `type: null` / `''` 的旧记录读得出来、却任何 update 都被 validateTaskFields 拒绝。\n\n关键判断（review-panel 分析，Lead 采纳）：\n- **候选修法被否**：把 validateTaskFields 的 type 校验改成与 taskTypeMissing 同判定 → 实测 394/1 fail，红的是 B7。根因：它被三条路径共用（buildTask / applyTaskPatch / normalizeTaskFormat），放宽会让迁移路径放行 → 删 goal 但 type 仍缺 → **半修**。\n- **实际做法**（+7 行，只在 applyTaskPatch）：缺失归一 → 校验 → 还原。validateTaskFields / buildTask / normalizeTaskFormat 一个字符不动，既有断言一条不改。宽进严守：null/'' 放行，非法串 \"nope\" 仍 exit 2。\n\n顺带发现并写进 CONTRACT 的真实差异：projectTaskType 只对**缺键**补 null，手写 null/'' 原字面值返回。\n\n性质修正（Lead 原判\"最后一条活边界\"被 review-panel 驳回）：它有完备路径（check tasks 报 → normalize --type-map 修 → update 恢复），是\"口径不符 + 可用性摩擦\"，不是 P2-3 那种静默卡死。\n\n门禁：node --test test/ 396/396；五个 selftest 全 PASS；变异验证（撤三行 → 新用例红）。",
   "schema": 1,
   "id": "T-20261106124556",
-  "status": "draft",
+  "status": "done",
   "parent": null,
   "owner": "",
   "scope": {
@@ -13,7 +13,11 @@
   },
   "acceptance": [],
   "checkpoints": [],
-  "commits": [],
+  "commits": [
+    "c2e4af2"
+  ],
   "created_at": "2026-11-06T12:45:56+08:00",
-  "updated_at": "2026-11-06T12:45:56+08:00"
+  "updated_at": "2026-11-06T21:25:55+08:00",
+  "done_at": "2026-11-06T21:25:55+08:00",
+  "archived_at": null
 }
