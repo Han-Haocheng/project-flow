@@ -527,9 +527,22 @@ test('契约同步：CONTRACT.md 与实现同改（保留名/ADS/结尾点空格
   for (const needle of ['WINDOWS_RESERVED_SESSION_NAMES', 'WINDOWS_UNSAFE_SESSION_CHARS_RE', 'WIN32_KILL_GRACE_MS']) {
     assert.ok(coreText.includes(needle), `lib/core.mjs 缺少实现：${needle}`)
   }
+  // task-52：checks 不再**内联**一份 win32 杀灭实现（那是真重复），改为从
+  // lib/proc.mjs 取同一份。断言的意图不变——"checks 具备杀进程树的能力，且用的是
+  // 带 /PID /T /F 的实现"——只是表达从"文本内联"换成"经 proc 可达 + 全 lib 唯一"。
+  const procText = fs.readFileSync(path.join(REPO_ROOT, 'lib', 'proc.mjs'), 'utf8')
+  assert.ok(/from '\.\/proc\.mjs'/.test(checksText), 'lib/checks.mjs 必须从 ./proc.mjs 取进程树杀灭能力')
   for (const needle of ['WIN32_KILL_GRACE_MS', "'taskkill', ['/PID'"]) {
-    assert.ok(checksText.includes(needle), `lib/checks.mjs 缺少实现：${needle}`)
+    assert.ok(procText.includes(needle), `lib/proc.mjs 缺少实现：${needle}`)
   }
+  // 唯一性：消除重复后，整个 lib 只许有一处进程树杀灭实现（防"换个地方藏起来"）。
+  const libFiles = fs.readdirSync(LIB_DIR).filter((name) => name.endsWith('.mjs'))
+  let taskkillImplementations = 0
+  for (const name of libFiles) {
+    const text = fs.readFileSync(path.join(LIB_DIR, name), 'utf8')
+    taskkillImplementations += text.split("spawnSync('taskkill'").length - 1
+  }
+  assert.equal(taskkillImplementations, 1, '进程树杀灭实现必须只有一处（lib/proc.mjs）')
   assert.ok(coreText.includes("'taskkill', ['/PID'"), 'core 的 taskkill 参数必须带 /PID /T /F')
   for (const token of ['CON', 'PRN', 'AUX', 'NUL', 'COM1', 'LPT9']) {
     assert.ok(contractText.includes(token), `CONTRACT.md 保留名清单缺少 ${token}`)
