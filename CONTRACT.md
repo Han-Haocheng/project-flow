@@ -275,6 +275,19 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
      实测边界（与规则 3 的「缺失」定义相关）：`type` 键**不存在**时 `validateTaskFields` 放行、
      不抛错，此时 `goal` 的合并/删除照常写盘而 `type` 仍缺，跳过分支走不到；只有 `type` 写成
      `null`/`''` 时才会抛错并被跳过。两条路径都是 `fixed` 无该条 + `ok:false`。
+     **三种「缺失」形态的当前行为分叉**（P2-4，`review-panel` task-13 实测）：
+
+     | `type` 形态 | `validateTaskFields` | 迁移动作 | 磁盘结果 |
+     |---|---|---|---|
+     | 键**不存在** | 放行 | `goal` 照常合并/删键 | **被改写**：`goal` 消失、`title` 合并、`type` 仍缺 |
+     | `null` | 抛错 | **整条跳过** | **零改写**：`goal` 原样保留 |
+     | `''` | 抛错 | **整条跳过** | **零改写**：`goal` 原样保留 |
+
+     `null`/`''` 这条是**永久态**：该条记录**一条都不会被改写**（goal 不搬、type 不补），
+     门禁会**永久**报 `missing-type`（`ok:false` 恒不收敛），除非给了 `typeById`——因此**必须**
+     为该条提供 `typeById` 才能解除。给了之后同一遍既能补 `type`，`goal` 也随之正常合并
+     （合并与补 type 在同一次写盘里完成，不会退化成"只补 type、goal 仍留着"）。
+     （`P2-4` 的 P2-3 修复落地后，`null`/`''` 与键不存在将统一走合并路径；届时本节相应收敛。）
   **parent 等缺省键的默认化是既有行为，不属于规则 1–4**：迁移写盘前会过一遍
   `validateTaskFields`，它顺带补齐记录缺省的键——`parent: null`、`owner: ''`、`notes: ''`、
   `scope: {allow:[],deny:[]}`、`acceptance: []`、`checkpoints: []`、`commits: []`——这是所有
