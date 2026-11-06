@@ -251,10 +251,10 @@ const fixture = {
     active: [
       {
         id: 'T-2',
+        type: 'feat',
         title: 'active task',
         status: 'active',
         owner: 'coord',
-        goal: '看见任务目标与内容，而不是编号',
         notes: '展开详情里的备注',
         scope: { allow: ['client.js', 'index.js'], deny: ['lib/'] },
         acceptance: ['node --check client.js', 'node .selftest/client-render.mjs'],
@@ -270,7 +270,6 @@ const fixture = {
         title: 'draft one',
         status: 'draft',
         owner: 'alice',
-        goal: '草稿也有目标',
         notes: '',
         scope: { allow: ['README.md'], deny: [] },
         acceptance: ['草稿验收'],
@@ -286,7 +285,6 @@ const fixture = {
         title: 'done task',
         status: 'done',
         owner: '',
-        goal: '完成的目标',
         notes: '',
         scope: { allow: [], deny: [] },
         acceptance: ['完成验收'],
@@ -300,7 +298,6 @@ const fixture = {
         title: 'gate failed task',
         status: 'done',
         owner: '',
-        goal: '',
         notes: '',
         scope: { allow: [], deny: [] },
         acceptance: [],
@@ -314,7 +311,6 @@ const fixture = {
         title: 'gate null task',
         status: 'done',
         owner: '',
-        goal: '',
         notes: '',
         scope: { allow: [], deny: [] },
         acceptance: [],
@@ -574,17 +570,19 @@ check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.exp.refuted, 1);
   assert.equal(view.tasks.counts.done, 28);
   assert.equal(view.tasks.counts.other, 0);
-  // Task rows carry their goal plus every detail field in all three groups.
+  // Task rows carry their type plus every detail field in all three groups.
   const active = view.tasks.active[0];
-  assert.equal(active.goal, '看见任务目标与内容，而不是编号');
+  assert.equal(active.type, 'feat');
+  assert.equal(active.title, 'active task');
   assert.equal(active.notes, '展开详情里的备注');
   assert.deepEqual(active.scope, { allow: ['client.js', 'index.js'], deny: ['lib/'] });
   assert.deepEqual(active.acceptance, ['node --check client.js', 'node .selftest/client-render.mjs']);
   assert.deepEqual(active.commits, ['f5f176bc']);
   assert.equal(active.created_at, '2026-10-28T08:00:00+08:00');
-  assert.equal(view.tasks.draft[0].goal, '草稿也有目标');
+  /* A legacy row without `type` degrades to the empty string, never to null. */
+  assert.equal(view.tasks.draft[0].type, '');
   assert.deepEqual(view.tasks.draft[0].scope, { allow: ['README.md'], deny: [] });
-  assert.equal(view.tasks.recentDone[0].goal, '完成的目标');
+  assert.equal(view.tasks.recentDone[0].type, '');
   assert.equal(view.tasks.recentDone[0].gate, 'pass');
   assert.equal(view.gates.length, 2);
   assert.equal(view.gates[0].lastRun.ok, true);
@@ -646,7 +644,7 @@ check('normalize: hostile values do not throw', () => {
   assert.deepEqual(hostile.tasks.recentDone[0].scope, { allow: [], deny: [] });
   assert.deepEqual(hostile.tasks.recentDone[0].acceptance, []);
   assert.deepEqual(hostile.tasks.recentDone[0].commits, []);
-  assert.equal(hostile.tasks.recentDone[0].goal, '');
+  assert.equal(hostile.tasks.recentDone[0].type, '');
   assert.equal(hostile.tasks.recentDone[0].created_at, '');
   assert.equal(hostile.heartbeats.length, 2, 'non-object heartbeats are dropped');
   assert.deepEqual(hostile.heartbeats[1].claims, [], 'non-array claims degrade to empty');
@@ -2127,27 +2125,29 @@ check('TasksCard: chips, current task, folded groups and one row per task', () =
   assert.equal(collect(opened, 'project-flow-taskRow').length, 5, 'expanding must reveal every row');
   assert.equal(collect(opened, 'project-flow-gateMark--ok').length, 1);
   assert.equal(collect(opened, 'project-flow-gateMark--error').length, 1);
-  // Rows themselves never leak an id or a commit before the detail opens.
+  // 用户 ③ 决策：id 作为署名常驻（旧「行不得泄露 id」设计已反转），commit 仍只在详情里。
+  const signatures = collect(opened, 'project-flow-taskSignature').map((element) => element.children[0]);
+  assert.deepEqual(signatures, ['T-2', 'T-D1', 'T-3', 'T-4', 'T-5'], 'every row must sign its business id');
   const rowText = collect(opened, 'project-flow-taskRow').map((row) => textOf(row)).join('\n');
-  for (const hidden of ['T-D1', 'T-3', 'T-4', 'T-5', '12556a8']) {
-    assert.ok(!rowText.includes(hidden), `collapsed rows must not show '${hidden}'`);
-  }
+  assert.ok(!rowText.includes('12556a8'), 'collapsed rows must not show a commit');
 });
 
-check('TasksCard: rows show title then goal and use the business id as key', () => {
+check('TasksCard: 首行是 type: title、第二行是 notes、署名是 id，行 key 仍是业务 id', () => {
   const payload = probe.normalize({
     tasks: {
       total: 2,
       counts: { active: 1, draft: 1 },
       current: null,
-      draft: [{ id: 'T-D9', title: '标题乙', owner: '', goal: '', updated_at: '2026-10-28T09:00:00+08:00' }],
+      // 旧记录没有 type：降级为裸 title，不显示占位符。
+      draft: [{ id: 'T-D9', title: '标题乙', owner: '', notes: '', updated_at: '2026-10-28T09:00:00+08:00' }],
       active: [
         {
           id: 'T-A9',
+          type: 'feat',
           title: '标题甲',
           status: 'active',
           owner: 'alice',
-          goal: '目标甲',
+          notes: '备注甲',
           updated_at: '2026-10-28T10:00:00+08:00',
         },
       ],
@@ -2155,37 +2155,69 @@ check('TasksCard: rows show title then goal and use the business id as key', () 
     },
   });
   const card = mountTasks(payload.tasks);
-  // The queue-head line is the one deliberate place that names an id: it is the
-  // task being worked on, not a row.
+  // 队列头仍然显式点名 id：它是正在做的任务，不是行。
   assert.equal(collect(card, 'project-flow-queueId')[0].children[0], 'T-A9', 'queue head does not name the active id');
-  const collapsedRowText = collect(card, 'project-flow-taskRow').map((row) => textOf(row)).join('\n');
-  assert.ok(!collapsedRowText.includes('T-A9'), 'active row leaked its id');
+  // 用户 ③ 决策：id 作为署名常驻（旧「行不得泄露 id」设计已反转）。
+  const collapsedSignatures = collect(card, 'project-flow-taskSignature');
+  assert.equal(collapsedSignatures.length, 1, 'collapsed active row must sign its id');
+  assert.equal(collapsedSignatures[0].children[0], 'T-A9', 'signature must be the business id');
   const opened = toggleGroup(card, 'draft', payload.tasks);
   const body = JSON.stringify(opened);
-  const rowText = collect(opened, 'project-flow-taskRow').map((row) => textOf(row)).join('\n');
-  assert.ok(!rowText.includes('T-D9'), 'draft row leaked its id');
-  // The active group comes first, then the (now expanded) draft group.
+  // 有 type → `type: title`；无 type → 裸 title。
   assert.deepEqual(
     collect(opened, 'project-flow-taskTitle').map((element) => element.children[0]),
-    ['标题甲', '标题乙']
+    ['feat: 标题甲', '标题乙']
   );
-  const goals = collect(opened, 'project-flow-taskGoal');
-  assert.equal(goals.length, 1, 'a row without a goal must not reserve the second line');
-  assert.equal(goals[0].children[0], '目标甲', 'goal missing from the second line');
-  assert.equal(goals[0].props.title, '目标甲', 'goal needs a full-text tooltip');
+  assert.equal(
+    collect(opened, 'project-flow-taskTitle')[0].props.title,
+    'feat: 标题甲',
+    'the tooltip must show the same composite string'
+  );
+  assert.equal(collect(opened, 'project-flow-taskTitle')[1].props.title, '标题乙', 'a missing type must not add a prefix');
+  // 第二行 = notes：非空才渲染，空则整行不出现。
+  const notes = collect(opened, 'project-flow-taskNotes');
+  assert.equal(notes.length, 1, 'a row without notes must not reserve the second line');
+  assert.equal(notes[0].children[0], '备注甲', 'notes missing from the second line');
+  assert.equal(notes[0].props.title, '备注甲', 'notes needs a full-text tooltip');
+  // 署名 = id，每行都有，tooltip 同一个 id。
+  const signatures = collect(opened, 'project-flow-taskSignature');
+  assert.deepEqual(signatures.map((element) => element.children[0]), ['T-A9', 'T-D9'], 'every row signs its id');
+  assert.deepEqual(signatures.map((element) => element.props.title), ['T-A9', 'T-D9'], 'signature tooltip is the id');
   assert.ok(body.includes('"key":"T-D9"'), 'draft row key is not its business id');
   assert.ok(body.includes('"key":"T-A9"'), 'active row key is not its business id');
   assert.ok(textOf(opened).includes('负责人 alice'), 'owner meta missing');
 });
 
-check('TasksCard: the goal line is clamped to two lines by the stylesheet', () => {
-  const rule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskGoal{'));
-  assert.ok(rule, 'goal CSS rule missing');
-  assert.ok(rule.includes('-webkit-line-clamp:2'), 'goal is not clamped to two lines');
-  assert.ok(rule.includes('-webkit-box-orient:vertical'), 'goal clamp box missing');
-  assert.ok(rule.includes('overflow:hidden'), 'goal clamp does not hide the overflow');
+check('TasksCard: a row whose type is not a string degrades to the bare title', () => {
+  const payload = probe.normalize({
+    tasks: {
+      total: 1,
+      counts: { active: 1 },
+      current: null,
+      active: [{ id: 'T-X9', title: '标题丙', status: 'active', type: {} }],
+      recentDone: [],
+    },
+  });
+  assert.equal(payload.tasks.active[0].type, '', 'a non-string type must normalize to the empty string');
+  const card = mountTasks(payload.tasks);
+  const title = collect(card, 'project-flow-taskTitle')[0];
+  assert.equal(title.children[0], '标题丙', 'a non-string type must not paint a prefix');
+  assert.equal(title.props.title, '标题丙');
+});
+
+check('TasksCard: the notes line is clamped to two lines by the stylesheet', () => {
+  const rule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskNotes{'));
+  assert.ok(rule, 'notes CSS rule missing');
+  assert.ok(rule.includes('-webkit-line-clamp:2'), 'notes is not clamped to two lines');
+  assert.ok(rule.includes('-webkit-box-orient:vertical'), 'notes clamp box missing');
+  assert.ok(rule.includes('overflow:hidden'), 'notes clamp does not hide the overflow');
   const titleRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskTitle{'));
   assert.ok(titleRule && titleRule.includes('text-overflow:ellipsis'), 'title has no ellipsis');
+  const signatureRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskSignature{'));
+  assert.ok(signatureRule, 'signature CSS rule missing');
+  assert.ok(signatureRule.includes('max-width:40%'), 'the signature must cap its width');
+  assert.ok(signatureRule.includes('text-overflow:ellipsis'), 'a long id must ellipsize');
+  assert.ok(signatureRule.includes('color:var(--dsw-alias-label-secondary)'), 'the signature must stay secondary');
 });
 
 check('TaskRow: expanded detail carries every ledger field including the id', () => {
@@ -2194,7 +2226,8 @@ check('TaskRow: expanded detail carries every ledger field including the id', ()
   assert.equal(collect(row, 'project-flow-taskDetail').length, 1, 'detail block missing');
   assert.deepEqual(collect(row, 'project-flow-detailLabel').map((element) => element.children[0]), [
     '编号',
-    '目标',
+    '类型',
+    '标题',
     '备注',
     '文件域（允许）',
     '文件域（禁止）',
@@ -2205,14 +2238,15 @@ check('TaskRow: expanded detail carries every ledger field including the id', ()
   ]);
   const values = collect(row, 'project-flow-detailValue').map((element) => element.children[0]);
   assert.equal(values[0], 'T-2', 'detail must show the business id');
-  assert.equal(values[1], '看见任务目标与内容，而不是编号');
-  assert.equal(values[2], '展开详情里的备注');
-  assert.equal(values[3], 'client.js\nindex.js', 'scope.allow must keep one entry per line');
-  assert.equal(values[4], 'lib/');
-  assert.equal(values[5], 'node --check client.js\nnode .selftest/client-render.mjs');
-  assert.equal(values[6], 'f5f176b', 'commits are short shas');
-  assert.equal(values[7], '2026-10-28T08:00:00+08:00');
-  assert.equal(values[8], '2026-10-28T10:00:00+08:00');
+  assert.equal(values[1], 'feat', 'detail must show the type');
+  assert.equal(values[2], 'active task', 'detail must show the raw title without the type prefix');
+  assert.equal(values[3], '展开详情里的备注');
+  assert.equal(values[4], 'client.js\nindex.js', 'scope.allow must keep one entry per line');
+  assert.equal(values[5], 'lib/');
+  assert.equal(values[6], 'node --check client.js\nnode .selftest/client-render.mjs');
+  assert.equal(values[7], 'f5f176b', 'commits are short shas');
+  assert.equal(values[8], '2026-10-28T08:00:00+08:00');
+  assert.equal(values[9], '2026-10-28T10:00:00+08:00');
 });
 
 check('TaskRow: aria-expanded, click and keyboard Enter/Space toggle the detail', () => {
@@ -2247,10 +2281,11 @@ check('TaskRow: aria-expanded, click and keyboard Enter/Space toggle the detail'
 check('TaskDetail: empty fields degrade to the dash placeholder', () => {
   const detail = probe.TaskDetail({ task: { id: 'T-empty' }, t });
   const values = collect(detail, 'project-flow-detailValue').map((element) => element.children[0]);
-  assert.equal(values.length, 9);
+  assert.equal(values.length, 10);
   assert.equal(values[0], 'T-empty');
-  assert.equal(values[1], '—', 'empty goal must show the dash');
-  assert.equal(values[8], '—', 'empty timestamp must show the dash');
+  assert.equal(values[1], '—', 'empty type must show the dash');
+  assert.equal(values[2], '—', 'empty title must show the dash');
+  assert.equal(values[9], '—', 'empty timestamp must show the dash');
 });
 
 check('TasksCard: an unknown task status bucket still renders', () => {
@@ -2285,7 +2320,7 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
           id: 'T-D1',
           title: 'draft one',
           owner: 'alice',
-          goal: '草稿一的目标',
+          notes: '草稿一的备注',
           scope: { allow: ['README.md'] },
           updated_at: '2026-10-28T10:00:00+08:00',
         },
@@ -2293,18 +2328,18 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
           id: 'T-D2',
           title: 'draft two',
           owner: '',
-          goal: '',
+          notes: '',
           updated_at: '2026-10-20T10:00:00+08:00',
         },
       ],
       active: [
-        { id: 'T-A1', title: 'active one', status: 'active', owner: '', goal: '活动目标', updated_at: '2026-10-28T09:00:00+08:00' },
+        { id: 'T-A1', title: 'active one', status: 'active', owner: '', notes: '活动备注', updated_at: '2026-10-28T09:00:00+08:00' },
       ],
       recentDone: [],
     },
   });
   assert.equal(payload.tasks.draft.length, 2, 'normalize dropped the draft array');
-  assert.equal(payload.tasks.draft[0].goal, '草稿一的目标');
+  assert.equal(payload.tasks.draft[0].notes, '草稿一的备注');
 
   const card = mountTasks(payload.tasks);
   const body = JSON.stringify(card);
@@ -2323,19 +2358,23 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     'the active group must render before the draft group'
   );
   assert.deepEqual(
-    collect(opened, 'project-flow-taskGoal').map((element) => element.children[0]),
-    ['活动目标', '草稿一的目标'],
-    'draft goals must render on the second line'
+    collect(opened, 'project-flow-taskNotes').map((element) => element.children[0]),
+    ['活动备注', '草稿一的备注'],
+    'notes must render on the second line (an empty notes row is skipped)'
   );
   assert.ok(textOf(opened).includes('负责人 alice'), 'draft owner missing');
-  const draftRowText = collect(opened, 'project-flow-taskRow').map((row) => textOf(row)).join('\n');
-  assert.ok(!draftRowText.includes('T-D1'), 'a draft row must not show its id by default');
+  // 用户 ③ 决策：id 作为署名常驻，不再是「默认隐藏」。
+  assert.deepEqual(
+    collect(opened, 'project-flow-taskSignature').map((element) => element.children[0]),
+    ['T-A1', 'T-D1', 'T-D2'],
+    'every row must sign its business id'
+  );
 
   const english = toggleGroup(mountTasks(payload.tasks, tEn), 'draft', payload.tasks, tEn);
-  // Data (the user's Chinese goals/titles) may be Chinese; the chrome must not be.
+  // Data (the user's Chinese notes/titles) may be Chinese; the chrome must not be.
   const englishText = textOf(english)
-    .split('草稿一的目标').join('')
-    .split('活动目标').join('')
+    .split('草稿一的备注').join('')
+    .split('活动备注').join('')
     .split('draft one').join('')
     .split('draft two').join('')
     .split('active one').join('');

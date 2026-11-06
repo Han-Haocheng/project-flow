@@ -206,7 +206,8 @@ window.__ModuleLoader__.load({
       'tasks.gate.pass': '门禁通过',
       'tasks.gate.fail': '门禁失败',
       'tasks.detail.id': '编号',
-      'tasks.detail.goal': '目标',
+      'tasks.detail.type': '类型',
+      'tasks.detail.title': '标题',
       'tasks.detail.notes': '备注',
       'tasks.detail.allow': '文件域（允许）',
       'tasks.detail.deny': '文件域（禁止）',
@@ -363,7 +364,8 @@ window.__ModuleLoader__.load({
       'tasks.gate.pass': 'gate pass',
       'tasks.gate.fail': 'gate fail',
       'tasks.detail.id': 'Id',
-      'tasks.detail.goal': 'Goal',
+      'tasks.detail.type': 'Type',
+      'tasks.detail.title': 'Title',
       'tasks.detail.notes': 'Notes',
       'tasks.detail.allow': 'Scope (allow)',
       'tasks.detail.deny': 'Scope (deny)',
@@ -817,10 +819,12 @@ window.__ModuleLoader__.load({
           .filter(Boolean);
       return {
         id: asText(task.id),
+        /* Row contract: `type` is a string or '' — a non-string must not paint a
+           `[object Object]: ` prefix on the title. */
+        type: typeof task.type === 'string' ? task.type : '',
         title: asText(task.title),
         status: asText(task.status),
         owner: asText(task.owner),
-        goal: asText(task.goal),
         notes: asText(task.notes),
         scope: { allow: list(scope.allow), deny: list(scope.deny) },
         acceptance: list(task.acceptance),
@@ -1090,8 +1094,8 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Expanded detail of one task: every field the ledger carries (bounded by
-     * the Host) plus the business id, which the collapsed row hides on purpose.
+     * Expanded detail of one task: every ledger field (bounded by the Host) plus
+     * the business id, which the collapsed row also shows as its signature.
      */
     function TaskDetail(props) {
       const task = asObject(props.task);
@@ -1104,7 +1108,8 @@ window.__ModuleLoader__.load({
           .join('\n');
       const rows = [
         { label: t('tasks.detail.id'), value: asText(task.id) },
-        { label: t('tasks.detail.goal'), value: asText(task.goal) },
+        { label: t('tasks.detail.type'), value: asText(task.type) },
+        { label: t('tasks.detail.title'), value: asText(task.title) },
         { label: t('tasks.detail.notes'), value: asText(task.notes) },
         { label: t('tasks.detail.allow'), value: lines(scope.allow) },
         { label: t('tasks.detail.deny'), value: lines(scope.deny) },
@@ -1128,9 +1133,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One task row: title first, goal second (two clamped lines, omitted when the
-     * ledger has no goal), owner/time as small meta. The id is deliberately not
-     * rendered until the detail opens. The head is a focusable `role="button"`
+     * One task row: `type: title` first, notes second (two clamped lines, omitted
+     * when the ledger has no notes), owner/time as small meta and the business id
+     * as a right-aligned signature. The head is a focusable `role="button"`
      * with `aria-expanded`, toggled by click or Enter/Space.
      */
     function TaskRow(props) {
@@ -1150,8 +1155,13 @@ window.__ModuleLoader__.load({
       const caretLabel = t(expanded ? 'tasks.collapseChildren' : 'tasks.expandChildren', {
         n: asNumber(tree.childCount, 0),
       });
+      const type = asText(task.type);
       const title = asText(task.title);
-      const goal = asText(task.goal);
+      /* `': '` is hardcoded on purpose (D-6): a missing type shows the bare
+         title, with no prefix and no placeholder. */
+      const heading = type ? type + ': ' + title : title;
+      const notes = asText(task.notes);
+      const signature = asText(task.id);
       const meta = taskMetaText(task, props.now, t);
       const gate = asText(task.gate);
       const mark = gate === 'pass' ? '\u2714' : gate === 'fail' ? '\u2718' : '';
@@ -1203,7 +1213,7 @@ window.__ModuleLoader__.load({
             role: 'button',
             tabIndex: 0,
             'aria-expanded': open ? true : false,
-            title: goal || title || undefined,
+            title: heading || undefined,
             onClick: toggle,
             onKeyDown: (event) => {
               if (!event) return;
@@ -1225,10 +1235,11 @@ window.__ModuleLoader__.load({
                 mark
               )
             : null,
-          React.createElement('span', { className: 'project-flow-taskTitle', title: title || undefined }, title || t('misc.dash')),
+          React.createElement('span', { className: 'project-flow-taskTitle', title: heading || undefined }, heading || t('misc.dash')),
           badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
           meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
-          goal ? React.createElement('span', { className: 'project-flow-taskGoal', title: goal }, goal) : null
+          React.createElement('span', { className: 'project-flow-taskSignature', title: signature || undefined }, signature),
+          notes ? React.createElement('span', { className: 'project-flow-taskNotes', title: notes }, notes) : null
         ),
         open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null,
         tree.childrenList || null
@@ -3818,7 +3829,8 @@ window.__ModuleLoader__.load({
 .project-flow-taskMark{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
 .project-flow-taskTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
 .project-flow-taskMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
-.project-flow-taskGoal{flex:1 1 100%;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
+.project-flow-taskSignature{flex:none;margin-left:auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
+.project-flow-taskNotes{flex:1 1 100%;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
 .project-flow-taskDetail{margin-left:12px;}
 .project-flow-gateMark{font-size:11px;line-height:1;}
 .project-flow-gateMark--ok{color:var(--dsw-alias-state-success-primary);}
@@ -3950,7 +3962,8 @@ window.__ModuleLoader__.load({
 .project-flow-taskHead{column-gap:10px;padding:4px 5px;font-size:12px;}
 .project-flow-taskMark{font-size:11px;}
 .project-flow-taskMeta{font-size:11px;}
-.project-flow-taskGoal{font-size:11.5px;}
+.project-flow-taskSignature{font-size:11px;}
+.project-flow-taskNotes{font-size:11.5px;}
 .project-flow-taskDetail{margin-left:42px;}
 .project-flow-guide{margin-top:6px;padding:14px;border-radius:10px;}
 .project-flow-guideTitle{font-size:13px;margin-bottom:4px;}

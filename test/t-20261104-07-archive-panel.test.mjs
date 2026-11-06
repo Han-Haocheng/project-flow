@@ -28,19 +28,21 @@ function addTask(root, contract, input = {}, options) {
 import { panelStateReader } from '../index.js'
 
 const DAY = 86_400_000
-/** 面板行对象字段（`index.js:panelTaskRow` 的投影面）。 */
+/** 面板行对象字段（`lib/state-snapshot.mjs:panelTaskRow` 的投影面，顺序即契约）。 */
 const ROW_KEYS = [
   'id',
+  'type',
   'title',
   'status',
   'owner',
-  'goal',
   'notes',
   'scope',
   'acceptance',
   'commits',
   'created_at',
   'updated_at',
+  'parent',
+  'depth',
 ]
 
 // 与 test/core.test.mjs 同一约定：用例结束清掉 tmpdir fixture。
@@ -168,12 +170,19 @@ test('archived 不进 active/draft/recentDone，行形状与 client 期望一致
   assert.deepEqual(ids(payload.tasks.active), [active.id])
   assert.deepEqual(ids(payload.tasks.recentDone), [freshDone.id])
 
-  // 行形状：client.js 读取的每个字段都在，且 status 与所在数组一致。
-  for (const row of [...payload.tasks.active, ...payload.tasks.recentDone]) {
-    for (const key of ROW_KEYS) {
-      assert.ok(Object.hasOwn(row, key), `行缺字段 ${key}：${JSON.stringify(row)}`)
-    }
+  // 行形状：client.js 读取的每个字段都在、键序逐字一致，且 status 与所在数组一致。
+  // 顺序即契约，改一处必改三处（面板行 / host2-tools.taskRowOk / CONTRACT §9.1.4）。
+  for (const row of payload.tasks.active) {
+    assert.deepEqual(Object.keys(row), ROW_KEYS, `行键序/字段不符：${JSON.stringify(row)}`)
     assert.equal(typeof row.id, 'string')
+    assert.equal(typeof row.type, 'string')
+    assert.equal(typeof row.title, 'string')
+  }
+  for (const row of payload.tasks.recentDone) {
+    // recentDone 行尾再追加 gate（§784-960 投影）。
+    assert.deepEqual(Object.keys(row), [...ROW_KEYS, 'gate'], `recentDone 行键序/字段不符：${JSON.stringify(row)}`)
+    assert.equal(typeof row.id, 'string')
+    assert.equal(typeof row.type, 'string')
     assert.equal(typeof row.title, 'string')
   }
   assert.equal(payload.tasks.active[0].status, 'active')

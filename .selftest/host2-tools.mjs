@@ -74,12 +74,13 @@ async function throws(label, fn, include) {
  */
 function taskRowOk(row, { gate = false } = {}) {
   if (row === null || typeof row !== 'object') return false
+  // 顺序即契约，改一处必改三处（面板行 / 本断言 / CONTRACT §9.1.4）。
   const keys = [
     'id',
+    'type',
     'title',
     'status',
     'owner',
-    'goal',
     'notes',
     'scope',
     'acceptance',
@@ -91,7 +92,7 @@ function taskRowOk(row, { gate = false } = {}) {
   ]
   if (gate) keys.push('gate')
   if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false
-  for (const key of ['id', 'title', 'status', 'owner', 'goal', 'notes', 'created_at', 'updated_at']) {
+  for (const key of ['id', 'type', 'title', 'status', 'owner', 'notes', 'created_at', 'updated_at']) {
     if (typeof row[key] !== 'string') return false
   }
   const scope = row.scope

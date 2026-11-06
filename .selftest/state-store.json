@@ -158,11 +158,12 @@
     "active": [
       {
         "id": "T-20261028-01",
+        "type": "feat",
         "title": "第一任务",
         "status": "active",
         "owner": "me",
-        "updated_at": "2026-10-28T16:46:43+08:00",
-        "goal": ""
+        "notes": "面板第二行渲染备注",
+        "updated_at": "2026-10-28T16:46:43+08:00"
       }
     ],
     "recentDone": []

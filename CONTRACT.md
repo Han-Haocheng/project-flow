@@ -1360,11 +1360,17 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 
 #### 9.1.4 面板任务区：行形状、视觉树与趋势
 
-- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行在 T-13 A3 后增加
-  `parent: string|null`（父任务 id；父失效/成环时读投影为 `null`）与 `depth: 0..3`
-  （相对根的深度，超过 3 截断），其余字段不变；数组仍按各自既有顺序（active/draft FIFO、
-  `recentDone` 按 `updated_at` 倒序）——树只由行上的 `parent`/`depth` 表达，**不改数组顺序、
-  不新增 `children` 数组**，前端据此嵌套渲染。
+- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 13 键
+  `id, type, title, status, owner, notes, scope, acceptance, commits, created_at, updated_at,
+  parent, depth`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
+  `.selftest/host2-tools.mjs` 与本节三处逐字一致。行里**没有 `goal`**（§3.2：已合并进
+  `title`）。`type` 取记录字段的裁剪值：缺失或非字符串一律投影为 `''`（行内字段全是字符串），
+  客户端据此**降级为只显示 `title`**——不加 `': '` 前缀、不显示占位符；有 `type` 时首行渲染
+  `type: title`（`: ` 硬编码，不走 i18n），第二行是 `notes`（为空则整行不渲染），弱化的右对齐
+  署名是业务 `id`。`parent: string|null`（父任务 id；父失效/成环时读投影为 `null`）与
+  `depth: 0..3`（相对根的深度，超过 3 截断）是 T-13 A3 起的树字段；数组仍按各自既有顺序
+  （active/draft FIFO、`recentDone` 按 `updated_at` 倒序）——树只由行上的 `parent`/`depth`
+  表达，**不改数组顺序、不新增 `children` 数组**，前端据此嵌套渲染。
 - **视觉树（a11y 口径）**：任务树是**视觉树**，**没有**采用严格的 `role="tree"`/`role="treeitem"`
   ——行是 `<li>`，按 `aria-level` = `min(depth,3)+1`（1..4）标注层级，配 12px/级缩进
   （`calc(var(--d) * 12px)`）与左侧连接线；行头是 `role="button"`（`aria-expanded` 控制详情）。
