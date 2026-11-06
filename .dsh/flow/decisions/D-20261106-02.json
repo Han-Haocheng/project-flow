@@ -23,15 +23,20 @@
     }
   ],
   "default": null,
-  "status": "open",
+  "status": "answered",
   "blocks": [],
   "supersedes": null,
-  "answer": null,
-  "answered_at": null,
+  "answer": {
+    "choice": "approve",
+    "note": "用户两次答\"推送/尝试推送\"，answer 因提交丢失被回滚；实际推送已完成 origin/main=7ba94b4",
+    "at": "2026-11-06T19:53:19+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-06T19:53:19+08:00",
   "withdraw": null,
   "superseded_by": null,
   "fingerprint": "39a917983de56eb9",
   "asked_at": "2026-11-06T19:32:39+08:00",
   "created_at": "2026-11-06T19:32:39+08:00",
-  "updated_at": "2026-11-06T19:32:39+08:00"
+  "updated_at": "2026-11-06T19:53:19+08:00"
 }
