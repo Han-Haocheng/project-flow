@@ -169,6 +169,56 @@ test('type：旧记录（无 type）读投影为 null、不迁移；update 其�
   assert.equal(onDisk.status, 'active')
 })
 
+test('type：旧记录带手写 null / \'\' 时，update 其它字段同样可用且不补写 type', () => {
+  // T-20261106124556。`type` 的「缺失」有三种落盘形态：键不存在（上一条用例）、
+  // `null`、`''`。CONTRACT §3.2 对三者一视同仁，但 `validateTaskFields` 只放行
+  // 第一种，另两种曾让**任何** update 都抛 `invalid`——读得出来、改不动。
+  // 修法在 `applyTaskPatch`（仅 update 路径）里把缺失语义归一后再校验：一条记录
+  // 缺 type 不应冻结它的 status/owner/notes。`buildTask` 与 `normalizeTaskFormat`
+  // 的严格性不受影响（后者见 normalize 的 B7：缺 type 时整条不写，goal 不丢）。
+  const root = freshProject('legacy-null')
+  const { contract } = loadContract(root)
+  const write = (id, type) => {
+    const record = {
+      schema: 1,
+      id,
+      title: `旧任务 ${id}`,
+      status: 'draft',
+      owner: '',
+      parent: null,
+      scope: { allow: [], deny: [] },
+      acceptance: [],
+      checkpoints: [],
+      commits: [],
+      notes: '',
+      created_at: '2026-11-05T10:00:00+08:00',
+      updated_at: '2026-11-05T10:00:00+08:00',
+      ...(type === undefined ? {} : { type }),
+    }
+    const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
+    fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')
+    return file
+  }
+
+  for (const [id, type] of [['T-20261105-11', null], ['T-20261105-12', '']]) {
+    const file = write(id, type)
+    // 之前：invalid: type must be one of … —— 一条缺 type 的记录冻结了所有字段。
+    const updated = updateTask(root, contract, id, { status: 'active', notes: '补备注' })
+    assert.equal(updated.status, 'active', `type=${JSON.stringify(type)} 的记录必须能改 status`)
+    assert.equal(updated.notes, '补备注')
+    assert.equal(updated.type, type, '读投影原样返回（不迁移；只有缺键才补 null）')
+    const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'))
+    assert.equal(onDisk.type, type, 'update 不得改写/补写 type，原字面值原样留在盘上')
+    assert.equal(Object.hasOwn(onDisk, 'type'), true, 'type 键仍在（不删键）')
+    assert.equal(onDisk.notes, '补备注')
+  }
+
+  // 非空且不在十枚举内的字符串仍被拒（④ 的严格性不因这次放宽而松动）。
+  const bogusFile = write('T-20261105-13', 'nope')
+  expectInvalid(() => updateTask(root, contract, 'T-20261105-13', { notes: 'x' }), /type must be one of/)
+  assert.equal(JSON.parse(fs.readFileSync(bogusFile, 'utf8')).type, 'nope', '非法串记录字节不变')
+})
+
 test('type：CLI 退出码矩阵（缺 type / 非法 / 合法 / update）', () => {
   const root = freshProject('cli')
   const missing = runCli(root, ['task', 'add', '--title', '缺 type', '--json'])

@@ -246,9 +246,21 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - **`type`（必填，T-15）**：conventional commit 类型，枚举 `feat` / `fix` / `docs` / `style` /
   `refactor` / `perf` / `test` / `chore` / `build` / `ci`。`task add` **必须**
   提供（缺 → `invalid: type is required`），非法值 → `invalid: type must be one of …`；
-  `task update` **不接受** `type`（见上「不可改字段」）。**旧记录可缺**：读投影为
-  `type: null`（读路径不迁移、不回填），面板降级只显示 `title`；对旧记录做其它字段 update
-  不会补写 `type` 键，补写只走 `normalizeTaskFormat({fix:true, typeById})`。
+  `task update` **不接受** `type`（见上「不可改字段」）。
+- **旧记录的 `type` 缺失有三种落盘形态，语义一律是「缺失」**：键不存在、`type: null`、
+  `type: ''`。三者行为统一（T-20261106124556）：
+  - **读投影不迁移**：键不存在 → 投影补 `type: null`；手写 `null`/`''` → **原字面值原样返回**。
+    面板降级只显示 `title`（§9.1.4）。
+  - **`update` 其它字段可用**：`status`/`owner`/`notes`/`commits`/`scope`/`acceptance`/
+    `parent`/`experiment` 都能正常改；三态**都不会被 update 补写或改写** `type`
+    （值原样留在盘上，"不迁移"的承诺不变）。实现上只在 `applyTaskPatch` 把缺失语义
+    归一后再校验——`buildTask`（新建必填）与 `normalizeTaskFormat`（见下）的严格性不受影响。
+  - **补写只走迁移**：`normalizeTaskFormat({fix:true, typeById})`。
+  - **非空的非枚举字符串**（如 `"nope"`）**不是缺失**：`update` 仍抛
+    `invalid: type must be one of …`，只能经上述迁移通道按 `typeById` 改正。
+  > 迁移路径的约束（B7）：一条缺 `type` 的记录在**没有合法 `typeById`** 时，迁移**整条不写盘**
+  > ——否则会删掉残留 `goal` 却补不上 `type`，留下半修记录。这与「update 可用」互不矛盾：
+  > update 不碰 `goal`/`type`，迁移才负责删与补。
 - **`title` 承载标题与目标（goal 已合并，D-1/D-2）**：`goal` **不再是任务字段**——
   `TASK_DEFAULTS` 不写、`task add`/`flow_task add` 不收（`--goal` 是未声明参数 → 用法错误
   `exit 1`；工具侧 `invalid: flow_task add does not accept "goal"`），`task update` 不能复活

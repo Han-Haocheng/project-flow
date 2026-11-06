@@ -197,6 +197,14 @@ test('B6：全量 map 归一后 data.ok=true，再 check tasks → exit 0', () =
 })
 
 // -------------------------------------------------------------------- B7
+//
+// 本用例守的是「迁移路径的原子性」，**不是** `validateTaskFields` 对 `type` 的严格性。
+// `type: null/''` 在 update 路径已放宽（`applyTaskPatch` 缺失归一，T-20261106124556），
+// 但迁移必须仍然整条不写：一条缺 type 的记录若被放行写盘，`goal` 会被删掉而 `type`
+// 补不上——留下**半修**记录，比不迁移更糟。因此这里断言的是 normalize 自己拒绝写盘
+// （bytes+mtime 不变 + goal 键仍在），与 update 是否可用是两个互不干扰的契约。
+// 改 `validateTaskFields` 的 type 分支前请先读这条：它依赖的是 normalize 的
+// 「写盘前校验不过就整条跳过」，把 `null/''` 在**校验函数里**放行会直接弄红本用例。
 
 test('B7：type:null 记录无 map 时整条不写（不丢 goal），有 map 时一次跑通', () => {
   const root = freshProject('b7')
