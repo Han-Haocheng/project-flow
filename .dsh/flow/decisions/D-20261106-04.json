@@ -1,5 +1,5 @@
 {
-  "question": "还有一处：D-20261106-03 决策记录本身（question/options 文字里）带着 /mnt/d/Project/project-flow。要一起处理吗？",
+  "question": "还有一处：D-20261106-03 决策记录本身（question/options 文字里）带着 本机绝对路径。要一起处理吗？",
   "kind": "choice",
   "rationale": "D-20261106-03 选了 clean-first，但这条决策记录自身写进了被清理的路径；它会被一并推送到公开仓库，需用户决定是否连它一起脱敏。",
   "options": [
