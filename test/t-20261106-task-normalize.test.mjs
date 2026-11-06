@@ -293,11 +293,33 @@ test('空台账 --dry-run 明确说没有待迁移项；未初始化是用法错
   assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
 })
 
-test('真实台账只跑 --dry-run：报告可读且 .dsh/flow 零改动', () => {
-  const before = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.dsh'], { encoding: 'utf8' }).stdout
+test('真实台账体检：--dry-run 报告可读且 .dsh/flow 零改动（环境不满足则 skip）', (t) => {
+  // 环境耦合三连 guard（brief-test-env-coupling §3.3）：台账目录存在 → 非空 → 在 git 工作树内。
+  // 不满足就 skip 并说明，**不要**断言具体条数——P3 归零后 49/42 会变成 0/0，硬编码即假红。
+  const tasksDir = path.join(REPO, '.dsh', 'flow', 'tasks')
+  if (fs.existsSync(tasksDir) === false) return t.skip('需要仓库真实台账（.dsh/flow/tasks 不存在）')
+  const records = fs.readdirSync(tasksDir).filter((name) => name.endsWith('.json'))
+  if (records.length === 0) return t.skip('需要仓库真实台账（tasks 目录为空）')
+  const inTree = spawnSync('git', ['-C', REPO, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' })
+  if (inTree.status !== 0) return t.skip('需要 git 工作树（零写盘指纹依赖 git）')
+  // 零写盘用 size+mtime 指纹（不用 `git status`：非 git 目录里 git 退 128、stdout 空串，
+  // assert.equal 既会假红也会假通过——brief-test-env-coupling §3.3）。
+  const fingerprint = () => {
+    const out = []
+    for (const name of fs.readdirSync(tasksDir).sort()) {
+      if (name.endsWith('.json') === false) continue
+      const st = fs.statSync(path.join(tasksDir, name))
+      out.push(`${name}:${st.size}:${st.mtimeMs}`)
+    }
+    return out.join('\n')
+  }
+  const before = fingerprint()
   const result = runCli(REPO, ['--root', REPO, 'task', 'normalize', '--dry-run'])
   assert.equal(result.code, 0)
-  assert.match(result.stdout, /--dry-run：未写盘/)
-  const after = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.dsh'], { encoding: 'utf8' }).stdout
-  assert.equal(after, before, '真实台账 --dry-run 不得改动 .dsh/')
+  // 两种合法形态：有待迁移项 → 明说未写盘；已归零 → 明说没有待迁移项。二者都不得写盘。
+  assert.ok(
+    /--dry-run：未写盘/.test(result.stdout) || /没有待迁移的旧记录/.test(result.stdout),
+    `--dry-run 报告形态异常：${result.stdout.slice(0, 200)}`
+  )
+  assert.equal(fingerprint(), before, '真实台账 --dry-run 不得改动 .dsh/flow/tasks（size+mtime）')
 })
