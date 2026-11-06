@@ -1,0 +1,21 @@
+{
+  "title": "feat: turn-stopping 心跳保活，防长 turn 被误判 stale 而误拦写",
+  "type": "feat",
+  "status": "done",
+  "notes": "2026-11-06 完成（c38b7ea，待推送）。\n\n故障：长 turn 里心跳 updated_at 老化超 6 小时 → heartbeatStatus 报 stale/dead → heartbeatGuardReason 错误拒绝 edit/write。\n\n做法：监听 agent/turn-stopping（宿主 mode=serial，宿主 await），对本会话已存在且 working 的心跳调 updateHeartbeat(root, contract, session, {})，空 patch 只刷 updated_at。\n\n七条硬约束：① 四层 try/catch ② 绝不 steer（该事件能 steer 让 turn 不结束）③ 只写已存在（heartbeatWorking gate）④ withLock 失败只 warn 不重试 ⑤ 观察 signal.aborted ⑥ ctx.effect + dispose ⑦ 只保活本会话（复用 heartbeatWorking，与写门禁同一判定；另用 rootSessionVerdict 排子代理）。\n\n测试 9 条，含「changedKeys 差异恰好只有 updated_at」逐字段钉死 + 源码无 steer 兜底。变异 9/9 命中。index.js +78/-0 纯增。\n\n来源：task-42 分析（我给的 6 个事件化候选被否 4 个，这是唯一推荐项）。",
+  "commits": [
+    "c38b7ea"
+  ],
+  "schema": 1,
+  "id": "T-20261106224632",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "created_at": "2026-11-06T22:46:32+08:00",
+  "updated_at": "2026-11-06T22:46:32+08:00"
+}
