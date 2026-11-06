@@ -268,6 +268,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   2. `goal` 为空/缺失/等于 `title` → 只删 `goal` 键；
   3. `type` **仅在当前缺失**（键不存在，或手写为 `null`/`''`）且 `typeById[id]` 是上面 10 个
      枚举之一时补齐；已有 `type` 的记录**永不改动**（迁移函数不穿透 ④ 的语义）。
+  4. 一条记录同时带残留 `goal` 又缺 `type`，且 `typeById` 没给它合法值时：`goal` 的合并/删除
+     **应当**发生，但 `validateTaskFields` 会因缺 `type` 拒绝写盘，该条被跳过并留
+     `task-normalize-skipped` 警告（`{fix:true}` 返回的 `ok:false`）。因此门禁**必须**为每条
+     待迁移记录提供 `typeById`。
+     实测边界（与规则 3 的「缺失」定义相关）：`type` 键**不存在**时 `validateTaskFields` 放行、
+     不抛错，此时 `goal` 的合并/删除照常写盘而 `type` 仍缺，跳过分支走不到；只有 `type` 写成
+     `null`/`''` 时才会抛错并被跳过。两条路径都是 `fixed` 无该条 + `ok:false`。
   迁移**不刷新** `updated_at`（格式归一不是编辑，不得重排「最近完成」），也不动 `done_at`/
   `archived_at`。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则

@@ -32,7 +32,8 @@ flow exp tree                # 按 parent 缩进；未知 parent / 成环按根�
 
 - `flow exp add` 的 id 固定自动生成，不能指定；`--parent` 指向不存在的实验会直接报
   `invalid`（退出码 2）。
-- `update` 不能改 `id`/`schema`/`created_at`，但会自动刷新 `updated_at`。
+- `exp update` 不能改 `id`/`schema`/`created_at`，但会自动刷新 `updated_at`；任务另有
+  `title`/`type` 也不可改（见下「任务」段）。
 - 删除需 `--yes`：`flow exp rm E-20261028-01 --yes`（不带 `--yes` 且非交互 → 退出码 1）。
 
 ## 任务：状态流转
@@ -40,13 +41,24 @@ flow exp tree                # 按 parent 缩进；未知 parent / 成环按根�
 `draft` → `active` → `done`，废弃用 `archived`。`scope` 用 `--json`/API 维护，
 CLI 只暴露常用字段。
 
+- **`title` 是"标题兼目标"**：`goal` 已并入 `title`，`task add/update` **没有** `--goal`
+  （传了是未声明参数 → 用法错误 `exit 1`）。目标就写进 `--title`，用 ` — ` 分隔。
+- `task add` **必填** `--type`（`feat`/`fix`/`docs`/`style`/`refactor`/`perf`/`test`/`chore`/
+  `build`/`ci`，conventional commit 类型）；缺 → `invalid: type is required`。
+
 ```bash
-flow task add --title "接 CLI 与面板" --status active --owner agent-a --goal "跑通主链路"
+flow task add --title "接 CLI 与面板 — 跑通主链路" --type feat \
+  --status active --owner agent-a
 flow task list
 flow task show T-20261028-01
 flow task update T-20261028-01 --status done --notes "测试全绿"
 flow task rm T-20261028-01 --yes
 ```
+
+- `task update` **不能改** `id`/`schema`/`created_at`，也**不能改** `title`/`type`
+  （→ `invalid: task <key> cannot be changed`，退出码 2）；换标题就新建任务。
+- 旧记录磁盘上的 `goal` 键由格式门禁的 `normalizeTaskFormat` 迁移到 `title`
+  （`title = "<旧 title> — <旧 goal>"`），**不是数据丢失**。
 
 ## 项目任务 ↔ Team 任务（Agent Teams 执行视图）
 
