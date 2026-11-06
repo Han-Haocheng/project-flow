@@ -1,8 +1,7 @@
 {
-  "title": "需求 2+4：合并 title/goal 为 title，并收紧可更新字段（type/title 不可改）",
+  "title": "需求 2+4：合并 title/goal 为 title，并收紧可更新字段（type/title 不可改） — 任务记录只保留 title（goal 合入 title，旧记录不做事前投影兼容，交由自动格式化门禁 T-20261105224822 归一）；同时收紧 flow_task update 与 CLI 的可更新字段白名单：type 与 title 不可改，其余字段显式白名单，越界报错而非静默丢弃。",
   "type": "refactor",
   "status": "done",
-  "goal": "任务记录只保留 title（goal 合入 title，旧记录不做事前投影兼容，交由自动格式化门禁 T-20261105224822 归一）；同时收紧 flow_task update 与 CLI 的可更新字段白名单：type 与 title 不可改，其余字段显式白名单，越界报错而非静默丢弃。",
   "notes": "2026-11-06 完成并**已独立复核 accept**（reviewer=review-core，报告 `.dsh-ops/briefs/review-core-c681935.md`）：P0 0；10 个变异中 7 个可红（M1/M4/M8 属等价变异——不可改集+白名单双层防线，补 M9 双层同时放开后红 5 例）；CLI 与工具 message 实测 `===`；schema 快照仅 flow_task 变；真实台账 91 issues 边界脏数据 0 例。\n\n提交：c681935（本卡）。后继 bba1b39（片 B，需求 3）已直线落盘，A 的 core/bin/tools/shared 逐字节未变，A+B 合并态复跑全绿，无 rebase 必要。\n\n审查遗留：P1 skills/project-flow-usage.md:44 仍教 `--goal`（→ 已派 exec-docs / team task-6 跟随修复）；P2×5（非字符串 goal 静默丢值、title 空时 suggestion 误导、非法 type 串不报不修、type:null/'' 口径、A7 experiment 断言分散）——现网 0 例，门禁卡 T-20261105224822 一并处理。",
   "parent": "T-20261105224427",
   "schema": 1,

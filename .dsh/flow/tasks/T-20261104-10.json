@@ -1,6 +1,5 @@
 {
-  "title": "fix: 心跳不检查会话存活（陈旧心跳误显示为活跃）",
-  "goal": "用户反馈：插件心跳功能不会检查会话是否还存在——即陈旧心跳（会话已结束/被 kill）仍显示为活跃。需分析现有心跳判定（lib/core.mjs readHeartbeatSection 的 status/active/stale 规则、心跳记录的 pid/session 字段、index.js 面板投影、tools 的 heartbeat 门禁），确定如何检查会话存活（宿主 agents 服务 roots/list？心跳文件 mtime + session 存在性？pid？），并给任务书（误判风险：多宿主/重启后 pid 复用、跨机器工作树）。",
+  "title": "fix: 心跳不检查会话存活（陈旧心跳误显示为活跃） — 用户反馈：插件心跳功能不会检查会话是否还存在——即陈旧心跳（会话已结束/被 kill）仍显示为活跃。需分析现有心跳判定（lib/core.mjs readHeartbeatSection 的 status/active/stale 规则、心跳记录的 pid/session 字段、index.js 面板投影、tools 的 heartbeat 门禁），确定如何检查会话存活（宿主 agents 服务 roots/list？心跳文件 mtime + session 存在性？pid？），并给任务书（误判风险：多宿主/重启后 pid 复用、跨机器工作树）。",
   "scope": {
     "allow": [
       "lib/core.mjs",
@@ -27,5 +26,7 @@
   ],
   "notes": "team: task-46 task-47(分析+实测复现) task-50(实施/卡A core liveness) task-60(审查 reject) task-66(修正 F1/F2/F3) task-68(复审 reject 软链遗留) task-51(实施/卡B agents 接线+bin writer) task-80(复审 accept) task-67(重启后 live 验证) task-83/88(字典/TUI/i18n) task-93(审查 accept) task-101(exp.tree) task-105(漂移扫描) task-113 等。已合并 01aa672 + bd2ba1a。心跳五态 liveness、counts 五键、dead/foreign/stale 语义、agents 正向证据、死会话 session-open 不再假绿；「陈旧心跳误显示活跃」已闭环。\n\n用户反馈：插件心跳功能不会检查会话是否还存在——即陈旧心跳（会话已结束/被 kill）仍显示为活跃。需分析现有心跳判定（lib/core.mjs readHeartbeatSection 的 status/active/stale 规则、心跳记录的 pid/session 字段、index.js 面板投影、tools 的 heartbeat 门禁），确定如何检查会话存活（宿主 agents 服务 roots/list？心跳文件 mtime + session 存在性？pid？），并给任务书（误判风险：多宿主/重启后 pid 复用、跨机器工作树）。",
   "created_at": "2026-11-04T19:59:22+08:00",
-  "updated_at": "2026-11-04T21:10:18+08:00"
+  "updated_at": "2026-11-04T21:10:18+08:00",
+  "type": "fix",
+  "parent": null
 }

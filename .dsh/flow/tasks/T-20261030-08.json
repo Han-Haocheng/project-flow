@@ -1,9 +1,8 @@
 {
   "id": "T-20261030-08",
-  "title": "迁移与 init 原子性 + ID 去重",
+  "title": "迁移与 init 原子性 + ID 去重 — init/种子/迁移的“读+写”进同一把锁；修 Exp-Id 分隔与 legacy id 迁移；updated_at 回退 mtime；解决同日 ID 跨分支撞名。",
   "status": "active",
   "owner": "",
-  "goal": "init/种子/迁移的“读+写”进同一把锁；修 Exp-Id 分隔与 legacy id 迁移；updated_at 回退 mtime；解决同日 ID 跨分支撞名。",
   "scope": {
     "allow": [
       "lib/core.mjs",
@@ -31,5 +30,6 @@
   "schema": 1,
   "parent": null,
   "done_at": null,
-  "archived_at": null
+  "archived_at": null,
+  "type": "fix"
 }

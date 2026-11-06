@@ -3,7 +3,6 @@
   "title": "审查 project-flow 插件不足（core/CLI/host/client/文档 并行盘点，输出优先级与修法）",
   "status": "archived",
   "owner": "session-7d92a615-9c31-4032-a9b8-524fd538a8d5",
-  "goal": "",
   "scope": {
     "allow": [],
     "deny": []
@@ -17,5 +16,6 @@
   "schema": 1,
   "parent": null,
   "done_at": null,
-  "archived_at": "2026-11-05T19:37:38+08:00"
+  "archived_at": "2026-11-05T19:37:38+08:00",
+  "type": "chore"
 }

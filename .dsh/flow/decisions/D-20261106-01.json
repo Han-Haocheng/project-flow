@@ -1,0 +1,45 @@
+{
+  "question": "P3 台账归零是否按「A 全并 + 3 条最长 goal 挪进 notes」执行？",
+  "kind": "approval",
+  "rationale": "这是不可逆的单向门：title 是不可改字段，一旦归一落盘，493 列标题永久定稿、只能手写迁移脚本收紧。用户已在对话中口头确认，需落成决策台账留痕。",
+  "recommendation": "approve",
+  "blocks": [
+    "T-20261105224822"
+  ],
+  "affects": [
+    ".dsh/flow/tasks",
+    "CONTRACT.md"
+  ],
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 7,
+  "schema": 1,
+  "id": "D-20261106-01",
+  "options": [
+    {
+      "id": "approve",
+      "label": "同意",
+      "impact": "批准该动作，可以继续执行"
+    },
+    {
+      "id": "reject",
+      "label": "拒绝",
+      "impact": "拒绝该动作，停止推进"
+    }
+  ],
+  "default": null,
+  "status": "answered",
+  "supersedes": null,
+  "answer": {
+    "choice": "approve",
+    "note": "P3 走 A 全并 + 3 条 goal 挪 notes",
+    "at": "2026-11-06T19:25:32+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-06T19:25:32+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "e0c1cd7282d06111",
+  "asked_at": "2026-11-06T19:25:24+08:00",
+  "created_at": "2026-11-06T19:25:24+08:00",
+  "updated_at": "2026-11-06T19:25:32+08:00"
+}

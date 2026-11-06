@@ -1,9 +1,8 @@
 {
   "id": "T-20261030-09",
-  "title": "Windows 兼容：超时杀进程树、rename、保留文件名",
+  "title": "Windows 兼容：超时杀进程树、rename、保留文件名 — gate run / flow check 的 timeout 在 Windows 真正生效（杀进程树 + grace 兜底）；rename 重试；心跳 session 名拒绝 Windows 保留名与 ADS。",
   "status": "done",
   "owner": "win-compat",
-  "goal": "gate run / flow check 的 timeout 在 Windows 真正生效（杀进程树 + grace 兜底）；rename 重试；心跳 session 名拒绝 Windows 保留名与 ADS。",
   "scope": {
     "allow": [
       "lib/core.mjs",

@@ -1,6 +1,5 @@
 {
-  "title": "feat: 任务进度随时间趋势视图",
-  "goal": "用户希望看见任务进度随时间的趋势（例如每日 active/done/archived 数量、完成速率）。当前台账只存现状、无历史序列；需分析数据来源（提交时间、任务 updated_at、门禁日志、心跳、决策记录）与最小成本方案（面板端按 updated_at/commits 重建近似趋势，或新增轻量历史快照），并给任务书。",
+  "title": "feat: 任务进度随时间趋势视图 — 用户希望看见任务进度随时间的趋势（例如每日 active/done/archived 数量、完成速率）。当前台账只存现状、无历史序列；需分析数据来源（提交时间、任务 updated_at、门禁日志、心跳、决策记录）与最小成本方案（面板端按 updated_at/commits 重建近似趋势，或新增轻量历史快照），并给任务书。",
   "scope": {
     "allow": [
       "client.js",
@@ -28,5 +27,7 @@
   ],
   "notes": "team: task-46(分析/数据能力矩阵) task-52(实施/卡A deriveTrend) task-53(实施/卡B1 done_at+archived_at) task-95(卡C 断言设计) task-120(实施/卡C SVG 日柱) task-126(审查 accept) task-127(边界断言+近似段 bug 修正+days 容错口径)。已合并 2ddb5e4 + c10e46f + dd61366 + c00e91d。趋势：本地日历日分桶（DST 安全）、created 精确 / done·archived 优先 done_at·archived_at 否则 updated_at 并标 ≈、estimatedFrom 边界（早于窗口=整窗近似）、14 天 207B/60 天 504B、400 任务 0.2ms；面板 26px SVG 日柱 + 摘要 + 首尾日期 + a11y。T-07 归档抹完成日的错位同时修复。",
   "created_at": "2026-11-04T19:59:12+08:00",
-  "updated_at": "2026-11-04T21:27:14+08:00"
+  "updated_at": "2026-11-04T21:27:14+08:00",
+  "type": "feat",
+  "parent": null
 }

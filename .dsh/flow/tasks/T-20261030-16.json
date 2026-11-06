@@ -1,9 +1,8 @@
 {
   "id": "T-20261030-16",
-  "title": "内嵌技能与脚本对齐实现",
+  "title": "内嵌技能与脚本对齐实现 — enforcement.md 写的 gate task / --force --reason 在 gate.py 里不存在；SKILL.md 指向包外 ~/.codex 的 quick_validate.py；usage 技能说 scope 用 --json（实际是输出，CLI --allow 又被忽略）。",
   "status": "active",
   "owner": "",
-  "goal": "enforcement.md 写的 gate task / --force --reason 在 gate.py 里不存在；SKILL.md 指向包外 ~/.codex 的 quick_validate.py；usage 技能说 scope 用 --json（实际是输出，CLI --allow 又被忽略）。",
   "scope": {
     "allow": [
       "skills/",
@@ -28,5 +27,6 @@
   "schema": 1,
   "parent": null,
   "done_at": null,
-  "archived_at": null
+  "archived_at": null,
+  "type": "docs"
 }

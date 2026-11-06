@@ -1,6 +1,5 @@
 {
-  "title": "fix: state 请求内 realpath 去重（112 次 → 7 次，单路径 ≤1；请求级 memo）",
-  "goal": "client-audit 分析发现：同一次 GET state 里 core.mjs 对同一 root 重复 realpathSync/normalizeContract，112 次 realpath 只解析 9 个不同路径；per-request memo 后同步调用 176→73、tmpfs 3.5ms→1.6ms。把请求入口 normalize 一次并传递 contract（或 per-request realpath 缓存），降低慢挂载下事件循环阻塞面 2~10×，语义不变。",
+  "title": "fix: state 请求内 realpath 去重（112 次 → 7 次，单路径 ≤1；请求级 memo） — client-audit 分析发现：同一次 GET state 里 core.mjs 对同一 root 重复 realpathSync/normalizeContract，112 次 realpath 只解析 9 个不同路径；per-request memo 后同步调用 176→73、tmpfs 3.5ms→1.6ms。把请求入口 normalize 一次并传递 contract（或 per-request realpath 缓存），降低慢挂载下事件循环阻塞面 2~10×，语义不变。",
   "scope": {
     "allow": [
       "lib/core.mjs",
@@ -28,5 +27,7 @@
   ],
   "notes": "team: task-14(实施） task-15(审查/accept) task-18(契约补句) task-19(审查测试/accept-with-notes)。已合并 4f06f99。证据：realpathSync 112→7、单路径最高 56×→1×、同步 fs 241→136、语义逐字节一致、node --test 159/159、.selftest 全绿；红测双向（退回旧行为 5/5 红、进程级缓存 5/5 红）。T-05 前置注意：memo 不可跨 worker 传（structuredClone 丢 error.code），且 T-04 只去重不同步化，136 次同步 fs + spawnSync git 仍在。scope 已补 CONTRACT.md（文档同步经 Lead 授权）。",
   "created_at": "2026-11-04T19:08:09+08:00",
-  "updated_at": "2026-11-04T19:30:31+08:00"
+  "updated_at": "2026-11-04T19:30:31+08:00",
+  "type": "fix",
+  "parent": null
 }

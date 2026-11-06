@@ -1,8 +1,7 @@
 {
-  "title": "技能元数据中文化（frontmatter + SKILL_META 兜底）",
+  "title": "技能元数据中文化（frontmatter + SKILL_META 兜底） — 用户确认三个技能的 description / when-to-use 统一中文：给 project-flow-init / project-flow-usage 补中文 frontmatter，协作技能保持中文；同步 index.js SKILL_META 的中文兜底，避免 frontmatter 写坏时回落英文。",
   "status": "draft",
   "owner": "",
-  "goal": "用户确认三个技能的 description / when-to-use 统一中文：给 project-flow-init / project-flow-usage 补中文 frontmatter，协作技能保持中文；同步 index.js SKILL_META 的中文兜底，避免 frontmatter 写坏时回落英文。",
   "scope": {
     "allow": [
       "skills/",
@@ -26,5 +25,7 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:09:20+08:00",
-  "updated_at": "2026-10-30T21:09:20+08:00"
+  "updated_at": "2026-10-30T21:09:20+08:00",
+  "type": "docs",
+  "parent": null
 }

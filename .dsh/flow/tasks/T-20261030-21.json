@@ -1,8 +1,7 @@
 {
-  "title": "流程：Agent Teams 与项目任务对接（中心拆分→团队执行→合并回收）",
+  "title": "流程：Agent Teams 与项目任务对接（中心拆分→团队执行→合并回收） — 用户指出智能体团队与项目任务天然兼容、但目前仍用一次性子代理。把技能/流程改为：项目台账是唯一 durable 真源，Lead 从任务进度分析拆解成 Team 任务（subject/description/blocked_by/write_scopes），用 spawn_teammate 派持久队友执行，队友产出分支+提交+证据，Lead 验收合并并回收更新项目任务；心跳只覆盖主会话。",
   "status": "archived",
   "owner": "team-integration",
-  "goal": "用户指出智能体团队与项目任务天然兼容、但目前仍用一次性子代理。把技能/流程改为：项目台账是唯一 durable 真源，Lead 从任务进度分析拆解成 Team 任务（subject/description/blocked_by/write_scopes），用 spawn_teammate 派持久队友执行，队友产出分支+提交+证据，Lead 验收合并并回收更新项目任务；心跳只覆盖主会话。",
   "scope": {
     "allow": [
       "skills/",
@@ -28,5 +27,7 @@
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-10-30T21:00:15+08:00",
-  "updated_at": "2026-10-31T10:20:50+08:00"
+  "updated_at": "2026-10-31T10:20:50+08:00",
+  "type": "feat",
+  "parent": null
 }

@@ -1,9 +1,8 @@
 {
   "id": "T-20261030-05",
-  "title": "心跳新鲜度与死心跳对账",
+  "title": "心跳新鲜度与死心跳对账 — working 判定加 TTL 与读侧归一化 missed；插件挂载/轮询用 agents.get 对账，把崩溃残留的心跳收敛；面板不再把死会话显示为 working。",
   "status": "archived",
   "owner": "",
-  "goal": "working 判定加 TTL 与读侧归一化 missed；插件挂载/轮询用 agents.get 对账，把崩溃残留的心跳收敛；面板不再把死会话显示为 working。",
   "scope": {
     "allow": [
       "index.js",
@@ -31,5 +30,6 @@
   "schema": 1,
   "parent": null,
   "done_at": null,
-  "archived_at": "2026-11-05T19:37:38+08:00"
+  "archived_at": "2026-11-05T19:37:38+08:00",
+  "type": "feat"
 }

@@ -1,9 +1,8 @@
 {
   "id": "T-20261030-07",
-  "title": "客户端：主题、可访问性、稳定 key、keepMounted",
+  "title": "客户端：主题、可访问性、稳定 key、keepMounted — 浅色主题下日志/运行输出/chip 有可辨底色；状态色不再承担正文对比度；补齐读屏与命中区；列表 key 改业务键；tab 支持 keepMounted 与可见性轮询。",
   "status": "done",
   "owner": "client-p1",
-  "goal": "浅色主题下日志/运行输出/chip 有可辨底色；状态色不再承担正文对比度；补齐读屏与命中区；列表 key 改业务键；tab 支持 keepMounted 与可见性轮询。",
   "scope": {
     "allow": [
       "client.js",
@@ -28,5 +27,6 @@
   "schema": 1,
   "parent": null,
   "done_at": "2026-11-06T11:16:47+08:00",
-  "archived_at": null
+  "archived_at": null,
+  "type": "feat"
 }
