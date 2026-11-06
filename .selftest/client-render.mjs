@@ -1477,6 +1477,36 @@ check('CSS: the plugin-local ok/warn/error text tokens clear WCAG on both themes
     'hb-dead keeps the strike-through as a non-colour cue'
   );
   assert.ok(!/--dsw-alias-[a-z0-9-]+\s*:/.test(source), 'the plugin must not redeclare a host alias');
+  /* The chip family is not the only 10.5-11px body text that inherited a host
+     state primary: these sibling rules did too (light 2.15-4.50:1 on the
+     layer-1 card/stale background). They must paint text with the plugin
+     tokens; border/background/box-shadow uses of the aliases stay untouched. */
+  const STATE_PRIMARY_AS_COLOR = /(?:^|[;{])color:var\(--dsw-alias-state-[a-z]+-primary\)/;
+  const textRules = [
+    ['.project-flow-stale', 'warn'],
+    ['.project-flow-gateRun--ok', 'ok'],
+    ['.project-flow-gateRun--fail', 'error'],
+    ['.project-flow-gateError', 'error'],
+    ['.project-flow-verdict--open', 'warn'],
+    ['.project-flow-decisionMark', 'warn']
+  ];
+  for (const [selector, expected] of textRules) {
+    const rule = source.split('\n').find((line) => line.startsWith(selector + '{'));
+    assert.ok(rule, selector + ' rule missing');
+    assert.ok(
+      !STATE_PRIMARY_AS_COLOR.test(rule),
+      selector + ' must not use a bare host state primary as its text colour'
+    );
+    const declaration = /(?:^|[;{])color:var\((--project-flow-(ok|warn|error)-text)\)/.exec(rule);
+    assert.ok(declaration, selector + ' must paint body text with a plugin text token');
+    assert.equal(declaration[2], expected, selector + ' must use the ' + expected + ' text token');
+    for (const theme of themes) {
+      const base = expected === 'error' ? theme.error : expected === 'ok' ? '#22c55e' : '#f59e0b';
+      const text = mix(base, theme.label, share);
+      const ruleRatio = contrastRatio(text, theme.card);
+      assert.ok(ruleRatio >= 4.5, `${theme.name} ${selector} text ${text} is ${ruleRatio.toFixed(2)}:1 (needs 4.5)`);
+    }
+  }
 });
 
 check('PanelView: aria-busy tracks refreshing, and the live region only writes on a transition', () => {
@@ -2769,7 +2799,7 @@ check('DecisionsCard: the new stylesheet rules use theme tokens', () => {
   for (const rule of rules) {
     assert.ok(!/#[0-9a-fA-F]{3,8}\b/.test(rule), 'hardcoded hex color: ' + rule);
     assert.ok(!/\brgba?\(/.test(rule) && !/\bhsla?\(/.test(rule), 'hardcoded color function: ' + rule);
-    if (rule.includes('color:')) assert.ok(rule.includes('var(--dsw-alias-'), 'color without a token: ' + rule);
+    if (rule.includes('color:')) assert.ok(/var\(--dsw-alias-[a-z0-9-]+\)|var\(--project-flow-(?:ok|warn|error)-text\)/.test(rule), 'color without a token: ' + rule);
   }
 });
 
