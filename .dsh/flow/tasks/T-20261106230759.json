@@ -1,0 +1,21 @@
+{
+  "title": "refactor: 消除 core/checks 进程树杀灭重复，抽 lib/proc.mjs + lib/runner.mjs",
+  "type": "refactor",
+  "status": "done",
+  "notes": "2026-11-07 完成（6c4fd7a，待推送）。\n\n根治真重复：core.mjs 与 checks.mjs 各有一份功能等价的进程树杀灭（runTaskkillSync 两边逐字节相同、WIN32_KILL_GRACE_MS/TASKKILL_TIMEOUT_MS 各一份、连测试注入 API 都一样）。根因是 checks.mjs「不 import core」纪律逼出来的重新实现。\n\n危害：两份会漂移，谁在 core 修了 win32 bug 忘了 checks，checks 会静默留旧 bug，而这类 bug 只在真 Windows 暴露。\n\n修法：抽 lib/proc.mjs（87 行，零内部 import，不碰 core 也不碰 checks）→ checks 仍是 core-free，纪律不破、重复消除。checks 删 66 行复制品改 import，保留 export { killProcessTree }。\n\n顺手搬完余两段（task-51 已解除位置耦合）：runStep 整簇 → lib/runner.mjs(126)、writeJsonAtomic → lib/atomic.mjs。core 4111 → 3879 行。导出面 73→73。\n\nLead 独立验证：逐函数抽 HEAD 原文比对 10/10 逐字节相同零丢失；grep -c \"spawnSync('taskkill'\" 全 lib 只剩 proc.mjs 1 处；proc.mjs 零内部 import；A/B 对照失败集一致；六 selftest 全绿；status 逐字节一致。\n\n测试断言同步（不删只改表达）：win-compat.test:530-532 从\"checks 内联含 needle\"改为\"能力可达 + 唯一实现\"，原断言一条未删。\n\n两处主动偏离已报告：proc.mjs JSDoc 加 2 行（函数体未动）、core 剔除 5 个不再用的 import。",
+  "commits": [
+    "6c4fd7a"
+  ],
+  "schema": 1,
+  "id": "T-20261106230759",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "created_at": "2026-11-06T23:07:59+08:00",
+  "updated_at": "2026-11-06T23:07:59+08:00"
+}
