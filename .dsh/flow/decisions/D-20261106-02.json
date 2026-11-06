@@ -1,0 +1,37 @@
+{
+  "question": "是否把本地 main（94 个未推送提交，含台账归零与全部源码改动）推送到 origin/main？",
+  "kind": "approval",
+  "rationale": "origin/main 停在 2026-10-31 的 cf27b6b，落后 94 个提交；不推则 CI 上线跑的是旧代码。push 是不可逆的范围外操作，且会把 50 条任务台账（含历史 goal 与 notes）公开发布到 GitHub，必须你明确授权。",
+  "recommendation": "reject",
+  "affects": [
+    "origin/main"
+  ],
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 9,
+  "schema": 1,
+  "id": "D-20261106-02",
+  "options": [
+    {
+      "id": "approve",
+      "label": "同意",
+      "impact": "批准该动作，可以继续执行"
+    },
+    {
+      "id": "reject",
+      "label": "拒绝",
+      "impact": "拒绝该动作，停止推进"
+    }
+  ],
+  "default": null,
+  "status": "open",
+  "blocks": [],
+  "supersedes": null,
+  "answer": null,
+  "answered_at": null,
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "39a917983de56eb9",
+  "asked_at": "2026-11-06T19:32:39+08:00",
+  "created_at": "2026-11-06T19:32:39+08:00",
+  "updated_at": "2026-11-06T19:32:39+08:00"
+}
