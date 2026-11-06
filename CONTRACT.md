@@ -26,6 +26,51 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 
 子目录可由契约覆盖（见 §2），但覆盖值必须留在项目根内；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
 
+### 1.1 代码模块职责
+
+上面是**数据**布局，这里是**代码**布局。依赖方向只有一种：上层指向下层，**无环**。
+
+| 模块 | 职责 | 谁依赖它 |
+|---|---|---|
+| `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
+| `bin/flow.mjs` | CLI：只做参数解析与输出，校验/加锁/原子写全部在 core | 人、脚本、门禁 |
+| `lib/core.mjs` | **唯一写者**：契约、记录 CRUD、门禁执行、心跳、决策 | 工具层、CLI、快照 |
+| `lib/lock.mjs` | 写锁与 CAS 接管（30 秒过期、`takeover-claim`） | core |
+| `lib/atomic.mjs` | 原子写（临时文件 + fsync + 改名 + 目录 fsync + 重试） | core、lock |
+| `lib/paths.mjs` | 路径 containment（拒绝绝对路径、`..` 逃逸、真实路径越界） | core |
+| `lib/proc.mjs` | **进程树杀灭的唯一实现**（POSIX 进程组 / win32 `taskkill /T /F` + grace 兜底） | core、checks |
+| `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
+| `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
+| `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
+| `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
+| `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
+| `lib/plugin/*.mjs` | 子插件挂载骨架（`mount`）与共享参数（`shared`） | `tasks.js`/`gates.js`/`experiments.js` |
+| `client.js` | 浏览器 bundle：**零 import、无构建步骤**，因此不能放进 `lib/` | 面板 |
+| 根目录 `tasks.js`/`gates.js`/`experiments.js`/`tui-host.js` | 子插件/TUI 入口，**被 `package.json` 的 `exports` 逐条点名**，是 npm 包契约的一部分，不要移动 | 宿主 |
+
+三条**由测试守着**的结构纪律（`test/t-20261107-module-boundaries.test.mjs`）：
+`lib/checks.mjs` 不得 import `lib/core.mjs`；`lib/*` 依赖无环、`util.mjs` 是叶子；
+`spawnSync('taskkill'` 全 lib 恰好一处。
+
+**去重判据**（踩过坑，写下来防复发）：判断两个同名函数能否合并，先分四类——
+**过时前提**（注释理由已失效 → 可删）、**等价但刻意自足**（如 `state-snapshot` 的
+`isPlainObject`，worker 不许 import 宿主 → 不动）、**语义分叉**（如 `timeValue` 无效值
+`-Infinity` 是排序哨兵 vs `util` 的 `0` → 绝不能合）、**同名不同物**（如 `bin/flow.mjs`
+的 `pad` 按显示宽度补表格 vs `lib/util.mjs` 的 `pad` 是时间戳补零 → 绝不能合）。
+`state-snapshot.mjs` 的路径 containment 是**算法重复但 sink 刻意分开**：它把拒绝写进
+本次 payload 的 `warnings[]`，`lib/paths.mjs` 写全局通道——混用会让面板轮询偷走 core
+警告，`test/warnings.test.mjs` 的《面板读路径 drain 后丢弃》用例守着这个隔离。
+
+**已知结构债（有意欠的，不是疏忽）**：`lib/tools/*` 为了拿 `requireCore` 静态 import
+`state-snapshot.mjs`（1233 行），而实际只用其中 2 个函数——约 **70% 依赖体积不可达**。
+根治要把「core 网关 + `brief`/`takeCoreWarnings`/`storeContractPath`/`taskCountsOf`/
+`pickInteger`」抽成约 100 行的独立模块（**不是 60 行**：少搬 `taskCountsOf`/`pickInteger`
+会让三个 tools 里两个仍留快照依赖、收益归零）。**性能收益可忽略**（≈0.5 ms/进程，因为
+网关仍须 top-level await 加载 core），所以这是**可理解性/风险面**问题，优先级 P3。
+前置条件：`core-unavailable` 降级路径先有测试覆盖、`index.js` 空闲。
+⚠ 搬的时候**不要动** `clip`/`isoLocal`/`timeValue`/`toPosix`/`isPlainObject`——它们与
+`util` 同名不同契约，`index.js` 依赖的是快照变体。
+
 ## 2 `flow.json`（schema 2）
 
 `flow init` 写入下面这份完整默认值：
