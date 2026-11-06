@@ -21,6 +21,12 @@
       "run": "\"./bin/flow.mjs\" task archive",
       "expect": "exit 0",
       "timeoutSeconds": 600
+    },
+    {
+      "id": "tasks-format",
+      "run": "\"./bin/flow.mjs\" check tasks",
+      "expect": "exit 0",
+      "timeoutSeconds": 600
     }
   ],
   "schema": 1,
