@@ -34,6 +34,23 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(HERE, '..')
+const LIB_DIR = path.join(REPO_ROOT, 'lib')
+
+/**
+ * 全部 `lib/**` 源码按**固定顺序**拼接（task-51）。
+ *
+ * 实现常量（`WIN32_KILL_GRACE_MS`、`WINDOWS_RESERVED_SESSION_NAMES` …）待在
+ * `core.mjs` 还是搬到某个 `lib/*.mjs` 是**实现细节**；源码级断言该对"整个实现"
+ * 成立。拼接顺序固定（`core.mjs` 最后）让结论不随文件系统枚举顺序漂移。
+ */
+function readLibSource() {
+  const files = fs
+    .readdirSync(LIB_DIR)
+    .filter((name) => name.endsWith('.mjs'))
+    .sort()
+  const ordered = [...files.filter((name) => name !== 'core.mjs'), ...files.filter((name) => name === 'core.mjs')]
+  return ordered.map((name) => fs.readFileSync(path.join(LIB_DIR, name), 'utf8')).join('\n')
+}
 
 const TEMP_DIRS = []
 after(() => {
@@ -493,7 +510,8 @@ test('心跳 session：既有安全规则不回归（空/过长/穿越/控制字
 
 test('契约同步：CONTRACT.md 与实现同改（保留名/ADS/结尾点空格、win32 taskkill/grace）', () => {
   const contractText = fs.readFileSync(path.join(REPO_ROOT, 'CONTRACT.md'), 'utf8')
-  const coreText = fs.readFileSync(path.join(REPO_ROOT, 'lib', 'core.mjs'), 'utf8')
+  // task-51：读整个 `lib/**` 而不是只读 core.mjs —— 位置无关，语义不变。
+  const coreText = readLibSource()
   const checksText = fs.readFileSync(path.join(REPO_ROOT, 'lib', 'checks.mjs'), 'utf8')
 
   const required = [

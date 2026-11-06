@@ -30,6 +30,27 @@ function addTask(root, contract, input = {}, options) {
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url))
 const CORE_PATH = path.join(TEST_DIR, '..', 'lib', 'core.mjs')
+const LIB_DIR = path.join(TEST_DIR, '..', 'lib')
+
+/**
+ * 全部 `lib/**` 源码按**固定顺序**拼接成的文本（task-51）。
+ *
+ * 为什么不是只读 `lib/core.mjs`：`lib/core.mjs` 已经从 4975 行拆成
+ * `lib/{util,paths,atomic,lock}.mjs` + 门面，函数搬去哪个文件是**实现细节**，
+ * 不是契约。源码级断言（fsync 顺序这类黑盒不可观测的不变量）应该对"整个实现"
+ * 成立，而不是对"某个文件"成立 —— 否则每次重构都得先改测试，那是把位置当契约。
+ *
+ * 拼接顺序固定（`lib/core.mjs` 最后），保证同样的实现总得到同样的文本，
+ * 断言结论不随文件系统枚举顺序漂移。
+ */
+function readLibSource() {
+  const files = fs
+    .readdirSync(LIB_DIR)
+    .filter((name) => name.endsWith('.mjs'))
+    .sort()
+  const ordered = [...files.filter((name) => name !== 'core.mjs'), ...files.filter((name) => name === 'core.mjs')]
+  return ordered.map((name) => fs.readFileSync(path.join(LIB_DIR, name), 'utf8')).join('\n')
+}
 const REPO_ROOT = path.join(TEST_DIR, '..')
 const HOST_TAG = `${os.hostname()}|${process.platform}`
 
@@ -369,7 +390,8 @@ test('claim 释放校验归属：claim 已被恢复/删除时 release 静默返�
 // ------------------------------------------------------------ A3 原子写
 
 test('原子写：fsync 在 rename 之前（源码断言；黑盒不可观测）', () => {
-  const source = fs.readFileSync(CORE_PATH, 'utf8')
+  // task-51：读整个 `lib/**` 而不是只读 core.mjs —— 位置无关，语义不变。
+  const source = readLibSource()
   const start = source.indexOf('function writeJsonAtomic(')
   assert.ok(start > 0, 'writeJsonAtomic 必须存在')
   const end = source.indexOf('\nfunction ', start + 1)
