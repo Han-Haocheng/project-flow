@@ -3141,7 +3141,10 @@ window.__ModuleLoader__.load({
       const refreshing = props.refreshing === true;
       const failed = props.failed === true;
       const stateRoot = asText(view ? view.root : '');
-      const phase = failed ? 'error' : refreshing ? 'busy' : 'idle';
+      /* Refreshing wins over a stale failure: a retry after an error must still
+         announce "refreshing…", otherwise the phase never leaves 'error' until
+         the next success and the start of the retry is silent (P1-1). */
+      const phase = refreshing ? 'busy' : failed ? 'error' : 'idle';
 
       /* Screen-reader announcement (D-20261105-06): the polite region only writes
          on a PHASE TRANSITION — background polls never flip `refreshing`, so the
@@ -3193,14 +3196,15 @@ window.__ModuleLoader__.load({
           card,
         });
 
-      return React.createElement(
+      /* The live region must NOT live inside the aria-busy subtree: while
+         aria-busy is true an assistive technology may defer content changes in
+         that subtree until it clears, which would delay or swallow the
+         "refreshing…" announcement (it is written exactly during busy). So the
+         status region stays a SIBLING of the busy container below, and only the
+         data body carries aria-busy. */
+      const body = React.createElement(
         'div',
-        { className: 'project-flow-view', 'aria-busy': refreshing ? true : undefined },
-        React.createElement(
-          'div',
-          { className: 'project-flow-srOnly', role: 'status', 'aria-live': 'polite' },
-          announced.text
-        ),
+        { 'aria-busy': refreshing ? true : undefined },
         React.createElement(DisplayBar, {
           t,
           display,
@@ -3260,6 +3264,17 @@ window.__ModuleLoader__.load({
           )
         ),
         React.createElement(Footer, { view, t })
+      );
+
+      return React.createElement(
+        'div',
+        { className: 'project-flow-view' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-srOnly', role: 'status', 'aria-live': 'polite' },
+          announced.text
+        ),
+        body
       );
     }
 
@@ -3699,7 +3714,9 @@ window.__ModuleLoader__.load({
   --project-flow-ok-text:var(--dsw-alias-state-success-primary);
   --project-flow-ok-text:color-mix(in srgb, var(--dsw-alias-state-success-primary) 52%, var(--dsw-alias-label-primary));
   --project-flow-warn-text:var(--dsw-alias-state-warn-primary);
-  --project-flow-warn-text:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 52%, var(--dsw-alias-label-primary));}
+  --project-flow-warn-text:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 52%, var(--dsw-alias-label-primary));
+  --project-flow-error-text:var(--dsw-alias-state-error-primary);
+  --project-flow-error-text:color-mix(in srgb, var(--dsw-alias-state-error-primary) 52%, var(--dsw-alias-label-primary));}
 .project-flow-inner{box-sizing:border-box;width:100%;padding:12px;container-type:inline-size;}
 .project-flow-top{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px 8px;}
 .project-flow-lead{display:flex;align-items:center;gap:8px;min-width:0;}
@@ -3760,15 +3777,15 @@ window.__ModuleLoader__.load({
 .project-flow-trendEmpty{margin:4px 0 0;font-size:11px;}
 .project-flow-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-chip--ok{color:var(--project-flow-ok-text);}
-.project-flow-chip--error{color:var(--dsw-alias-state-error-primary);}
+.project-flow-chip--error{color:var(--project-flow-error-text);}
 .project-flow-chip--warn{color:var(--project-flow-warn-text);}
 .project-flow-chip--brand{color:var(--dsw-alias-brand-primary);}
-.project-flow-chip--muted{color:var(--dsw-alias-label-secondary);opacity:.75;}
-.project-flow-chip--hb-working{color:var(--dsw-alias-state-success-primary);}
-.project-flow-chip--hb-idle{color:var(--dsw-alias-state-warn-primary);}
-.project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);opacity:.8;}
-.project-flow-chip--hb-missed{color:var(--dsw-alias-state-error-primary);}
-.project-flow-chip--hb-dead{color:var(--dsw-alias-label-secondary);opacity:.65;text-decoration:line-through;}
+.project-flow-chip--muted{color:var(--dsw-alias-label-secondary);}
+.project-flow-chip--hb-working{color:var(--project-flow-ok-text);}
+.project-flow-chip--hb-idle{color:var(--project-flow-warn-text);}
+.project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);}
+.project-flow-chip--hb-missed{color:var(--project-flow-error-text);}
+.project-flow-chip--hb-dead{color:var(--dsw-alias-label-secondary);text-decoration:line-through;}
 .project-flow-stale{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-state-warn-primary);font-size:11px;}
 .project-flow-staleMark{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:50%;border:1px solid var(--dsw-alias-state-warn-primary);font-size:10px;line-height:1;flex:none;}
 .project-flow-staleCode{font-family:${MONO};font-size:10.5px;opacity:.8;}

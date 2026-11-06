@@ -1405,22 +1405,28 @@ function contrastRatio(foreground, background) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-check('CSS: the plugin-local ok/warn text tokens clear WCAG on both themes', () => {
+check('CSS: the plugin-local ok/warn/error text tokens clear WCAG on both themes', () => {
   /* Host values measured in task-178 (theme: body / body[data-ds-dark-theme]):
-     state-success #22c55e, state-warn #f59e0b; light label #0f1115, dark label
-     #f9fafb; chip background = bg-layer-2 (#ffffff / #2c2c2e). */
+     state-success #22c55e, state-warn #f59e0b, state-error #ec1313 (light) /
+     #f25a5a (dark); light label #0f1115 / secondary #61666b, dark label #f9fafb
+     / secondary #cfd3d6; chip background = bg-layer-2 (#ffffff / #2c2c2e). */
   const okSource = /--project-flow-ok-text\s*:\s*color-mix\(in srgb, var\(--dsw-alias-state-success-primary\) (\d+)%, var\(--dsw-alias-label-primary\)\)/;
   const warnSource = /--project-flow-warn-text\s*:\s*color-mix\(in srgb, var\(--dsw-alias-state-warn-primary\) (\d+)%, var\(--dsw-alias-label-primary\)\)/;
+  const errorSource = /--project-flow-error-text\s*:\s*color-mix\(in srgb, var\(--dsw-alias-state-error-primary\) (\d+)%, var\(--dsw-alias-label-primary\)\)/;
   const okMatch = okSource.exec(source);
   const warnMatch = warnSource.exec(source);
+  const errorMatch = errorSource.exec(source);
   assert.ok(okMatch, 'the ok token must mix the host success colour with the label colour');
   assert.ok(warnMatch, 'the warn token must mix the host warn colour with the label colour');
+  assert.ok(errorMatch, 'the error token must mix the host error colour with the label colour');
   assert.equal(okMatch[1], '52');
   assert.equal(warnMatch[1], '52');
+  assert.equal(errorMatch[1], '52');
   /* No literal colour, no theme branch: the mix follows whatever the host set. */
   assert.ok(!/#[0-9a-f]{6}/i.test(source), 'the plugin must not hardcode a hex colour');
   assert.ok(!/@media\s*\(prefers-color-scheme/.test(source), 'no OS theme branch is needed (and viewport media queries are banned)');
   assert.ok(source.includes('--project-flow-ok-text:var(--dsw-alias-state-success-primary)'), 'a non-color-mix fallback is required');
+  assert.ok(source.includes('--project-flow-error-text:var(--dsw-alias-state-error-primary)'), 'the error token needs the same fallback');
 
   const mix = (base, label, share) => {
     const a = [1, 3, 5].map((o) => parseInt(base.slice(o, o + 2), 16));
@@ -1430,48 +1436,96 @@ check('CSS: the plugin-local ok/warn text tokens clear WCAG on both themes', () 
   };
   const share = Number(okMatch[1]) / 100;
   const themes = [
-    { name: 'light', label: '#0f1115', chip: '#ffffff', card: '#ffffff' },
-    { name: 'dark', label: '#f9fafb', chip: '#2c2c2e', card: '#232324' },
+    { name: 'light', label: '#0f1115', secondary: '#61666b', error: '#ec1313', chip: '#ffffff', card: '#ffffff' },
+    { name: 'dark', label: '#f9fafb', secondary: '#cfd3d6', error: '#f25a5a', chip: '#2c2c2e', card: '#232324' },
   ];
   for (const theme of themes) {
     const okText = mix('#22c55e', theme.label, share);
     const warnText = mix('#f59e0b', theme.label, share);
+    const errorText = mix(theme.error, theme.label, share);
     const okRatio = contrastRatio(okText, theme.chip);
     const warnRatio = contrastRatio(warnText, theme.chip);
+    const errorRatio = contrastRatio(errorText, theme.chip);
     assert.ok(okRatio >= 4.5, `${theme.name} ok text ${okText} is ${okRatio.toFixed(2)}:1 (needs 4.5)`);
     assert.ok(warnRatio >= 4.5, `${theme.name} warn text ${warnText} is ${warnRatio.toFixed(2)}:1 (needs 4.5)`);
+    assert.ok(errorRatio >= 4.5, `${theme.name} error text ${errorText} is ${errorRatio.toFixed(2)}:1 (needs 4.5)`);
+    /* Chip text is 10.5-11px body-level type, so the WHOLE family needs 4.5:1,
+       not just ok/warn: the secondary-label chips included (P1-2). */
+    const secondaryRatio = contrastRatio(theme.secondary, theme.chip);
+    assert.ok(secondaryRatio >= 4.5, `${theme.name} secondary chip text ${theme.secondary} is ${secondaryRatio.toFixed(2)}:1 (needs 4.5)`);
     /* The trend line / dots are graphics: the lower 3:1 bar, same token. */
     assert.ok(contrastRatio(okText, theme.card) >= 3, `${theme.name} trend line is below 3:1`);
   }
   assert.ok(source.includes('.project-flow-trendLineDone{stroke:var(--project-flow-ok-text);}'), 'trend done line must use the token');
   assert.ok(source.includes('.project-flow-chip--ok{color:var(--project-flow-ok-text);}'), 'ok chip must use the token');
   assert.ok(source.includes('.project-flow-chip--warn{color:var(--project-flow-warn-text);}'), 'warn chip must use the token');
+  assert.ok(source.includes('.project-flow-chip--error{color:var(--project-flow-error-text);}'), 'error chip must use the error token');
+  assert.ok(source.includes('.project-flow-chip--hb-working{color:var(--project-flow-ok-text);}'), 'hb-working must use the ok token');
+  assert.ok(source.includes('.project-flow-chip--hb-idle{color:var(--project-flow-warn-text);}'), 'hb-idle must use the warn token');
+  assert.ok(source.includes('.project-flow-chip--hb-missed{color:var(--project-flow-error-text);}'), 'hb-missed must use the error token');
+  /* The host state-* primaries (and `opacity`) are still reachable: pin the
+     three dimmed chips to a plain token, since opacity composites the text
+     towards the chip background and drops the light-theme ratio to 2.8-3.7:1. */
+  for (const selector of ['.project-flow-chip--muted', '.project-flow-chip--hb-done', '.project-flow-chip--hb-dead']) {
+    const rule = source.split('\n').find((line) => line.startsWith(selector + '{'));
+    assert.ok(rule, selector + ' rule missing');
+    assert.ok(!/opacity\s*:/.test(rule), selector + ' must not dim text with opacity (P1-2)');
+    assert.ok(rule.includes('color:var(--dsw-alias-label-secondary);'), selector + ' must keep the secondary label colour');
+  }
+  assert.ok(
+    source.includes('.project-flow-chip--hb-dead{color:var(--dsw-alias-label-secondary);text-decoration:line-through;}'),
+    'hb-dead keeps the strike-through as a non-colour cue'
+  );
   assert.ok(!/--dsw-alias-[a-z0-9-]+\s*:/.test(source), 'the plugin must not redeclare a host alias');
 });
 
 check('PanelView: aria-busy tracks refreshing, and the live region only writes on a transition', () => {
   const view = probe.normalize(panelViewPayload());
+  /* P1-3: `.project-flow-view` holds [srOnly status, body]; the body div — NOT
+     the outer element — carries aria-busy, so the live region is a SIBLING of
+     the busy subtree (AT may defer changes inside a busy subtree). */
+  const busyHost = (tree) => {
+    const outer = collect(tree, 'project-flow-view')[0];
+    assert.equal(outer.props['aria-busy'], undefined, 'aria-busy must not sit on the element that contains the live region');
+    const host = (outer.children || []).find(
+      (child) => child && child.props && Object.prototype.hasOwnProperty.call(child.props, 'aria-busy')
+    );
+    assert.ok(host, 'the inner body div carrying aria-busy is missing');
+    assert.deepEqual(collect(host, 'project-flow-srOnly'), [], 'the live region must not be inside the busy subtree');
+    return host;
+  };
   const render = (extra = {}) =>
     renderWithState(probe.PanelView, panelViewProps(view, extra), { reset: Object.keys(extra).length === 0 });
   render(); // establish the idle baseline
   const idle = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
-  assert.equal(collect(idle, 'project-flow-view')[0].props['aria-busy'], undefined, 'idle is not busy');
+  assert.equal(busyHost(idle).props['aria-busy'], undefined, 'idle is not busy');
   assert.equal(textOf(collect(idle, 'project-flow-srOnly')[0]), '', 'the live region starts empty');
 
   const busy = renderWithState(probe.PanelView, panelViewProps(view, { refreshing: true }));
-  assert.equal(collect(busy, 'project-flow-view')[0].props['aria-busy'], true, 'refreshing must set aria-busy');
+  assert.equal(busyHost(busy).props['aria-busy'], true, 'refreshing must set aria-busy');
   assert.equal(textOf(collect(busy, 'project-flow-srOnly')[0]), '正在刷新…');
   const stillBusy = renderWithState(probe.PanelView, panelViewProps(view, { refreshing: true }));
   assert.equal(textOf(collect(stillBusy, 'project-flow-srOnly')[0]), '正在刷新…', 'a repeat render keeps the same text (no rewrite)');
 
   const settled = renderWithState(probe.PanelView, panelViewProps(view));
-  assert.equal(collect(settled, 'project-flow-view')[0].props['aria-busy'], undefined);
+  assert.equal(busyHost(settled).props['aria-busy'], undefined);
   assert.equal(textOf(collect(settled, 'project-flow-srOnly')[0]), '已更新', 'settling announces once');
   const failed = renderWithState(probe.PanelView, panelViewProps(view, { failed: true }));
   assert.equal(textOf(collect(failed, 'project-flow-srOnly')[0]), '读取失败');
   const live = collect(failed, 'project-flow-srOnly')[0];
   assert.equal(live.props.role, 'status');
   assert.equal(live.props['aria-live'], 'polite');
+
+  /* P1-1 regression: retrying after a failure sets refreshing while the stale
+     error is still present. `refreshing` must win the phase race, otherwise the
+     phase never leaves 'error' and the start of the retry is never announced. */
+  const retry = renderWithState(probe.PanelView, panelViewProps(view, { refreshing: true, failed: true }));
+  assert.equal(busyHost(retry).props['aria-busy'], true, 'a retry after an error is busy');
+  assert.equal(
+    textOf(collect(retry, 'project-flow-srOnly')[0]),
+    '正在刷新…',
+    'refreshing must outrank a stale failure, so the retry announces its start'
+  );
 });
 
 check('UI state: grouping/expansion is cached per root and restored on the way back', () => {
