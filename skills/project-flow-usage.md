@@ -2,20 +2,37 @@
 
 技能名：`project-flow-usage`。用 `flow` CLI 维护 `.dsh/flow/` 里的实验、任务与门禁；
 面板读同一份 store（唯一写动作是未初始化空态上的「初始化」按钮，同样走 core）。
-所有命令都接受全局 `--root <dir>` 与 `--json`。
+所有命令都接受全局 `--root <dir>` 与 `--json`，但**必须写在子命令之前**：
+`flow --root /path/to/proj task list`，不是 `flow task list --root ...`（放后面会被当成
+子命令参数丢掉，命令随即报「未初始化」）。
 
 ## 实验：生命周期与谱系
 
 状态：`open`（新建默认）→ `confirmed` | `refuted`，任何阶段可改 `abandoned`。
 一次实验一条记录，用 `metrics` 存结构化数字，`measured` 存一句话结论。
 
-```bash
-# 新建（id 自动生成 E-YYYYMMDD-NN）
-flow exp add --title "focus 归一化降 tie" --hypothesis "归一化后 tie_mean<=1.0" \
-  --factor focus/normalize --expected "tie_mean<=1.0" --scale small
+`exp add` 对新记录有**七个必填字段**（`CONTRACT §3.1`）：`--direction`、`--expected`、
+`--primary-metric`、`--guardrail`（可重复，至少一次）、`--falsify`、`--window-days`（正整数）、
+`--stop-loss`；外加 `--title` 与 `--hypothesis`。缺一个即 `invalid`。
 
-# 在父实验下开子实验（parent 必须已存在）
-flow exp add --title "调 PI 增益" --parent E-20261028-01 --factor focus/pi
+```bash
+# 新建（id 自动生成 E-YYYYMMDD-NN）；下面是最小可用的完整形态
+flow exp add --title "focus 归一化降 tie" \
+  --direction "focus 归一化后对比度是否下降" \
+  --hypothesis "归一化后 tie_mean<=1.0" \
+  --expected "tie_mean<=1.0" \
+  --primary-metric tie_mean \
+  --guardrail tie_max \
+  --falsify "tie_mean>1.0" \
+  --window-days 7 \
+  --stop-loss "tie_mean>2.0 连续两天" \
+  --factor focus/normalize --scale small
+
+# 在父实验下开子实验（parent 必须已存在）；七个必填字段同样要带全
+flow exp add --title "调 PI 增益" --parent E-20261028-01 --factor focus/pi \
+  --direction "PI 增益对收敛速度的影响" --hypothesis "增益 2x 后 step 减少 30%" \
+  --expected "steps<0.7*基线" --primary-metric steps --guardrail tie_max \
+  --falsify "steps>=0.7*基线" --window-days 7 --stop-loss "连续两次发散"
 
 # 记录结果并判定
 flow exp update E-20261028-01 --measured "tie_mean=0.4" \
