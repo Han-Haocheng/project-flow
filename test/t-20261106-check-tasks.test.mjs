@@ -394,3 +394,20 @@ test('D6：map 里既有未知 id 又有已有 type 的键 → 两条 warning �
   assert.ok(flat.includes('type-map-unused: T-20260101-02'), flat)
   assert.ok(flat.includes('type-map-unknown-id: T-20990101-01'), flat)
 })
+
+// ------------------------------------------- P1-1：未初始化的 root 必须 usage(2)
+
+test('P1-1：未初始化的 root 走 usage(exit 2)，不把「没有台账」报成「台账很干净」', () => {
+  // review-core 在 task-10 里发现的缺口：`normalizeTaskFormat({fix:false})` 对空目录返回
+  // `{ok:true, issues:[]}`，若不先拦，门禁会把"根本没台账"报成"零 issue"——假绿。
+  // 兄弟检查 `check decisions`/`check experiments` 同样场景都返回 2（CONTRACT §6.2）。
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-check-tasks-uninit-'))
+  TEMP_ROOTS.push(bare)
+  const result = runCli(bare, ['--root', bare, 'check', 'tasks', '--json'])
+  assert.equal(result.code, 2, `未初始化应为 exit 2，实际 ${result.code}：${JSON.stringify(result.json)}`)
+  assert.equal(result.json.ok, false)
+  assert.equal(result.json.error.code, 'usage')
+  assert.match(result.json.error.message, /run flow init first/)
+  // 未初始化时也不得创建 store。
+  assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
+})

@@ -2055,6 +2055,10 @@ function runCheckTasks(ctx) {
   const { core } = ctx
   const loaded = core.loadContract(ctx.root)
   collectWarnings(loaded.warnings)
+  // P1-1（review-core）：未初始化的 root 必须走 usage(exit 2)，与 CONTRACT §6.2 及兄弟检查
+  // `check decisions`/`check experiments` 一致。`normalizeTaskFormat({fix:false})` 对空目录
+  // 返回 `{ok:true, issues:[]}`，若不先拦，门禁会把"根本没台账"报成"台账很干净"——假绿。
+  core.assertInitialized(ctx.root)
   const mapPath = readString(ctx.flags, 'type-map')
   const typeById = mapPath === undefined ? {} : loadTypeMap(ctx.root, mapPath)
   if (mapPath !== undefined) warnTypeMapExtras(core, ctx.root, loaded.contract, typeById)
