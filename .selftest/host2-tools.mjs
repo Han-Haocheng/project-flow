@@ -593,10 +593,20 @@ function registerChildAgent(agent) {
   liveAgents.set(agent.id, agent)
 }
 
-/** Drive the registered pre-step reminder hook with a synthetic decision. */
-async function runPreStep(agent, turn = 1, step = 1) {
+/**
+ * Drive the registered pre-step reminder hook with a synthetic decision.
+ *
+ * `options.decision` overrides the `next()` result so the hook's own early
+ * returns can be exercised; `options.nextThrows` makes `next()` reject.
+ */
+async function runPreStep(agent, turn = 1, step = 1, options = {}) {
   if (preStepHandlers.length === 0) return null
-  return preStepHandlers[0]({ agent, step, turn }, async () => ({ kind: 'enter', messages: [] }))
+  const decision = Object.hasOwn(options, 'decision') ? options.decision : { kind: 'enter', messages: [] }
+  const next = async () => {
+    if (options.nextThrows === true) throw new Error('next() rejected by fixture')
+    return decision
+  }
+  return preStepHandlers[0]({ agent, step, turn }, next)
 }
 
 const hbRootAgent = mockAgent('session-hb-root', storeRoot)
@@ -1315,6 +1325,113 @@ check(
 )
 
 // H13 is the existing "pre-step: subagent is not reminded" assertion above.
+
+// ------------------------- pre-step early returns (H17-H19), task-34
+//
+// The hook in `index.js` has three early returns that no fixture used to reach:
+//   (1) `decision.kind !== 'enter'`  -> return the decision untouched
+//   (2) `step !== 0 && step !== 1`   -> only the first step of a turn reminds
+//   (3) the handler's own `catch`    -> a throwing decision must never escape
+// Each fixture needs a session that WOULD be reminded, so that a passing
+// "no reminder" proves the branch ran and not just an uninteresting session.
+// The probes below are what make that distinction: only the branch under test
+// explains the observed result.
+
+/** A root session with a pending decision: this is the configuration the hook DOES remind for. */
+function remindableAgent(label, id) {
+  const root = reminderRoot(label)
+  const agent = mockAgent(id, root)
+  registerRootAgent(agent)
+  const item = askFixture(root, agent, { asked_turn: 1 })
+  return { agent, item, root }
+}
+
+// --- H17: a non-`enter` decision is returned untouched ---------------------
+{
+  const { agent, item } = remindableAgent('early-nonenter', 'session-early-nonenter')
+  // Baseline probe: same session, step 1, `enter` -> the hook DOES remind.
+  // Without this the negative assertion below would also pass for a broken hook.
+  const baseline = await runPreStep(agent, 1, 1)
+  check(
+    'H17 baseline: the same session IS reminded on an enter decision',
+    reminderText(baseline).includes(item.id),
+    JSON.stringify(reminderText(baseline)),
+  )
+  const blocked = { kind: 'block', messages: [] }
+  const result = await runPreStep(agent, 1, 1, { decision: blocked })
+  check(
+    'H17 non-enter: decision.kind!==enter returns the decision with no reminder added',
+    result === blocked && Array.isArray(result.messages) && result.messages.length === 0,
+    JSON.stringify(result),
+  )
+  check(
+    'H17 non-enter: identity is preserved, not a copy',
+    result === blocked,
+    result === blocked ? 'same reference' : 'hook built a new object',
+  )
+}
+
+// --- H18: only step 0 and step 1 of a turn may remind ----------------------
+{
+  const { agent, item } = remindableAgent('early-step', 'session-early-step')
+  for (const step of [0, 1]) {
+    const text = reminderText(await runPreStep(agent, 1, step))
+    check(`H18 step ${step}: the first step DOES remind`, text.includes(item.id), text)
+  }
+  for (const step of [2, 3, 7]) {
+    const result = await runPreStep(agent, 1, step)
+    const messages = Array.isArray(result?.messages) ? result.messages : []
+    check(
+      `H18 step ${step}: a later step is NOT reminded`,
+      result !== null && messages.length === 0,
+      JSON.stringify(messages),
+    )
+  }
+}
+
+// --- H19: the handler's catch absorbs a throwing decision ------------------
+{
+  const { agent } = remindableAgent('early-catch', 'session-early-catch')
+  // A getter that throws on access to `messages` blows up inside the hook's
+  // own try block (`Array.isArray(decision.messages)` at index.js).
+  const explosive = { kind: 'enter' }
+  Object.defineProperty(explosive, 'messages', {
+    get() {
+      throw new Error('fixture: messages getter exploded')
+    },
+    enumerable: true,
+  })
+  let escaped = null
+  let result
+  try {
+    result = await runPreStep(agent, 1, 1, { decision: explosive })
+  } catch (error) {
+    escaped = error
+  }
+  check(
+    'H19 catch: a throwing decision never escapes the hook',
+    escaped === null,
+    escaped === null ? 'absorbed' : `escaped: ${escaped.message}`,
+  )
+  check(
+    'H19 catch: the hook still returns the original decision',
+    result === explosive,
+    result === explosive ? 'same reference' : `got ${JSON.stringify(result)}`,
+  )
+  // `next()` itself rejecting is the other way into the same contract: the
+  // hook must not crash the host loop.
+  let nextEscaped = null
+  try {
+    await runPreStep(agent, 1, 1, { nextThrows: true })
+  } catch (error) {
+    nextEscaped = error
+  }
+  check(
+    'H19 catch: a rejecting next() propagates (upstream contract, documented)',
+    nextEscaped !== null && String(nextEscaped.message).includes('next() rejected by fixture'),
+    nextEscaped === null ? 'swallowed' : 'propagated as expected',
+  )
+}
 
 // ------------------------------------- payload decisions section (H14-H16)
 
