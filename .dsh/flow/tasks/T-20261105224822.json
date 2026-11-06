@@ -14,7 +14,9 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "",
+  "notes": "2026-11-06 分析完成（analyst-check，任务书 `.dsh-ops/briefs/brief-check-tasks.md` 557 行），Lead 采纳其 §0 全部推荐：\n\nD1 check tasks **永远只读**、不带 --fix（check 只读纪律在 bin/flow.mjs:6/:102、lib/checks.mjs:1、CONTRACT:838 四处明文）。\nD2 写盘独立为 `flow task normalize`（--type-map / --dry-run）。\nD3 typeById 通道 = `--type-map <file.json>`（CLI 文件参数），坏形态 exit 2 usage。\nD4 未给 map 的 missing-type 一律保留 issue、exit 1、绝不猜（用户口径：AI 推断后全部列出待确认）。\nD5 map 非法枚举 exit 2（配置错与台账脏分开报）。D6 map 多余 key/已有 type → warning 不阻断。\nD7 草稿放 `.dsh-ops/type-map.json`（未跟踪），结果进 `.dsh/flow/`。\nD9 precommit 接在 `tasks-archive` 之后作第 4 步 tasks-format（归档会先跑，门禁必须最后看）。\nD10 不做 --allow-legacy 基线（基线=永久合法欠账）。\nD11 落地顺序 P0 检查器 → P1 归一命令 → P2 候选+用户确认 → P3 台账归零 → P4 改 precommit.json（P4 只含该文件、可单独 revert）。\nD12 flow init 种子本卡不加此步。\n\n分片：A（exec-check，bin/flow.mjs + CONTRACT §5.1/§6.1 + test/checks.test.mjs）与 B（task normalize）**必须串行**（同改 bin/flow.mjs 的 SPEC/cmdTask/cmdCheck）。验收 A1–A10 / B1–B9 / C1–C13。\n\n自查数据（以实测为准，不硬编码）：50 个任务文件（含本卡与 T-20261106124556），91 issues = legacy-goal 49 + missing-type 42，且**42 条 missing-type 全部同时带 legacy-goal**，所以必须每条都给 type-map 才能清零。\n\n42 条缺 type 的推断清单已在 `.dsh-ops/tools/type-inference-42.md`（按标题语义 + 自带前缀），待用户确认后生成 `.dsh-ops/type-map.json`。\n\n事故披露：分析者为探测 fix:true 边界，一条 `cd` 未生效导致 normalizeTaskFormat({fix:true}) 在仓库根跑了一次，改写真实台账 49 个文件（删 goal/并 title/补 parent:null）；已用只读 `git show HEAD:` 比对确认变换精确，按 HEAD 字节写回并删除临时脚本；Lead 复核 `git status` 仅 `?? .dsh-ops/`、`git diff` 0 行、50 文件全在 → 已完全恢复。教训：fix 类验证一律显式 `--root`，不依赖 cd。",
   "created_at": "2026-11-05T22:48:22+08:00",
-  "updated_at": "2026-11-05T22:48:22+08:00"
+  "updated_at": "2026-11-06T13:19:14+08:00",
+  "done_at": null,
+  "archived_at": null
 }
