@@ -277,6 +277,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
      `null`/`''` 时才会抛错并被跳过。两条路径都是 `fixed` 无该条 + `ok:false`。
   迁移**不刷新** `updated_at`（格式归一不是编辑，不得重排「最近完成」），也不动 `done_at`/
   `archived_at`。
+  **CLI 通道**：写盘只走 `flow task normalize [--type-map <file.json>] [--dry-run]`（§5.1），
+  `--type-map` 是 `{ "<T-id>": "<type>" }` 草稿文件（`.dsh-ops/`、不进库），任何坏形态
+  （不存在/坏 JSON/非对象/值非十枚举）一律用法错误、早于 core 调用；`--dry-run` 走
+  `fix:false`（不取锁、零写盘、恒 exit 0）。`flow check tasks` 只读、不带 `--fix`，
+  所以带合法 map **也不会**消掉 `missing-type`（只改变 `suggestion` 文案）；清零必须真跑本条命令。
 - **`parent`（可选，T-13）**：父任务 id，与 `experiment` 同一宽松引用规则
   （`^[A-Za-z][A-Za-z0-9_.-]{1,60}$`）；`null`/空串 = 根；CLI 传
   `task add|update --parent <T-id>`，`--parent ''` / `none` / `null` 清空为根
@@ -710,6 +715,9 @@ flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archi
                  # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
 flow task rm <id> [--yes]
 flow task archive [--older-than N] [--dry-run]
+flow task normalize [--type-map <file.json>] [--dry-run]
+                 # 归一旧记录：goal 并入 title、按 map 补 type；--dry-run 只报告不改盘，
+                 # 恒 exit 0（报告不是门禁）。写盘成功 → exit 0，残留见 data.ok:false。
 
 flow gate list | show <id>
 flow gate add    --id SLUG --title T --phase commit|release|manual

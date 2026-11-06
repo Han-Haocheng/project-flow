@@ -55,6 +55,8 @@ const USAGE = `project-flow CLI（schema 2）
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
+  task normalize [--type-map <file.json>] [--dry-run]
+          归一旧记录：goal 并入 title、按 map 补 type（--dry-run 只报告不改盘；不会猜 type）
   task rm <id> [--yes]
 
   gate list | show <id>
@@ -202,6 +204,7 @@ export const SPEC = Object.freeze({
     add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent'] },
     update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent'] },
     archive: { flags: ['older-than', 'dry-run'] },
+    normalize: { flags: ['type-map', 'dry-run'] },
     rm: { flags: ['id', 'yes'] },
   }),
   gate: Object.freeze({
@@ -1150,7 +1153,7 @@ function readParentFlag(flags, core) {
 
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|rm>')
+  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|normalize|rm>')
   const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
@@ -1245,6 +1248,11 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
+  if (sub === 'normalize') {
+    // 写盘通道与只读门禁（check tasks）分开：--dry-run 只报告，真跑在 core 写锁内迁移。
+    return runTaskNormalize(ctx)
+  }
+
   if (sub === 'rm') {
     const id = requireString(flags, 'id', '用法: flow task rm <id> [--yes]')
     await confirmDelete(ctx, `任务 ${id}`)
@@ -1253,7 +1261,7 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|rm）`)
+  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|normalize|rm）`)
 }
 
 async function cmdGate(ctx, sub) {
@@ -2097,6 +2105,122 @@ function runCheckTasks(ctx) {
     typeMap,
   }
   throw error
+}
+
+// ---------------------------------------------------------------- 任务格式归一
+
+/** 合并后的 title 超过这个宽度就提示复查（面板首行是 `type: title`，§9.1.4）。 */
+const TASK_TITLE_REVIEW_WIDTH = 120
+
+/**
+ * 待迁移记录在写盘后的 `title` 预览，按 `normalizeTaskRecord` 的同一条规则算
+ * （只有 goal 非空、title 非空且两者不同才合并）。用于 `--dry-run` 的变更对照与
+ * 长标题统计，不写盘。
+ */
+function plannedTaskTitle(record) {
+  const title = typeof record.title === 'string' ? record.title.trim() : ''
+  const goal = typeof record.goal === 'string' ? record.goal.trim() : ''
+  if (goal === '' || title === '' || goal === title) return null
+  return `${title} — ${goal}`
+}
+
+/** 文本显示宽度（CJK 记 2 列），用于判断合并后的 title 会不会顶掉面板布局。 */
+function displayWidthOf(text) {
+  let width = 0
+  for (const char of String(text)) {
+    width += /[\u1100-\u115F\u2E80-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(char) ? 2 : 1
+  }
+  return width
+}
+
+/**
+ * `flow task normalize`: the only write path for legacy task format (`goal` merge /
+ * `type` backfill), kept deliberately separate from `check tasks` so the gate family
+ * stays read-only. `--dry-run` is a report: `fix:false`, no lock, no write, exit 0.
+ * Never guesses `type` — a record without a mapping stays unfixed and is reported.
+ */
+async function runTaskNormalize(ctx) {
+  const { core } = ctx
+  const contract = loadContractFor(ctx, ctx.root)
+  const dryRun = ctx.flags['dry-run'] === true
+  const mapPath = readString(ctx.flags, 'type-map')
+  const typeById = mapPath === undefined ? {} : loadTypeMap(ctx.root, mapPath)
+  if (mapPath !== undefined) warnTypeMapExtras(core, ctx.root, contract, typeById)
+
+  // 预览用只读一遍（`fix:false` 不取锁）：--dry-run 直接用它，真跑用它算「写盘后还剩什么」。
+  const planned = core.normalizeTaskFormat(ctx.root, contract, { fix: false, typeById })
+  let result = planned
+  let landed = []
+  if (dryRun === false) {
+    result = core.normalizeTaskFormat(ctx.root, contract, { fix: true, typeById })
+    landed = Array.isArray(result.fixed) ? result.fixed : []
+  }
+  drainCoreWarnings()
+
+  const records = new Map()
+  for (const record of core.listTasks(ctx.root, contract)) {
+    if (typeof record?.id === 'string') records.set(record.id, record)
+  }
+  const ratio = (kind) => result.issues.filter((item) => item.kind === kind).length
+  const counts = { 'legacy-goal': ratio('legacy-goal'), 'missing-type': ratio('missing-type') }
+  const remaining = { 'legacy-goal': 0, 'missing-type': 0 }
+  if (dryRun === false) {
+    // 写盘后的真实残留（core 的 ok 就是这个判定）：直接问一遍盘上状态，不自己推。
+    const after = core.normalizeTaskFormat(ctx.root, contract, { fix: false, typeById })
+    for (const item of after.issues) remaining[item.kind] = (remaining[item.kind] ?? 0) + 1
+  }
+
+  const lines = []
+  const longTitles = []
+  if (planned.issues.length === 0) {
+    lines.push('（没有待迁移的旧记录）')
+  } else if (dryRun) {
+    for (const id of [...new Set(planned.issues.map((item) => item.id))]) {
+      const record = records.get(id)
+      const merged = plannedTaskTitle(record ?? {})
+      const current = typeof record?.type === 'string' ? record.type.trim() : ''
+      const mapped = typeById[id] === undefined ? null : typeById[id]
+      const parts = [`${id}`]
+      parts.push(merged === null ? '删 goal 键' : `title: ${JSON.stringify(record?.title ?? '')} → ${JSON.stringify(merged)}`)
+      // 已有 type 的记录永不被 map 穿透（CONTRACT §3.2 规则 3）：只有真缺 type 才提补齐。
+      if (current === '') parts.push(mapped === null ? 'type 仍缺（map 未覆盖）' : `type → ${JSON.stringify(mapped)}`)
+      else parts.push(`type ${JSON.stringify(current)} 不动`)
+      lines.push(`· ${parts.join(' · ')}`)
+      if (merged !== null && displayWidthOf(merged) > TASK_TITLE_REVIEW_WIDTH) {
+        longTitles.push({ id, width: displayWidthOf(merged), title: merged })
+      }
+    }
+    lines.push(`将归一 ${new Set(planned.issues.map((item) => item.id)).size} 条：legacy-goal ${counts['legacy-goal']} · missing-type ${counts['missing-type']}（--dry-run：未写盘）`)
+  } else {
+    for (const id of landed) lines.push(`✓ 已归一 ${id}`)
+    lines.push(`已归一 ${landed.length} 条（legacy-goal ${counts['legacy-goal']} · missing-type ${counts['missing-type']}）`)
+    const left = remaining['legacy-goal'] + remaining['missing-type']
+    if (left > 0) {
+      lines.push(`仍有 ${left} 条待处理（legacy-goal ${remaining['legacy-goal']} · 缺 type：${remaining['missing-type']} 条）`)
+      if (remaining['missing-type'] > 0) {
+        lines.push('补 type 后再跑：flow task normalize --type-map <file.json>（不会替你猜 type）')
+      }
+    }
+  }
+  if (longTitles.length > 0) {
+    lines.push(`⚠ 合并后 title 超过 ${TASK_TITLE_REVIEW_WIDTH} 列 ${longTitles.length} 条（面板首行是 type: title，请复查）：`)
+    for (const item of longTitles) lines.push(`  ⚠ ${item.id} ${item.width} 列 ${clip(item.title, 60)}`)
+  }
+  const stdout = lines.join('\n')
+  if (!ctx.json) {
+    for (const line of lines) out(line)
+  }
+  return {
+    fix: dryRun !== true,
+    dryRun,
+    ok: remaining['legacy-goal'] + remaining['missing-type'] === 0,
+    issues: result.issues,
+    fixed: landed,
+    counts,
+    remaining: dryRun ? null : remaining,
+    longTitles: longTitles.map((item) => item.id),
+    typeMap: mapPath ?? null,
+  }
 }
 
 // ---------------------------------------------------------------- 展示辅助
