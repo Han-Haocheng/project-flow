@@ -45,6 +45,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/capture.mjs` | P1 捕获流水线：`agent/pre-step` 只做内存的排除/集合差去重，`agent/turn-stopping` 才落盘（`source.key` 跨进程去重、创建即推进 `queued-analysis`）；同时产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入，宿主无 core 时捕获自然降级） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
+| `lib/team-sync.mjs` | P3a **只读**团队板对账：`readTeamBoard(ctx, agent)`（真实宿主 API 以 `caller` 为授权凭据）与 `reconcile`（matched/missing/orphaned，零写入）；**不映射** `TeamTaskView.status` 与九阶段 | `index.js`（工具/面板读路径） |
+
 | `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
 | `lib/plugin/*.mjs` | 子插件挂载骨架（`mount`）与共享参数（`shared`） | `tasks.js`/`gates.js`/`experiments.js` |
 | `client.js` | 浏览器 bundle：**零 import、无构建步骤**，因此不能放进 `lib/` | 面板 |
@@ -1818,3 +1820,31 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
 - 面板**只读**：不新增 HTTP 写端点、不调工具、不写 store；「复制回答串」在浏览器端拼接
   `flow decision answer <id> --choice <推荐值>`（取值顺序 `recommendation` → `default` →
   首个 option id；`input` 类型用引号包裹自由文本），回答由用户粘回会话或直接在 CLI 执行。
+
+## 10 团队同步（P3a：只读对账）
+
+**宿主契约以 typings 为准，不是方案草图。** `ctx.agentTeams` 的读方法是
+`listTasks(caller: Agent)` 与 `listMembers(agent: Agent)`——`caller` 是**授权凭据**
+（宿主 JSDoc 原文 "exact live Agent used as the authority credential"），不是可选参数。
+缺失时 `readTeamBoard` 返回 `{ok:false, reason:'no-caller'}`，**不猜一个 agent 硬读**。
+
+- **`team` 字段（台账）**：`{ taskId: string, revision: number, owner: string|null, syncedAt: string }`。
+  进 `TASK_CREATE_KEYS`；**不进** `TASK_UPDATABLE_KEYS`（插件同步，会话不可写）——update 带
+  `team` 一律 `invalid: task team cannot be changed`（值没变也算改）。存量记录无此字段，读写行为不变。
+- **`lib/team-sync.mjs`**：
+  - `readTeamBoard(ctx, agent)` → `{ok:true, members, tasks}`（行归一化：id/revision/subject/status/
+    owner/blockedBy/writeScopes；Promise 视为契约不匹配）或 `{ok:false, reason}`，reason ∈
+    `no-team-service` / `no-caller` / `bad-team-board` / `async-team-service` / `team-service-error`，
+    **从不抛**。
+  - `reconcile(root, contract, board)` → `{matched, missing, orphaned}`：`matched`/`missing` 是**台账
+    任务 id**（"我的哪些任务对上了/丢了"），`orphaned` 是**板上 id**（哪些板任务没人认领）。板上
+    不可用时三类都为空——**"未知"不是"全丢"**。**只读**：不写台账、不写团队板、不删记录；证明
+    方式是跑完前后台账文件的 mtime 与 sha256 **不变**。
+  - **不映射** `TeamTaskView.status`（`pending|in_progress|completed|deleted`）与九阶段：两套枚举
+    的对应是 P3b 的语义决定，现在映射就是猜。
+- **状态块 `team`**：`{available, members, tasks, linked, missing, orphaned}`；无团队服务时
+  `available:false` 且 `members/tasks` 保留 0——**"读不到"与"没有"必须能区分**。CLI 进程没有
+  `ctx.agentTeams`，因此 CLI 的 `--json` 恒 `available:false`（诚实降级，不假装 0）。
+- **面板**：任务卡底行 `团队 N 成员 · M 张共享任务 · K 条未关联`（`linked/missing/orphaned` 来自
+  `reconcile`）；`available:false` 时**整行不渲染**（不是显示 0）。不新增任务行键（14 键契约不动）。
+
