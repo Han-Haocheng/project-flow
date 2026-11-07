@@ -70,7 +70,14 @@ test('平铺技能 A2：解析结果非空且不是占位符（防空 frontmatte
       assert.ok(!/^(tbd|todo|xxx|n\/a)$/i.test(value.trim()), `skills/${name}.md 的 ${key} 是占位符：${value}`)
     }
     // when-to-use 应当说明"何时用"，不是一句 description 的复制粘贴。
-    assert.match(front.whenToUse, /[Uu]se when|何时|当项目|when the user/, `${name} 的 when-to-use 不像"何时用"说明`)
+    // 「当用户」是中文里最常见的"何时用"引导语（task-61 中文化后 usage 技能正是这种写法），
+    // 原正则只收了「当项目」——那是收录不全，补上它是修正断言的覆盖面，不是放宽标准：
+    // 这条仍然要求出现一个**引导语**，光有内容、没有"何时"语气的句子照样红。
+    assert.match(
+      front.whenToUse,
+      /[Uu]se when|何时|当项目|当用户|当在|when the user/,
+      `${name} 的 when-to-use 不像"何时用"说明`,
+    )
   }
 })
 
@@ -131,4 +138,22 @@ test('平铺技能 A5：解析规则对形状敏感（whenToUse 驼峰会解析�
   assert.equal(readSkillFrontmatter(camel).whenToUse, '', 'whenToUse（驼峰）不应被识别——那是错误形状')
   const kebab = '---\ndescription: A\nmetadata:\n  when-to-use: B\n---\n# x\n'
   assert.equal(readSkillFrontmatter(kebab).whenToUse, 'B', 'when-to-use（连字符）应被识别')
+})
+
+/** 三个技能各自的元数据文件（两个平铺 + 一个目录技能）。 */
+const ALL_SKILL_FILES = [
+  ...FLAT_SKILLS.map((name) => ({ name, file: path.join(REPO, 'skills', `${name}.md`) })),
+  { name: 'ai-collaborative-dev-workflow', file: path.join(REPO, 'skills', 'ai-collaborative-dev-workflow', 'SKILL.md') },
+]
+
+test('技能 A7：三个技能的 description 与 when-to-use 都必须是中文', () => {
+  // T-20261030-24（用户 2026-10-30 已确认）：三个技能的 description / when-to-use 统一中文。
+  // A1/A2 只断言"非空、不相同"，抓不到"被改回英文"——那条改动在它们眼里完全合法。
+  // 这条守住语言本身：六个值（3 技能 × 2 键）每个都要含汉字。
+  const CJK = /[\u4e00-\u9fff]/
+  for (const { name, file } of ALL_SKILL_FILES) {
+    const front = readSkillFrontmatter(fs.readFileSync(file, 'utf8'))
+    assert.match(front.description, CJK, `${name} 的 description 不是中文（需含汉字）`)
+    assert.match(front.whenToUse, CJK, `${name} 的 when-to-use 不是中文（需含汉字）`)
+  }
 })

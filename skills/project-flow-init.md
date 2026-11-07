@@ -1,7 +1,7 @@
 ---
-description: Initialize a project to the .dsh/flow store (schema 2) and inspect the resulting layout.
+description: 给一个项目建立 `.dsh/flow/` 流程台账（schema 2，实验 / 任务 / 门禁），并查看生成的目录结构。
 metadata:
-  when-to-use: Use when the project has no `.dsh/flow/flow.json`, when the user asks to set up project flow, when a project was copied in WITH an existing `.dsh/flow/` (run `flow status` first, do NOT re-init), or when flow tools report a missing store or legacy `.agents/tasks/` / `Exp-Id` trailer history that has not been migrated.
+  when-to-use: 当项目还没有 `.dsh/flow/flow.json`、用户要求搭建 project flow、项目从别处拷来但已带 `.dsh/flow/`（先跑 `flow status` 确认，不要重新 init）、或 flow 工具报缺少台账 / 存在尚未迁移的旧 `.agents/tasks/` 与 `Exp-Id` trailer 历史时使用。
 ---
 # project-flow-init
 

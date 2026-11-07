@@ -1,7 +1,7 @@
 ---
-description: Record and inspect experiments, tasks and gates through the flow CLI and the flow_* tools.
+description: 通过 `flow` CLI 与 `flow_*` 工具记录和查看可证伪实验、任务与门禁。
 metadata:
-  when-to-use: Use when the user asks about project flow status, experiments, tasks or gates, or wants to record an experiment, task or gate run.
+  when-to-use: 当用户询问 project flow 状态、实验、任务或门禁，或想登记一次实验、一个任务、一次门禁运行时使用。
 ---
 # project-flow-usage
 
