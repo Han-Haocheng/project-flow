@@ -81,26 +81,47 @@ test('平铺技能 A3：SKILL_META 里这两个技能不再有 description/whenT
   const end = src.indexOf('\n]', start)
   const block = src.slice(start, end)
   for (const name of FLAT_SKILLS) {
-    // 取该条目所在的 `{ ... }` 片段（对象字面量不嵌套在这里）。
-    const at = block.indexOf(`name: '${name}'`)
-    assert.ok(at > 0, `SKILL_META 找不到 ${name}`)
-    const open = block.lastIndexOf('{', at)
-    const close = block.indexOf('}', at)
-    const entry = block.slice(open, close + 1)
+    const entry = skillMetaEntry(name)
     assert.doesNotMatch(entry, /\bdescription\s*:/, `SKILL_META.${name} 仍带 description（与 frontmatter 成双来源）`)
     assert.doesNotMatch(entry, /\bwhenToUse\s*:/, `SKILL_META.${name} 仍带 whenToUse（与 frontmatter 成双来源）`)
   }
 })
 
-test('平铺技能 A4：目录技能 ai-collaborative-dev-workflow 的 SKILL_META 元数据未被波及', () => {
+/** SN `SKILL_META` 里某个技能的条目文本（对象字面量，不嵌套）。 */
+function skillMetaEntry(name) {
   const src = fs.readFileSync(path.join(REPO, 'index.js'), 'utf8')
   const start = src.indexOf('const SKILL_META = [')
+  assert.ok(start > 0, 'index.js 找不到 SKILL_META')
   const block = src.slice(start, src.indexOf('\n]', start))
-  const at = block.indexOf("name: 'ai-collaborative-dev-workflow'")
-  assert.ok(at > 0, 'SKILL_META 找不到 ai-collaborative-dev-workflow')
-  const entry = block.slice(block.lastIndexOf('{', at), block.indexOf('}', at) + 1)
-  assert.match(entry, /\bdescription\s*:/, '目录技能的 description 不应被删（它靠 SKILL_META 兜底）')
-  assert.match(entry, /\bwhenToUse\s*:/, '目录技能的 whenToUse 不应被删')
+  const at = block.indexOf(`name: '${name}'`)
+  assert.ok(at > 0, `SKILL_META 找不到 ${name}`)
+  return block.slice(block.lastIndexOf('{', at), block.indexOf('}', at) + 1)
+}
+
+test('平铺技能 A4：目录技能 ai-collaborative-dev-workflow 的元数据也只有一个来源', () => {
+  // task-59：这里原先只断言"SKILL_META 里那两条元数据还在（未被波及）"——那是防止误删，
+  // 但没有断言**来源是否单一**。当时它实际是混合来源：description 走 SKILL.md 的
+  // frontmatter，whenToUse 走 SKILL_META，于是改 SKILL.md 里的"何时用"不生效。
+  // 现在两个键都必须在 SKILL.md 的 frontmatter 里，SKILL_META 只剩 name。
+  const skillMd = fs.readFileSync(path.join(REPO, 'skills', 'ai-collaborative-dev-workflow', 'SKILL.md'), 'utf8')
+  assert.match(skillMd, /^---\r?\n/, 'SKILL.md 必须以 frontmatter 开头')
+  const front = readSkillFrontmatter(skillMd)
+  assert.ok(front.description.length > 0, 'ai-collaborative-dev-workflow 的 description 必须来自 SKILL.md frontmatter')
+  assert.ok(front.whenToUse.length > 0, 'ai-collaborative-dev-workflow 的 when-to-use 必须来自 SKILL.md frontmatter（不是 SKILL_META）')
+  // 且 SKILL_META 里不能残留这两个键，否则又是双来源。
+  const entry = skillMetaEntry('ai-collaborative-dev-workflow')
+  assert.doesNotMatch(entry, /\bdescription\s*:/, 'SKILL_META 里仍有 description（与 frontmatter 成双来源）')
+  assert.doesNotMatch(entry, /\bwhenToUse\s*:/, 'SKILL_META 里仍有 whenToUse（与 frontmatter 成双来源）')
+})
+
+test('平铺技能 A6：三个技能的 SKILL_META 条目都只剩 name（无兜底残留）', () => {
+  // 全量扫而不是逐个点名：将来新增技能时，若有人又想"顺手在 SKILL_META 写一份"，
+  // 这条会先红，而不是等到某天发现改 md 不生效。
+  for (const name of [...FLAT_SKILLS, 'ai-collaborative-dev-workflow']) {
+    const entry = skillMetaEntry(name)
+    assert.doesNotMatch(entry, /\bdescription\s*:/, `SKILL_META.${name} 仍有 description`)
+    assert.doesNotMatch(entry, /\bwhenToUse\s*:/, `SKILL_META.${name} 仍有 whenToUse`)
+  }
 })
 
 test('平铺技能 A5：解析规则对形状敏感（whenToUse 驼峰会解析为空）', () => {

@@ -2117,26 +2117,31 @@ function registerTools(ctx, settings) {
 // ------------------------------------------------------------------- skills
 
 const SKILL_META = [
-  /* Flat skills (skills/<name>.md) carry their own frontmatter; `name` is the
+  /* Every skill carries its own metadata in its file frontmatter (flat
+     `skills/<name>.md`, or directory `skills/<name>/SKILL.md`); `name` is the
      only field here. Keeping description/whenToUse here too would be a second
      source of truth that silently loses to the frontmatter. */
   { name: 'project-flow-init' },
   { name: 'project-flow-usage' },
-  {
-    /* Directory layout: skills/<name>/SKILL.md plus references/, assets/, scripts/. */
-    name: 'ai-collaborative-dev-workflow',
-    description:
-      'Multi-agent (and single-agent) development workflow: project profiles, command contracts, quality gates, release cadence, session continuity, and collaboration discipline.',
-    whenToUse:
-      'Use when starting or resuming a development task in a long-maintained project, coordinating several agents or sessions, preparing a commit/release, or recovering after an interrupted session. Read its references only for the section you need.',
-  },
+  /* Directory layout: skills/<name>/SKILL.md plus references/, assets/, scripts/. */
+  { name: 'ai-collaborative-dev-workflow' },
 ]
 
 /**
  * Read the simple frontmatter of a skill file: the top-level `description` and
- * `when-to-use` inside the `metadata:` block. Only `key: value` scalars are
- * supported; folded/quoted multiline values are ignored so the SKILL_META
- * fallback still applies.
+ * `when-to-use` inside the `metadata:` block.
+ *
+ * This is a deliberately minimal YAML subset, NOT a YAML parser, and it fails
+ * SILENTLY in two ways that cost a whole debugging session each:
+ *  - the key must be exactly `metadata.when-to-use`; a camelCase `whenToUse`
+ *    parses to `''` with no error;
+ *  - only single-line `key: value` scalars are read. A value wrapped onto
+ *    continuation lines keeps its FIRST line and drops the rest, so a nicely
+ *    formatted multi-line `description:` silently becomes a truncated one.
+ *
+ * Every skill, flat or directory, now carries its metadata in its own file, so
+ * there is NO SKILL_META fallback left: a frontmatter value missed here reaches
+ * the model as `undefined`, not as a default. Keep every value on ONE line.
  */
 function readSkillFrontmatter(content) {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(content)

@@ -3,6 +3,7 @@ name: ai-collaborative-dev-workflow
 description: 通用 AI 协作开发工作流，只有一个流程：中心-贡献者（maintainer）模型。中心是集成权威——唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交按五条清单做合理性判定（accept / reject / request-rebase）；贡献者（子代理、队友、外部协作者、人）在自己分支产出可评审提交与证据，向中心提申请，不与其他贡献者协调、同步或互锁。仅依赖 shell 系统命令与 git（工具链命令由项目技能以"命令契约"声明）：提交归属纪律（pathspec 提交）、默认提交即写 CHANGELOG（项目可覆盖）、分支纪律（发布分支只接收合并）、发布节奏（git 基线计数阈值或里程碑 --force）、环境与协作陷阱。长期项目需处理多会话、上下文压缩、对话中断等连续性场景。最高硬性约束：代理有权也必须反驳和纠正用户提出的内容与建议，包括错误、不合理或不建议之处，并说明对未来项目的影响；普通任务说明后即可执行；本地可回退的操作（含 commit）不需要逐次确认，push 等不可逆或范围外操作仍需当次确认。适用于协调多个 AI 子代理/队友处理开发提交、版本发布节奏、协作环境问题排查；单人项目是"中心=唯一贡献者"的退化情形，仍跑门禁与 CHANGELOG 纪律，不是另一种模式。
 metadata:
   short-description: 中心-贡献者协作开发工作流
+  when-to-use: Use when starting or resuming a development task in a long-maintained project, coordinating several agents or sessions, preparing a commit/release, or recovering after an interrupted session. Read its references only for the section you need.
 ---
 
 # AI 协作开发工作流：中心-贡献者模型（通用版；仅系统命令与 git）
