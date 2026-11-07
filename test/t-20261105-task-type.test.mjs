@@ -31,6 +31,45 @@ const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
 const BIN_SOURCE = fs.readFileSync(BIN, 'utf8')
 const TEMP_ROOTS = []
 
+/**
+ * The `flags` array of one `SPEC.task.<command>` entry, parsed out of the CLI source.
+ *
+ * Why parse instead of matching a literal: the array's ORDER carries no meaning for
+ * the CLI (`VALUE_FLAGS` is set semantics), so pinning it as a literal would turn a
+ * harmless reordering — anyone sorting the list alphabetically — into a red test that
+ * blames the wrong person. What the assertion actually protects is MEMBERSHIP
+ * (`type` must be declared, or the CLI rejects `--type`), so the check has to read the
+ * members and compare as a set.
+ *
+ * Failure discipline: an unparseable source THROWS. Returning `[]` would let
+ * `flags.includes('type')` fail for the right reason but `flags.includes(…)` in other
+ * shapes pass vacuously — an empty read must never look like a clean source.
+ *
+ * The `task:` section is anchored by slicing between `task: Object.freeze({` and the
+ * next `gate: Object.freeze({`; a slice is required because `exp`/`gate` declare
+ * commands with the same names (`add`, `update`) and a bare regex would happily match
+ * those instead.
+ */
+function specTaskFlags(source, command) {
+  const start = source.indexOf('task: Object.freeze({')
+  if (start < 0) throw new Error('SPEC.task 段未找到：bin/flow.mjs 的 `task: Object.freeze({` 锚点变了')
+  const end = source.indexOf('gate: Object.freeze({', start)
+  if (end < 0) throw new Error('SPEC.task 段未闭合：`gate: Object.freeze({` 锚点变了')
+  const section = source.slice(start, end)
+  const match = new RegExp(`(?:^|\\n)\\s*${command}:\\s*\\{\\s*flags:\\s*\\[([^\\]]*)\\]`).exec(section)
+  if (match === null) {
+    throw new Error(`SPEC.task.${command}.flags 未解析到：声明形状变了，断言不能静默降级为空数组`)
+  }
+  const flags = match[1]
+    .split(',')
+    .map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((entry) => entry !== '')
+  // A parsed-but-empty list is indistinguishable from "the source says nothing";
+  // refuse it so a broken regex cannot masquerade as a passing set comparison.
+  if (flags.length === 0) throw new Error(`SPEC.task.${command}.flags 解析为空：拒绝把空数组当成有效结果`)
+  return flags
+}
+
 after(() => {
   for (const dir of TEMP_ROOTS) {
     try {
@@ -278,8 +317,18 @@ test('type：flow_task schema enum/必填 + SPEC↔handler 白名单含 type', a
   )
 
   // SPEC 与 handler 同步：task add/update 都声明了 type，help/用法列出 10 值。
-  assert.match(BIN_SOURCE, /add: \{ flags: \['id', 'title', 'type'/)
-  assert.match(BIN_SOURCE, /update: \{ flags: \['id', 'title', 'type'/)
+  //
+  // 这里断言的是**成员资格**，不是数组长相：CLI 只问 "type 在不在 flags 里"（VALUE_FLAGS
+  // 是集合语义），顺序对行为零影响。旧的 `assert.match(BIN_SOURCE, /add: \{ flags: \['id',
+  // 'title', 'type'/)` 只验了一个**前缀**，既没证明全体成员都在，又会因为别人给 flags
+  // 排序而红——task-63 加 `stage` 时就撞上过，被迫改成"只能往末尾追加"。
+  const addFlags = specTaskFlags(BIN_SOURCE, 'add')
+  const updateFlags = specTaskFlags(BIN_SOURCE, 'update')
+  for (const [command, flags] of [['add', addFlags], ['update', updateFlags]]) {
+    assert.ok(flags.includes('type'), `SPEC.task.${command}.flags 必须声明 type（否则 CLI 拒绝 --type）`)
+    // 更强：原来只验前 3 个，现在验的是 SPEC 里声明的**全体**都必须在 handler 白名单里可读。
+    assert.ok(flags.includes('id') && flags.includes('title'), `SPEC.task.${command}.flags 缺 id/title`)
+  }
   assert.match(BIN_SOURCE, /feat\|fix\|docs\|style\|refactor\|perf\|test\|chore\|build\|ci/)
 
   // A11：`goal` 已从工具 schema/白名单里删除（②），只在"已合并"说明里出现。
@@ -292,5 +341,66 @@ test('type：flow_task schema enum/必填 + SPEC↔handler 白名单含 type', a
   // ④：title/type 仍透传给 core（白名单不另造第二种错误形态）。
   assert.equal(TASK_UPDATE_FIELDS.includes('title'), true)
   assert.equal(TASK_UPDATE_FIELDS.includes('type'), true)
-  assert.match(BIN_SOURCE, /update: \{ flags: \['id', 'title', 'type', 'status', 'owner', 'notes'/)
+  // update 的 flags 是 add 的超集之外的同一套声明的成员资格，不再是字面前缀。
+  assert.ok(updateFlags.includes('status'), 'SPEC.task.update.flags 必须声明 status')
+  assert.ok(updateFlags.includes('owner'), 'SPEC.task.update.flags 必须声明 owner')
+  assert.ok(updateFlags.includes('notes'), 'SPEC.task.update.flags 必须声明 notes')
+})
+
+// ------------------------------------------------------------------ 顺序无关
+
+/**
+ * The membership checks above, factored out so they can be replayed against a
+ * REWRITTEN copy of the CLI source. Keeping one implementation means the guard
+ * below proves something about the real assertions, not about a look-alike.
+ */
+function assertTypeDeclaredInSpec(source) {
+  const addFlags = specTaskFlags(source, 'add')
+  const updateFlags = specTaskFlags(source, 'update')
+  for (const [command, flags] of [['add', addFlags], ['update', updateFlags]]) {
+    assert.ok(flags.includes('type'), `SPEC.task.${command}.flags 必须声明 type`)
+  }
+  for (const flag of ['status', 'owner', 'notes']) {
+    assert.ok(updateFlags.includes(flag), `SPEC.task.update.flags 必须声明 ${flag}`)
+  }
+}
+
+test('SPEC.task flags：成员资格与数组顺序无关（打乱顺序仍绿，删掉 type 必红）', () => {
+  // 正向：把 task 段里两个 flags 数组**逆序**，成员一个不变 —— 判定必须仍然通过。
+  // 这正是 task-63 的场景（给 flags 插了 'stage' 导致旧的字面前缀断言红）。
+  const taskStart = BIN_SOURCE.indexOf('task: Object.freeze({')
+  const taskEnd = BIN_SOURCE.indexOf('gate: Object.freeze({', taskStart)
+  assert.ok(taskStart >= 0 && taskEnd > taskStart, 'SPEC.task 段锚点必须存在')
+  const section = BIN_SOURCE.slice(taskStart, taskEnd)
+  const reversed = section.replace(/flags:\s*\[([^\]]*)\]/g, (whole, inner) => {
+    const entries = inner
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '')
+    return `flags: [${entries.reverse().join(', ')}]`
+  })
+  assert.notEqual(reversed, section, '样本改写必须真的发生，否则本用例什么都没证明')
+  const reordered = BIN_SOURCE.slice(0, taskStart) + reversed + BIN_SOURCE.slice(taskEnd)
+  // 自检的是「确实换过序」这件事本身，而不是某个特定元素落在哪个位置——把判据写成
+  // "type 不在首位"会在这个文件自己就被重排过（比如 type 本来就在末尾）时误报。
+  const beforeOrder = JSON.stringify(specTaskFlags(BIN_SOURCE, 'add'))
+  const afterOrder = JSON.stringify(specTaskFlags(reordered, 'add'))
+  assert.notEqual(afterOrder, beforeOrder, '样本必须真的换了顺序，否则本用例什么都没证明')
+  assert.deepEqual(afterOrder.slice(1, -1).split(',').sort(), beforeOrder.slice(1, -1).split(',').sort(), '换序不得改变成员')
+  assertTypeDeclaredInSpec(reordered)
+
+  // 反向：从 add 的 flags 里删掉 type —— 同一组断言必须红，证明解耦没有把判据放松。
+  const withoutType = BIN_SOURCE.replace(
+    /(task: Object\.freeze\(\{[\s\S]*?\badd:\s*\{\s*flags:\s*\[)([^\]]*)(\])/,
+    (whole, head, inner, tail) => `${head}${inner.replace(/,\s*'type'|'type',\s*/g, '').replace(/'type'/g, '')}${tail}`,
+  )
+  assert.notEqual(withoutType, BIN_SOURCE, '删 type 的改写必须真的发生')
+  assert.throws(() => assertTypeDeclaredInSpec(withoutType), /必须声明 type/, '删掉 type 必须让成员资格断言失败')
+
+  // 解析失败必须显式抛错，绝不静默降级为空数组（空数组会让 includes 假绿）。
+  assert.throws(() => specTaskFlags('// no SPEC here', 'add'), /SPEC\.task 段未找到/)
+  assert.throws(
+    () => specTaskFlags(BIN_SOURCE.replace(/task: Object\.freeze\(\{[\s\S]*?gate: Object\.freeze\(\{/, 'gate: Object.freeze({')),
+    /SPEC\.task/,
+  )
 })
