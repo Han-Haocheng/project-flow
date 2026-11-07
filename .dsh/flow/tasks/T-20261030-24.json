@@ -1,6 +1,6 @@
 {
   "title": "技能元数据中文化（frontmatter + SKILL_META 兜底） — 用户确认三个技能的 description / when-to-use 统一中文：给 project-flow-init / project-flow-usage 补中文 frontmatter，协作技能保持中文；同步 index.js SKILL_META 的中文兜底，避免 frontmatter 写坏时回落英文。",
-  "status": "draft",
+  "status": "done",
   "owner": "",
   "scope": {
     "allow": [
@@ -19,13 +19,17 @@
     "host2-tools 断言改为校验 frontmatter 来源与中文存在性，不写死完整句式",
     "node --test 与 host2-tools 全绿"
   ],
-  "notes": "用户 2026-10-30 确认统一中文；依赖 T-20261030-20（同改 index.js）。",
+  "notes": "2026-11-07 完成（f8eb77c，待推送）。\n\n用户 2026-10-30 就确认「三个技能的 description / when-to-use 统一中文」，一直没做；而我期间做的 frontmatter 全是英文，等于违反了两天还没发现。\n\n改动恰好 5 行、全在 frontmatter，正文一字未动。三技能 6 个值全部中文，每条单行（最长 172 字符）——多行会被解析器静默截断只留首行（task-53 实测的形状敏感点）。index.js 里 grep 六个旧英文串 → 零命中；SKILL_META 三条只剩 { name }。\n\n新增守护 A7：3 技能 × 2 键都必须含汉字。A1/A2 只断言\"非空、不相同\"，抓不到\"被改回英文\"；A7 补上。变异：改回英文 → A7 红（Lead 独立复跑确认）。\n\n一处 A2 正则修正（不是放水）：中文化后 A2 红了，根因是断言自身收录遗漏——usage 开头「当用户询问」而 A2 的引导语正则只收录 Use when|何时|当项目|when the user，「当用户」这个中文最常见引导语从来没被收录（以前全英文没暴露）。补进引导语集合，并反向验证没削弱：把 when-to-use 改成 description 复制粘贴（无引导语）→ A2 仍红（Lead 独立复跑）。刻意没走\"改内容迁就正则\"那条路。\n\n验证两层：解析副本跑真文件 6/6 非空含中文 + 真实 apply(ctx) 挂载确认 skills.register 收到中文。\n\n性质判定：这不是新需求，是还债。",
   "schema": 1,
   "id": "T-20261030-24",
   "checkpoints": [],
-  "commits": [],
+  "commits": [
+    "f8eb77c"
+  ],
   "created_at": "2026-10-30T21:09:20+08:00",
-  "updated_at": "2026-10-30T21:09:20+08:00",
+  "updated_at": "2026-11-07T14:59:45+08:00",
   "type": "docs",
-  "parent": null
+  "parent": null,
+  "done_at": "2026-11-07T14:59:45+08:00",
+  "archived_at": null
 }
