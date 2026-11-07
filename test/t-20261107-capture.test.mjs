@@ -12,7 +12,9 @@ import path from 'node:path'
 import { apply } from '../index.js'
 import { addTask, listTasks, loadContract, initProject, startHeartbeat } from '../lib/core.mjs'
 import {
+  PEER_MESSAGE_PREFIXES,
   SOURCE_TEXT_MAX,
+  exclusionReasonOf,
   buildStatusBlock,
   captureSummary,
   compareStack,
@@ -564,6 +566,69 @@ test('诊断⑦：capture 关闭时状态块 capture 为 null（不是 0）', ()
     pending: 0,
     messages: 0,
     skipped: 'ok',
+    excludedBy: null,
     error: null,
   })
+})
+
+// --------------------------------------- 7 第四类排除：Agent Teams 队友消息（task-76）
+
+test('排除 ④：content 以 "Team message from " 开头 → 不建任务，excludedBy="peer"', async () => {
+  const { root, contract } = freshProject('rule-peer')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-rule-peer')
+  const peer = 'Team message from exec-panel:\n**回归 2 完成**（两组都绿了）'
+  await preStep(harness, agent, [userMessage(peer, recentStamp(-4000))])
+  await turnStopping(harness, agent)
+  assert.equal(tasksOf(root, contract).length, 0, 'a teammate report must not become a task')
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'peer')
+  assert.equal(status.capture.skipped, 'filtered-out')
+})
+
+test('排除 ④边界："Team message fromX"（缺少前缀末尾空格）→ 仍捕获（不许过宽）', async () => {
+  const { root, contract } = freshProject('rule-peer-tight')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-rule-peer-tight')
+  const userText = 'Team message fromX 是用户自己写的一句话'
+  await preStep(harness, agent, [userMessage(userText, recentStamp(-3000))])
+  await turnStopping(harness, agent)
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1, 'only the exact "Team message from " prefix is excluded')
+  assert.equal(tasks[0].title, userText)
+})
+
+test('排除 ④不影响正常用户消息：普通一句仍捕获，excludedBy 为 null', async () => {
+  const { root, contract } = freshProject('rule-peer-normal')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-rule-peer-normal')
+  await preStep(harness, agent, [userMessage('把第四类排除规则加上', recentStamp(-2000))])
+  await turnStopping(harness, agent)
+  assert.equal(tasksOf(root, contract).length, 1)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, null)
+})
+
+test('诊断 excludedBy：五类原因各自可取到（表驱动：sentinel/prefix/peer/stale/dup）', async () => {
+  // 前三类由纯函数分类（消息本身决定）
+  assert.equal(exclusionReasonOf('<flow-context>ctx</flow-context>'), 'sentinel')
+  assert.equal(exclusionReasonOf('【project-flow】注入'), 'prefix')
+  assert.equal(exclusionReasonOf('Team message from teammate: hi'), 'peer')
+  assert.equal(exclusionReasonOf('普通用户消息'), null)
+  assert.deepEqual([...PEER_MESSAGE_PREFIXES], ['Team message from '])
+
+  // stale / dup 需要上一 step 的集合与挂载窗口，走 recordPreStep
+  const { root } = freshProject('rule-excludedby-table')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-excludedby-table')
+  // stale：时间戳早于挂载宽限窗口
+  await preStep(harness, agent, [userMessage('很久以前的历史', recentStamp(-10 * 60 * 1000))])
+  let status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'stale')
+  // dup：同一句在下一个 step 重放（上一 step 已记录 key）
+  const again = userMessage('重复的一句', recentStamp(-1000))
+  await preStep(harness, agent, [again])
+  await preStep(harness, agent, [again])
+  status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'dup')
 })

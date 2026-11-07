@@ -1146,13 +1146,30 @@ capture: {
   pending: 0,               // 队列里剩余条数
   messages: 0,              // 最近一次 pre-step 收到的 messages 条数
   skipped: "ok",            // 五道门 + pre-step 原因之一（见下）
+  excludedBy: null,         // 最近一条被排除消息的原因：sentinel|prefix|peer|stale|dup|null
   error: null               // 最近一次被吞掉的失败（含函数名），没有则为 null
 }
 ```
 
 `skipped` 的取值：turn-stopping 的 `no-target` / `no-core` / `no-contract` /
 `nothing-pending` / `flush-failed` / `ok`；pre-step 的 `no-messages`（payload 空）/
-`filtered-out`（有消息但全被三条排除规则滤掉）/ `queued-n`（入队成功）/ `pre-step-failed`。
+`filtered-out`（有消息但全被排除规则滤掉）/ `queued-n`（入队成功）/ `pre-step-failed`。
+
+**四条排除规则**（`excludedBy` 记录最近一条的原因）：
+
+| # | 规则 | 判据 | `excludedBy` |
+|---|---|---|---|
+| ① | 插件注入 context | content 以 `<flow-context>` 开头 | `sentinel` |
+| ② | 系统前缀 | `【project-flow】` / `<system-reminder>` / `[WIP]` | `prefix` |
+| ③ | 集合差重放 | 与上一 step 的 key 集合相同（或本批已见） | `dup` |
+| ④ | **Agent Teams 队友消息** | content 以固定前缀 **`Team message from `** 开头（**含末尾空格**） | `peer` |
+| — | 恢复会话的旧历史 | 时间戳早于挂载宽限窗口 `CAPTURE_GRACE_MS` | `stale` |
+
+规则 ④ 的判据是**文本约定，不是结构信号**：`UserMessage = {role, content, timestamp}` 没有
+sender 字段，队友消息与用户原话都以 `role:'user'` 出现在同一个 `payload.messages` 里。若宿主
+将来给消息加 sender 元数据，应改成按元数据判断并删除该前缀。
+**方向性要求**：前缀必须**窄**（`Team message from ` 带空格；`Team message fromX` 不排除）——
+**宁可多捕获队友消息（界面可见、可软关闭），也不能漏捕获用户的真话（静默丢失、界面一切正常）**。
 **`nothing-pending` 是最弱原因**：pre-step 已给出 `no-messages`/`filtered-out`/`no-target` 时，
 它不得覆盖——"没东西可写"的原因必须保留到状态块。
 
