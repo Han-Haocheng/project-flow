@@ -1702,7 +1702,7 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
           // here as well as on `agent/created` so a session that predates the
           // plugin mount (or one created while capture is off) is still covered.
           if (settings !== null && typeof settings === 'object' && settings.enforce === true) {
-            restrictMainSessionTools(ctx, agent, settings.restrictedAgents)
+            restrictMainSessionTools(ctx, agent, settings.restrictedAgents, settings.boardMode)
           }
           rememberTeamCaller(ctx, agent)
           // P1 capture: memory only (filter → diff → queue). The write happens on
@@ -1943,7 +1943,7 @@ function registerAgentCreated(ctx, captureState, settings) {
         }
         if (enforce) {
           try {
-            restrictMainSessionTools(ctx, payload === null || payload === undefined ? undefined : payload.agent, settings.restrictedAgents)
+            restrictMainSessionTools(ctx, payload === null || payload === undefined ? undefined : payload.agent, settings.restrictedAgents, settings.boardMode)
           } catch (error) {
             warnMount(`enforce: restrict skipped: ${brief(error)}`, ctx)
           }
@@ -1974,18 +1974,33 @@ function registerAgentCreated(ctx, captureState, settings) {
 // scheduling). Subagents are exempt from rules 1-2: they exist to dispatch work
 // and to create tasks.
 
-/** Tools a main session must not see (plan §5.2 ①). Unknown names are filtered. */
-const TEAM_TOOL_NAMES = Object.freeze([
-  'spawn_teammate',
+/**
+ * The team surface has two different meanings, and conflating them froze the
+ * board in the real Host (regression 1, handoff 2026-11-07):
+ *
+ * - **dispatch** = spawning/deriving agents (`spawn_teammate` / `subagent*`).
+ *   The user's rule "a session must not dispatch the team" is about this.
+ * - **bookkeeping** = maintaining the shared task board (`team_task_*`).
+ *   Marking a card done or creating one is bookkeeping, not dispatch; blocking
+ *   it while P3b does not exist means nobody can run the team at all.
+ *
+ * `boardMode` decides the bookkeeping half: `lead` (default) lets the main
+ * session keep the board; `plugin` hides it too (P3b flips the default).
+ * Unknown names are filtered before `restrict`.
+ */
+const DISPATCH_TOOL_NAMES = Object.freeze(['spawn_teammate', 'subagent', 'subagent_fork'])
+
+const BOARD_TOOL_NAMES = Object.freeze([
   'team_task_create',
   'team_task_update',
   'team_task_list',
   'team_task_get',
   'team_task_delete',
-  'subagent',
-  'subagent_fork',
 ])
 
+const TEAM_TOOL_NAMES = Object.freeze([...DISPATCH_TOOL_NAMES, ...BOARD_TOOL_NAMES])
+
+const DISPATCH_TOOL_DENY = new Set(DISPATCH_TOOL_NAMES)
 const TEAM_TOOL_DENY = new Set(TEAM_TOOL_NAMES)
 
 const MAIN_SESSION_TEAM_DENY =
@@ -2065,7 +2080,7 @@ function subtaskGuardReason(ctx, agent, args) {
  * (a guard failure must not turn into a denied tool call) and it only inspects
  * the tool names/shapes it knows; everything else is the normal tool layer.
  */
-function enforceGuardReason(ctx, execution, actorMode) {
+function enforceGuardReason(ctx, execution, actorMode, deniedTools) {
   try {
     if (execution === null || execution === undefined) return undefined
     const name = typeof execution.name === 'string' ? execution.name : ''
@@ -2073,7 +2088,7 @@ function enforceGuardReason(ctx, execution, actorMode) {
     const args = isPlainObject(execution.arguments) ? execution.arguments : {}
     const agent = execution.agent
     const main = rootSessionVerdict(ctx, agent) === true
-    if (main && TEAM_TOOL_DENY.has(name)) return MAIN_SESSION_TEAM_DENY
+    if (main && deniedTools instanceof Set && deniedTools.has(name)) return MAIN_SESSION_TEAM_DENY
     if (name === 'flow_task') {
       const action = typeof args.action === 'string' ? args.action : ''
       if (action === 'add') return main ? MAIN_SESSION_TASK_ADD_DENY : undefined
@@ -2093,7 +2108,7 @@ function enforceGuardReason(ctx, execution, actorMode) {
  * only to main sessions; names the host does not provide are dropped first
  * (`restrict` throws on unknown names).
  */
-function restrictMainSessionTools(ctx, agent, restrictedAgents) {
+function restrictMainSessionTools(ctx, agent, restrictedAgents, boardMode) {
   try {
     if (rootSessionVerdict(ctx, agent) !== true) return
     if (isPlainObject(agent) === false) return
@@ -2106,7 +2121,7 @@ function restrictMainSessionTools(ctx, agent, restrictedAgents) {
     const tools = service(scope, 'tools')
     if (tools === undefined || tools === null || typeof tools.restrict !== 'function') return
     if (restricted !== null) restricted.add(agent)
-    let deny = TEAM_TOOL_NAMES.slice()
+    let deny = (boardMode === 'plugin' ? TEAM_TOOL_NAMES : DISPATCH_TOOL_NAMES).slice()
     if (typeof tools.get === 'function') {
       deny = deny.filter((name) => {
         try {
@@ -2148,6 +2163,25 @@ function resolveActorMode(config, ctx) {
     ctx,
   )
   return 'single'
+}
+
+/**
+ * `enforce.boardMode`: `lead` (default) or `plugin`.
+ *
+ * `lead` = the main session keeps the shared task board (`team_task_*` allowed)
+ * but still may not dispatch (`spawn_teammate` / `subagent*` denied). `plugin`
+ * hides the whole team surface (P3b, once the plugin maintains the board).
+ * Invalid values are `lead` + one mount warning.
+ */
+function resolveBoardMode(config, ctx) {
+  const enforce = isPlainObject(config) ? config.enforce : undefined
+  if (isPlainObject(enforce) === false) return 'lead'
+  const requested = enforce.boardMode
+  if (requested === undefined || requested === null) return 'lead'
+  const mode = typeof requested === 'string' ? requested.trim() : ''
+  if (mode === 'lead' || mode === 'plugin') return mode
+  warnMount(`enforce.boardMode 非法（${JSON.stringify(requested)}）：按 lead 处理（可选 lead|plugin）`, ctx)
+  return 'lead'
 }
 
 /** Whether the P1 capture/status behaviour is on (`config.capture !== false`). */
@@ -2643,6 +2677,9 @@ function registerTools(ctx, settings) {
   const heartbeatGate = settings !== null && typeof settings === 'object' && settings.heartbeatGate === true
   const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
   const actorMode = settings !== null && typeof settings === 'object' && settings.actorMode === 'team' ? 'team' : 'single'
+  const boardMode = settings !== null && typeof settings === 'object' && settings.boardMode === 'plugin' ? 'plugin' : 'lead'
+  // Dispatch is always denied; bookkeeping only in `plugin` mode.
+  const deniedTools = boardMode === 'plugin' ? TEAM_TOOL_DENY : DISPATCH_TOOL_DENY
   // Two independent guards, one predicate: the heartbeat write gate (a session
   // without a working heartbeat may not edit/write) and the P2 permission
   // surface (plan §5.2). Each failure inside a guard allows the call.
@@ -2655,7 +2692,7 @@ function registerTools(ctx, settings) {
             if (reason !== undefined) return reason
           }
           if (enforce) {
-            const reason = enforceGuardReason(scoped, execution, actorMode)
+            const reason = enforceGuardReason(scoped, execution, actorMode, deniedTools)
             if (reason !== undefined) return reason
           }
           return undefined
@@ -2840,6 +2877,7 @@ export function apply(ctx, config) {
     // `single` today (one role); P3 flips the default to `team` once the plugin
     // actually dispatches analyzer/implementer/reviewer work.
     actorMode: resolveActorMode(config, ctx),
+    boardMode: resolveBoardMode(config, ctx),
     // Per-mount dedupe for §5.2 ① (a re-apply restores the team tools until the
     // new mount restricts again; a module-level set would skip that).
     restrictedAgents: new WeakSet(),

@@ -195,7 +195,7 @@ test('正例：会话推进 actor=session 的边被放行（guard 不是一律�
 
 // ------------------------------------------------------------- 2 规则 1
 
-test('规则 1：主会话调团队工具 → 拒绝，文案给出替代（flow_task_update / flow_task）', () => {
+test('规则 1：主会话不得「调度」团队（spawn/subagent），但可以维护任务板（默认 lead）', () => {
   const { root } = freshProject('rule1')
   const harness = makeHarness(root)
   const main = harness.addAgent('session-main')
@@ -205,9 +205,38 @@ test('规则 1：主会话调团队工具 → 拒绝，文案给出替代（flow
   assert.ok(reason.includes('flow_task_update'), reason)
   assert.ok(reason.includes('flow_task'), reason)
   assert.ok(reason.includes('插件会派工'), reason)
-  for (const name of ['team_task_create', 'subagent', 'subagent_fork']) {
-    assert.equal(typeof guard(call(name, {}, main)), 'string', `${name} must be denied for a main session`)
+  for (const name of ['spawn_teammate', 'subagent', 'subagent_fork']) {
+    assert.equal(typeof guard(call(name, {}, main)), 'string', `${name} (dispatch) must be denied for a main session`)
   }
+  /* Regression 1 (handoff 2026-11-07): "调度" is dispatching agents, not keeping
+     the shared board. Blocking the bookkeeping half froze the board in the real
+     Host (nobody could mark a card done or create one). */
+  for (const name of ['team_task_create', 'team_task_update', 'team_task_list', 'team_task_get']) {
+    assert.equal(guard(call(name, {}, main)), undefined, `${name} (bookkeeping) must stay allowed in lead mode`)
+  }
+})
+
+test('规则 1b：boardMode=plugin → team_task_* 也被拒绝（P3b 模式）', () => {
+  const { root } = freshProject('rule1-plugin')
+  const harness = makeHarness(root, { enforce: { boardMode: 'plugin' } })
+  const main = harness.addAgent('session-main')
+  const guard = harness.guardOf()
+  for (const name of ['spawn_teammate', 'subagent', 'subagent_fork', 'team_task_create', 'team_task_update', 'team_task_list']) {
+    assert.equal(typeof guard(call(name, {}, main)), 'string', `${name} must be denied in plugin mode`)
+  }
+  // The dispatch text is unchanged.
+  assert.ok(guard(call('spawn_teammate', {}, main)).includes('插件会派工'))
+})
+
+test('规则 1c：非法 boardMode → 按 lead 处理并 warn 一条，不崩', () => {
+  const { root } = freshProject('rule1-bad')
+  const harness = makeHarness(root, { enforce: { boardMode: 'nonsense' } })
+  const main = harness.addAgent('session-main')
+  assert.ok(
+    harness.warns.some((line) => line.includes('boardMode')),
+    `expected a boardMode warning, got ${JSON.stringify(harness.warns)}`
+  )
+  assert.equal(harness.guardOf()(call('team_task_update', {}, main)), undefined, 'an invalid value falls back to lead')
 })
 
 // ------------------------------------------------------------- 3 规则 2
@@ -296,6 +325,7 @@ test('enforce:false：restrict 与全部 guard 不注册，主会话回到 P1 �
   // 只有心跳门禁的 guard 还在（默认开启），P2 规则全部放行。
   const guard = harness.guardOf()
   assert.equal(guard(call('spawn_teammate', {}, main)), undefined)
+  assert.equal(guard(call('team_task_update', {}, main)), undefined, 'enforce:false allows the board too')
   assert.equal(guard(call('flow_task', { action: 'add', title: 't', type: 'feat' }, main)), undefined)
   assert.equal(harness.restrictions.length, 0, 'enforce:false must not restrict')
   harness.created({ agent: main, source: 'startup', signal: { aborted: false } })
@@ -316,7 +346,7 @@ test('回归：flow_status / flow_heartbeat / flow_decision 完全不受 P2 守�
 
 // ------------------------------------------------ 11 restrict（隐藏层）
 
-test('restrict：主会话在 agent/created 时隐藏团队工具；子代理不隐藏；未知工具名被过滤', () => {
+test('restrict（lead）：主会话只隐藏「调度」工具，任务板保持可见；子代理不隐藏', () => {
   const { root } = freshProject('restrict')
   const harness = makeHarness(root)
   const main = harness.addAgent('session-main')
@@ -325,14 +355,24 @@ test('restrict：主会话在 agent/created 时隐藏团队工具；子代理不
   harness.created({ agent: main, source: 'startup', signal: { aborted: false } })
   assert.equal(harness.restrictions.length, 1, 'a main session gets exactly one restriction')
   const deny = harness.restrictions[0].deny
-  assert.ok(Array.isArray(deny))
-  for (const name of ['spawn_teammate', 'team_task_create', 'team_task_update', 'team_task_list', 'team_task_get', 'subagent', 'subagent_fork']) {
-    assert.ok(deny.includes(name), `${name} must be hidden from a main session`)
-  }
-  assert.equal(deny.includes('team_task_delete'), false, 'a tool the host does not provide must be filtered out')
+  assert.deepEqual(deny.slice().sort(), ['spawn_teammate', 'subagent', 'subagent_fork'], 'lead mode hides dispatch only')
+  assert.equal(deny.includes('team_task_update'), false, 'the board tools must stay visible')
 
   harness.created({ agent: child, source: 'startup', signal: { aborted: false } })
   assert.equal(harness.restrictions.length, 1, 'a subagent must keep the team tools')
+})
+
+test('restrict（plugin）：主会话隐藏全部团队工具，未知名字仍被过滤', () => {
+  const { root } = freshProject('restrict-plugin')
+  const harness = makeHarness(root, { enforce: { boardMode: 'plugin' } })
+  const main = harness.addAgent('session-main')
+  harness.created({ agent: main, source: 'startup', signal: { aborted: false } })
+  assert.equal(harness.restrictions.length, 1)
+  const deny = harness.restrictions[0].deny
+  for (const name of ['spawn_teammate', 'team_task_create', 'team_task_update', 'team_task_list', 'team_task_get', 'subagent', 'subagent_fork']) {
+    assert.ok(deny.includes(name), `${name} must be hidden in plugin mode`)
+  }
+  assert.equal(deny.includes('team_task_delete'), false, 'a tool the host does not provide must be filtered out')
 })
 
 // ------------------------------------------- 12 capture:false 的 restrict 兜底

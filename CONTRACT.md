@@ -1094,6 +1094,18 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 `single` 不是放宽结构：**规则 3 在任何模式下都生效**，跳级（如 `analyzing → implementing`）照样拒绝；
 唯一放行的是"这条边该由谁走"。P3 落地时只需把默认值翻成 `team`（配置就绪，不必改代码）。
 
+**两种 boardMode（2026-11-07 真机回归 1 的修复）**：`config.enforce.boardMode`
+（`lead` 默认 | `plugin`；非法值按 `lead` + 一条 mount warning）。
+
+| 模式 | 主会话拦什么 | 适用 |
+|---|---|---|
+| `lead`（默认） | **只拦调度**：`spawn_teammate` / `subagent` / `subagent_fork`；`team_task_*` **放行** | 今天：插件还没接管任务板，主会话要能建卡/标记完成/改派 |
+| `plugin` | 全部团队工具（8 个） | P3b 落地、插件真的维护团队板之后翻默认值 |
+
+**语义**：用户说"严禁直接调度团队"——**"调度"是派工/派生代理；维护任务板是记账，不是调度**。
+把记账也拦掉，团队板就会冻住（真实宿主里已发生：没人能建卡或标记完成）。
+`spawn_teammate` 在任何模式都拦，这条不松。
+
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|
 list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤，`restrict` 对未知名字会抛；
