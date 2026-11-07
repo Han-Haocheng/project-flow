@@ -1,7 +1,7 @@
 {
   "id": "T-20261030-08",
   "title": "迁移与 init 原子性 + ID 去重 — init/种子/迁移的“读+写”进同一把锁；修 Exp-Id 分隔与 legacy id 迁移；updated_at 回退 mtime；解决同日 ID 跨分支撞名。",
-  "status": "active",
+  "status": "done",
   "owner": "",
   "scope": {
     "allow": [
@@ -24,13 +24,13 @@
   ],
   "checkpoints": [],
   "commits": [],
-  "notes": "2026-11-05 分析（task-171, server-audit）结论：①真缺口=initProject(core:661)+seedDefaultGates(core:763) 全程无锁（实测持锁时 init 仍 exit 0 写盘，而 task add conflict）；②nextId 在 withLock 内重算，单 store 安全，撞名只在「.dsh/flow 入 git + 多分支同日建卡」时（文件合并静默覆盖）；③④卡面 Exp-Id/legacy 迁移**已失效**：v0.2 的 7c64255 物理删除，grep Flow-Exp-Id|--migrate = 0，`init --migrate` 报未知参数，无法复现；⑤CONTRACT 无 §8.1。拆卡：A=init 全程加锁（task-172，已派）；B=ID 方案（待 D-20261105-03 拍板）；C=缺 updated_at 读投影 mtime 回退（仅迁移保留才需要，建议取消）。",
+  "notes": "2026-11-08 审计关闭：**主 claim 已修**，其余子 claim 前提已失效。\n\n证据：\n- **init 原子性已修**：`lib/core.mjs:485` `initProject` 现在整段跑在 `withLock` 里，且有\n  `MAX_INIT_LOCK_ROUNDS = 5` 的「锁内重验 store.root，变了就重试」循环。注释逐条写明理由。\n- **有测试**：`test/core.test.mjs:3599` 「init 持锁（库）」与 `:3616` 「init 持锁（CLI）：\n  真实子进程持锁时 `flow init` = exit 2 conflict，**不写盘**」。\n- 子 claim「修 Exp-Id 分隔与 legacy id 迁移」：任务卡自己的笔记已写「v0.2 的 7c64255 物理删除，\n  `grep Flow-Exp-Id|--migrate` = 0」——**前提不存在**。\n- 子 claim「同日 ID 跨分支撞名」：仅在「`.dsh/flow` 入 git + 多分支同日建卡」时成立，\n  属已知边界，不影响本卡关闭。",
   "created_at": "2026-10-30T20:30:40+08:00",
-  "updated_at": "2026-11-07T15:27:29+08:00",
+  "updated_at": "2026-11-08T00:10:55+08:00",
   "schema": 1,
   "parent": null,
-  "done_at": null,
+  "done_at": "2026-11-08T00:09:58+08:00",
   "archived_at": null,
   "type": "fix",
-  "stage": "queued-implementation"
+  "stage": "done"
 }
