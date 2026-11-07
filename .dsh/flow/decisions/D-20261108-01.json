@@ -1,0 +1,40 @@
+{
+  "question": "控制词（「继续」「暂停」「好」这类）要不要各建一条任务？",
+  "kind": "choice",
+  "rationale": "当前行为已符合规格，不阻塞流程；但只有用户能决定\"每句话都是任务\"这条语义要不要为可读性让步。分类失败方向必须安全：判成 control 只是不进栈顶，而白名单判错会让记录消失。",
+  "options": [
+    {
+      "id": "keep",
+      "label": "保持规格：控制词也建任务",
+      "impact": "完全符合「每句话都是任务」，但任务栈会被控制词刷屏"
+    },
+    {
+      "id": "drop",
+      "label": "白名单不入栈",
+      "impact": "不再字面符合规格；白名单必漏词，漏了就是静默丢真话（今天最怕的失败方向）"
+    },
+    {
+      "id": "degrade",
+      "label": "记录但降级（推荐）",
+      "impact": "仍落记录但 source.kind=control，不进栈顶/不计数/面板折叠；判错只影响显示，记录不丢"
+    }
+  ],
+  "recommendation": "degrade",
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 56,
+  "schema": 1,
+  "id": "D-20261108-01",
+  "default": null,
+  "status": "open",
+  "blocks": [],
+  "affects": [],
+  "supersedes": null,
+  "answer": null,
+  "answered_at": null,
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "e27a1cb83d857147",
+  "asked_at": "2026-11-08T01:11:22+08:00",
+  "created_at": "2026-11-08T01:11:22+08:00",
+  "updated_at": "2026-11-08T01:11:22+08:00"
+}
