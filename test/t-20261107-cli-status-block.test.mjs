@@ -80,7 +80,7 @@ function oracleBlock(root) {
   return buildStatusBlock({ listTasks }, root, contract)
 }
 
-const BLOCK_KEYS = ['stack', 'counts', 'team', 'unfinished', 'recentCaptured']
+const BLOCK_KEYS = ['stack', 'counts', 'team', 'capture', 'unfinished', 'recentCaptured']
 
 // ---------------------------------------------------------------- 有任务：形状与真源
 
@@ -101,6 +101,7 @@ test('有任务：flow status 的 data.status 与工具侧同构，且与 buildS
     { available: false, members: 0, tasks: 0, linked: 0, missing: 0, orphaned: 0 },
     'the CLI has no ctx.agentTeams: available:false is the honest answer'
   )
+  assert.equal(block.capture, null, 'the CLI process has no capture state: null, not a fake zero')
 
   // 单点真源：CLI 的结果必须与直接调用 capture.mjs 的结果逐字相同。
   assert.deepEqual(block, oracleBlock(root), 'CLI 不得实现第二套装配逻辑')

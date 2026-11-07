@@ -1135,6 +1135,30 @@ list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤
 `single` 模式下父任务在 non-implementation 阶段调 `flow_subtask` 会被 guard 拒绝，文案带当前
 阶段中文。
 
+### 5.4.1 捕获诊断（回归 2：`capture` 状态）
+
+`flow_status` / `flow_heartbeat update` 的状态块新增 `capture` 字段（capture 关闭时为 `null`）：
+
+```jsonc
+capture: {
+  lastAt: "ISO" | null,     // 最后一次 turn-stopping 的时刻
+  created: 0,               // 本次落盘条数
+  pending: 0,               // 队列里剩余条数
+  messages: 0,              // 最近一次 pre-step 收到的 messages 条数
+  skipped: "ok",            // 五道门 + pre-step 原因之一（见下）
+  error: null               // 最近一次被吞掉的失败（含函数名），没有则为 null
+}
+```
+
+`skipped` 的取值：turn-stopping 的 `no-target` / `no-core` / `no-contract` /
+`nothing-pending` / `flush-failed` / `ok`；pre-step 的 `no-messages`（payload 空）/
+`filtered-out`（有消息但全被三条排除规则滤掉）/ `queued-n`（入队成功）/ `pre-step-failed`。
+**`nothing-pending` 是最弱原因**：pre-step 已给出 `no-messages`/`filtered-out`/`no-target` 时，
+它不得覆盖——"没东西可写"的原因必须保留到状态块。
+
+两条捕获路径的 `catch` 一律 `warnMount`，文案带函数名（`recordPreStep:` / `captureTurnStop:`），
+使两条路径的警告可区分。捕获 `N > 0` 时心跳 `last_action` 写「本轮捕获 N 条」；`N = 0` 不写。
+
 ### 5.5 子任务与否决工具（P4）
 
 两个工具都由主插件注册（`index.js` 的 `buildToolDefinitions`）；`flow_task` 仍在 `tasks.js`

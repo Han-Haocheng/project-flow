@@ -11,7 +11,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
 import { addTask, listTasks, loadContract, initProject, startHeartbeat } from '../lib/core.mjs'
-import { SOURCE_TEXT_MAX, compareStack, utteranceKey } from '../lib/capture.mjs'
+import {
+  SOURCE_TEXT_MAX,
+  buildStatusBlock,
+  captureSummary,
+  compareStack,
+  createCaptureState,
+  noteCaptureGate,
+  recordPreStep,
+  utteranceKey,
+} from '../lib/capture.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -443,4 +452,118 @@ test('缺陷 2（③）：历史不占栈顶——历史+新句只收新句，�
   await turnStopping(onlyHarness, onlyAgent)
   const onlyStatus = await flowStatus(onlyHarness, onlyAgent, only.root)
   assert.equal(onlyStatus.stack.length, 0, 'history must never occupy the task stack (and therefore never the stack top)')
+})
+
+// ------------------------------------------- 6 诊断：capture 不能把"没有"当"失败"
+
+test('诊断①：payload.messages 为空数组 → skipped "no-messages"（不是 nothing-pending）', async () => {
+  const { root } = freshProject('diag-no-messages')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-diag-nomsg')
+  await preStep(harness, agent, [])
+  await turnStopping(harness, agent)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.skipped, 'no-messages')
+  assert.equal(status.capture.messages, 0)
+  assert.equal(status.capture.created, 0)
+  assert.equal(status.capture.error, null)
+})
+
+test('诊断②：messages > 0 但全被排除 → skipped "filtered-out"', async () => {
+  const { root } = freshProject('diag-filtered')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-diag-filtered')
+  await preStep(harness, agent, [userMessage('【project-flow】这是插件自己注入的噪音', recentStamp(-3000))])
+  await turnStopping(harness, agent)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.messages, 1, 'the payload was seen')
+  assert.equal(status.capture.created, 0)
+  assert.equal(status.capture.skipped, 'filtered-out', 'all messages excluded is not "nothing to capture"')
+})
+
+test('诊断③：正常捕获 → skipped "ok"、created>0、lastAt 有值，心跳 last_action 带条数', async () => {
+  const { root, contract } = freshProject('diag-ok')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-diag-ok')
+  startHeartbeat(root, contract, { session: agent.id, goal: '观察捕获' })
+  await preStep(harness, agent, [userMessage('这条应该被捕获', recentStamp(-2000))])
+  await turnStopping(harness, agent)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.skipped, 'ok')
+  assert.equal(status.capture.created, 1)
+  assert.equal(status.capture.messages, 1)
+  assert.equal(typeof status.capture.lastAt, 'string')
+  assert.equal(status.capture.error, null)
+  const beat = JSON.parse(fs.readFileSync(heartbeatFile(root, agent.id), 'utf8'))
+  assert.ok(String(beat.last_action).includes('本轮捕获 1 条'), `last_action: ${beat.last_action}`)
+})
+
+test('诊断④：空队列 flush → skipped "nothing-pending"', async () => {
+  const { root } = freshProject('diag-empty')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-diag-empty')
+  await turnStopping(harness, agent)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.skipped, 'nothing-pending')
+  assert.equal(status.capture.created, 0)
+})
+
+test('诊断⑤：flush 抛错 → skipped "flush-failed" + error 带函数名 + warn 一条', async () => {
+  const { root } = freshProject('diag-fail')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-diag-fail')
+  await preStep(harness, agent, [userMessage('会失败的一句', recentStamp(-1000))])
+  // Removing the store makes the write fail for real (not a fake stub).
+  fs.rmSync(path.join(root, '.dsh'), { recursive: true, force: true })
+  await turnStopping(harness, agent)
+  const state = createCaptureState() // unused sanity
+  assert.ok(state)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.skipped, 'flush-failed')
+  assert.equal(typeof status.capture.error, 'string')
+  assert.ok(status.capture.error.includes('captureTurnStop:') || status.capture.error.includes('flushCapture:'), status.capture.error)
+  assert.ok(
+    harness.warns.some((line) => line.includes('captureTurnStop:')),
+    `expected a captureTurnStop warning, got ${JSON.stringify(harness.warns)}`
+  )
+})
+
+test('诊断⑥：五道门/三条 pre-step 原因都能落进 skipped（表驱动）', () => {
+  const gates = ['no-target', 'no-core', 'no-contract', 'nothing-pending', 'flush-failed', 'ok']
+  for (const gate of gates) {
+    const state = createCaptureState()
+    noteCaptureGate(state, gate)
+    assert.equal(captureSummary(state).skipped, gate, `gate ${gate}`)
+  }
+  const state = createCaptureState()
+  assert.equal(captureSummary(state).skipped, null, 'a fresh state has no reason yet')
+  const onError = []
+  state.buckets.get = () => {
+    throw new Error('boom')
+  }
+  const queued = recordPreStep(
+    state,
+    { root: '/x', session: 's', messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }], timestamp: recentStamp() }] },
+    (error) => onError.push(String(error && error.message))
+  )
+  assert.equal(queued, 0)
+  assert.equal(onError.length, 1, 'the warning callback must fire (never a silent 0)')
+  assert.equal(captureSummary(state).skipped, 'pre-step-failed')
+  assert.ok(captureSummary(state).error.includes('recordPreStep:'))
+})
+
+test('诊断⑦：capture 关闭时状态块 capture 为 null（不是 0）', () => {
+  const block = buildStatusBlock({ listTasks }, '/tmp/none', {})
+  assert.equal(block.capture, null)
+  const state = createCaptureState()
+  noteCaptureGate(state, 'ok', { created: 2 })
+  const withState = buildStatusBlock({ listTasks }, '/tmp/none', {}, undefined, state)
+  assert.deepEqual(withState.capture, {
+    lastAt: captureSummary(state).lastAt,
+    created: 2,
+    pending: 0,
+    messages: 0,
+    skipped: 'ok',
+    error: null,
+  })
 })

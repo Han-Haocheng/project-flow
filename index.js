@@ -86,6 +86,7 @@ import {
   buildStatusBlock,
   createCaptureState,
   flushCapture,
+  noteCaptureGate,
   recordPreStep,
   stackTop,
 } from './lib/capture.mjs'
@@ -1707,7 +1708,13 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
           rememberTeamCaller(ctx, agent)
           // P1 capture: memory only (filter → diff → queue). The write happens on
           // `agent/turn-stopping`, never on this per-step critical path.
-          if (captureState !== null) recordPreStep(captureState, { root, session, messages: payload.messages })
+          if (captureState !== null) {
+            recordPreStep(
+              captureState,
+              { root, session, messages: payload.messages },
+              (error) => warnMount(`recordPreStep: ${brief(error)}`, ctx),
+            )
+          }
           const turn = Number.isInteger(payload.turn) ? payload.turn : null
           const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
           const heartbeatText =
@@ -1865,19 +1872,48 @@ function captureClaims(top) {
  * with a stack top).
  */
 function captureTurnStop(ctx, state, payload) {
+  /* Five exits, each one leaves a trace in `capture.skipped` (regression 2):
+     "nothing to capture" must never look like "it failed". */
   const target = captureTarget(ctx, payload)
-  if (target === null) return
+  if (target === null) {
+    noteCaptureGate(state, 'no-target')
+    return
+  }
   const c = coreModule()
-  if (c === null || typeof c.loadContract !== 'function') return
-  const loaded = c.loadContract(target.root)
-  if (isPlainObject(loaded) === false) return
-  const result = flushCapture(state, {
-    core: c,
-    root: target.root,
-    contract: loaded.contract,
-    session: target.session,
-  })
-  if (result.created.length === 0) return
+  if (c === null || typeof c.loadContract !== 'function') {
+    noteCaptureGate(state, 'no-core')
+    return
+  }
+  let loaded
+  try {
+    loaded = c.loadContract(target.root)
+  } catch (error) {
+    noteCaptureGate(state, 'no-contract', { error: `captureTurnStop: ${brief(error)}` })
+    warnMount(`captureTurnStop: ${brief(error)}`, ctx)
+    return
+  }
+  if (isPlainObject(loaded) === false) {
+    noteCaptureGate(state, 'no-contract')
+    return
+  }
+  let result
+  try {
+    result = flushCapture(state, {
+      core: c,
+      root: target.root,
+      contract: loaded.contract,
+      session: target.session,
+    })
+  } catch (error) {
+    // flushCapture already recorded `flush-failed`; the warning names the path.
+    warnMount(`captureTurnStop: ${brief(error)}`, ctx)
+    return
+  }
+  if (result.created.length === 0) {
+    noteCaptureGate(state, 'nothing-pending')
+    return
+  }
+  noteCaptureGate(state, 'ok', { created: result.created.length })
   if (typeof c.heartbeatStatus !== 'function' || typeof c.updateHeartbeat !== 'function') return
   const status = c.heartbeatStatus(target.root, loaded.contract, target.session)
   if (isPlainObject(status) === false || isPlainObject(status.record) === false) return
@@ -1887,6 +1923,8 @@ function captureTurnStop(ctx, state, payload) {
     goal: typeof top.title === 'string' ? top.title : '',
     task: typeof top.id === 'string' ? top.id : '',
     claims: captureClaims(top),
+    // N > 0 only: a zero capture adds no line and would be pure noise.
+    last_action: `本轮捕获 ${result.created.length} 条`,
   })
 }
 
@@ -2359,7 +2397,7 @@ function buildToolDefinitions(deps, settings) {
         if (captureEnabled(settings)) {
           try {
             const team = await teamStatusFor(ctx, exec.agent, root)
-            Object.assign(result, buildStatusBlock(c, root, loaded.contract, team))
+            Object.assign(result, buildStatusBlock(c, root, loaded.contract, team, settings.captureState))
           } catch (error) {
             warnMount(`status block unavailable: ${brief(error)}`, ctx)
           }
@@ -2502,7 +2540,7 @@ function buildToolDefinitions(deps, settings) {
           if (captureEnabled(settings)) {
             try {
               const team = await teamStatusFor(ctx, exec.agent, root)
-              Object.assign(result, buildStatusBlock(c, root, contract, team))
+              Object.assign(result, buildStatusBlock(c, root, contract, team, settings.captureState))
             } catch (error) {
               warnMount(`status block unavailable: ${brief(error)}`, ctx)
             }
@@ -2883,6 +2921,9 @@ export function apply(ctx, config) {
     restrictedAgents: new WeakSet(),
   }
   const captureState = captureEnabled ? createCaptureState() : null
+  /* The tool handlers need the same state for `capture` diagnostics; null when
+     capture is off (the status block then reports capture:null). */
+  settings.captureState = captureState
 
   // The state read pool: one per apply, disposed with the effect that owns it.
   // A re-apply therefore kills the previous children instead of leaking them,
