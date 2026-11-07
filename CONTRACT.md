@@ -1155,6 +1155,18 @@ list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤
 
 决策复用既有 `flow_decision`（唯一接口面）；任务侧只有 `veto`/`decision` 两个字段（见 §3.2）。
 
+**用户答完自动生效（task-75）**：`flow_decision answer` 与 CLI `flow decision answer` 在**写入答案之后**
+都调 `lib/veto.mjs` 的 `answerDecisionAndApply`：
+
+- **判据只有一个**：反向查找 `task.decision === decisionId` 的任务（**不是**选项 id 恰好叫
+  `modify`/`delete`——普通决策用同样的 id 也必须无副作用）。
+- **顺序是硬要求**：先 `answerDecision` 落盘，再尽力应用。应用失败**不回滚答案**，结果带
+  `vetoApplied:false` + `vetoWarning`，决策保持 answered，任务不动；用户可用 `flow_veto answer` 补。
+- **幂等**：`task.decision` 已为 `null` 时自动路径返回 `null` 跳过；`flow_veto answer` 对已应用的任务
+  返回 `applied:false`，不二次推进阶段。
+- **两个入口共用同一实现**（工具与 CLI 各一行调用），CLI 的 `--json` 在失败时附带 `vetoWarning`。
+- `flow_veto` 仍保留 `answer` 动作，作为自动应用失败后的手动重试通道。
+
 ## 6 机械检查（`flow check`）
 
 `flow check` 把 `skills/ai-collaborative-dev-workflow/scripts/` 下的机械检查脚本包成

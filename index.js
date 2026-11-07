@@ -81,7 +81,7 @@ import {
 import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
 import { readTeamBoard, reconcileLinks, teamStatusOf } from './lib/team-sync.mjs'
 import { buildDefinition as buildSubtaskDefinition } from './lib/tools/subtasks.mjs'
-import { applyVetoAnswer, vetoSubtask, vetoTask } from './lib/veto.mjs'
+import { answerDecisionAndApply, applyVetoAnswer, vetoSubtask, vetoTask } from './lib/veto.mjs'
 import {
   buildStatusBlock,
   createCaptureState,
@@ -2605,7 +2605,11 @@ function buildToolDefinitions(deps, settings) {
             throw new Error('flow_decision answer needs a newer lib/core.mjs: decision support is missing')
           }
           const id = requireId('flow_decision', action, args.id)
-          return { root, decision: c.answerDecision(root, contract, id, pickFields(args, ['choice', 'note', 'by'])) }
+          /* Record the answer first, then try to apply a veto automatically. The
+             helper guarantees the order and turns an apply failure into
+             `vetoApplied:false` + `vetoWarning` instead of failing the answer. */
+          const applied = answerDecisionAndApply(root, contract, id, pickFields(args, ['choice', 'note', 'by']))
+          return { root, ...applied }
         }
         if (action === 'withdraw') {
           if (typeof c.withdrawDecision !== 'function') {

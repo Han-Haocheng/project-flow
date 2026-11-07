@@ -1911,12 +1911,22 @@ async function cmdDecision(ctx, sub) {
     if (note !== undefined) patch.note = note
     const by = readString(flags, 'by')
     if (by !== undefined) patch.by = by
-    const record = core.answerDecision(ctx.root, contract, id, patch)
+    /* Answer first, then apply a veto automatically (task-75). The veto module
+       is loaded lazily like core, so a package missing it reports through the
+       same io path instead of breaking every command. An apply failure must not
+       fail the answer; it surfaces as a warning. */
+    const veto = await import(new URL('../lib/veto.mjs', import.meta.url).href)
+    const applied = veto.answerDecisionAndApply(ctx.root, contract, id, patch)
+    const record = applied.decision
+    if (applied.vetoWarning !== undefined) {
+      collectWarnings([`veto auto-apply skipped: ${applied.vetoWarning}`])
+    }
     if (!ctx.json) {
       out(`已回答决策 ${record.id}（${record.answer.choice}）`)
+      if (applied.vetoApplied === true) out(`已自动应用否决结果：任务 ${applied.task.id} → ${applied.task.stage}`)
       printRecord(record)
     }
-    return record
+    return applied.vetoWarning === undefined ? record : { ...record, vetoApplied: false, vetoWarning: applied.vetoWarning }
   }
 
   if (sub === 'withdraw') {
