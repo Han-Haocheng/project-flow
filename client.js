@@ -210,6 +210,7 @@ window.__ModuleLoader__.load({
       'tasks.stageGroup.queuedReview': '待审查',
       'tasks.stageGroup.done': '已完成',
       'tasks.stageEmpty': '任务台账里还没有任务。',
+      'tasks.teamLine': '团队 {members} 成员 · {tasks} 张共享任务 · {orphaned} 条未关联',
       'tasks.more': '还有 {n} 条未显示',
       'tasks.trendSummary': '近 {days} 天 · 新增 {created} · 完成 {done} · 归档 {archived}',
       'tasks.trendBar': '{date} 新增 {created} · 完成 {done} · 归档 {archived}',
@@ -379,6 +380,7 @@ window.__ModuleLoader__.load({
       'tasks.stageGroup.queuedReview': 'Awaiting review',
       'tasks.stageGroup.done': 'Done',
       'tasks.stageEmpty': 'The task ledger has no tasks yet.',
+      'tasks.teamLine': 'Team {members} members · {tasks} shared tasks · {orphaned} unlinked',
       'tasks.more': '{n} more not shown',
       'tasks.trendSummary': 'Last {days}d · {created} new · {done} done · {archived} archived',
       'tasks.trendBar': '{date} · {created} new · {done} done · {archived} archived',
@@ -941,6 +943,23 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /** task-73: team-board summary. `available` gates the whole panel line. */
+    function boardTeamStatus(raw) {
+      const team = asObject(raw);
+      const count = (value) => {
+        const number = asNumber(value, 0);
+        return number > 0 ? Math.floor(number) : 0;
+      };
+      return {
+        available: team.available === true,
+        members: count(team.members),
+        tasks: count(team.tasks),
+        linked: count(team.linked),
+        missing: count(team.missing),
+        orphaned: count(team.orphaned),
+      };
+    }
+
     function normalizeTasks(value) {
       return asArray(value)
         .filter((task) => task && typeof task === 'object' && !Array.isArray(task))
@@ -1056,6 +1075,9 @@ window.__ModuleLoader__.load({
           stages: normalizeTaskStages(tasksSrc.stages),
           trend: normalizeTrend(tasksSrc.trend),
         },
+        /* task-73: read-only Team-board summary. Absent on an older payload →
+           available:false, so the panel hides the line instead of showing 0. */
+        team: boardTeamStatus(src.team),
         gates,
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
@@ -1891,6 +1913,7 @@ window.__ModuleLoader__.load({
       const tasks = props.tasks || {};
       const counts = asObject(tasks.counts);
       const activeTasks = asArray(tasks.active);
+      const team = asObject(props.team);
       const recentTasks = asArray(tasks.recentDone);
       const t = props.t;
       const now = props.now;
@@ -2228,6 +2251,19 @@ window.__ModuleLoader__.load({
         ),
         stageGroups.every((group) => group.rows.length === 0)
           ? React.createElement(EmptyLine, null, t('tasks.stageEmpty'))
+          : null,
+        /* task-73: one read-only team line. `available:false` hides it — "cannot
+           read the board" must not look like "0 members / 0 tasks". */
+        team.available === true
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-teamLine' },
+              t('tasks.teamLine', {
+                members: asNumber(team.members, 0),
+                tasks: asNumber(team.tasks, 0),
+                orphaned: asNumber(team.orphaned, 0),
+              })
+            )
           : null
       );
     }
@@ -3366,7 +3402,7 @@ window.__ModuleLoader__.load({
             foldCard(
               'tasks',
               'tasks.title',
-              React.createElement(TasksCard, { tasks: view.tasks, t, now, showTitle: false, stateRoot, showTrend: display.showTrend !== false })
+              React.createElement(TasksCard, { tasks: view.tasks, team: view.team, t, now, showTitle: false, stateRoot, showTrend: display.showTrend !== false })
             ),
             /* Gate definitions sit between tasks and live signals. */
             view.gates
@@ -3943,6 +3979,7 @@ window.__ModuleLoader__.load({
 .project-flow-taskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
 .project-flow-taskMark{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
 .project-flow-taskTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.project-flow-teamLine{margin-top:6px;font-size:11px;}
 .project-flow-taskStage{flex:none;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:10px;line-height:1.6;white-space:nowrap;}
 .project-flow-taskStage--closed{color:var(--dsw-alias-label-secondary);}
 .project-flow-taskMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}

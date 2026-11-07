@@ -300,7 +300,11 @@ test('状态块：flow_status 与 flow_heartbeat update 都带 stack/counts/team
     'queued-implementation', 'queued-review', 'reviewing',
   ])
   assert.equal(status.counts['queued-analysis'], 4)
-  assert.deepEqual(status.team, { members: 0, tasks: 0 }, 'team counts stay zero until P2/P3')
+  assert.deepEqual(
+    status.team,
+    { available: false, members: 0, tasks: 0, linked: 0, missing: 0, orphaned: 0 },
+    'no Team service: available:false with zero counts (never a fake 0 without the flag)'
+  )
   assert.ok(Array.isArray(status.recentCaptured), 'the §6.3 escape hatch must be present')
   assert.equal(status.recentCaptured.length, 3, 'exactly the newest three auto-created tasks')
   // §11 LIFO：created_at 倒序、同秒回退 id 倒序。四条的 created_at 可能落在同一秒

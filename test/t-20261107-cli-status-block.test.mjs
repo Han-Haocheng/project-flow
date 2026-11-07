@@ -96,7 +96,11 @@ test('有任务：flow status 的 data.status 与工具侧同构，且与 buildS
   assert.deepEqual(Object.keys(block.counts), [...STAGE_IDS], 'counts 的九个键来自 STAGE_IDS，不是手写的四 status')
   assert.equal(block.counts.implementing, 3)
   assert.equal(block.unfinished, 3)
-  assert.deepEqual(block.team, { members: 0, tasks: 0 })
+  assert.deepEqual(
+    block.team,
+    { available: false, members: 0, tasks: 0, linked: 0, missing: 0, orphaned: 0 },
+    'the CLI has no ctx.agentTeams: available:false is the honest answer'
+  )
 
   // 单点真源：CLI 的结果必须与直接调用 capture.mjs 的结果逐字相同。
   assert.deepEqual(block, oracleBlock(root), 'CLI 不得实现第二套装配逻辑')

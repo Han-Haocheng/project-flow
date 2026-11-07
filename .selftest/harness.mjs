@@ -444,8 +444,21 @@ check(
   JSON.stringify(alpha.json?.gates),
 )
 check(
-  'alpha: retired gate/runs/team sections are absent',
-  alpha.json?.gate === undefined && alpha.json?.runs === undefined && alpha.json?.team === undefined,
+  'alpha: retired gate/runs absent; team is the P3a summary',
+  // `gate`/`runs` stay retired. `team` is NOT retired any more: P3a added the
+  // read-only team-board summary, so this must assert its SHAPE rather than its
+  // absence — otherwise the guard would forbid the feature it is meant to guard.
+  // Keep this in lockstep with `.selftest/host2-tools.mjs` ("team is the P3a summary").
+  alpha.json?.gate === undefined &&
+    alpha.json?.runs === undefined &&
+    alpha.json?.team !== null &&
+    typeof alpha.json?.team === 'object' &&
+    typeof alpha.json.team.available === 'boolean' &&
+    Number.isInteger(alpha.json.team.members) &&
+    Number.isInteger(alpha.json.team.tasks) &&
+    Number.isInteger(alpha.json.team.linked) &&
+    Number.isInteger(alpha.json.team.missing) &&
+    Number.isInteger(alpha.json.team.orphaned),
   JSON.stringify(Object.keys(alpha.json ?? {})),
 )
 check(

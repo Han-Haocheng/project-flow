@@ -979,7 +979,19 @@ check('store payload: bare draft created_at present', typeof emptyDraft.created_
 check('store payload: gates array', Array.isArray(store.gates) && store.gates.length === 1)
 eq('store payload: gate lastRun ok false', store.gates?.[0]?.lastRun?.ok, false)
 check('store payload: gate lastRun steps present', Array.isArray(store.gates?.[0]?.lastRun?.steps))
-check('store payload: no legacy gate/runs/team sections', store.gate === undefined && store.runs === undefined && store.team === undefined)
+check(
+  'store payload: legacy gate/runs gone; team is the P3a summary',
+  store.gate === undefined &&
+    store.runs === undefined &&
+    store.team !== null &&
+    typeof store.team === 'object' &&
+    typeof store.team.available === 'boolean' &&
+    Number.isInteger(store.team.members) &&
+    Number.isInteger(store.team.tasks) &&
+    Number.isInteger(store.team.linked) &&
+    Number.isInteger(store.team.missing) &&
+    Number.isInteger(store.team.orphaned)
+)
 if (skillFiles.length < SKILL_NAMES.length) {
   check(
     'store payload: missing-skill warning surfaced',

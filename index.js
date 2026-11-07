@@ -79,6 +79,7 @@ import {
 // core-warning wrapper and the mount-warning channel are shared with the three
 // module sub-plugins (tasks.js / gates.js / experiments.js).
 import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
+import { readTeamBoard, reconcileLinks, teamStatusOf } from './lib/team-sync.mjs'
 import {
   buildStatusBlock,
   createCaptureState,
@@ -797,6 +798,100 @@ async function handleState(host, request, response) {
  * out / crashed / unavailable worker becomes `ok:false` with a stable error code;
  * the endpoint still answers 200, exactly like `not-initialized`.
  */
+// ------------------------------------------------- P3a: read-only team board
+//
+// The Team service needs a live Agent as its authorization credential
+// (`listTasks(caller)`), and the panel read path has no Agent of its own. The
+// last main session seen by `agent/created` / `agent/pre-step` is remembered
+// here; without one the board is `available:false` and the panel hides the line
+// instead of inventing zeros.
+
+const TEAM_UNAVAILABLE = Object.freeze({
+  available: false,
+  members: 0,
+  tasks: 0,
+  linked: 0,
+  missing: 0,
+  orphaned: 0,
+})
+
+const TEAM_CALLERS = new WeakMap()
+
+/** Per-mount caller slot; the WeakMap key is the plugin context, not a module global. */
+function teamCallerState(ctx) {
+  let state = TEAM_CALLERS.get(ctx)
+  if (state === undefined) {
+    state = { agent: undefined }
+    TEAM_CALLERS.set(ctx, state)
+  }
+  return state
+}
+
+/** Remember the last main-session agent (the read credential); failures are ignored. */
+function rememberTeamCaller(ctx, agent) {
+  try {
+    if (rootSessionVerdict(ctx, agent) !== true) return
+    teamCallerState(ctx).agent = agent
+  } catch {
+    // no agents service / disposed session: keep whatever caller we had
+  }
+}
+
+function teamCallerOf(ctx) {
+  try {
+    const state = TEAM_CALLERS.get(ctx)
+    return state === undefined ? undefined : state.agent
+  } catch {
+    return undefined
+  }
+}
+
+/** One read-only sync round for a status block; never throws. */
+async function teamStatusFor(ctx, agent, root) {
+  try {
+    if (typeof root !== 'string' || root === '') return { ...TEAM_UNAVAILABLE }
+    const c = requireCore()
+    const contract = c.loadContract(root).contract
+    return await teamStatusOf(ctx, agent, root, contract)
+  } catch (error) {
+    return { ...TEAM_UNAVAILABLE, reason: brief(error) }
+  }
+}
+
+/**
+ * Panel enrichment, next to `applyAgentLiveness`: same host-side, post-fork shape.
+ *
+ * No store read here: `payload.tasks.teamLinks` was computed inside the snapshot
+ * fork, so this path keeps the §9.1.1 invariant (zero synchronous store access on
+ * the request main thread). The only host call is the in-memory Team service.
+ */
+async function applyTeamBoard(ctx, payload) {
+  if (payload === null || typeof payload !== 'object') return payload
+  try {
+    const board = readTeamBoard(ctx, teamCallerOf(ctx))
+    if (board.ok !== true) {
+      payload.team = { ...TEAM_UNAVAILABLE, reason: board.reason }
+      return payload
+    }
+    const rawLinks = payload.tasks !== null && typeof payload.tasks === 'object' ? payload.tasks.teamLinks : []
+    const links = Array.isArray(rawLinks)
+      ? rawLinks.map((link) => ({ ledgerId: typeof link.id === 'string' ? link.id : '', boardId: typeof link.teamTaskId === 'string' ? link.teamTaskId : '' }))
+      : []
+    const result = reconcileLinks(links, board)
+    payload.team = {
+      available: true,
+      members: board.members.length,
+      tasks: board.tasks.length,
+      linked: result.matched.length,
+      missing: result.missing.length,
+      orphaned: result.orphaned.length,
+    }
+  } catch (error) {
+    payload.team = { ...TEAM_UNAVAILABLE, reason: brief(error) }
+  }
+  return payload
+}
+
 async function collectPanelState(ctx, root, workspaces) {
   if (!Array.isArray(workspaces)) {
     throw new TypeError('collectPanelState requires the caller to enumerate the workspace registry')
@@ -835,6 +930,9 @@ async function collectPanelState(ctx, root, workspaces) {
     // 顺序是「全量行 → agents 标注 → 宿主过滤」：快照层不做最终过滤，否则 stale 行
     // 在 agents 看到之前就消失了（task-143 修的语义缺口）。
     applyAgentLiveness(ctx, payload)
+    // P3a: read-only team-board summary for the panel's team line. A missing
+    // caller/service yields available:false (the client then hides the line).
+    await applyTeamBoard(ctx, payload)
     return applyHeartbeatVisibility(payload)
   }
   return {
@@ -1604,6 +1702,7 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
           if (settings !== null && typeof settings === 'object' && settings.enforce === true) {
             restrictMainSessionTools(ctx, agent, settings.restrictedAgents)
           }
+          rememberTeamCaller(ctx, agent)
           // P1 capture: memory only (filter → diff → queue). The write happens on
           // `agent/turn-stopping`, never on this per-step critical path.
           if (captureState !== null) recordPreStep(captureState, { root, session, messages: payload.messages })
@@ -1847,6 +1946,7 @@ function registerAgentCreated(ctx, captureState, settings) {
             warnMount(`enforce: restrict skipped: ${brief(error)}`, ctx)
           }
         }
+        rememberTeamCaller(ctx, payload === null || payload === undefined ? undefined : payload.agent)
       })
       return () => {
         try {
@@ -2181,7 +2281,8 @@ function buildToolDefinitions(deps, settings) {
         // stack / counts / team / unfinished + the §6.3 recentCaptured escape hatch.
         if (captureEnabled(settings)) {
           try {
-            Object.assign(result, buildStatusBlock(c, root, loaded.contract))
+            const team = await teamStatusFor(ctx, exec.agent, root)
+            Object.assign(result, buildStatusBlock(c, root, loaded.contract, team))
           } catch (error) {
             warnMount(`status block unavailable: ${brief(error)}`, ctx)
           }
@@ -2323,7 +2424,8 @@ function buildToolDefinitions(deps, settings) {
           const result = { root, workspace, store: true, session, heartbeat }
           if (captureEnabled(settings)) {
             try {
-              Object.assign(result, buildStatusBlock(c, root, contract))
+              const team = await teamStatusFor(ctx, exec.agent, root)
+              Object.assign(result, buildStatusBlock(c, root, contract, team))
             } catch (error) {
               warnMount(`status block unavailable: ${brief(error)}`, ctx)
             }

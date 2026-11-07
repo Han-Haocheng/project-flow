@@ -2,6 +2,7 @@
 // sendMessage 一个都不调用；reconcile 只返回三类结果，绝不写台账或团队板。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -267,4 +268,62 @@ test('③ teamStatusOf：真实读取 → members/tasks/linked/missing/orphaned 
   // 同一结果喂给状态块，字段不丢。
   const block = buildStatusBlock(coreDouble(), root, contract, status)
   assert.deepEqual(block.team, status)
+})
+
+// ------------------------------------------------------- ⑥ 零写入（本卡最重要）
+
+/** Every regular file under `dir`: relative path → {sha256, mtimeMs}. */
+function fingerprint(dir) {
+  const out = new Map()
+  const walk = (current, prefix) => {
+    for (const name of fs.readdirSync(current).sort()) {
+      const abs = path.join(current, name)
+      const stat = fs.statSync(abs)
+      if (stat.isDirectory()) {
+        walk(abs, prefix === '' ? name : prefix + '/' + name)
+        continue
+      }
+      if (stat.isFile() === false) continue
+      const rel = prefix === '' ? name : prefix + '/' + name
+      out.set(rel, {
+        sha256: crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex'),
+        mtimeMs: stat.mtimeMs,
+      })
+    }
+  }
+  walk(dir, '')
+  return out
+}
+
+test('⑥ 零写入：跑完 readTeamBoard + reconcile + teamStatusOf 后，台账每个文件 mtime/sha256/文件数不变', async () => {
+  const { root, contract } = freshProject('readonly')
+  addTask(root, contract, { type: 'feat', title: 'linked', team: { taskId: 'T-A', revision: 1, owner: null, syncedAt: '2026-11-07T18:00:00+08:00' } })
+  addTask(root, contract, { type: 'feat', title: 'missing', team: { taskId: 'T-GONE', revision: 1, owner: null, syncedAt: '2026-11-07T18:00:00+08:00' } })
+  addTask(root, contract, { type: 'fix', title: 'plain' })
+  const storeDir = path.join(root, '.dsh', 'flow')
+  const before = fingerprint(storeDir)
+  const beforeCount = before.size
+  assert.ok(beforeCount >= 2, 'the fixture must contain ledger files')
+
+  const service = {
+    listTasks: () => [boardTask('T-A'), boardTask('T-ORPHAN')],
+    listMembers: () => [{ id: 's1', name: 'lead', role: 'lead', status: 'running' }],
+  }
+  const ctx = teamCtx(service)
+  const board = readTeamBoard(ctx, FAKE_AGENT)
+  assert.equal(board.ok, true)
+  await reconcile(root, contract, board)
+  const status = await teamStatusOf(ctx, FAKE_AGENT, root, contract)
+  assert.deepEqual(status, { available: true, members: 1, tasks: 2, linked: 1, missing: 1, orphaned: 1 })
+  buildStatusBlock({ listTasks }, root, contract, status)
+
+  const after = fingerprint(storeDir)
+  assert.equal(after.size, beforeCount, 'file count changed (a read must not add/remove ledger files)')
+  assert.deepEqual([...after.keys()], [...before.keys()], 'the file set changed')
+  for (const [file, snapshot] of before) {
+    assert.equal(after.get(file).mtimeMs, snapshot.mtimeMs, `mtime changed for ${file} (a read wrote it)`)
+    assert.equal(after.get(file).sha256, snapshot.sha256, `content changed for ${file} (a read wrote it)`)
+  }
+  // 台账内容仍可读且与跑之前一致。
+  assert.equal(listTasks(root, contract).length, 3)
 })

@@ -2173,6 +2173,33 @@ check('TaskRow: stage badge renders after type: title and greys finished stages 
   );
 });
 
+check('TasksCard: the team line renders only when the board was readable (task-73)', () => {
+  const tasks = probe.normalize({}).tasks;
+  const team = { available: true, members: 3, tasks: 4, linked: 2, missing: 1, orphaned: 2 };
+  const withTeam = renderWithState(probe.TasksCard, { tasks, team, t, now: NOW }, { reset: true });
+  const line = collect(withTeam, 'project-flow-teamLine')[0];
+  assert.ok(line, 'an available board needs the team line');
+  assert.equal(textOf(line), '团队 3 成员 · 4 张共享任务 · 2 条未关联');
+
+  // unavailable must HIDE the line, never print 0s ("cannot read" ≠ "nothing there").
+  const unavailable = renderWithState(
+    probe.TasksCard,
+    { tasks, team: { available: false, members: 0, tasks: 0, linked: 0, missing: 0, orphaned: 0 }, t, now: NOW },
+    { reset: true }
+  );
+  assert.equal(collect(unavailable, 'project-flow-teamLine').length, 0, 'available:false must hide the line');
+
+  // An older payload without `team` also hides it.
+  const absent = renderWithState(probe.TasksCard, { tasks, t, now: NOW }, { reset: true });
+  assert.equal(collect(absent, 'project-flow-teamLine').length, 0, 'a payload without team hides the line');
+
+  const english = renderWithState(probe.TasksCard, { tasks, team, t: tEn, now: NOW }, { reset: true });
+  assert.equal(
+    textOf(collect(english, 'project-flow-teamLine')[0]),
+    'Team 3 members · 4 shared tasks · 2 unlinked'
+  );
+});
+
 check('TasksCard: the queue head takes tasks.current even when it is not active[0]', () => {
   const tasks = probe.normalize({
     tasks: {
