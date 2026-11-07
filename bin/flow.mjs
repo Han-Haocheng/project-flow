@@ -821,6 +821,17 @@ async function cmdStatus(ctx) {
   const taskCounts = countsOf(tasks, ['draft', 'active', 'done', 'archived'])
   const gateEnabled = gates.filter((gate) => gate.enabled !== false).length
 
+  // §9 状态块：只在 store 存在时读。未初始化时**不给零值块**——"读不到"必须与
+  // "很干净"可区分（本会话反复打的假绿就是这两者被混为一谈）。
+  let statusBlock = null
+  if (initialized) {
+    try {
+      statusBlock = await statusBlockOf(ctx, ctx.root, contract)
+    } catch (error) {
+      collectWarnings([`status-block-unavailable: ${error?.message ?? String(error)}`])
+    }
+  }
+
   const data = {
     root: ctx.root,
     name: contract.name || path.basename(ctx.root),
@@ -840,6 +851,8 @@ async function cmdStatus(ctx) {
       tasks: tasks.slice(0, 3),
       gateRuns: recentRuns.slice(0, 3),
     },
+    // `status` 缺席 = store 未初始化/不可读；不是"零任务"。
+    ...(statusBlock === null ? {} : { status: statusBlock }),
   }
 
   if (!ctx.json) {
@@ -929,6 +942,10 @@ async function cmdStatus(ctx) {
             `  ${run.gate || '-'}  ${run.ok ? '通过' : '失败'}  ${fmtTime(run.started_at)}  ${passed}/${steps.length} 步  ${fmtDuration(run.durationMs)}`,
           )
         }
+      }
+      if (statusBlock !== null) {
+        out('')
+        printStatusBlock(statusBlock)
       }
     }
   }
@@ -1441,6 +1458,62 @@ function printHeartbeat(record) {
   for (const [label, value] of rows) out(`${pad(label, width)}  ${value}`)
 }
 
+// --------------------------------------------------- §9 项目状态块（P1 数据面）
+//
+// 装配逻辑**不在本文件**：`lib/capture.mjs` 的 `buildStatusBlock` 是工具返回
+// （`flow_status` / `flow_heartbeat update`）与 CLI 共用的唯一真源。这里只做两件事：
+// 动态加载它（保持 CLI 不静态依赖 lib/ 的既有约定）与显示截断（不是排序规则）。
+
+/** Display cap for `heartbeat update` — the stack itself is already ordered by capture.mjs. */
+const HEARTBEAT_STACK_ROWS = 5
+
+/**
+ * The §9 block for a heartbeat write. A block failure must never fail the
+ * heartbeat itself (the write already landed): return null and warn.
+ */
+async function heartbeatStatusBlock(ctx, root, contract, stackRows) {
+  try {
+    return await statusBlockOf(ctx, root, contract, stackRows)
+  } catch (error) {
+    collectWarnings([`status-block-unavailable: ${error?.message ?? String(error)}`])
+    return null
+  }
+}
+
+async function loadCapture() {
+  return import(new URL('../lib/capture.mjs', import.meta.url).href)
+}
+
+/**
+ * The §9 status block for `root`. `stackRows` only truncates the **display** of the
+ * already-sorted stack; `unfinished` keeps the true count.
+ */
+async function statusBlockOf(ctx, root, contract, stackRows = null) {
+  const capture = await loadCapture()
+  const block = capture.buildStatusBlock(ctx.core, root, contract)
+  if (stackRows === null || block.stack.length <= stackRows) return block
+  return { ...block, stack: block.stack.slice(0, stackRows) }
+}
+
+/** Human rendering of the block. Callers must guard with `!ctx.json` (out() always writes). */
+function printStatusBlock(block, options = {}) {
+  const { stackNote = '', hideFolded = false } = options
+  const stages = Object.entries(block.counts)
+    .filter(([, count]) => count > 0)
+    .map(([stage, count]) => `${stage} ${count}`)
+  out(`项目状态  未完成 ${block.unfinished}${stages.length > 0 ? ` ｜ ${stages.join(' · ')}` : ''}${block.recentCaptured.length > 0 ? ` ｜ 自动建 ${block.recentCaptured.length}` : ''}`)
+  if (block.stack.length === 0) {
+    out('  栈  空（没有未完成的任务）')
+    return
+  }
+  const folded = block.unfinished - block.stack.length
+  const foldedNote = folded > 0 && hideFolded === false ? `（共 ${block.unfinished} 条，其余折叠）` : ''
+  out(`  栈  ${block.stack.length} 条${foldedNote}${stackNote}`)
+  block.stack.forEach((item, index) => {
+    out(`    ${index + 1}. ${item.id}  [${item.stageZh}]  ${clip(item.title, 48)}`)
+  })
+}
+
 function printHeartbeatList(section, showAll = false) {
   const items = Array.isArray(section?.items) ? section.items : []
   const counts = section?.counts ?? { total: 0, active: 0, stale: 0, dead: 0 }
@@ -1505,11 +1578,17 @@ async function cmdHeartbeat(ctx, sub) {
     if (ctx.claims.length > 0) options.claims = ctx.claims
     if (note !== undefined) options.last_action = note
     const record = await core.startHeartbeat(root, contract, options)
+    const block = await heartbeatStatusBlock(ctx, root, contract, null)
     if (!ctx.json) {
       out(`已开始心跳${record.createdTask ? `（新建任务 ${record.createdTask}）` : ''}`)
       printHeartbeat(record)
+      if (block !== null) {
+        out('')
+        printStatusBlock(block)
+      }
     }
-    return record
+    // 与工具侧（flow_status / flow_heartbeat update）同构：块的五个键平铺在 data 上。
+    return block === null ? record : { ...record, ...block }
   }
 
   if (sub === 'update') {
@@ -1530,11 +1609,19 @@ async function cmdHeartbeat(ctx, sub) {
       throw new CliError('usage', 'heartbeat update 至少需要一个字段参数（如 --status idle / --note T）')
     }
     const record = await core.updateHeartbeat(root, contract, sessionFlag, patch, { writer: 'cli' })
+    const block = await heartbeatStatusBlock(ctx, root, contract, HEARTBEAT_STACK_ROWS)
     if (!ctx.json) {
       out('已更新心跳')
       printHeartbeat(record)
+      if (block !== null) {
+        out('')
+        printStatusBlock(block, {
+          stackNote: `（本轮只显示前 ${HEARTBEAT_STACK_ROWS} 条，共 ${block.unfinished} 条）`,
+          hideFolded: true,
+        })
+      }
     }
-    return record
+    return block === null ? record : { ...record, ...block }
   }
 
   if (sub === 'end') {

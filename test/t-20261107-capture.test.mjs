@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
 import { addTask, listTasks, loadContract, initProject, startHeartbeat } from '../lib/core.mjs'
-import { compareStack, utteranceKey } from '../lib/capture.mjs'
+import { SOURCE_TEXT_MAX, compareStack, utteranceKey } from '../lib/capture.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -112,6 +112,8 @@ function freshProject(label) {
 }
 
 const userMessage = (text, timestamp) => ({ role: 'user', content: [{ type: 'text', text }], timestamp })
+/** Message timestamps must sit inside the mount grace window (defect 2). */
+const recentStamp = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString()
 const tasksOf = (root, contract) => listTasks(root, contract)
 const heartbeatFile = (root, session) => path.join(root, '.agents', 'heartbeat', `${session}.json`)
 
@@ -163,7 +165,7 @@ test('捕获正例：一条用户消息 → 恰好 1 条任务，source/stage �
   const { root, contract } = freshProject('basic')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-basic')
-  const at = '2026-11-07T10:00:00+08:00'
+  const at = recentStamp(-5000)
   const text = '把 P1 捕获流水线做完'
 
   await preStep(harness, agent, [userMessage(text, at)])
@@ -174,7 +176,7 @@ test('捕获正例：一条用户消息 → 恰好 1 条任务，source/stage �
   assert.equal(tasks.length, 1, `expected exactly one task, got ${tasks.length}`)
   const task = tasks[0]
   assert.equal(task.title, text)
-  assert.deepEqual(task.source, { kind: 'utterance', key: utteranceKey(at, text), at })
+  assert.deepEqual(task.source, { kind: 'utterance', key: utteranceKey(at, text), at, text }, 'source.text keeps the full sentence')
   assert.equal(task.stage, 'queued-analysis', 'created is advanced to queued-analysis immediately')
   assert.equal(task.status, 'active', 'status is the compatibility view of queued-analysis')
   assert.equal(task.type, 'chore', 'P1 does not infer a conventional type')
@@ -186,7 +188,7 @@ test('幂等：同一 pre-step payload 连发 3 次仍只有 1 条任务；换�
   const { root, contract } = freshProject('idempotent')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-idempotent')
-  const at = '2026-11-07T10:01:00+08:00'
+  const at = recentStamp(-5000)
   const batch = [userMessage('同一句话不要建三次', at)]
 
   for (let round = 1; round <= 3; round += 1) {
@@ -211,7 +213,7 @@ test('排除 ①：带 <flow-context> 哨兵的注入 context 不建任务（含
   const { root, contract } = freshProject('rule-sentinel')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-sentinel')
-  const at = '2026-11-07T10:02:00+08:00'
+  const at = recentStamp(-4000)
   const plain = '这是真正的用户指令'
 
   await preStep(harness, agent, [
@@ -231,7 +233,7 @@ test('排除 ②：以 【project-flow】 / <system-reminder> / [WIP] 开头的 
   const { root, contract } = freshProject('rule-prefix')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-prefix')
-  const at = '2026-11-07T10:03:00+08:00'
+  const at = recentStamp(-3000)
   const plain = '前缀规则之外的真实请求'
 
   await preStep(harness, agent, [
@@ -252,10 +254,10 @@ test('排除 ③：两个 step 重放同一批 messages 不重复建任务；新
   const { root, contract } = freshProject('rule-diff')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-diff')
-  const at = '2026-11-07T10:04:00+08:00'
+  const at = recentStamp(-2000)
   const first = userMessage('第一句', at)
   const batchA = [first]
-  const second = userMessage('第二句', '2026-11-07T10:05:00+08:00')
+  const second = userMessage('第二句', recentStamp(-1000))
   const batchAB = [first, second]
 
   await preStep(harness, agent, batchA)
@@ -276,13 +278,13 @@ test('状态块：flow_status 与 flow_heartbeat update 都带 stack/counts/team
 
   // 两批共 4 条自动任务（batch1 先落，batch2 后落）。
   await preStep(harness, agent, [
-    userMessage('自动任务甲', '2026-11-07T10:06:00+08:00'),
-    userMessage('自动任务乙', '2026-11-07T10:07:00+08:00'),
+    userMessage('自动任务甲', recentStamp(-4000)),
+    userMessage('自动任务乙', recentStamp(-3000)),
   ])
   await turnStopping(harness, agent)
   await preStep(harness, agent, [
-    userMessage('自动任务丙', '2026-11-07T10:08:00+08:00'),
-    userMessage('自动任务丁', '2026-11-07T10:09:00+08:00'),
+    userMessage('自动任务丙', recentStamp(-2000)),
+    userMessage('自动任务丁', recentStamp(-1000)),
   ])
   await turnStopping(harness, agent)
 
@@ -335,7 +337,7 @@ test('开关与心跳：capture:false 全停（回到 P0）；空台账绝不开
   const offAgent = offHarness.addAgent('session-capture-off')
   // 放一条未完成任务在栈上：若自动开心跳未被开关关掉，它就会开出来。
   addTask(off.root, off.contract, { type: 'feat', title: '栈顶任务', scope: { allow: ['lib/capture.mjs'] } })
-  await preStep(offHarness, offAgent, [userMessage('开关关闭时不该建任务', '2026-11-07T10:10:00+08:00')])
+  await preStep(offHarness, offAgent, [userMessage('开关关闭时不该建任务', recentStamp(-500))])
   await turnStopping(offHarness, offAgent)
   assert.equal(offHarness.handler('agent/created').length, 0, 'capture:false must not register the created hook at all')
   assert.equal(tasksOf(off.root, off.contract).length, 1, 'capture:false must not create tasks')
@@ -371,4 +373,70 @@ test('开关与心跳：capture:false 全停（回到 P0）；空台账绝不开
   assert.equal(record.goal, '栈顶：捕获流水线')
   assert.equal(typeof record.task, 'string', 'the heartbeat must point at the stack-top task')
   assert.deepEqual(record.claims, ['lib/capture.mjs', 'index.js'])
+})
+
+// ------------------------------------------------ 缺陷 1：整句原文必须可回溯
+
+test('缺陷 1：source.text 保存整句原文（title 仍截 120）；超 4000 显式标截断而不是静默丢', async () => {
+  const { root, contract } = freshProject('full-text')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-capture-fulltext')
+  const long = '长'.repeat(4500)
+  const longAt = recentStamp(-1000)
+
+  await preStep(harness, agent, [userMessage(long, longAt)])
+  await turnStopping(harness, agent)
+  const longTask = tasksOf(root, contract).find((task) => task.source && task.source.key === utteranceKey(longAt, long))
+  assert.ok(longTask, 'the long sentence must become a task')
+  assert.equal(longTask.title.length, 120, 'the title stays panel-sized')
+  assert.ok(longTask.title.endsWith('…'), 'the title is explicitly clipped for display')
+  assert.equal(longTask.source.text.length, SOURCE_TEXT_MAX + '…[truncated 500 chars]'.length)
+  assert.ok(longTask.source.text.startsWith('长'.repeat(SOURCE_TEXT_MAX)), 'the first 4000 chars are kept verbatim')
+  assert.ok(longTask.source.text.endsWith('…[truncated 500 chars]'), 'the overflow is marked explicitly, never dropped silently')
+
+  const short = '短句逐字保留'
+  const shortAt = recentStamp(-500)
+  await preStep(harness, agent, [userMessage(short, shortAt)])
+  await turnStopping(harness, agent)
+  const shortTask = tasksOf(root, contract).find((task) => task.title === short)
+  assert.ok(shortTask, 'the short sentence must become a task')
+  assert.equal(shortTask.source.text, short, 'a short sentence is stored verbatim with no marker')
+  assert.equal(shortTask.source.key, utteranceKey(shortAt, short))
+})
+
+// ---------------------------------------- 缺陷 2：恢复会话不得把历史当新任务
+
+const historyStamp = () => new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
+const historyMessage = () => userMessage('三天前的旧历史', historyStamp())
+
+test('缺陷 2（①）：恢复会话重放的纯历史批不建任务', async () => {
+  const { root, contract } = freshProject('history-only')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-capture-history')
+  await preStep(harness, agent, [historyMessage()])
+  await turnStopping(harness, agent)
+  assert.equal(tasksOf(root, contract).length, 0, 'a batch made only of replayed history must create nothing')
+})
+
+test('缺陷 2（③）：历史不占栈顶——历史+新句只收新句，纯历史时栈为空', async () => {
+  // 历史 + 新句：只建新句。
+  const mixed = freshProject('history-mixed')
+  const mixedHarness = makeHarness(mixed.root)
+  const mixedAgent = mixedHarness.addAgent('session-capture-history')
+  await preStep(mixedHarness, mixedAgent, [historyMessage(), userMessage('现在的新要求', recentStamp(-1000))])
+  await turnStopping(mixedHarness, mixedAgent)
+  const tasks = tasksOf(mixed.root, mixed.contract)
+  assert.deepEqual(tasks.map((task) => task.title), ['现在的新要求'], 'only the fresh sentence becomes a task')
+  assert.equal(tasks[0].source.text, '现在的新要求')
+  const mixedStatus = await flowStatus(mixedHarness, mixedAgent, mixed.root)
+  assert.equal(mixedStatus.stack[0].title, '现在的新要求', 'the stack top must be the newest real request, never replayed history')
+
+  // 纯历史：栈必须是空的（历史连队列都不该进）。
+  const only = freshProject('history-stack')
+  const onlyHarness = makeHarness(only.root)
+  const onlyAgent = onlyHarness.addAgent('session-capture-history')
+  await preStep(onlyHarness, onlyAgent, [historyMessage()])
+  await turnStopping(onlyHarness, onlyAgent)
+  const onlyStatus = await flowStatus(onlyHarness, onlyAgent, only.root)
+  assert.equal(onlyStatus.stack.length, 0, 'history must never occupy the task stack (and therefore never the stack top)')
 })
