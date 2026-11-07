@@ -12,6 +12,26 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
+const LIB_DIR = path.join(REPO, 'lib')
+
+/**
+ * 全部 `lib/**` 源码按**固定顺序**拼接成的文本（task-56，与 task-51 同一形态）。
+ *
+ * 这条断言要保护的是「`panelTaskRow` 的返回键序 = §9.1.4 的 13 键」，而**不是**
+ * 「它必须住在 `lib/state-snapshot.mjs`」。函数搬去哪个文件是**实现细节**，不是契约；
+ * 钉死单文件会让面板投影的任何拆分都必须先改测试，那是把位置当契约。
+ *
+ * 拼接顺序固定（`core.mjs` 最后），保证同样的实现总得到同样的文本，结论不随
+ * 文件系统枚举顺序漂移。
+ */
+function readLibSource() {
+  const files = fs
+    .readdirSync(LIB_DIR)
+    .filter((name) => name.endsWith('.mjs'))
+    .sort()
+  const ordered = [...files.filter((name) => name !== 'core.mjs'), ...files.filter((name) => name === 'core.mjs')]
+  return ordered.map((name) => fs.readFileSync(path.join(LIB_DIR, name), 'utf8')).join('\n')
+}
 
 /** §9.1.4 定稿顺序（也是 `panelTaskRow` 的返回顺序）。 */
 const ROW_KEYS = [
@@ -37,9 +57,10 @@ test('P2-2 A1：CONTRACT §9.1.4 逐字写出 13 键且顺序一致', () => {
 })
 
 test('P2-2 A2：panelTaskRow 的源码键序与 §9.1.4 一致', () => {
-  const src = fs.readFileSync(path.join(REPO, 'lib', 'state-snapshot.mjs'), 'utf8')
+  // task-56：读整个 `lib/**` 而不是只读 state-snapshot.mjs —— 位置无关，语义不变。
+  const src = readLibSource()
   const start = src.indexOf('function panelTaskRow(')
-  assert.ok(start > 0, 'state-snapshot 找不到 panelTaskRow')
+  assert.ok(start > 0, 'lib 下找不到 panelTaskRow')
   const body = src.slice(start, src.indexOf('\n}', start))
   const inner = body.slice(body.indexOf('return {'))
   // 抓返回对象里的顶层键：`    key: expr,` 或 `    key,`（`status` 是简写，没有冒号——
