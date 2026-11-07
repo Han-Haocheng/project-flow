@@ -1197,6 +1197,25 @@ flow gate add --id precommit --title 提交前检查 --phase commit \
 `gate run` 只记录步骤退出码与输出尾部；`flow check` 自身不写任何 store，门禁失败不会
 污染台账。
 
+#### 6.4.1 门禁的覆盖层次（哪层测什么，别把层次当缺陷）
+
+仓库有**三层**验证，覆盖的对象不同；**任何一层单独绿都不代表整体绿**：
+
+| 层 | 命令 | 测什么 | 不测什么 |
+|---|---|---|---|
+| 单元/契约 | `node --test test/` | 记录格式、CLI 退出码、core API、文本契约（CONTRACT/README 的数字与清单）、模块边界不变量 | 宿主事件派发、子进程 worker 的跨进程行为 |
+| 宿主自测 | `.selftest/host2-tools.mjs` 等 6 个 | 插件在**模拟宿主**上的挂载、工具 schema、技能注册、面板端点、心跳门禁 | 纯函数级细节（如 `isPlainObject` 对数组的判定） |
+| 客户端自测 | `.selftest/client-render.mjs` 等 | 浏览器 bundle 的渲染、注册、轮询、对比度 | 宿主侧逻辑 |
+
+两个**实测事实**，写下来避免后来者误判：
+
+- 有些纯函数只被 `node --test` 覆盖、**六个 selftest 全都不红**（例：把
+  `lib/util.mjs` 的 `isPlainObject` 去掉 `!Array.isArray(value)`，`node --test` 有 2 条红，
+  selftest 全部仍 exit 0）。**这是层次事实，不是缺陷**——selftest 测的是宿主集成面，
+  不该为纯函数补覆盖。反过来说：**只跑 selftest 就说"门禁绿了"是错的**。
+- `precommit` 门禁的 `tests` 步跑的是 `node --test test/`，**不跑 selftest**（selftest 需要
+  模拟宿主，耗时且不属于"提交前必须过"的范畴）。所以提交前的绿只代表第一层绿。
+
 ## 7 core API（Host 工具与 CLI 共用）
 
 `lib/core.mjs` 导出：
