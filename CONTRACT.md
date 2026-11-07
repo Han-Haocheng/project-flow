@@ -41,6 +41,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/proc.mjs` | **进程树杀灭的唯一实现**（POSIX 进程组 / win32 `taskkill /T /F` + grace 兜底） | core、checks |
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
+| `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；P0 只有数据，不捕获不派工 | core |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
 | `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
@@ -406,6 +407,41 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   记 `task-archive-skipped` warning，不中断本次 sweep（门禁步不会被一条脏记录卡住）。写锁被
   占用（`conflict`）时跳过本次、记一条 `archive-locked` warning，命令仍退出 **0**（`--json`
   带 `locked:true`）；`--dry-run` 不写、不取锁，只报告候选。
+
+#### 3.2.1 任务阶段 `stage`（P0：只落数据）
+
+`stage` 是行为层，`status`（`draft|active|done|archived`）是**兼容视图**——面板队列、
+归档 sweep、心跳认领仍读 `status`，它们的行为不因本字段改变。
+
+| `stage` | 中文 | 后继 | 推进者 |
+|---|---|---|---|
+| `created` | 已创建 | `queued-analysis` | plugin |
+| `queued-analysis` | 待分析 | `analyzing` | plugin |
+| `analyzing` | 分析中 | `queued-implementation` | session |
+| `queued-implementation` | 待实现 | `implementing` | plugin |
+| `implementing` | 实现中 | `queued-review` | session |
+| `queued-review` | 待审查 | `reviewing` | plugin |
+| `reviewing` | 审查中 | `done`（通过）**或 `queued-implementation`（打回）** | reviewer |
+| `done` | 已完成 | `archived` | plugin |
+| `archived` | 已归档 | —（终态） | — |
+
+- **唯一后退边**：`reviewing → queued-implementation`（审查打回）。`reviewing → done` 是
+  通过路径，两者都是合法边。
+- **`stage` → `status` 派生**（写路径）：`created → draft`；`queued-analysis` / `analyzing` /
+  `queued-implementation` / `implementing` / `queued-review` / `reviewing → active`；
+  `done → done`；`archived → archived`。写 `stage` 时同批把派生的 `status` 写回，保证两者
+  不矛盾；**同时给 `stage` 与 `status` 且不一致 → `invalid`**。
+- **只写 `status` 仍然合法**：既有调用方（归档 sweep、心跳认领、`task update --status`）不改，
+  此时 `stage` 原样不动。
+- **存量记录**没有 `stage` 键：读投影（`listTasks`/`getTask`/`updateTask` 的返回）补
+  `created`，**不写磁盘**；只有显式写 `stage` 才会落盘。台账回填是独立的显式操作，不是读路径行为。
+- **校验**：非法值 → `invalid: stage must be one of created, queued-analysis, analyzing,
+  queued-implementation, implementing, queued-review, reviewing, done, archived`（CLI 映射
+  `exit 2`）。`stage` 在**可更新白名单**内，不在不可改清单内。
+- **实现位置**：`lib/stage.mjs` 是唯一真源（阶段表、边、派生、`canTransition`/`assertTransition`）；
+  `lib/core.mjs` 只 import 它的 id/派生用于校验与投影，不复制表。
+- 本版**只有数据**：没有捕获、没有 guard、没有派工；`stage` 不会自行推进，
+  `canTransition`/`assertTransition` 也还没有被任何写路径调用。
 
 ### 3.3 门禁 `gates/<slug>.json`
 
