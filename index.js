@@ -2117,18 +2117,11 @@ function registerTools(ctx, settings) {
 // ------------------------------------------------------------------- skills
 
 const SKILL_META = [
-  {
-    name: 'project-flow-init',
-    description: 'Initialize a project to the .dsh/flow store (schema 2) and inspect the resulting layout.',
-    whenToUse:
-      'Use when the project has no .dsh/flow/flow.json, when the user asks to set up project flow, or when flow tools report a missing store.',
-  },
-  {
-    name: 'project-flow-usage',
-    description: 'Record and inspect experiments, tasks and gates through the flow CLI and the flow_* tools.',
-    whenToUse:
-      'Use when the user asks about project flow status, experiments, tasks or gates, or wants to record an experiment, task or gate run.',
-  },
+  /* Flat skills (skills/<name>.md) carry their own frontmatter; `name` is the
+     only field here. Keeping description/whenToUse here too would be a second
+     source of truth that silently loses to the frontmatter. */
+  { name: 'project-flow-init' },
+  { name: 'project-flow-usage' },
   {
     /* Directory layout: skills/<name>/SKILL.md plus references/, assets/, scripts/. */
     name: 'ai-collaborative-dev-workflow',

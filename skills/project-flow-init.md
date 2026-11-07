@@ -1,3 +1,8 @@
+---
+description: Initialize a project to the .dsh/flow store (schema 2) and inspect the resulting layout.
+metadata:
+  when-to-use: Use when the project has no `.dsh/flow/flow.json`, when the user asks to set up project flow, when a project was copied in WITH an existing `.dsh/flow/` (run `flow status` first, do NOT re-init), or when flow tools report a missing store or legacy `.agents/tasks/` / `Exp-Id` trailer history that has not been migrated.
+---
 # project-flow-init
 
 技能名：`project-flow-init`。给一个项目建立 `.dsh/flow/` 流程台账（实验 / 任务 / 门禁），

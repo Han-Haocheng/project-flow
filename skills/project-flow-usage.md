@@ -1,3 +1,8 @@
+---
+description: Record and inspect experiments, tasks and gates through the flow CLI and the flow_* tools.
+metadata:
+  when-to-use: Use when the user asks about project flow status, experiments, tasks or gates, or wants to record an experiment, task or gate run.
+---
 # project-flow-usage
 
 技能名：`project-flow-usage`。用 `flow` CLI 维护 `.dsh/flow/` 里的实验、任务与门禁；
