@@ -434,8 +434,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   不矛盾；**同时给 `stage` 与 `status` 且不一致 → `invalid`**。
 - **只写 `status` 仍然合法**：既有调用方（归档 sweep、心跳认领、`task update --status`）不改，
   此时 `stage` 原样不动。
-- **存量记录**没有 `stage` 键：读投影（`listTasks`/`getTask`/`updateTask` 的返回）补
-  `created`，**不写磁盘**；只有显式写 `stage` 才会落盘。台账回填是独立的显式操作，不是读路径行为。
+- **存量记录**没有 `stage` 键：读投影（`listTasks`/`getTask`/`updateTask` 的返回）**按 `status`
+  反推**——`archived → archived`、`done → done`、`active → queued-analysis`（唯一歧义项：`active`
+  对应流水线六阶段，取最早者作"在管道中"标记）、其它 → `created`。**不写磁盘**；只有显式写
+  `stage` 才会落盘，且**显式 `stage` 永远优先于 `status` 反推**。映射函数是 `lib/stage.mjs` 的
+  `legacyStageFromStatus()`（唯一真源，投影只调用、不手写 if 链）。
+  反推必须按 `status`：一律补 `created` 会让 done/archived 的存量记录被当成未完成、进待办栈顶并
+  虚增 §9 状态块的计数（task-68 的真 bug）。台账回填是独立的显式操作，不是读路径行为。
 - **校验**：非法值 → `invalid: stage must be one of created, queued-analysis, analyzing,
   queued-implementation, implementing, queued-review, reviewing, done, archived`（CLI 映射
   `exit 2`）。`stage` 在**可更新白名单**内，不在不可改清单内。

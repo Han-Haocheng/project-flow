@@ -304,16 +304,19 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
   assert.equal(readTaskFile(root, other.id).status, 'draft', '被拒绝的写入不得落盘')
   assert.equal(Object.hasOwn(readTaskFile(root, other.id), 'stage'), false)
 
-  // 只写 status 仍然可用（既有调用方：归档 sweep / 心跳认领），stage 原样不动
+  // 只写 status 仍然可用（既有调用方：归档 sweep / 心跳认领）。
+  // 磁盘上不得补写 stage 键；**读投影按 status 反推**（task-68：done → done，
+  // 否则 done 任务会被当成未完成、进待办栈顶）。
   const statusOnly = updateTask(root, contract, other.id, { status: 'done' })
   assert.equal(statusOnly.status, 'done')
-  assert.equal(statusOnly.stage, DEFAULT_STAGE, '只写 status 不得改动 stage')
+  assert.equal(statusOnly.stage, 'done', '只写 status 时投影按 status 反推')
+  assert.equal(Object.hasOwn(readTaskFile(root, other.id), 'stage'), false, '只写 status 不得在磁盘补 stage 键')
   assert.equal(Object.hasOwn(readTaskFile(root, other.id), 'stage'), false, '只写 status 也不得补写 stage 键')
 })
 
 // ------------------- 6. 存量无 stage：读投影补 created 且磁盘指纹不变（零写盘）
 
-test('⑥ 存量无 stage 的记录：读投影补 created，磁盘 bytes+size+mtime 一个字节都不动', () => {
+test('⑥ 存量无 stage 的记录：读投影按 status 反推（draft→created / active→queued-analysis），磁盘字节不动', () => {
   const { root, contract } = freshProject('legacy')
   writeLegacyTask(root, 'T-20260101-01', { status: 'draft' })
   writeLegacyTask(root, 'T-20260101-02', { status: 'active' })
@@ -321,9 +324,13 @@ test('⑥ 存量无 stage 的记录：读投影补 created，磁盘 bytes+size+m
   const before = storeFingerprint(root)
   const one = getTask(root, contract, 'T-20260101-01')
   const all = listTasks(root, contract)
-  assert.equal(one.stage, 'created', '缺 stage 的读投影必须是 DEFAULT_STAGE')
+  assert.equal(one.stage, 'created', 'draft 存量（缺 stage）投影为 DEFAULT_STAGE')
   assert.equal(one.status, 'draft', '读投影不得改写 status')
-  assert.deepEqual(all.map((record) => record.stage).sort(), ['created', 'created'])
+  assert.deepEqual(
+    all.map((record) => record.stage).sort(),
+    ['created', 'queued-analysis'],
+    'active 存量反推为流水线最早阶段（task-68）',
+  )
   assert.deepEqual(storeFingerprint(root), before, '读路径零写盘（bytes/size/mtime 全等）')
 
   // 改其它字段：既不补写 stage，也不清空 status
