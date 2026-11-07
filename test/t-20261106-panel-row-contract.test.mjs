@@ -1,6 +1,6 @@
 // T-20261106 · P2-2：面板任务行形状（CONTRACT §9.1.4）的机器断言。
 //
-// 背景：§9.1.4 定稿 13 键并声称「panelTaskRow / host2-tools.taskRowOk / 本节三处逐字一致」，
+// 背景：§9.1.4 定稿 14 键并声称「panelTaskRow / host2-tools.taskRowOk / 本节三处逐字一致」，
 // 但只有前两处有断言，文档侧没有——改文档、或改其中一处而漏另一处，都没人发现。
 // 本文件把「顺序即契约」锁成四个来源的两两一致。
 
@@ -36,10 +36,10 @@ function readLibSource() {
 /** §9.1.4 定稿顺序（也是 `panelTaskRow` 的返回顺序）。 */
 const ROW_KEYS = [
   'id', 'type', 'title', 'status', 'owner', 'notes', 'scope',
-  'acceptance', 'commits', 'created_at', 'updated_at', 'parent', 'depth',
+  'acceptance', 'commits', 'created_at', 'updated_at', 'parent', 'depth', 'stage',
 ]
 
-test('P2-2 A1：CONTRACT §9.1.4 逐字写出 13 键且顺序一致', () => {
+test('P2-2 A1：CONTRACT §9.1.4 逐字写出 14 键且顺序一致', () => {
   const text = fs.readFileSync(path.join(REPO, 'CONTRACT.md'), 'utf8')
   const start = text.indexOf('#### 9.1.4')
   assert.ok(start > 0, 'CONTRACT 找不到 §9.1.4')
@@ -49,7 +49,7 @@ test('P2-2 A1：CONTRACT §9.1.4 逐字写出 13 键且顺序一致', () => {
   // 文档里的键序串跨越换行，先把空白折叠成单空格再比。
   const flat = section.replace(/\s+/g, ' ')
   const expected = ROW_KEYS.join(', ')
-  assert.ok(flat.includes(expected), `§9.1.4 未按顺序写出 13 键；期望含：${expected}`)
+  assert.ok(flat.includes(expected), `§9.1.4 未按顺序写出 14 键；期望含：${expected}`)
   // 防回退：定位串出现在 §9.1.4 正文（不是别处），且 recentDone 提及 gate。
   assert.ok(/recentDone/.test(section) && /追加\s*.?gate/.test(section), '§9.1.4 应说明 recentDone 行尾追加 gate')
   assert.ok(/`type` 取记录字段的裁剪值/.test(section), '§9.1.4 应说明 type 是裁剪值')
@@ -90,9 +90,9 @@ test('P2-2 A5：行里不许再出现 goal（§3.2 已合并进 title）', () =>
   const text = fs.readFileSync(path.join(REPO, 'CONTRACT.md'), 'utf8')
   const start = text.indexOf('#### 9.1.4')
   const section = text.slice(start, text.indexOf('\n### 9.2', start))
-  const keyLine = section.match(/13 键[\s\S]{0,200}/)?.[0] ?? ''
-  assert.ok(keyLine.length > 0, '§9.1.4 找不到「13 键」引导句')
-  assert.ok(!/goal/.test(keyLine), `13 键串里不许有 goal：${keyLine}`)
+  const keyLine = section.match(/14 键[\s\S]{0,200}/)?.[0] ?? ''
+  assert.ok(keyLine.length > 0, '§9.1.4 找不到「14 键」引导句')
+  assert.ok(!/goal/.test(keyLine), `14 键串里不许有 goal：${keyLine}`)
   // 源码侧：panelTaskRow 的键列表里也不许出现 goal。
   const src = fs.readFileSync(path.join(REPO, 'lib', 'state-snapshot.mjs'), 'utf8')
   const body = src.slice(src.indexOf('function panelTaskRow('))

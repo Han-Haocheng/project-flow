@@ -43,6 +43,7 @@ const ROW_KEYS = [
   'updated_at',
   'parent',
   'depth',
+  'stage',
 ]
 
 // 与 test/core.test.mjs 同一约定：用例结束清掉 tmpdir fixture。

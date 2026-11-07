@@ -300,7 +300,7 @@ check('locale: every dictionary key is referenced by client.js', () => {
   for (const match of usage.matchAll(/\|\|\s*'([^']+)'/g)) used.add(match[1]);
   /* Keys passed as data (for example `message: 'workspace.pending'`). */
   for (const match of usage.matchAll(/'([a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+)'/g)) used.add(match[1]);
-  const dynamicPrefixes = ['tasks.status.', 'hb.status.', 'gates.phase.'].filter((prefix) =>
+  const dynamicPrefixes = ['tasks.status.', 'hb.status.', 'gates.phase.', 'tasks.stage.'].filter((prefix) =>
     usage.includes("'" + prefix + "' +")
   );
   const unused = Object.keys(zh).filter(

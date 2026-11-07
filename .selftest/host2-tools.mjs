@@ -89,10 +89,11 @@ function taskRowOk(row, { gate = false } = {}) {
     'updated_at',
     'parent',
     'depth',
+    'stage',
   ]
   if (gate) keys.push('gate')
   if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false
-  for (const key of ['id', 'type', 'title', 'status', 'owner', 'notes', 'created_at', 'updated_at']) {
+  for (const key of ['id', 'type', 'title', 'status', 'owner', 'notes', 'created_at', 'updated_at', 'stage']) {
     if (typeof row[key] !== 'string') return false
   }
   const scope = row.scope

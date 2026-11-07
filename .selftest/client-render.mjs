@@ -721,7 +721,7 @@ check('i18n: zh/en dictionaries stay in lockstep (keys, placeholders, ASCII-only
   assert.deepEqual(chinese, [], `en still contains Chinese: ${chinese.join(', ')}`);
   // Every literal t('…') must resolve; the dynamic prefixes are whitelisted but
   // must exist in the dictionary (so a renamed bucket cannot go silent).
-  const dynamic = ['tasks.status.', 'gates.phase.', 'hb.status.'];
+  const dynamic = ['tasks.status.', 'gates.phase.', 'hb.status.', 'tasks.stage.'];
   const used = [...source.matchAll(/\bt\(\s*'([^']+)'/g)].map((m) => m[1]);
   const missing = [...new Set(used)].filter((key) => !(key in zh) && !dynamic.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(missing, [], `t() keys with no zh definition: ${missing.join(', ')}`);
@@ -1119,13 +1119,15 @@ function treeTasks(overrides = {}) {
       counts: { draft: 1, active: 4, done: 1, archived: 0, other: 0 },
       current: 'T-A',
       active: [
-        { id: 'T-A', title: 'A 根任务', status: 'active', parent: null, depth: 0 },
-        { id: 'T-B', title: 'B 子任务', status: 'active', parent: 'T-A', depth: 1 },
-        { id: 'T-C', title: 'C 孙任务', status: 'active', parent: 'T-B', depth: 2 },
-        { id: 'T-X', title: 'X 跨组任务', status: 'active', parent: 'T-D', depth: 1 },
+        /* task-71: stages drive the buckets; A/B/C/X sit in the open 待办 bucket,
+           D sits in 分析中 (folded) so X keeps the cross-group badge case. */
+        { id: 'T-A', title: 'A 根任务', status: 'active', stage: 'created', parent: null, depth: 0 },
+        { id: 'T-B', title: 'B 子任务', status: 'active', stage: 'created', parent: 'T-A', depth: 1 },
+        { id: 'T-C', title: 'C 孙任务', status: 'active', stage: 'created', parent: 'T-B', depth: 2 },
+        { id: 'T-X', title: 'X 跨组任务', status: 'active', stage: 'created', parent: 'T-D', depth: 1 },
       ],
-      draft: [{ id: 'T-D', title: 'D 草稿任务', status: 'draft', parent: null, depth: 0 }],
-      recentDone: [{ id: 'T-E', title: 'E 完成', status: 'done', parent: null, depth: 0 }],
+      draft: [{ id: 'T-D', title: 'D 草稿任务', status: 'draft', stage: 'analyzing', parent: null, depth: 0 }],
+      recentDone: [{ id: 'T-E', title: 'E 完成', status: 'done', stage: 'done', parent: null, depth: 0 }],
       ...overrides,
     },
   }).tasks;
@@ -1240,14 +1242,14 @@ check('TasksCard tree: a cross-group child becomes a root row with a 父在…ba
   assert.equal(x.props['data-depth'], 0);
   const badge = collect(x, 'project-flow-taskBadge')[0];
   assert.ok(badge, 'the badge is missing');
-  assert.equal(textOf(badge), '父在草稿', 'the badge must name the parent group: ' + textOf(badge));
+  assert.equal(textOf(badge), '父在分析中', 'the badge must name the parent stage group: ' + textOf(badge));
 
   // A parent that is not in the payload at all reads as archived.
   const orphan = mountTasks(
     treeTasks({ active: [{ id: 'T-Z', title: 'Z 孤儿', status: 'active', parent: 'T-GONE', depth: 1 }] })
   );
   const z = collect(orphan, 'project-flow-taskRow')[0];
-  assert.equal(textOf(collect(z, 'project-flow-taskBadge')[0]), '父在已归档');
+  assert.equal(textOf(collect(z, 'project-flow-taskBadge')[0]), '父在已完成');
 });
 
 check('TasksCard tree: the parent caret does not steal the row click (detail stays closed)', () => {
@@ -1319,12 +1321,12 @@ check('TasksCard tree: the preview budget counts rendered rows, child rows inclu
   const rows = collect(flat, 'project-flow-taskRow');
   assert.equal(rows.length, 6, 'the preview shows exactly six rendered rows (parent + children)');
   assert.ok(rows.some((row) => textOf(row).includes('p1 子')), 'child rows count toward the budget');
-  const activeGroup = collect(flat, 'project-flow-group').find((group) => group.props.key === 'active');
+  const activeGroup = collect(flat, 'project-flow-group').find((group) => group.props.key === 'todo');
   const more = collect(activeGroup, 'project-flow-more');
   assert.equal(more.length, 1, 'the overflow line is missing');
   assert.equal(textOf(more[0]), '还有 1 条未显示');
   // Expanding the group lifts the preview and renders everything.
-  const opened = toggleGroup(flat, 'active', previewTasks);
+  const opened = toggleGroup(flat, 'todo', previewTasks);
   assert.equal(collect(opened, 'project-flow-taskRow').length, 7, 'expanding lifts the preview to every row');
 });
 
@@ -1365,7 +1367,12 @@ const FIXTURE_STORE = fileURLToPath(new URL('./state-store.json', import.meta.ur
 function panelViewPayload() {
   const payload = JSON.parse(readFileSync(FIXTURE_STORE, 'utf8'));
   payload.experiments = Object.assign({}, payload.experiments, { enabled: true });
+  /* task-71: stage annotations turn the fixture into three stage buckets:
+     待办 (the draft row), 实现中 (the active row), 已完成 (recentDone). */
   payload.tasks = Object.assign({}, payload.tasks, {
+    active: (payload.tasks.active || []).map((row) => Object.assign({}, row, { stage: 'implementing' })),
+    draft: (payload.tasks.draft || []).map((row) => Object.assign({}, row, { stage: 'created' })),
+    recentDone: (payload.tasks.recentDone || []).map((row) => Object.assign({}, row, { stage: 'done' })),
     trend: {
       from: '2026-10-22',
       to: '2026-11-04',
@@ -1601,29 +1608,31 @@ check('UI state: grouping/expansion is cached per root and restored on the way b
     /* The captured fixture has no draft rows, and the fold state needs rows to
        be observable: inject two so "folded" vs "expanded" is a row count. */
     payload.tasks = Object.assign({}, payload.tasks, {
-      draft: [
-        { id: 'T-D1', title: 'draft one', status: 'draft' },
-        { id: 'T-D2', title: 'draft two', status: 'draft' },
-      ],
+      /* task-71: the stage buckets only render when they hold rows, so the fold
+         state needs a non-empty, folded bucket: 分析中. */
+      active: payload.tasks.active.concat([
+        { id: 'T-D1', title: 'draft one', status: 'active', stage: 'analyzing' },
+        { id: 'T-D2', title: 'draft two', status: 'active', stage: 'analyzing' },
+      ]),
     });
-    payload.tasks.counts = Object.assign({}, payload.tasks.counts, { draft: 2 });
+    payload.tasks.counts = Object.assign({}, payload.tasks.counts, { active: payload.tasks.counts.active + 2 });
     return probe.normalize(payload);
   };
   const alpha = make('/w/alpha');
   const beta = make('/w/beta');
   const draftRows = (tree) => {
-    const group = collect(tree, 'project-flow-group').find((entry) => entry.props.key === 'draft');
+    const group = collect(tree, 'project-flow-group').find((entry) => entry.props.key === 'analyzing');
     return group ? collect(group, 'project-flow-taskRow').length : 0;
   };
   withStorage({}, () => {
     const first = renderWithState(probe.PanelView, panelViewProps(alpha), { reset: true });
-    assert.equal(draftRows(first), 0, 'the draft group starts folded');
-    const toggle = collect(first, 'project-flow-groupToggle').find((button) => button.props['aria-controls'] === 'project-flow-group-draft');
-    assert.ok(toggle, 'draft group toggle missing');
+    assert.equal(draftRows(first), 0, 'the analyzing group starts folded');
+    const toggle = collect(first, 'project-flow-groupToggle').find((button) => button.props['aria-controls'] === 'project-flow-group-analyzing');
+    assert.ok(toggle, 'analyzing group toggle missing');
     toggle.props.onClick({});
 
     const openedAlpha = renderWithState(probe.PanelView, panelViewProps(alpha));
-    assert.ok(draftRows(openedAlpha) > 0, 'expanding the draft group must render its rows');
+    assert.ok(draftRows(openedAlpha) > 0, 'expanding the analyzing group must render its rows');
 
     const other = renderWithState(probe.PanelView, panelViewProps(beta));
     assert.equal(draftRows(other), 0, 'another root must start from its own defaults');
@@ -2126,6 +2135,44 @@ check('TaskRow: the caret label says 收起 when expanded and 展开 when collap
   assert.match(collapsedCaret.props['aria-label'], /展开 1 个子任务/, 'a collapsed parent offers expand');
 });
 
+check('TaskRow: stage badge renders after type: title and greys finished stages (task-71)', () => {
+  const render = (task) => probe.TaskRow({ task, t, now: NOW, open: false, onToggle: () => {} });
+  const inProgress = render({ id: 'T-S1', type: 'feat', title: '进行中', status: 'active', stage: 'implementing' });
+  const activeBadges = collect(inProgress, 'project-flow-taskStage');
+  assert.equal(activeBadges.length, 1, 'an in-progress row needs exactly one stage badge');
+  assert.equal(textOf(activeBadges[0]), '实现中', 'the badge must use the Chinese stage label');
+  assert.equal(activeBadges[0].props.title, 'implementing', 'the badge keeps the English id as its tooltip');
+  assert.ok(!String(activeBadges[0].props.className).includes('--closed'), 'in-progress must not use the closed tone');
+  // Position: after `type: title` in the row head.
+  const head = collect(inProgress, 'project-flow-taskHead')[0];
+  const title = collect(inProgress, 'project-flow-taskTitle')[0];
+  assert.ok(textOf(title) === 'feat: 进行中', 'the title line must stay `type: title`');
+  const children = head.children.filter(Boolean);
+  assert.ok(
+    children.indexOf(activeBadges[0]) > children.indexOf(title),
+    'the stage badge must come after the title line'
+  );
+
+  const done = render({ id: 'T-S2', title: '完成', status: 'done', stage: 'done' });
+  const doneBadge = collect(done, 'project-flow-taskStage')[0];
+  assert.equal(textOf(doneBadge), '已完成');
+  assert.ok(String(doneBadge.props.className).includes('--closed'), 'finished work takes the closed (secondary) tone');
+  const archived = render({ id: 'T-S3', title: '归档', status: 'archived', stage: 'archived' });
+  assert.ok(String(collect(archived, 'project-flow-taskStage')[0].props.className).includes('--closed'));
+  assert.equal(textOf(collect(archived, 'project-flow-taskStage')[0]), '已归档');
+
+  // An older payload without `stage` renders no badge (no invented stage).
+  const legacy = render({ id: 'T-S4', title: '旧行', status: 'active' });
+  assert.equal(collect(legacy, 'project-flow-taskStage').length, 0, 'a row without stage must not show a badge');
+
+  // Stylesheet: the badge exists and the closed tone is the secondary label colour.
+  assert.ok(probe.CSS.includes('.project-flow-taskStage{'), 'stage badge CSS rule missing');
+  assert.ok(
+    probe.CSS.includes('.project-flow-taskStage--closed{color:var(--dsw-alias-label-secondary);}'),
+    'the closed stage badge must use the secondary label colour'
+  );
+});
+
 check('TasksCard: the queue head takes tasks.current even when it is not active[0]', () => {
   const tasks = probe.normalize({
     tasks: {
@@ -2156,10 +2203,10 @@ check('TasksCard: chips, current task, folded groups and one row per task', () =
   assert.ok(body.includes('client half'), 'current task title missing');
   // Groups: one draft, one active, three recent-done. Draft and recent start
   // folded, so the mount renders only the active preview.
-  assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'folded groups must not render rows');
-  assert.deepEqual(groupOrder(card), ['active', 'draft', 'recentDone'], 'group order is not active -> draft -> recentDone');
-  assert.equal(collect(card, 'project-flow-more').length, 2, 'each folded group must announce its hidden rows');
-  const opened = toggleGroup(toggleGroup(card, 'draft', view.tasks), 'recentDone', view.tasks);
+  assert.equal(collect(card, 'project-flow-taskRow').length, 2, 'the open 待办 preview shows both todo rows');
+  assert.deepEqual(groupOrder(card), ['todo', 'done'], 'group order is not 待办 -> 已完成');
+  assert.equal(collect(card, 'project-flow-more').length, 1, 'the folded 已完成 group must announce its hidden rows');
+  const opened = toggleGroup(card, 'done', view.tasks);
   assert.equal(collect(opened, 'project-flow-taskRow').length, 5, 'expanding must reveal every row');
   assert.equal(collect(opened, 'project-flow-gateMark--ok').length, 1);
   assert.equal(collect(opened, 'project-flow-gateMark--error').length, 1);
@@ -2197,9 +2244,13 @@ check('TasksCard: 首行是 type: title、第二行是 notes、署名是 id，�
   assert.equal(collect(card, 'project-flow-queueId')[0].children[0], 'T-A9', 'queue head does not name the active id');
   // 用户 ③ 决策：id 作为署名常驻（旧「行不得泄露 id」设计已反转）。
   const collapsedSignatures = collect(card, 'project-flow-taskSignature');
-  assert.equal(collapsedSignatures.length, 1, 'collapsed active row must sign its id');
-  assert.equal(collapsedSignatures[0].children[0], 'T-A9', 'signature must be the business id');
-  const opened = toggleGroup(card, 'draft', payload.tasks);
+  assert.equal(collapsedSignatures.length, 2, 'both 待办 rows must sign their ids');
+  assert.deepEqual(
+    collapsedSignatures.map((element) => element.children[0]),
+    ['T-A9', 'T-D9'],
+    'signatures must be the business ids'
+  );
+  const opened = card;
   const body = JSON.stringify(opened);
   // 有 type → `type: title`；无 type → 裸 title。
   assert.deepEqual(
@@ -2334,15 +2385,14 @@ check('TasksCard: an unknown task status bucket still renders', () => {
   assert.equal(collect(card, 'project-flow-chip').length, 5, 'other chip missing');
   const body = JSON.stringify(card);
   assert.ok(body.includes('2 其它'), 'other count not rendered');
-  assert.ok(body.includes('任务台账里没有进行中的任务。'), 'active list empty state missing');
+  assert.ok(body.includes('任务台账里还没有任务。'), 'empty stage copy missing');
   assert.equal(collect(card, 'project-flow-taskRow').length, 0);
 });
 
 check('TasksCard: empty tasks render the generic ledger copy', () => {
   const card = probe.TasksCard({ tasks: probe.normalize({}).tasks, t, now: NOW });
   const body = JSON.stringify(card);
-  assert.ok(body.includes('任务台账里没有进行中的任务。'), 'active empty copy missing');
-  assert.ok(body.includes('任务台账里还没有完成的任务。'), 'recent empty copy missing');
+  assert.ok(body.includes('任务台账里还没有任务。'), 'empty stage copy missing');
   assert.ok(!body.includes('JSON'), 'empty copy still names a JSON ledger');
   assert.equal(collect(card, 'project-flow-taskRow').length, 0);
 });
@@ -2381,19 +2431,17 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
 
   const card = mountTasks(payload.tasks);
   const body = JSON.stringify(card);
-  assert.ok(body.includes('待办（草稿）'), 'draft group header missing');
-  assert.deepEqual(groupOrder(card), ['active', 'draft', 'recentDone'], 'group order is not active -> draft -> recentDone');
-  assert.equal(groupToggle(card, 'draft').props['aria-expanded'], false, 'the draft group must start folded');
-  assert.equal(groupToggle(card, 'active').props['aria-expanded'], true, 'the active group must start open');
-  assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'a folded draft group must not render rows');
-
-  const opened = toggleGroup(card, 'draft', payload.tasks);
-  assert.equal(groupToggle(opened, 'draft').props['aria-expanded'], true, 'the draft toggle did not expand');
-  assert.equal(collect(opened, 'project-flow-taskRow').length, 3, 'expected one active + two expanded draft rows');
+  /* task-71: active and draft rows without a stage both bucket into 待办, so the
+     three records render as one preview (no separate draft section any more). */
+  assert.ok(body.includes('待办'), 'todo group header missing');
+  assert.deepEqual(groupOrder(card), ['todo'], 'the pipeline buckets must stay empty for this payload');
+  assert.equal(groupToggle(card, 'todo').props['aria-expanded'], true, 'the todo group starts open');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 3, 'the todo preview renders all three rows');
+  const opened = card;
   assert.deepEqual(
     collect(opened, 'project-flow-taskTitle').map((element) => element.children[0]),
     ['active one', 'draft one', 'draft two'],
-    'the active group must render before the draft group'
+    'active rows must render before draft rows inside the bucket'
   );
   assert.deepEqual(
     collect(opened, 'project-flow-taskNotes').map((element) => element.children[0]),
@@ -2408,7 +2456,7 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     'every row must sign its business id'
   );
 
-  const english = toggleGroup(mountTasks(payload.tasks, tEn), 'draft', payload.tasks, tEn);
+  const english = mountTasks(payload.tasks, tEn);
   // Data (the user's Chinese notes/titles) may be Chinese; the chrome must not be.
   const englishText = textOf(english)
     .split('草稿一的备注').join('')
@@ -2416,7 +2464,7 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     .split('draft one').join('')
     .split('draft two').join('')
     .split('active one').join('');
-  assert.ok(englishText.includes('Todo (drafts)'), 'en draft group header missing');
+  assert.ok(englishText.includes('Todo'), 'en todo group header missing');
   assert.ok(englishText.includes('owner alice'), 'en owner meta missing');
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en draft group still contains Chinese');
 });
@@ -2428,20 +2476,17 @@ check('TasksCard: no draft rows means no todo section', () => {
       counts: { draft: 0, active: 1, done: 1 },
       current: null,
       active: [{ id: 'T-A1', title: 'active one', owner: '' }],
-      recentDone: [{ id: 'T-DONE', title: 'done one', commits: [], gate: null }],
+      recentDone: [{ id: 'T-DONE', title: 'done one', status: 'done', commits: [], gate: null }],
     },
   });
   assert.deepEqual(payload.tasks.draft, [], 'an absent draft array normalizes to empty');
   const card = mountTasks(payload.tasks);
   const body = JSON.stringify(card);
-  assert.ok(!body.includes('待办（草稿）'), 'empty draft section must not render');
-  assert.equal(groupOrder(card).includes('draft'), false, 'an empty draft group must not render a header');
-  assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'only the active preview renders while recent is folded');
-  assert.equal(
-    collect(toggleGroup(card, 'recentDone', payload.tasks), 'project-flow-taskRow').length,
-    2,
-    'expanding recent must reveal the second row'
-  );
+  assert.equal(groupOrder(card).includes('draft'), false, 'the old draft group key must be gone');
+  assert.equal(groupOrder(card).includes('todo'), true, 'the active row lands in the 待办 bucket');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'the 待办 preview renders its single row');
+  const expanded = toggleGroup(card, 'done', payload.tasks);
+  assert.equal(collect(expanded, 'project-flow-taskRow').length, 2, 'expanding 已完成 must reveal the second row');
 
   // Older / hostile payloads must not crash or invent a section.
   const hostile = probe.TasksCard({
@@ -2450,7 +2495,7 @@ check('TasksCard: no draft rows means no todo section', () => {
     now: NOW,
   });
   assert.ok(hostile, 'hostile draft field rendered nothing');
-  assert.ok(!JSON.stringify(hostile).includes('待办（草稿）'), 'non-array draft must not render a section');
+  assert.ok(JSON.stringify(hostile).includes('任务台账里还没有任务。'), 'a payload without rows shows the empty line');
 });
 
 check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
@@ -2462,20 +2507,19 @@ check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
     tasks: { total: 30, counts: { draft: 30 }, current: null, draft: drafts, active: [], recentDone: [] },
   });
   const card = mountTasks(payload.tasks);
-  // Folded with 30 drafts: no rows, but the hidden count is announced (never a
-  // silent cut).
-  assert.equal(collect(card, 'project-flow-taskRow').length, 0, 'a folded group must not render rows');
-  assert.ok(JSON.stringify(card).includes('还有 30 条未显示'), 'folded overflow not announced');
+  // task-71: draft rows (created) land in the open 待办 bucket → preview first.
+  assert.equal(collect(card, 'project-flow-taskRow').length, 6, 'the 待办 preview shows the first 6 rows');
+  assert.ok(JSON.stringify(card).includes('还有 24 条未显示'), 'preview overflow not announced');
 
-  const opened = toggleGroup(card, 'draft', payload.tasks);
-  assert.equal(collect(opened, 'project-flow-taskRow').length, 25, 'draft rows must cap at 25');
+  const opened = toggleGroup(card, 'todo', payload.tasks);
+  assert.equal(collect(opened, 'project-flow-taskRow').length, 25, 'bucket rows must cap at 25');
   const body = JSON.stringify(opened);
   assert.ok(body.includes('draft 25'), 'last visible draft row missing');
   assert.ok(!body.includes('draft 26'), 'a 26th draft row leaked through');
   assert.ok(body.includes('还有 5 条未显示'), 'draft overflow copy missing');
   assert.equal(collect(opened, 'project-flow-more').length, 1, 'overflow line missing');
 
-  const english = toggleGroup(mountTasks(payload.tasks, tEn), 'draft', payload.tasks, tEn);
+  const english = toggleGroup(mountTasks(payload.tasks, tEn), 'todo', payload.tasks, tEn);
   const englishText = JSON.stringify(english);
   assert.ok(englishText.includes('5 more not shown'), 'en overflow copy missing');
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en overflow copy still contains Chinese');
@@ -2483,8 +2527,12 @@ check('TasksCard: draft list caps at 25 rows and reports the overflow', () => {
 
 // ---------------------------------------- task card: queue view (T-08 卡 A)
 check('TasksCard: 50+ tasks keep the task card inside a 12-row first screen', () => {
-  const rows = (prefix, length) =>
-    Array.from({ length }, (_, index) => ({ id: prefix + String(index + 1).padStart(2, '0'), title: prefix + ' ' + (index + 1) }));
+  const rows = (prefix, length, status = '') =>
+    Array.from({ length }, (_, index) => ({
+      id: prefix + String(index + 1).padStart(2, '0'),
+      title: prefix + ' ' + (index + 1),
+      ...(status ? { status } : {}),
+    }));
   const payload = probe.normalize({
     tasks: {
       total: 58,
@@ -2492,17 +2540,17 @@ check('TasksCard: 50+ tasks keep the task card inside a 12-row first screen', ()
       current: null,
       active: rows('A', 25),
       draft: rows('D', 25),
-      recentDone: rows('R', 8),
+      recentDone: rows('R', 8, 'done'),
     },
   });
   const card = mountTasks(payload.tasks);
   const firstScreen = collect(card, 'project-flow-taskRow').length;
   assert.ok(firstScreen <= 12, `first screen renders ${firstScreen} task rows (> 12)`);
-  assert.equal(firstScreen, 6, 'the active group should open on exactly the preview row count');
+  assert.equal(firstScreen, 6, 'the 待办 bucket should open on exactly the preview row count');
   const body = JSON.stringify(card);
-  assert.ok(body.includes('还有 19 条未显示'), 'active overflow (25-6) not announced');
-  assert.ok(body.includes('还有 25 条未显示'), 'folded draft overflow not announced');
-  assert.ok(body.includes('还有 8 条未显示'), 'folded recent overflow not announced');
+  /* task-71: active + draft both bucket into 待办 (50 rows); done is folded. */
+  assert.ok(body.includes('还有 44 条未显示'), '待办 overflow (50-6) not announced');
+  assert.ok(body.includes('还有 8 条未显示'), 'folded 已完成 overflow not announced');
   // Counts are never lost: the chips still come from the payload counts.
   assert.equal(collect(card, 'project-flow-chip').length, 4);
   assert.ok(body.includes('25 进行中'), 'active chip count drifted');
@@ -2515,8 +2563,8 @@ check('TasksCard: the fold state is keyed by group name and survives a poll refr
       { id: 'T-A2', title: 'active two' },
     ];
     const draft = [
-      { id: 'T-D1', title: 'draft one' },
-      { id: 'T-D2', title: 'draft two' },
+      { id: 'T-D1', title: 'draft one', stage: 'analyzing' },
+      { id: 'T-D2', title: 'draft two', stage: 'analyzing' },
     ];
     return probe.normalize({
       tasks: {
@@ -2531,56 +2579,50 @@ check('TasksCard: the fold state is keyed by group name and survives a poll refr
   };
   const first = build(false);
   const card = mountTasks(first);
-  // 2 active rows preview + 2 folded drafts.
-  assert.equal(collect(card, 'project-flow-taskRow').length, 2, 'the folded draft group must not render rows');
+  // 2 待办 rows preview + 2 folded 分析中 rows.
+  assert.equal(collect(card, 'project-flow-taskRow').length, 2, 'the folded 分析中 group must not render rows');
 
-  const opened = toggleGroup(card, 'draft', first);
-  assert.equal(collect(opened, 'project-flow-taskRow').length, 4, 'the draft group did not expand');
+  const opened = toggleGroup(card, 'analyzing', first);
+  assert.equal(collect(opened, 'project-flow-taskRow').length, 4, 'the 分析中 group did not expand');
 
   // A poll refresh hands the component a NEW payload with reordered rows: the
   // fold state must follow the group NAME, so it stays open.
   const refreshed = build(true);
   const afterPoll = renderWithState(probe.TasksCard, { tasks: refreshed, t, now: NOW });
-  assert.equal(groupToggle(afterPoll, 'draft').props['aria-expanded'], true, 'the fold state was lost on refresh');
+  assert.equal(groupToggle(afterPoll, 'analyzing').props['aria-expanded'], true, 'the fold state was lost on refresh');
   assert.equal(collect(afterPoll, 'project-flow-taskRow').length, 4, 'row count changed after refresh');
 
-  const closed = toggleGroup(afterPoll, 'draft', refreshed);
-  assert.equal(groupToggle(closed, 'draft').props['aria-expanded'], false, 'the draft group did not collapse');
-  assert.equal(collect(closed, 'project-flow-taskRow').length, 2, 'collapsed draft must render only the 2 active rows');
+  const closed = toggleGroup(afterPoll, 'analyzing', refreshed);
+  assert.equal(groupToggle(closed, 'analyzing').props['aria-expanded'], false, 'the 分析中 group did not collapse');
+  assert.equal(collect(closed, 'project-flow-taskRow').length, 2, 'collapsed 分析中 must render only the 2 待办 rows');
   const afterSecondPoll = renderWithState(probe.TasksCard, { tasks: build(false), t, now: NOW });
-  assert.equal(groupToggle(afterSecondPoll, 'draft').props['aria-expanded'], false, 'a collapsed group reopened on refresh');
+  assert.equal(groupToggle(afterSecondPoll, 'analyzing').props['aria-expanded'], false, 'a collapsed group reopened on refresh');
 });
 
 check('TasksCard: active overflow announces the hidden rows instead of truncating', () => {
   const active = Array.from({ length: 40 }, (_, index) => ({ id: 'A' + String(index + 1).padStart(2, '0'), title: 'active ' + (index + 1) }));
   const tasks = probe.normalize({ tasks: { total: 40, counts: { active: 40 }, current: null, active, recentDone: [] } }).tasks;
   const card = mountTasks(tasks);
-  assert.equal(collect(card, 'project-flow-taskRow').length, 6, 'active preview drifted');
-  assert.ok(JSON.stringify(card).includes('还有 34 条未显示'), 'active overflow copy missing (silent truncation)');
-  const opened = toggleGroup(card, 'active', tasks);
-  assert.equal(collect(opened, 'project-flow-taskRow').length, 25, 'expanded active must cap at MAX_LIST_ROWS');
-  assert.ok(JSON.stringify(opened).includes('还有 15 条未显示'), 'expanded active overflow copy missing');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 6, '待办 preview drifted');
+  assert.ok(JSON.stringify(card).includes('还有 34 条未显示'), '待办 overflow copy missing (silent truncation)');
+  const opened = toggleGroup(card, 'todo', tasks);
+  assert.equal(collect(opened, 'project-flow-taskRow').length, 25, 'expanded 待办 must cap at MAX_LIST_ROWS');
+  assert.ok(JSON.stringify(opened).includes('还有 15 条未显示'), 'expanded 待办 overflow copy missing');
 });
 
 check('TasksCard: empty groups keep every aria-controls target resolvable', () => {
   // Empty is a normal state (nothing in progress, nothing completed yet). The
   // toggle must never point at an id that does not exist in the tree.
   const empty = mountTasks(probe.normalize({}).tasks);
-  const toggles = collect(empty, 'project-flow-groupToggle');
-  assert.ok(toggles.length >= 2, 'the active and recent groups must render even when empty');
-  const lists = collect(empty, 'project-flow-taskList');
-  for (const toggle of toggles) {
-    const target = toggle.props['aria-controls'];
-    assert.ok(target, 'a group toggle lost its aria-controls');
-    assert.ok(
-      lists.some((element) => element.props.id === target),
-      `empty group aria-controls target ${target} does not exist (dangling reference)`
-    );
-  }
+  /* task-71: an empty ledger renders no groups at all (never six empty buckets),
+     so there is no toggle whose aria-controls could dangle. */
+  assert.equal(collect(empty, 'project-flow-groupToggle').length, 0, 'an empty ledger must render no groups');
+  assert.ok(textOf(empty).includes('任务台账里还没有任务。'), 'the empty ledger copy is missing');
   assert.equal(collect(empty, 'project-flow-taskRow').length, 0, 'an empty ledger must render no rows');
-  // Same guarantee when only the recent group is empty but active has a row.
+  // Every rendered group keeps its aria-controls target resolvable.
   const onlyActive = mountTasks(probe.normalize({ tasks: { total: 1, counts: { active: 1 }, current: null, active: [{ id: 'T-A1', title: 'a' }], recentDone: [] } }).tasks);
   const activeLists = collect(onlyActive, 'project-flow-taskList');
+  assert.equal(collect(onlyActive, 'project-flow-groupToggle').length, 1, 'only the non-empty 待办 group renders');
   for (const toggle of collect(onlyActive, 'project-flow-groupToggle')) {
     const target = toggle.props['aria-controls'];
     assert.ok(activeLists.some((element) => element.props.id === target), `dangling aria-controls: ${target}`);
@@ -2599,46 +2641,48 @@ check('TasksCard: PROBE-A — a group appearing later must not lose the fold sta
       current: null,
       active: [{ id: 'T-A1', title: 'active one' }],
       recentDone: [
-        { id: 'T-R1', title: 'done one', gate: 'pass' },
-        { id: 'T-R2', title: 'done two', gate: 'fail' },
+        { id: 'T-R1', title: 'done one', status: 'done', gate: 'pass' },
+        { id: 'T-R2', title: 'done two', status: 'done', gate: 'fail' },
       ],
     },
   }).tasks;
   assert.equal(before.draft.length, 0, 'the old payload must have no draft group');
 
   const card = mountTasks(before);
-  assert.deepEqual(groupOrder(card), ['active', 'recentDone'], 'a payload without drafts renders two groups');
-  const opened = toggleGroup(card, 'recentDone', before);
-  assert.equal(groupToggle(opened, 'recentDone').props['aria-expanded'], true, 'recent group did not expand');
-  assert.equal(collect(opened, 'project-flow-taskRow').length, 3, 'expected 1 active + 2 recent rows');
+  assert.deepEqual(groupOrder(card), ['todo', 'done'], 'a payload without drafts renders two groups');
+  const opened = toggleGroup(card, 'done', before);
+  assert.equal(groupToggle(opened, 'done').props['aria-expanded'], true, 'done group did not expand');
+  assert.equal(collect(opened, 'project-flow-taskRow').length, 3, 'expected 1 待办 + 2 已完成 rows');
 
-  // Next poll: a draft group shows up in the middle of the render order.
+  // Next poll: a NEW group (分析中) shows up between 待办 and 已完成.
   const after = probe.normalize({
     tasks: {
       total: 4,
-      counts: { active: 1, draft: 1, done: 2 },
+      counts: { active: 2, done: 2 },
       current: null,
-      active: [{ id: 'T-A1', title: 'active one' }],
-      draft: [{ id: 'T-D1', title: 'draft one' }],
+      active: [
+        { id: 'T-A1', title: 'active one' },
+        { id: 'T-N1', title: 'analyzing one', status: 'active', stage: 'analyzing' },
+      ],
       recentDone: [
-        { id: 'T-R1', title: 'done one', gate: 'pass' },
-        { id: 'T-R2', title: 'done two', gate: 'fail' },
+        { id: 'T-R1', title: 'done one', status: 'done', gate: 'pass' },
+        { id: 'T-R2', title: 'done two', status: 'done', gate: 'fail' },
       ],
     },
   }).tasks;
   const refreshed = renderWithState(probe.TasksCard, { tasks: after, t, now: NOW });
-  assert.deepEqual(groupOrder(refreshed), ['active', 'draft', 'recentDone'], 'group order changed unexpectedly');
+  assert.deepEqual(groupOrder(refreshed), ['todo', 'analyzing', 'done'], 'group order changed unexpectedly');
   assert.equal(
-    groupToggle(refreshed, 'recentDone').props['aria-expanded'],
+    groupToggle(refreshed, 'done').props['aria-expanded'],
     true,
-    'PROBE-A: the recent group re-collapsed when a new group appeared ahead of it (state keyed by render index)'
+    'PROBE-A: the done group re-collapsed when a new group appeared ahead of it (state keyed by render index)'
   );
   assert.equal(
     collect(refreshed, 'project-flow-taskRow').length,
     3,
-    'PROBE-A: expected 1 active + 2 recent rows (the new draft group is folded)'
+    'PROBE-A: expected 1 待办 + 2 已完成 rows (the new 分析中 group is folded)'
   );
-  assert.equal(groupToggle(refreshed, 'draft').props['aria-expanded'], false, 'the new draft group must start folded');
+  assert.equal(groupToggle(refreshed, 'analyzing').props['aria-expanded'], false, 'the new analyzing group must start folded');
 });
 
 check('TasksCard: the queue head names the first active row and degrades when empty', () => {
@@ -2656,7 +2700,7 @@ check('TasksCard: the queue head names the first active row and degrades when em
 check('TasksCard: group toggles are real buttons with aria-expanded and aria-controls', () => {
   const card = mountTasks(view.tasks);
   const toggles = collect(card, 'project-flow-groupToggle');
-  assert.equal(toggles.length, 3, 'expected one toggle per rendered group');
+  assert.equal(toggles.length, 2, 'expected one toggle per rendered stage group');
   for (const toggle of toggles) {
     assert.equal(toggle.type, 'button', 'a group toggle must be a <button>');
     assert.equal(toggle.props.type, 'button', 'a group toggle must not submit a form');
@@ -2668,8 +2712,8 @@ check('TasksCard: group toggles are real buttons with aria-expanded and aria-con
     assert.ok(list, `aria-controls target ${target} does not exist`);
   }
   const chevron = (node, group) => collect(groupToggle(node, group), 'project-flow-groupChevron')[0].children[0];
-  assert.equal(chevron(card, 'draft'), '\u25B8', 'a folded group must show the closed chevron');
-  assert.equal(chevron(toggleGroup(card, 'draft', view.tasks), 'draft'), '\u25BE', 'an expanded group must show the open chevron');
+  assert.equal(chevron(card, 'done'), '\u25B8', 'a folded group must show the closed chevron');
+  assert.equal(chevron(toggleGroup(card, 'done', view.tasks), 'done'), '\u25BE', 'an expanded group must show the open chevron');
 });
 
 // ------------------------------------------------------------- decisions (T-23)

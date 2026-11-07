@@ -1628,17 +1628,31 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 
 #### 9.1.4 面板任务区：行形状、视觉树与趋势
 
-- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 13 键
+- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 14 键
   `id, type, title, status, owner, notes, scope, acceptance, commits, created_at, updated_at,
-  parent, depth`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
-  `.selftest/host2-tools.mjs` 与本节三处逐字一致。行里**没有 `goal`**（§3.2：已合并进
-  `title`）。`type` 取记录字段的裁剪值：缺失或非字符串一律投影为 `''`（行内字段全是字符串），
-  客户端据此**降级为只显示 `title`**——不加 `': '` 前缀、不显示占位符；有 `type` 时首行渲染
-  `type: title`（`: ` 硬编码，不走 i18n），第二行是 `notes`（为空则整行不渲染），弱化的右对齐
-  署名是业务 `id`。`parent: string|null`（父任务 id；父失效/成环时读投影为 `null`）与
-  `depth: 0..3`（相对根的深度，超过 3 截断）是 T-13 A3 起的树字段；数组仍按各自既有顺序
-  （active/draft FIFO、`recentDone` 按 `updated_at` 倒序）——树只由行上的 `parent`/`depth`
-  表达，**不改数组顺序、不新增 `children` 数组**，前端据此嵌套渲染。
+  parent, depth, stage`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
+  `.selftest/host2-tools.mjs` 与本节三处逐字一致。第 14 键 `stage`（task-71）是**投影值**：
+  记录带合法 `stage` 就用它，旧记录用 `lib/stage.mjs` 的 `legacyStageFromStatus(status)` 推导
+  （唯一真源；客户端与快照都不另写第二套 status→stage 映射），恒为九个 id 之一。行里
+  **没有 `goal`**（§3.2：已合并进 `title`）。`type` 取记录字段的裁剪值：缺失或非字符串一律投影为
+  `''`（行内字段全是字符串），客户端据此**降级为只显示 `title`**——不加 `': '` 前缀、
+  不显示占位符；有 `type` 时首行渲染 `type: title`（`: ` 硬编码，不走 i18n），第二行是
+  `notes`（为空则整行不渲染），弱化的右对齐署名是业务 `id`。`parent: string|null`（父任务 id；
+  父失效/成环时读投影为 `null`）与 `depth: 0..3`（相对根的深度，超过 3 截断）是 T-13 A3 起的
+  树字段；数组仍按各自既有顺序（active/draft FIFO、`recentDone` 按 `updated_at` 倒序）——树
+  只由行上的 `parent`/`depth` 表达，**不改数组顺序、不新增 `children` 数组**，前端据此嵌套渲染。
+- **九阶段视图（task-71）**：`tasks` 另带两个字段。`stageCounts` = 九个阶段 id 的计数
+  （**由 `STAGE_IDS` 生成，不手写九个键**；全部任务按有效阶段计数，旧记录用
+  `legacyStageFromStatus` 推导）。`stages` = 九键 → 行数组（同一 14 键行；管线阶段按
+  `created_at` FIFO、`done`/`archived` 按 `updated_at` 倒序，每桶上限 50 行，真实总数看
+  `stageCounts`）。四态 `counts` **保留不动**：`done`/`archived` 与阶段 id 同名，阶段计数
+  因此必须单独成字段，不能并进 `counts`。面板任务卡按**六个阶段桶**分组：待办
+  （created + queued-analysis）/ 分析中 / 待实现 / 实现中 / 待审查（queued-review + reviewing）/
+  已完成（done + archived，默认折叠）；行首 `type: title` 之后渲染 `stage` 徽标（客户端按
+  `tasks.stage.<id>` 取 i18n 文案），已完成/已归档用次要色。旧 payload 没有
+  `stages`/`stageCounts` 时，客户端按行上的 `stage` 从 `active`/`draft`/`recentDone` 推导分组
+  （行缺 `stage` 时仅按 `status` 把 `done`/`archived` 归入「已完成」，其余归「待办」）——
+  该兜底的桶归属与 `legacyStageFromStatus` 一致，不维护第二套阶段映射。
 - **视觉树（a11y 口径）**：任务树是**视觉树**，**没有**采用严格的 `role="tree"`/`role="treeitem"`
   ——行是 `<li>`，按 `aria-level` = `min(depth,3)+1`（1..4）标注层级，配 12px/级缩进
   （`calc(var(--d) * 12px)`）与左侧连接线；行头是 `role="button"`（`aria-expanded` 控制详情）。

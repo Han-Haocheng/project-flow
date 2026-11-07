@@ -64,6 +64,16 @@ function stageSnapshotCopy(label) {
   fs.copyFileSync(SNAPSHOT_SRC, copy)
   // 先证明复制的是真源码：否则下面的断言只是在测一个可能被篡改的副本。
   assert.equal(sha256(copy), sha256(SNAPSHOT_SRC), 'copied state-snapshot.mjs differs from lib/state-snapshot.mjs')
+  // P2.5 made state-snapshot import lib/stage.mjs (a pure data module), so the
+  // copy needs that dependency too — otherwise the probe dies with
+  // ERR_MODULE_NOT_FOUND instead of exercising the degradation path it targets.
+  // Only this one module is copied on purpose: `core.mjs` stays ABSENT, because
+  // a missing core is exactly what these probes are meant to simulate.
+  for (const dep of ['util.mjs', 'stage.mjs']) {
+    const depCopy = path.join(lib, dep)
+    fs.copyFileSync(path.join(REPO, 'lib', dep), depCopy)
+    assert.equal(sha256(depCopy), sha256(path.join(REPO, 'lib', dep)), `copied ${dep} differs from lib/${dep}`)
+  }
   const project = path.join(dir, 'project')
   fs.mkdirSync(project, { recursive: true })
   return { dir, lib, copy, project }

@@ -95,6 +95,30 @@ window.__ModuleLoader__.load({
        rows so a 50-task ledger still fits the sidebar. Everything beyond it stays
        behind the group toggle and is always announced by the "N more" line. */
     const TASK_PREVIEW_ROWS = 6;
+    /* task-71: the nine stage ids are a host projection; the client only maps
+       them to display labels and to the six stage buckets. No status→stage
+       mapping lives here — a legacy row without `stage` is bucketed by the
+       bucket-safe fallback in `stageOfRow` (done/archived exact, everything
+       else "todo"), which matches legacyStageFromStatus's bucket outcome. */
+    const STAGE_LABEL_KEYS = {
+      created: 'tasks.stage.created',
+      'queued-analysis': 'tasks.stage.queued-analysis',
+      analyzing: 'tasks.stage.analyzing',
+      'queued-implementation': 'tasks.stage.queued-implementation',
+      implementing: 'tasks.stage.implementing',
+      'queued-review': 'tasks.stage.queued-review',
+      reviewing: 'tasks.stage.reviewing',
+      done: 'tasks.stage.done',
+      archived: 'tasks.stage.archived',
+    };
+    const TASK_STAGE_GROUPS = [
+      { id: 'todo', label: 'tasks.stageGroup.todo', stages: ['created', 'queued-analysis'] },
+      { id: 'analyzing', label: 'tasks.stageGroup.analyzing', stages: ['analyzing'] },
+      { id: 'queuedImplementation', label: 'tasks.stageGroup.queuedImplementation', stages: ['queued-implementation'] },
+      { id: 'implementing', label: 'tasks.stageGroup.implementing', stages: ['implementing'] },
+      { id: 'queuedReview', label: 'tasks.stageGroup.queuedReview', stages: ['queued-review', 'reviewing'] },
+      { id: 'done', label: 'tasks.stageGroup.done', stages: ['done', 'archived'] },
+    ];
     const STALE_AFTER_SECONDS = 6 * 60 * 60;
 
     /** The seven tallies the Host reports for the decision section. */
@@ -170,7 +194,22 @@ window.__ModuleLoader__.load({
       'tasks.status.other': '其它',
       'tasks.current': '当前任务',
       'tasks.currentNone': '无',
-      'tasks.draft': '待办（草稿）',
+      'tasks.stage.created': '已创建',
+      'tasks.stage.queued-analysis': '待分析',
+      'tasks.stage.analyzing': '分析中',
+      'tasks.stage.queued-implementation': '待实现',
+      'tasks.stage.implementing': '实现中',
+      'tasks.stage.queued-review': '待审查',
+      'tasks.stage.reviewing': '审查中',
+      'tasks.stage.done': '已完成',
+      'tasks.stage.archived': '已归档',
+      'tasks.stageGroup.todo': '待办',
+      'tasks.stageGroup.analyzing': '分析中',
+      'tasks.stageGroup.queuedImplementation': '待实现',
+      'tasks.stageGroup.implementing': '实现中',
+      'tasks.stageGroup.queuedReview': '待审查',
+      'tasks.stageGroup.done': '已完成',
+      'tasks.stageEmpty': '任务台账里还没有任务。',
       'tasks.more': '还有 {n} 条未显示',
       'tasks.trendSummary': '近 {days} 天 · 新增 {created} · 完成 {done} · 归档 {archived}',
       'tasks.trendBar': '{date} 新增 {created} · 完成 {done} · 归档 {archived}',
@@ -198,10 +237,6 @@ window.__ModuleLoader__.load({
       'tasks.trendLegendDone': '完成',
       'tasks.queueHead': '队列头',
       'tasks.queueEmpty': '暂无进行中任务',
-      'tasks.active': '进行中',
-      'tasks.activeEmpty': '任务台账里没有进行中的任务。',
-      'tasks.recent': '最近完成',
-      'tasks.recentEmpty': '任务台账里还没有完成的任务。',
       'tasks.owner': '负责人',
       'tasks.gate.pass': '门禁通过',
       'tasks.gate.fail': '门禁失败',
@@ -328,7 +363,22 @@ window.__ModuleLoader__.load({
       'tasks.status.other': 'other',
       'tasks.current': 'Current task',
       'tasks.currentNone': 'none',
-      'tasks.draft': 'Todo (drafts)',
+      'tasks.stage.created': 'Created',
+      'tasks.stage.queued-analysis': 'Awaiting analysis',
+      'tasks.stage.analyzing': 'Analyzing',
+      'tasks.stage.queued-implementation': 'Awaiting implementation',
+      'tasks.stage.implementing': 'Implementing',
+      'tasks.stage.queued-review': 'Awaiting review',
+      'tasks.stage.reviewing': 'Reviewing',
+      'tasks.stage.done': 'Done',
+      'tasks.stage.archived': 'Archived',
+      'tasks.stageGroup.todo': 'Todo',
+      'tasks.stageGroup.analyzing': 'Analyzing',
+      'tasks.stageGroup.queuedImplementation': 'Awaiting implementation',
+      'tasks.stageGroup.implementing': 'Implementing',
+      'tasks.stageGroup.queuedReview': 'Awaiting review',
+      'tasks.stageGroup.done': 'Done',
+      'tasks.stageEmpty': 'The task ledger has no tasks yet.',
       'tasks.more': '{n} more not shown',
       'tasks.trendSummary': 'Last {days}d · {created} new · {done} done · {archived} archived',
       'tasks.trendBar': '{date} · {created} new · {done} done · {archived} archived',
@@ -356,10 +406,6 @@ window.__ModuleLoader__.load({
       'tasks.trendLegendDone': 'done',
       'tasks.queueHead': 'Queue head',
       'tasks.queueEmpty': 'Nothing in progress',
-      'tasks.active': 'In progress',
-      'tasks.activeEmpty': 'No task in the ledger is in progress.',
-      'tasks.recent': 'Recently completed',
-      'tasks.recentEmpty': 'Nothing in the ledger is completed yet.',
       'tasks.owner': 'owner',
       'tasks.gate.pass': 'gate pass',
       'tasks.gate.fail': 'gate fail',
@@ -832,6 +878,9 @@ window.__ModuleLoader__.load({
         created_at: asText(task.created_at),
         updated_at: asText(task.updated_at),
         gate: asText(task.gate),
+        /* task-71: 14th row key. The host derives it (stage.mjs); an older
+           payload has none and the stage bucket falls back to status. */
+        stage: asText(task.stage),
         /* T-13 A2 tree fields: absent on an older payload → null / 0 (flat). */
         parent: asText(task.parent) || null,
         depth: asNumber(task.depth, 0),
@@ -896,6 +945,14 @@ window.__ModuleLoader__.load({
       return asArray(value)
         .filter((task) => task && typeof task === 'object' && !Array.isArray(task))
         .map(normalizeTask);
+    }
+
+    /** `tasks.stages`: stage id → rows; non-object buckets are dropped. */
+    function normalizeTaskStages(value) {
+      const source = asObject(value);
+      const out = {};
+      for (const stage of Object.keys(source)) out[stage] = normalizeTasks(source[stage]);
+      return out;
     }
 
     /** Tolerant mapping of the host payload; never throws on missing fields. */
@@ -992,6 +1049,11 @@ window.__ModuleLoader__.load({
           draft: normalizeTasks(tasksSrc.draft),
           active: normalizeTasks(tasksSrc.active),
           recentDone: normalizeTasks(tasksSrc.recentDone),
+          /* task-71: nine stage buckets + their counts, generated by the host
+             from STAGE_IDS. Absent on an older payload; the card falls back to
+             the three legacy arrays for grouping. */
+          stageCounts: asObject(tasksSrc.stageCounts),
+          stages: normalizeTaskStages(tasksSrc.stages),
           trend: normalizeTrend(tasksSrc.trend),
         },
         gates,
@@ -1162,6 +1224,10 @@ window.__ModuleLoader__.load({
       const heading = type ? type + ': ' + title : title;
       const notes = asText(task.notes);
       const signature = asText(task.id);
+      const stage = asText(task.stage);
+      const stageLabel =
+        stage === '' ? '' : STAGE_LABEL_KEYS[stage] ? t(STAGE_LABEL_KEYS[stage]) : t('tasks.stage.' + stage);
+      const stageClosed = stage === 'done' || stage === 'archived';
       const meta = taskMetaText(task, props.now, t);
       const gate = asText(task.gate);
       const mark = gate === 'pass' ? '\u2714' : gate === 'fail' ? '\u2718' : '';
@@ -1236,6 +1302,18 @@ window.__ModuleLoader__.load({
               )
             : null,
           React.createElement('span', { className: 'project-flow-taskTitle', title: heading || undefined }, heading || t('misc.dash')),
+          /* task-71: the nine-stage badge, right after `type: title`; done/archived
+             take the secondary tone so finished work does not compete for the eye. */
+          stageLabel === ''
+            ? null
+            : React.createElement(
+                'span',
+                {
+                  className: 'project-flow-taskStage' + (stageClosed ? ' project-flow-taskStage--closed' : ''),
+                  title: stage,
+                },
+                stageLabel
+              ),
           badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
           meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
           React.createElement('span', { className: 'project-flow-taskSignature', title: signature || undefined }, signature),
@@ -1841,16 +1919,19 @@ window.__ModuleLoader__.load({
         currentTitle = asText(current.title);
       }
 
-      /* Drafts are optional: an older Host payload has no `draft` array, so the
-         block renders only when there are rows (counts still appear as chips). */
-      const draftTasks = asArray(tasks.draft);
-
       /* Groups fold independently, and the fold amount is keyed by GROUP NAME —
          never by row index — so a 2.5 s poll that reorders rows keeps the state.
          Defaults keep the first screen short: the queue head (active) opens on a
          preview, the backlog and the recent completions start folded. */
       const [groupLimits, setGroupLimits] = useState(() =>
-        uiRead(stateRoot, 'groupLimits', { active: TASK_PREVIEW_ROWS, draft: 0, recentDone: 0 })
+        uiRead(stateRoot, 'groupLimits', {
+          todo: TASK_PREVIEW_ROWS,
+          analyzing: 0,
+          queuedImplementation: 0,
+          implementing: 0,
+          queuedReview: 0,
+          done: 0,
+        })
       );
       const groupLimit = (key) => {
         const table = asObject(groupLimits) || {};
@@ -1888,6 +1969,34 @@ window.__ModuleLoader__.load({
       const queueHeadId = queueHead ? asText(queueHead.id) : '';
       const queueHeadTitle = queueHead ? asText(queueHead.title) : '';
 
+      /* task-71: six stage buckets. The host pre-groups rows into `tasks.stages`
+         (nine keys, each row exactly once); an older payload has no `stages`, so
+         the three legacy arrays are re-bucketed. `stageOfRow`'s fallback is
+         bucket-safe: done/archived map exactly, everything else lands in "todo"
+         — the same bucket legacyStageFromStatus would produce for the row. */
+      const stageBuckets = asObject(tasks.stages);
+      const hasStageBuckets = Object.keys(stageBuckets).length > 0;
+      const legacyRows = activeTasks.concat(asArray(tasks.draft), recentTasks);
+      const stageOfRow = (row) => {
+        const stage = asText(asObject(row).stage);
+        if (stage !== '') return stage;
+        const status = asText(asObject(row).status);
+        if (status === 'done') return 'done';
+        if (status === 'archived') return 'archived';
+        return 'created';
+      };
+      const rowsOfStage = (stage) =>
+        hasStageBuckets ? asArray(stageBuckets[stage]) : legacyRows.filter((row) => stageOfRow(row) === stage);
+      const stageGroups = TASK_STAGE_GROUPS.map((def) => {
+        const rows = [];
+        for (const stage of def.stages) for (const row of rowsOfStage(stage)) rows.push(row);
+        return { id: def.id, label: def.label, rows };
+      });
+      const stageGroupLabel = (id) => {
+        const def = TASK_STAGE_GROUPS.find((group) => group.id === id);
+        return def === undefined ? t('tasks.stageGroup.done') : t(def.label);
+      };
+
       /* T-13 A3: fold state per PARENT task id (never per index), so a 2.5 s poll
          that reorders rows keeps every subtree open. Default shows one level. */
       const [collapsedIds, setCollapsedIds] = useState(() => uiRead(stateRoot, 'collapsedIds', {}));
@@ -1906,10 +2015,10 @@ window.__ModuleLoader__.load({
       /* Which group owns each task: the same-group nesting rule and the
          「父在…」badge both read this map. */
       const groupOfTask = new Map();
-      for (const [groupKey, groupRows] of [['active', activeTasks], ['draft', draftTasks], ['done', recentTasks]]) {
-        for (const row of groupRows) {
+      for (const group of stageGroups) {
+        for (const row of group.rows) {
           const id = asText(row.id);
-          if (id !== '' && !groupOfTask.has(id)) groupOfTask.set(id, groupKey);
+          if (id !== '' && !groupOfTask.has(id)) groupOfTask.set(id, group.id);
         }
       }
 
@@ -1951,7 +2060,7 @@ window.__ModuleLoader__.load({
         if (parentId === '') return '';
         const owner = groupOfTask.get(parentId);
         if (owner === kind) return '';
-        return t('tasks.parentIn', { group: t('tasks.status.' + (owner || 'archived')) });
+        return t('tasks.parentIn', { group: stageGroupLabel(owner) });
       };
 
       /** Rows of one group; business ids are the React keys, never row indexes. */
@@ -2109,11 +2218,17 @@ window.__ModuleLoader__.load({
             : null,
           queueHead ? null : React.createElement('span', { className: 'project-flow-muted' }, t('tasks.queueEmpty'))
         ),
-        renderGroup({ key: 'active', label: 'tasks.active', rows: activeTasks, empty: 'tasks.activeEmpty' }),
-        draftTasks.length === 0
-          ? null
-          : renderGroup({ key: 'draft', label: 'tasks.draft', rows: draftTasks, empty: null }),
-        renderGroup({ key: 'recentDone', label: 'tasks.recent', rows: recentTasks, empty: 'tasks.recentEmpty' })
+        /* task-71: one block per non-empty stage bucket, order fixed by
+           TASK_STAGE_GROUPS (todo → … → done). An empty ledger shows one line,
+           never six empty buckets. */
+        stageGroups.map((group) =>
+          group.rows.length === 0
+            ? null
+            : renderGroup({ key: group.id, label: group.label, rows: group.rows, empty: null })
+        ),
+        stageGroups.every((group) => group.rows.length === 0)
+          ? React.createElement(EmptyLine, null, t('tasks.stageEmpty'))
+          : null
       );
     }
 
@@ -3828,6 +3943,8 @@ window.__ModuleLoader__.load({
 .project-flow-taskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
 .project-flow-taskMark{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
 .project-flow-taskTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
+.project-flow-taskStage{flex:none;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:10px;line-height:1.6;white-space:nowrap;}
+.project-flow-taskStage--closed{color:var(--dsw-alias-label-secondary);}
 .project-flow-taskMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-taskSignature{flex:none;margin-left:auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
 .project-flow-taskNotes{flex:1 1 100%;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
@@ -3962,6 +4079,7 @@ window.__ModuleLoader__.load({
 .project-flow-taskHead{column-gap:10px;padding:4px 5px;font-size:12px;}
 .project-flow-taskMark{font-size:11px;}
 .project-flow-taskMeta{font-size:11px;}
+.project-flow-taskStage{font-size:10.5px;}
 .project-flow-taskSignature{font-size:11px;}
 .project-flow-taskNotes{font-size:11.5px;}
 .project-flow-taskDetail{margin-left:42px;}
