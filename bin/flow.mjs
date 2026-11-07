@@ -47,10 +47,12 @@ const USAGE = `project-flow CLI（schema 2）
 
   task list | show <id>
   task add --title T --type <t> [--id T-YYYYMMDDHHMMSS] [--status draft|active|done|archived]
-           [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+           [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
   task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
-           [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+           [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
           type 必填（add）：feat|fix|docs|style|refactor|perf|test|chore|build|ci（commit 类型）
+          stage（可选）：created|queued-analysis|analyzing|queued-implementation|implementing|
+           queued-review|reviewing|done|archived；写 stage 时 status 自动派生（见 CONTRACT §3.2.1）
           标题即目标（goal 已并入 title）；title/type 不可改（update），旧记录由格式门禁迁移
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
   task archive [--older-than N] [--dry-run]
@@ -151,7 +153,7 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type', 'type-map',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -201,8 +203,8 @@ export const SPEC = Object.freeze({
   task: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
-    add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent'] },
-    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent'] },
+    add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
+    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
     archive: { flags: ['older-than', 'dry-run'] },
     normalize: { flags: ['type-map', 'dry-run'] },
     rm: { flags: ['id', 'yes'] },
@@ -1190,7 +1192,7 @@ async function cmdTask(ctx, sub) {
 
   if (sub === 'add') {
     const input = {}
-    for (const key of ['title', 'type', 'status', 'owner', 'notes']) {
+    for (const key of ['title', 'type', 'status', 'stage', 'owner', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) input[key] = value
     }
@@ -1209,7 +1211,7 @@ async function cmdTask(ctx, sub) {
   if (sub === 'update') {
     const id = requireString(flags, 'id', '用法: flow task update <id> [...]')
     const patch = {}
-    for (const key of ['title', 'type', 'status', 'owner', 'notes']) {
+    for (const key of ['title', 'type', 'status', 'stage', 'owner', 'notes']) {
       const value = readString(flags, key)
       if (value !== undefined) patch[key] = value
     }

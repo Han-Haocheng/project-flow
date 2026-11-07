@@ -822,10 +822,12 @@ flow exp rm <id> [--yes]
 
 flow task list | show <id>
 flow task add    --title T --type <t> [--status draft|active|done|archived]
-                 [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
 flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
-                 [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
                  # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
+                 # <s>: 九阶段之一（见 §3.2.1）；写 --stage 时 status 由阶段派生并同批落盘，
+                 #      给 --stage done 会同时写 done_at（stampTaskTimes），两者同给且矛盾 → invalid
                  # title 承载标题与目标：--goal 已删除（旧记录由 normalizeTaskFormat 迁移）；
                  # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
 flow task rm <id> [--yes]
