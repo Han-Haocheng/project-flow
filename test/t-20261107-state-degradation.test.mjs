@@ -1,10 +1,14 @@
-// T-20261107 · task-57：core 降级路径的机器断言。
+// T-20261107 · task-57/58：core 降级路径 + 降级/健康 payload 形状一致性。
 //
 // 背景：`lib/state-snapshot.mjs:61-67` 用 `try { core = await import(CORE_URL) }
 // catch { coreFailure = … }` 把 core 做成**可选依赖**——core 坏掉时插件不该整个
-// 加载失败，面板应拿到一份带可读原因的合法空 payload。但这条路径此前零覆盖：
-// `requireCore` 改坏、`emptyStoreState` 返回错形状，都不会有测试红，用户只会
-// 看到"面板没数据"。
+// 加载失败，面板应拿到一份带可读原因的合法空 payload。这条路径此前零覆盖：
+// `requireCore` 改坏、`emptyStoreState` 返回错形状，都不会有测试红。
+//
+// task-58 又发现「零覆盖」的后果：降级 payload 曾悄悄缩水（缺 `heartbeatsHidden`
+// 与 `experiments.counts` 的 `inconclusive`/`pivoted`/`unreadable`），而当时的
+// 测试把 12 个顶层键的字面量钉死了——**等于把 bug 固化成契约**。现在改成
+// 「降级键集合 == 健康键集合」：任一侧加/减字段而另一侧忘了，测试会红。
 //
 // 测试手法（无注入 seam：core/coreFailure/CORE_URL 都是模块级私有 + 顶层 await）：
 //   1. 把**真实的** lib/state-snapshot.mjs 逐字节复制到临时目录（先断言 sha256
@@ -14,8 +18,9 @@
 //      requireCore()/buildSnapshot() 的行为打到 stdout，父进程断言。
 // 不在真实树里 mv/删 lib/core.mjs（那是中间态残留，也会和并发队员打架）。
 //
-// 正例先行：先断言"真树的 core 正常时不走降级"，再断言降级路径——否则一个
-// "永远返回降级"的错误实现也能让否定断言全绿。
+// 正例先行：健康参考 payload 必须来自**真正的 buildStoreState**（临时 root 里
+// 写一个 `.dsh/flow/flow.json`），不能落到 `emptyStoreState` 兜底——否则两边同源，
+// 形状对比会完美假绿。
 
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -64,6 +69,37 @@ function stageSnapshotCopy(label) {
   return { dir, lib, copy, project }
 }
 
+/** 一个**初始化过**的 store：有 `.dsh/flow/flow.json`，所以 buildStoreState 不会走兜底。 */
+function healthyStoreRoot(label) {
+  const root = tempDir(`healthy-${label}`)
+  fs.mkdirSync(path.join(root, '.dsh', 'flow'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, '.dsh', 'flow', 'flow.json'),
+    `${JSON.stringify({ schema: 2, name: `degradation-${label}` })}\n`,
+    'utf8'
+  )
+  return root
+}
+
+/**
+ * 健康参考 payload（模块内缓存一次）。
+ * 它必须由 `buildStoreState` 生成——测试里显式断言它带 `heartbeatsHidden` 与
+ * 8 键的 `experiments.counts`，否则就是退回到了 emptyStoreState。
+ */
+let healthyReference = null
+async function healthyPayload() {
+  if (healthyReference === null) {
+    const root = healthyStoreRoot('reference')
+    healthyReference = await snapshots.buildSnapshot({
+      root,
+      realRoot: root,
+      entry: { path: root, name: 'degradation-reference' },
+      hostWarnings: [],
+    })
+  }
+  return healthyReference
+}
+
 /** 子进程探针：加载副本并输出可 JSON 化的行为快照。 */
 const PROBE = [
   "import process from 'node:process'",
@@ -88,15 +124,15 @@ function runProbe(copy, root) {
 }
 
 /**
- * 降级载荷的**合法形状**。
+ * 降级载荷的合法形状（逐项校验保留自 task-57），并在给了 `reference` 时追加
+ * **形状一致性**断言：顶层键集合与三个 counts 的键集合必须与健康 payload 相等。
  *
- * 断言的是"消费端必需且降级路径也必须给"的键；注意当前 `emptyStoreState`
- * 与正常 `buildStoreState` 有两处已知差异（另立卡跟进，不在本测试里锁死）：
- *   1. 缺 `heartbeatsHidden`（client.js 用 `asNumber(x, 0)` 兜底，不会崩）；
- *   2. `experiments.counts` 缺 `inconclusive`/`pivoted`（client.js 同样有兜底）。
- * 这里只断言两份 payload 都**必须**有的部分，将来修好差异不会误红。
+ * 不比较 `experiments` 容器本身：关闭实验区时健康 payload 只给
+ * `{enabled,total,counts}`，而降级载荷给 `{source,total,counts,items,tree,groups}`
+ * ——这是 CONTRACT §9.1.3 规定的两种模式差异，不是漂移。`tasks.trend` 同理是
+ * 文档声明的可选字段。
  */
-function assertPayloadShape(payload, root) {
+function assertPayloadShape(payload, root, reference = null) {
   assert.ok(payload !== null && typeof payload === 'object' && Array.isArray(payload) === false, 'payload must be an object')
   for (const key of [
     'ok',
@@ -143,33 +179,67 @@ function assertPayloadShape(payload, root) {
     assert.equal(typeof payload.decisions.counts[key], 'number', `decisions.counts.${key} must be a number`)
   }
   assert.ok(Array.isArray(payload.warnings))
+
+  if (reference === null) return
+  const sortedKeys = (value) => Object.keys(value).sort()
+  assert.deepEqual(
+    sortedKeys(payload),
+    sortedKeys(reference),
+    `degraded payload top-level keys drifted from the healthy shape: ${JSON.stringify(sortedKeys(payload))} vs ${JSON.stringify(sortedKeys(reference))}`
+  )
+  for (const [label, actual, expected] of [
+    ['experiments.counts', payload.experiments.counts, reference.experiments.counts],
+    ['tasks.counts', payload.tasks.counts, reference.tasks.counts],
+    ['decisions.counts', payload.decisions.counts, reference.decisions.counts],
+  ]) {
+    assert.deepEqual(
+      sortedKeys(actual),
+      sortedKeys(expected),
+      `${label} keys drifted from the healthy shape: ${JSON.stringify(sortedKeys(actual))} vs ${JSON.stringify(sortedKeys(expected))}`
+    )
+  }
+  // 降级态没有数据：计数必须是 0（不是 undefined/NaN），可读原因另行断言。
+  assert.equal(payload.heartbeatsHidden, 0, 'heartbeatsHidden must be an explicit 0, not a missing key')
+  assert.equal(payload.tasks.total, 0)
+  for (const [key, value] of Object.entries(payload.tasks.counts)) {
+    assert.equal(value, 0, `tasks.counts.${key} must be 0 in the degraded payload`)
+  }
+  assert.equal(payload.experiments.total, 0)
+  for (const [key, value] of Object.entries(payload.experiments.counts)) {
+    assert.equal(value, 0, `experiments.counts.${key} must be 0 in the degraded payload`)
+  }
+  for (const [key, value] of Object.entries(payload.decisions.counts)) {
+    assert.equal(value, 0, `decisions.counts.${key} must be 0 in the degraded payload`)
+  }
 }
 
 // ------------------------------------------------------------------ 正例
-test('正例：core 正常时 buildSnapshot 不走降级，也不带 core-unavailable 原因', async () => {
+test('正例：core 正常时 buildSnapshot 不走降级，且形状含 heartbeatsHidden 与 8 键 counts', async () => {
   assert.equal(snapshots.coreAvailable(), true, 'real tree must load lib/core.mjs')
   const core = snapshots.coreModule()
   assert.ok(core !== null && typeof core === 'object', 'coreModule() must expose the loaded module')
   assert.equal(typeof core.loadContract, 'function', 'coreModule() must be a real core (loadContract is a function)')
   assert.equal(snapshots.requireCore(), core, 'requireCore() returns the same loaded module')
 
-  const root = tempDir('healthy')
-  const payload = await snapshots.buildSnapshot({
-    root,
-    realRoot: root,
-    entry: { path: root, name: 'healthy' },
-    hostWarnings: [],
-  })
-  assertPayloadShape(payload, root)
+  const payload = await healthyPayload()
+  assertPayloadShape(payload, payload.root)
   assert.equal(
     payload.warnings.some((line) => typeof line === 'string' && line.startsWith('core-unavailable:')),
     false,
     'a healthy core must not produce the degradation warning'
   )
+  // 健康参考必须来自 buildStoreState（不是 emptyStoreState 兜底），否则形状对比同源假绿。
+  assert.equal(Object.hasOwn(payload, 'heartbeatsHidden'), true, 'healthy payload must carry heartbeatsHidden')
+  assert.deepEqual(
+    Object.keys(payload.experiments.counts).sort(),
+    ['abandoned', 'confirmed', 'inconclusive', 'open', 'pivoted', 'refuted', 'total', 'unreadable'],
+    'healthy experiments.counts must be the 8-key shape from CONTRACT §9.1.3'
+  )
 })
 
 // ------------------------------------------------------ 降级 ①：core 不存在
-test('降级（core.mjs 缺失）：buildSnapshot 仍返回合法形状，且带可读原因', () => {
+test('降级（core.mjs 缺失）：payload 形状与健康一致，且带可读原因', async () => {
+  const reference = await healthyPayload()
   const { copy, lib, project } = stageSnapshotCopy('missing')
   assert.equal(fs.existsSync(path.join(lib, 'core.mjs')), false, 'the copy dir must not contain core.mjs')
 
@@ -185,8 +255,8 @@ test('降级（core.mjs 缺失）：buildSnapshot 仍返回合法形状，且带
   assert.match(probe.requireError, /is not installed/, 'requireCore() must throw the actionable CLI hint')
   assert.match(probe.requireError, /core\.mjs could not be loaded/, 'requireCore() must name the missing module')
 
-  // 载荷合法且**带原因**，不是静默空对象。
-  assertPayloadShape(probe.payload, project)
+  // 载荷合法、形状与健康 payload 一致，且**带原因**，不是静默空对象。
+  assertPayloadShape(probe.payload, project, reference)
   const reasons = probe.payload.warnings.filter(
     (line) => typeof line === 'string' && line.startsWith('core-unavailable: ')
   )
@@ -199,7 +269,8 @@ test('降级（core.mjs 缺失）：buildSnapshot 仍返回合法形状，且带
 })
 
 // -------------------------------------------------- 降级 ②：core 形状坏掉
-test('降级（core.mjs 可加载但形状坏）：读 store 失败也降级为空 payload 并给原因', () => {
+test('降级（core.mjs 可加载但形状坏）：读 store 失败也降级为同形状空 payload 并给原因', async () => {
+  const reference = await healthyPayload()
   const { lib, copy, project } = stageSnapshotCopy('malformed')
   fs.writeFileSync(path.join(lib, 'core.mjs'), 'export const loadContract = 42\n', 'utf8')
 
@@ -207,7 +278,7 @@ test('降级（core.mjs 可加载但形状坏）：读 store 失败也降级为�
 
   // 可加载的坏 core 不算"缺失"，走的是 buildStoreState 的读失败兜底。
   assert.equal(probe.coreAvailable, true, 'a loadable but malformed core.mjs must not be treated as missing')
-  assertPayloadShape(probe.payload, project)
+  assertPayloadShape(probe.payload, project, reference)
   assert.ok(
     probe.payload.warnings.some((line) => typeof line === 'string' && line.startsWith('store contract unreadable: ')),
     `expected a readable store-contract failure, got warnings: ${JSON.stringify(probe.payload.warnings)}`
