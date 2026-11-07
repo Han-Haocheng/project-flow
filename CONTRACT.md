@@ -426,8 +426,28 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | `done` | 已完成 | `archived` | plugin |
 | `archived` | 已归档 | —（终态） | — |
 
-- **唯一后退边**：`reviewing → queued-implementation`（审查打回）。`reviewing → done` 是
-  通过路径，两者都是合法边。
+**边表**（`STAGE_MACHINE[x].next` 的每一项；边级 actor 是"谁能走这条边"，为 P2 的 guard 铺路）：
+
+| 边 | actor | 标记 |
+|---|---|---|
+| `created → queued-analysis` | plugin | |
+| `queued-analysis → analyzing` | plugin | |
+| `analyzing → queued-implementation` | session | |
+| `queued-implementation → implementing` | plugin | |
+| `implementing → queued-review` | session | |
+| `queued-review → reviewing` | plugin | |
+| `reviewing → done` | reviewer | 通过 |
+| `reviewing → queued-implementation` | reviewer | **`back`**（打回） |
+| `done → archived` | plugin | |
+
+- **两级 actor**：上表"推进者"列是**阶段默认**（`STAGE_MACHINE[x].actor`，"谁负责把任务推出
+  阶段 x"）；边表里每条边还有**自己的 actor**（"谁能走这条边"）。今天两者逐条相等，并由测试
+  断言锁死；给单条边开特权必须显式标 `actorOverride`，那条断言会提醒同步阶段级 actor。
+- **唯一后退边**：`reviewing → queued-implementation`（审查打回），也是唯一带 `back: true`
+  的边。`reviewing → done` 是通过路径；两条后继在阶段表里 actor 相同，**靠 `back` 区分**。
+- **边表是唯一真源**：`nextStages(stage)` / `edgeOf(from, to)` / `actorForEdge(from, to)` 都是
+  从边表派生的**投影**，不另存数组；`canTransition` 与 `assertTransition` 只走这三个投影，
+  不直接读 `next`。未知边返回 `null`（不抛）。
 - **`stage` → `status` 派生**（写路径）：`created → draft`；`queued-analysis` / `analyzing` /
   `queued-implementation` / `implementing` / `queued-review` / `reviewing → active`；
   `done → done`；`archived → archived`。写 `stage` 时同批把派生的 `status` 写回，保证两者

@@ -17,8 +17,11 @@ import {
   STAGE_IDS,
   STAGE_MACHINE,
   STAGE_ZH,
+  actorForEdge,
   assertTransition,
   canTransition,
+  edgeOf,
+  nextStages,
   stageToStatus,
 } from '../lib/stage.mjs'
 import {
@@ -137,15 +140,15 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
     assert.ok(Array.isArray(node.next) && Array.isArray(node.from), `${id} 的 next/from 必须是数组`)
   }
   // 表头行（卡里的定稿）：后继与 actor 逐行一致
-  assert.deepEqual([...STAGE_MACHINE.created.next], ['queued-analysis'])
-  assert.deepEqual([...STAGE_MACHINE['queued-analysis'].next], ['analyzing'])
-  assert.deepEqual([...STAGE_MACHINE.analyzing.next], ['queued-implementation'])
-  assert.deepEqual([...STAGE_MACHINE['queued-implementation'].next], ['implementing'])
-  assert.deepEqual([...STAGE_MACHINE.implementing.next], ['queued-review'])
-  assert.deepEqual([...STAGE_MACHINE['queued-review'].next], ['reviewing'])
-  assert.deepEqual([...STAGE_MACHINE.reviewing.next], ['done', 'queued-implementation'])
-  assert.deepEqual([...STAGE_MACHINE.done.next], ['archived'])
-  assert.deepEqual([...STAGE_MACHINE.archived.next], [])
+  assert.deepEqual(nextStages('created'), ['queued-analysis'])
+  assert.deepEqual(nextStages('queued-analysis'), ['analyzing'])
+  assert.deepEqual(nextStages('analyzing'), ['queued-implementation'])
+  assert.deepEqual(nextStages('queued-implementation'), ['implementing'])
+  assert.deepEqual(nextStages('implementing'), ['queued-review'])
+  assert.deepEqual(nextStages('queued-review'), ['reviewing'])
+  assert.deepEqual(nextStages('reviewing'), ['done', 'queued-implementation'])
+  assert.deepEqual(nextStages('done'), ['archived'])
+  assert.deepEqual(nextStages('archived'), [])
   assert.equal(STAGE_MACHINE.created.actor, 'plugin')
   assert.equal(STAGE_MACHINE.analyzing.actor, 'session')
   assert.equal(STAGE_MACHINE.implementing.actor, 'session')
@@ -154,11 +157,11 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
 
   // from 是 next 的逆向声明：两侧必须完全一致（防表漂移）
   for (const id of STAGE_IDS) {
-    for (const nextId of STAGE_MACHINE[id].next) {
+    for (const nextId of nextStages(id)) {
       assert.ok(STAGE_MACHINE[nextId].from.includes(id), `${nextId}.from 缺少前驱 ${id}`)
     }
     for (const fromId of STAGE_MACHINE[id].from) {
-      assert.ok(STAGE_MACHINE[fromId].next.includes(id), `${fromId}.next 缺少后继 ${id}`)
+      assert.ok(nextStages(fromId).includes(id), `${fromId}.next 缺少后继 ${id}`)
     }
   }
   // 除入口 created 外，每个阶段都至少有一个前驱
@@ -173,7 +176,7 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
 test('② canTransition：相邻边可走，跳级/终态/非法 id 不可走，同阶段重写幂等', () => {
   // 正例：表里声明的每一条边都必须被认可
   for (const id of STAGE_IDS) {
-    for (const nextId of STAGE_MACHINE[id].next) {
+    for (const nextId of nextStages(id)) {
       assert.equal(canTransition(id, nextId), true, `${id} → ${nextId} 应合法`)
     }
   }
@@ -225,7 +228,7 @@ test('③ reviewing → queued-implementation 是唯一后退边，必须被 can
   const forward = []
   const backward = []
   for (const id of STAGE_IDS) {
-    for (const nextId of STAGE_MACHINE[id].next) {
+    for (const nextId of nextStages(id)) {
       ;(order.get(nextId) > order.get(id) ? forward : backward).push(`${id} → ${nextId}`)
     }
   }
@@ -375,4 +378,139 @@ test('⑦ 非法 stage：invalid 且文案列出九值；CLI 的 invalid 映射�
   assert.equal(cli.code, 2, cli.stdout + cli.stderr)
   assert.equal(cli.json?.error?.code, 'invalid')
   assert.match(cli.json?.error?.message ?? '', /status must be one of/)
+})
+
+// ============================================================ task-69：边级 actor
+//
+// 结构变更、**零行为变更**：`next` 从 `string[]` 升级为带 actor 的边表。
+// 行为不变由第 ⑫ 条的 9×9 矩阵锁死——任何"大部分对、个别边悄悄变了"都会红。
+
+/** 全部 9 条边（顺序即方案 §4 的表序；前 8 条是阶段间推进，末条是归档）。 */
+const EDGES = [
+  { from: 'created', to: 'queued-analysis', actor: 'plugin', back: undefined },
+  { from: 'queued-analysis', to: 'analyzing', actor: 'plugin', back: undefined },
+  { from: 'analyzing', to: 'queued-implementation', actor: 'session', back: undefined },
+  { from: 'queued-implementation', to: 'implementing', actor: 'plugin', back: undefined },
+  { from: 'implementing', to: 'queued-review', actor: 'session', back: undefined },
+  { from: 'queued-review', to: 'reviewing', actor: 'plugin', back: undefined },
+  { from: 'reviewing', to: 'done', actor: 'reviewer', back: undefined },
+  { from: 'reviewing', to: 'queued-implementation', actor: 'reviewer', back: true },
+  { from: 'done', to: 'archived', actor: 'plugin', back: undefined },
+]
+
+test('⑧ 边表逐项：9 条边的 {from, to, actor} 与方案 §4 表一致', () => {
+  for (const edge of EDGES) {
+    const node = STAGE_MACHINE[edge.from]
+    const found = node.next.find((item) => item.to === edge.to)
+    assert.ok(found, `${edge.from} → ${edge.to} 边不见了`)
+    assert.equal(found.actor, edge.actor, `${edge.from} → ${edge.to} 的 actor 错了`)
+  }
+  // 边总数 = 8（没有多出来的边）
+  const total = STAGE_IDS.reduce((sum, id) => sum + STAGE_MACHINE[id].next.length, 0)
+  assert.equal(total, EDGES.length, '边总数必须恰好 9 条（8 条阶段推进 + done→archived）')
+})
+
+test('⑨ back 标记：恰好一条，且就是 reviewing → queued-implementation', () => {
+  const backs = []
+  for (const id of STAGE_IDS) {
+    for (const edge of STAGE_MACHINE[id].next) {
+      if (edge.back === true) backs.push(`${id} → ${edge.to}`)
+    }
+  }
+  assert.deepEqual(backs, ['reviewing → queued-implementation'], '后退边必须恰好一条')
+  // back 只能是 true 或缺省（不许出现 back:false 这种半吊子写法）
+  for (const id of STAGE_IDS) {
+    for (const edge of STAGE_MACHINE[id].next) {
+      if (Object.hasOwn(edge, 'back')) assert.equal(edge.back, true, `${id} → ${edge.to} 的 back 只能是 true`)
+    }
+  }
+})
+
+test('⑩ nextStages 是边表的投影，不是第二份数组', () => {
+  for (const id of STAGE_IDS) {
+    assert.deepEqual(
+      nextStages(id),
+      STAGE_MACHINE[id].next.map((edge) => edge.to),
+      `${id}: nextStages 与边表不一致（不许另存一份）`,
+    )
+  }
+  assert.deepEqual(nextStages('bogus'), [], '未知阶段返回空数组，不抛')
+  assert.deepEqual(nextStages('archived'), [], '终态没有后继')
+})
+
+test('⑪ actorForEdge：9 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
+  for (const edge of EDGES) {
+    assert.equal(actorForEdge(edge.from, edge.to), edge.actor, `${edge.from} → ${edge.to}`)
+  }
+  for (const [from, to] of [
+    ['created', 'done'], ['archived', 'done'], ['bogus', 'done'], ['created', 'bogus'],
+    ['created', 'created'], // 自重写是幂等，不是边
+  ]) {
+    assert.equal(actorForEdge(from, to), null, `${from} → ${to} 必须是 null`)
+  }
+  // edgeOf 的对应关系
+  assert.equal(edgeOf('reviewing', 'done').back, undefined)
+  assert.equal(edgeOf('reviewing', 'queued-implementation').back, true)
+  assert.equal(edgeOf('created', 'done'), null)
+})
+
+test('⑫ canTransition 零行为变更：9×9 全组合与硬编码真值表逐格相同', () => {
+  // 行 = from、列 = to，顺序同 STAGE_IDS。自环一律 true（幂等），其余只认真实边。
+  //            created q-ana  analyz q-impl  impl  q-rev  review  done  arch
+  const TRUTH = [
+    [true,  true,  false, false, false, false, false, false, false], // created
+    [false, true,  true,  false, false, false, false, false, false], // queued-analysis
+    [false, false, true,  true,  false, false, false, false, false], // analyzing
+    [false, false, false, true,  true,  false, false, false, false], // queued-implementation
+    [false, false, false, false, true,  true,  false, false, false], // implementing
+    [false, false, false, false, false, true,  true,  false, false], // queued-review
+    [false, false, false, true,  false, false, true,  true,  false], // reviewing（打回 + 通过）
+    [false, false, false, false, false, false, false, true,  true ], // done
+    [false, false, false, false, false, false, false, false, true ], // archived
+  ]
+  assert.equal(TRUTH.length, STAGE_IDS.length)
+  for (const row of TRUTH) assert.equal(row.length, STAGE_IDS.length, '真值表必须是 9×9')
+
+  const mismatches = []
+  STAGE_IDS.forEach((from, rowIndex) => {
+    STAGE_IDS.forEach((to, columnIndex) => {
+      const actual = canTransition(from, to)
+      if (actual !== TRUTH[rowIndex][columnIndex]) {
+        mismatches.push(`${from} → ${to}: 期望 ${TRUTH[rowIndex][columnIndex]}，实际 ${actual}`)
+      }
+    })
+  })
+  assert.deepEqual(mismatches, [], `canTransition 行为变了：${mismatches.join('; ')}`)
+})
+
+test('⑬ 两个后继可区分（本次改动的存在理由）', () => {
+  // 通过 vs 打回：阶段表里它们的 actor 相同，靠 back 区分
+  assert.equal(edgeOf('reviewing', 'done').back, undefined, '通过边不得标 back')
+  assert.equal(edgeOf('reviewing', 'queued-implementation').back, true, '打回边必须标 back')
+  assert.notDeepEqual(edgeOf('reviewing', 'done'), edgeOf('reviewing', 'queued-implementation'))
+  // 打回边可继续实现（结构上仍是合法边）
+  assert.equal(canTransition('reviewing', 'queued-implementation'), true)
+  assert.equal(canTransition('reviewing', 'done'), true)
+})
+
+test('⑭ 不变式：每条边的 actor 等于其阶段默认 actor（显式覆盖除外）', () => {
+  const offenders = []
+  for (const id of STAGE_IDS) {
+    for (const edge of STAGE_MACHINE[id].next) {
+      // 显式单边特权：标注 actorOverride 的边由改动者自己负责同步阶段级 actor
+      if (edge.actorOverride === true) continue
+      if (edge.actor !== STAGE_MACHINE[id].actor) {
+        offenders.push(`${id} → ${edge.to}: 边 actor=${edge.actor}，阶段 actor=${STAGE_MACHINE[id].actor}`)
+      }
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `边的 actor 与阶段默认 actor 不一致：${offenders.join('; ')}。` +
+      '若要给某条边单独开特权，请同时决定阶段级 actor 是否同步（或用 actorOverride: true 显式覆盖）。',
+  )
+  // 今天没有任何边走覆盖：一旦有人加了 actorOverride，这条会提醒去更新上面的不变式
+  const overrides = STAGE_IDS.flatMap((id) => STAGE_MACHINE[id].next.filter((edge) => edge.actorOverride === true))
+  assert.deepEqual(overrides, [], '今天不应存在 actorOverride（出现了就要把不变式的旁路也一起改）')
 })
