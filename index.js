@@ -79,6 +79,13 @@ import {
 // core-warning wrapper and the mount-warning channel are shared with the three
 // module sub-plugins (tasks.js / gates.js / experiments.js).
 import {
+  buildStatusBlock,
+  createCaptureState,
+  flushCapture,
+  recordPreStep,
+  stackTop,
+} from './lib/capture.mjs'
+import {
   mountWarnings,
   provide,
   registerToolDefinitions,
@@ -1561,8 +1568,13 @@ function decisionReminderText(root, contract, session, turn) {
  * message at all; otherwise a single message with a single text block carries
  * both, decision section first. `step` is 1-based in the loop; `0` is accepted
  * too so the hook survives a loop that counts differently.
+ *
+ * `captureState` is the P1 capture queue (null when `config.capture === false`).
+ * The pre-step listener owns the in-memory record call because the host may only
+ * accept one waterfall listener per plugin in older environments (host2-tools
+ * asserts exactly one `agent/pre-step` hook); it stays memory-only.
  */
-function registerHeartbeatReminder(ctx) {
+function registerHeartbeatReminder(ctx, captureState) {
   try {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
@@ -1585,6 +1597,9 @@ function registerHeartbeatReminder(ctx) {
           if (session === '') return decision
           const root = agentRoot(ctx, agent)
           if (root === undefined) return decision
+          // P1 capture: memory only (filter → diff → queue). The write happens on
+          // `agent/turn-stopping`, never on this per-step critical path.
+          if (captureState !== null) recordPreStep(captureState, { root, session, messages: payload.messages })
           const turn = Number.isInteger(payload.turn) ? payload.turn : null
           const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
           const heartbeatText =
@@ -1657,10 +1672,16 @@ function heartbeatKeepalive(ctx, payload) {
 }
 
 /**
- * Register the keepalive listener through `ctx.effect` so unload disposes it.
+ * Register the turn-stopping listener through `ctx.effect` so unload disposes it.
  * A host without the event API is a no-op, never an error.
+ *
+ * One listener serves both P1 duties on purpose: host2-tools asserts that the
+ * plugin registers exactly one `agent/turn-stopping` hook, and the host awaits
+ * every listener on this serial event anyway. Keepalive refreshes the heartbeat;
+ * capture drains the queue and writes the captured tasks. Either failure is
+ * swallowed independently so one duty can never take the other down.
  */
-function registerHeartbeatKeepalive(ctx) {
+function registerHeartbeatKeepalive(ctx, captureState) {
   try {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
@@ -1669,6 +1690,14 @@ function registerHeartbeatKeepalive(ctx) {
           heartbeatKeepalive(ctx, payload)
         } catch {
           // Defence in depth: heartbeatKeepalive already swallows everything.
+        }
+        if (captureState !== null) {
+          try {
+            captureTurnStop(ctx, captureState, payload)
+          } catch (error) {
+            // A serial listener must never throw: a failed flush is one warning.
+            warnMount(`capture flush skipped: ${brief(error)}`, ctx)
+          }
         }
       })
       return () => {
@@ -1682,6 +1711,139 @@ function registerHeartbeatKeepalive(ctx) {
   } catch (error) {
     warnMount(`heartbeat keepalive unavailable: ${brief(error)}`, ctx)
   }
+}
+
+/**
+ * Resolve `{root, session}` for one capture event: only a live main session with
+ * a valid id and a workspace root may capture. Every failure is `null`, never a
+ * throw (this runs on hook paths that cannot report an error to anyone).
+ */
+function captureTarget(ctx, payload) {
+  try {
+    if (payload === null || payload === undefined || typeof payload !== 'object') return null
+    const signal = payload.signal
+    if (signal !== null && signal !== undefined && signal.aborted === true) return null
+    const agent = payload.agent
+    if (agent === undefined || agent === null) return null
+    if (rootSessionVerdict(ctx, agent) !== true) return null
+    const session = usableSessionId(agent.id)
+    if (session === '') return null
+    const root = agentRoot(ctx, agent)
+    if (root === undefined) return null
+    return { root, session }
+  } catch {
+    return null
+  }
+}
+
+/** `scope.allow` of one task as heartbeat claims (strings only, never a throw). */
+function captureClaims(top) {
+  try {
+    const scope = isPlainObject(top) ? top.scope : null
+    if (isPlainObject(scope) === false || Array.isArray(scope.allow) === false) return []
+    return scope.allow.filter((entry) => typeof entry === 'string')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Serial `agent/turn-stopping` duty: drain the in-memory queue into the ledger.
+ *
+ * The write itself lives in `lib/capture.mjs` (one place for key/mapping/stage);
+ * this wrapper only resolves the session/root, loads the contract, and refreshes
+ * an **existing** heartbeat's goal/task/claims from the new stack top per §6 —
+ * capture never creates a heartbeat (that is `agent/created`'s job, and only
+ * with a stack top).
+ */
+function captureTurnStop(ctx, state, payload) {
+  const target = captureTarget(ctx, payload)
+  if (target === null) return
+  const c = coreModule()
+  if (c === null || typeof c.loadContract !== 'function') return
+  const loaded = c.loadContract(target.root)
+  if (isPlainObject(loaded) === false) return
+  const result = flushCapture(state, {
+    core: c,
+    root: target.root,
+    contract: loaded.contract,
+    session: target.session,
+  })
+  if (result.created.length === 0) return
+  if (typeof c.heartbeatStatus !== 'function' || typeof c.updateHeartbeat !== 'function') return
+  const status = c.heartbeatStatus(target.root, loaded.contract, target.session)
+  if (isPlainObject(status) === false || isPlainObject(status.record) === false) return
+  const top = stackTop(c, target.root, loaded.contract)
+  if (top === null) return
+  c.updateHeartbeat(target.root, loaded.contract, target.session, {
+    goal: typeof top.title === 'string' ? top.title : '',
+    task: typeof top.id === 'string' ? top.id : '',
+    claims: captureClaims(top),
+  })
+}
+
+/**
+ * Serial `agent/created` duty: open this session's heartbeat from the **stack
+ * top** so it is never an empty shell (an empty heartbeat would defeat the write
+ * gate). No unfinished task means no heartbeat at all — one mount warning, no
+ * fallback, no invented goal.
+ */
+function captureAutoStart(ctx, payload) {
+  const target = captureTarget(ctx, payload)
+  if (target === null) return
+  const c = coreModule()
+  if (c === null || typeof c.loadContract !== 'function' || typeof c.startHeartbeat !== 'function') return
+  const loaded = c.loadContract(target.root)
+  if (isPlainObject(loaded) === false) return
+  const top = stackTop(c, target.root, loaded.contract)
+  if (top === null) {
+    warnMount(
+      'heartbeat auto-start skipped: the task stack is empty (no unfinished task), so no heartbeat was opened — create a task first',
+      ctx,
+    )
+    return
+  }
+  // `agent/created` can fire more than once for one session (resume/clear); an
+  // already-working heartbeat is left alone instead of having its turn bumped.
+  if (heartbeatWorking(target.root, target.session, sessionIsLive(ctx, target.session)) === true) return
+  c.startHeartbeat(target.root, loaded.contract, {
+    session: target.session,
+    goal: typeof top.title === 'string' ? top.title : '',
+    task: typeof top.id === 'string' ? top.id : '',
+    claims: captureClaims(top),
+  })
+}
+
+/** Register the `agent/created` auto-start through `ctx.effect` (no-op without the event API). */
+function registerCapture(ctx, captureState) {
+  if (captureState === null) return
+  try {
+    if (typeof ctx.on !== 'function') return
+    ctx.effect(() => {
+      const dispose = ctx.on('agent/created', (payload) => {
+        try {
+          captureAutoStart(ctx, payload)
+        } catch (error) {
+          // `agent/created` is serial: a throw would fail session creation.
+          warnMount(`capture heartbeat auto-start skipped: ${brief(error)}`, ctx)
+        }
+      })
+      return () => {
+        try {
+          if (typeof dispose === 'function') dispose()
+        } catch {
+          // A listener disposer must never break plugin unload.
+        }
+      }
+    }, 'project-flow: capture heartbeat auto-start')
+  } catch (error) {
+    warnMount(`capture: registration failed: ${brief(error)}`, ctx)
+  }
+}
+
+/** Whether the P1 capture/status behaviour is on (`config.capture !== false`). */
+function captureEnabled(settings) {
+  return isPlainObject(settings) === false || settings.capture !== false
 }
 
 /** Default-on hard gate; disable with `config.heartbeatGate: false` or `PROJECT_FLOW_HEARTBEAT_GATE=off`. */
@@ -1778,7 +1940,7 @@ function decisionAskInput(args, c, root, contract, session) {
   return input
 }
 
-function buildToolDefinitions(deps) {
+function buildToolDefinitions(deps, settings) {
   const { ctx, toolRoot } = deps
   return [
     {
@@ -1796,7 +1958,7 @@ function buildToolDefinitions(deps) {
         const state = c.readStoreState(root, loaded.contract)
         const experiments = state.experiments
         const tasks = state.tasks
-        return {
+        const result = {
           root,
           store: hasStore(root),
           contract: { source: loaded.source, schema: loaded.contract.schema, name: loaded.contract.name },
@@ -1808,6 +1970,16 @@ function buildToolDefinitions(deps) {
             at: gate.lastRun === null || gate.lastRun === undefined ? null : gate.lastRun.started_at,
           })),
         }
+        // §9 status block (P1). Same shape the CLI `--json` envelope carries:
+        // stack / counts / team / unfinished + the §6.3 recentCaptured escape hatch.
+        if (captureEnabled(settings)) {
+          try {
+            Object.assign(result, buildStatusBlock(c, root, loaded.contract))
+          } catch (error) {
+            warnMount(`status block unavailable: ${brief(error)}`, ctx)
+          }
+        }
+        return result
       },
     },
     {
@@ -1940,7 +2112,16 @@ function buildToolDefinitions(deps) {
           }
           const patch = pickFields(args, ['status', 'last_action', 'goal', 'task', 'claims'])
           if (Object.keys(patch).length === 0) throw new Error('flow_heartbeat update requires at least one field to change')
-          return { root, workspace, store: true, session, heartbeat: c.updateHeartbeat(root, contract, session, patch) }
+          const heartbeat = c.updateHeartbeat(root, contract, session, patch)
+          const result = { root, workspace, store: true, session, heartbeat }
+          if (captureEnabled(settings)) {
+            try {
+              Object.assign(result, buildStatusBlock(c, root, contract))
+            } catch (error) {
+              warnMount(`status block unavailable: ${brief(error)}`, ctx)
+            }
+          }
+          return result
         }
         if (action === 'end') {
           if (typeof c.endHeartbeat !== 'function') {
@@ -2106,7 +2287,7 @@ function registerTools(ctx, settings) {
   const heartbeatGate = settings !== null && typeof settings === 'object' && settings.heartbeatGate === true
   registerToolDefinitions(ctx, {
     label: 'tools',
-    build: (scoped) => buildToolDefinitions(toolDeps(scoped)),
+    build: (scoped) => buildToolDefinitions(toolDeps(scoped), settings),
     // Hard gate: a session that never registered a `working` heartbeat may not
     // write files. Only edit/write are denied, so read/bash/diagnostics keep
     // working; every failure inside the guard itself allows the call.
@@ -2277,7 +2458,11 @@ export function apply(ctx, config) {
   // still-broken core re-adds its message every time.
   mountWarnings.length = 0
   if (coreAvailable() === false) warnMount(coreUnavailableMessage(), ctx)
-  const settings = { heartbeatGate: heartbeatGateEnabled(config) }
+  // `config.capture === false` is the rollback switch: no pre-step recording, no
+  // turn-stopping flush and no heartbeat auto-start — the plugin behaves like P0.
+  const captureEnabled = isPlainObject(config) === false || config.capture !== false
+  const settings = { heartbeatGate: heartbeatGateEnabled(config), capture: captureEnabled }
+  const captureState = captureEnabled ? createCaptureState() : null
 
   // The state read pool: one per apply, disposed with the effect that owns it.
   // A re-apply therefore kills the previous children instead of leaking them,
@@ -2325,13 +2510,18 @@ export function apply(ctx, config) {
     warnMount(`system prompt: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerHeartbeatReminder(ctx)
+    registerHeartbeatReminder(ctx, captureState)
   } catch (error) {
     warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerHeartbeatKeepalive(ctx)
+    registerHeartbeatKeepalive(ctx, captureState)
   } catch (error) {
     warnMount(`heartbeat keepalive: registration failed: ${brief(error)}`, ctx)
+  }
+  try {
+    registerCapture(ctx, captureState)
+  } catch (error) {
+    warnMount(`capture: registration failed: ${brief(error)}`, ctx)
   }
 }
