@@ -1916,7 +1916,7 @@ function guardTaskOf(ctx, agent, id) {
  * (`edgeOf` / `actorForEdge` / `nextStages`) — a second stage table here would
  * drift from the machine.
  */
-function stageGuardReason(ctx, agent, args) {
+function stageGuardReason(ctx, agent, args, actorMode) {
   const to = typeof args.stage === 'string' ? args.stage.trim() : ''
   if (to === '') return undefined
   const task = guardTaskOf(ctx, agent, args.id)
@@ -1929,7 +1929,10 @@ function stageGuardReason(ctx, agent, args) {
     const legal = nextStages(from)
     return `项目流：${from} 只能到 ${legal.length === 0 ? '（无后继）' : legal.join('、')}，你给了 ${to}。`
   }
-  if (edge.actor !== 'session') {
+  // Rule 4 is the `team`-mode implementation. `single` (the default today) still
+  // enforces the structure (rule 3 above) but not the role split: there is one
+  // role, so "who may walk this edge" would deadlock the pipeline until P3.
+  if (actorMode === 'team' && edge.actor !== 'session') {
     const mine = nextStages(from).filter((next) => actorForEdge(from, next) === 'session')
     return `项目流：${from} → ${to} 由 ${String(edge.actor)} 推进，不是你。你只能推进：${mine.length === 0 ? '（无）' : mine.join('、')}。`
   }
@@ -1960,7 +1963,7 @@ function subtaskGuardReason(ctx, agent, args) {
  * (a guard failure must not turn into a denied tool call) and it only inspects
  * the tool names/shapes it knows; everything else is the normal tool layer.
  */
-function enforceGuardReason(ctx, execution) {
+function enforceGuardReason(ctx, execution, actorMode) {
   try {
     if (execution === null || execution === undefined) return undefined
     const name = typeof execution.name === 'string' ? execution.name : ''
@@ -1972,7 +1975,7 @@ function enforceGuardReason(ctx, execution) {
     if (name === 'flow_task') {
       const action = typeof args.action === 'string' ? args.action : ''
       if (action === 'add') return main ? MAIN_SESSION_TASK_ADD_DENY : undefined
-      if (action === 'update') return stageGuardReason(ctx, agent, args)
+      if (action === 'update') return stageGuardReason(ctx, agent, args, actorMode)
       return undefined
     }
     if (name === 'flow_subtask') return subtaskGuardReason(ctx, agent, args)
@@ -2021,6 +2024,28 @@ function restrictMainSessionTools(ctx, agent, restrictedAgents) {
 /** Whether the P2 permission surface is on (`config.enforce !== false`). */
 function enforceEnabled(config) {
   return isPlainObject(config) === false || config.enforce !== false
+}
+
+/**
+ * `enforce.actorMode`: `single` (default) or `team`.
+ *
+ * `single` = one role does everything today: rule 4 (actor) is off, rule 3
+ * (structure) stays on, so skipping stages is still denied. `team` = the target
+ * design once P3 dispatches work and the analyzer/implementer/reviewer split
+ * exists. An invalid value is `single` plus one mount warning (never a crash).
+ */
+function resolveActorMode(config, ctx) {
+  const enforce = isPlainObject(config) ? config.enforce : undefined
+  if (isPlainObject(enforce) === false) return 'single'
+  const requested = enforce.actorMode
+  if (requested === undefined || requested === null) return 'single'
+  const mode = typeof requested === 'string' ? requested.trim() : ''
+  if (mode === 'single' || mode === 'team') return mode
+  warnMount(
+    `enforce.actorMode 非法（${JSON.stringify(requested)}）：按 single 处理（可选 single|team）`,
+    ctx,
+  )
+  return 'single'
 }
 
 /** Whether the P1 capture/status behaviour is on (`config.capture !== false`). */
@@ -2468,6 +2493,7 @@ function buildToolDefinitions(deps, settings) {
 function registerTools(ctx, settings) {
   const heartbeatGate = settings !== null && typeof settings === 'object' && settings.heartbeatGate === true
   const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
+  const actorMode = settings !== null && typeof settings === 'object' && settings.actorMode === 'team' ? 'team' : 'single'
   // Two independent guards, one predicate: the heartbeat write gate (a session
   // without a working heartbeat may not edit/write) and the P2 permission
   // surface (plan §5.2). Each failure inside a guard allows the call.
@@ -2480,7 +2506,7 @@ function registerTools(ctx, settings) {
             if (reason !== undefined) return reason
           }
           if (enforce) {
-            const reason = enforceGuardReason(scoped, execution)
+            const reason = enforceGuardReason(scoped, execution, actorMode)
             if (reason !== undefined) return reason
           }
           return undefined
@@ -2662,6 +2688,9 @@ export function apply(ctx, config) {
     heartbeatGate: heartbeatGateEnabled(config),
     capture: captureEnabled,
     enforce: enforceEnabled(config),
+    // `single` today (one role); P3 flips the default to `team` once the plugin
+    // actually dispatches analyzer/implementer/reviewer work.
+    actorMode: resolveActorMode(config, ctx),
     // Per-mount dedupe for §5.2 ① (a re-apply restores the team tools until the
     // new mount restricts again; a module-level set would skip that).
     restrictedAgents: new WeakSet(),

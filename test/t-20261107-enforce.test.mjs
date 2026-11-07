@@ -239,9 +239,9 @@ test('规则 3：跳级（created → done）→ 拒绝并列出合法后继', (
 
 // ------------------------------------------------------------- 5 规则 4
 
-test('规则 4：边存在但 actor 不是 session → 拒绝并说明由谁推进、你能推什么', () => {
+test('规则 4（team 模式）：边存在但 actor 不是 session → 拒绝并说明由谁推进、你能推什么', () => {
   const { root, contract } = freshProject('rule4')
-  const harness = makeHarness(root)
+  const harness = makeHarness(root, { enforce: { actorMode: 'team' } })
   const main = harness.addAgent('session-main')
   const task = addTask(root, contract, { type: 'feat', title: '新任务' })
   const reason = harness.guardOf()(call('flow_task', { action: 'update', id: task.id, stage: 'queued-analysis' }, main))
@@ -350,4 +350,86 @@ test('capture:false 时 created 钩子不注册，但 pre-step 仍对主会话�
   assert.equal(harness.restrictions.length, 1, 'the pre-step fallback must restrict a main session once')
   await listener(payload, next)
   assert.equal(harness.restrictions.length, 1, 'the per-agent WeakSet must prevent a second restriction')
+})
+
+// ------------------------------------- 13 actorMode：single（默认）解除死锁
+
+test('actorMode=single（默认）：queued-implementation → implementing 放行——死锁解除', () => {
+  const { root, contract } = freshProject('single-deadlock')
+  const harness = makeHarness(root)
+  const main = harness.addAgent('session-main')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '停在待实现',
+    stage: 'queued-implementation',
+    status: 'active',
+  })
+  const reason = harness.guardOf()(call('flow_task', { action: 'update', id: task.id, stage: 'implementing' }, main))
+  assert.equal(reason, undefined, 'single mode must let the only role walk a real edge')
+})
+
+// --------------------------------- 14 single 仍强制结构：跳级照样拒绝
+
+test('actorMode=single 仍然拦跳级：analyzing → implementing 拒绝（规则 3 与 actorMode 无关）', () => {
+  const { root, contract } = freshProject('single-structure')
+  const harness = makeHarness(root)
+  const main = harness.addAgent('session-main')
+  const task = addTask(root, contract, { type: 'feat', title: '分析中', stage: 'analyzing', status: 'active' })
+  const reason = harness.guardOf()(call('flow_task', { action: 'update', id: task.id, stage: 'implementing' }, main))
+  assert.equal(typeof reason, 'string', 'single mode is not "allow everything": structure still rules')
+  assert.ok(reason.includes('analyzing'), reason)
+  assert.ok(reason.includes('queued-implementation'), reason)
+})
+
+// --------------------------------- 15 team 模式：规则 4 保留并拒绝
+
+test('actorMode=team：queued-implementation → implementing 拒绝（actor=plugin）', () => {
+  const { root, contract } = freshProject('team-actor')
+  const harness = makeHarness(root, { enforce: { actorMode: 'team' } })
+  const main = harness.addAgent('session-main')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '停在待实现',
+    stage: 'queued-implementation',
+    status: 'active',
+  })
+  const reason = harness.guardOf()(call('flow_task', { action: 'update', id: task.id, stage: 'implementing' }, main))
+  assert.equal(typeof reason, 'string', 'team mode keeps rule 4 (the P3 implementation, not deleted)')
+  assert.ok(reason.includes('plugin'), reason)
+  assert.ok(reason.includes('不是你'), reason)
+})
+
+// --------------------------------- 16 非法 actorMode：按 single 处理并 warn
+
+test('非法 actorMode：按 single 处理并 warn 一条，不崩', () => {
+  const { root, contract } = freshProject('bad-mode')
+  const harness = makeHarness(root, { enforce: { actorMode: 'bogus' } })
+  const main = harness.addAgent('session-main')
+  assert.ok(
+    harness.warns.some((line) => line.includes('actorMode')),
+    `expected one actorMode warning, got ${JSON.stringify(harness.warns)}`,
+  )
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '停在待实现',
+    stage: 'queued-implementation',
+    status: 'active',
+  })
+  assert.equal(
+    harness.guardOf()(call('flow_task', { action: 'update', id: task.id, stage: 'implementing' }, main)),
+    undefined,
+    'an invalid mode falls back to single instead of disabling/over-blocking',
+  )
+})
+
+// --------------------------- 17 enforce:false 与 actorMode 正交
+
+test('enforce:false 与 actorMode 正交：即使配置了 team，守卫仍不注册', () => {
+  const { root, contract } = freshProject('orthogonal')
+  const harness = makeHarness(root, { enforce: false })
+  const main = harness.addAgent('session-main')
+  const task = addTask(root, contract, { type: 'feat', title: '分析中', stage: 'analyzing', status: 'active' })
+  const guard = harness.guardOf() // 只剩心跳门禁
+  assert.equal(guard(call('flow_task', { action: 'add', title: 't', type: 'feat' }, main)), undefined)
+  assert.equal(guard(call('flow_task', { action: 'update', id: task.id, stage: 'done' }, main)), undefined)
 })

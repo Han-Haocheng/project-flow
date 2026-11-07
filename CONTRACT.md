@@ -1068,8 +1068,23 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 
 ### 5.4 会话工具面（P2 权限面，`config.enforce` 控制）
 
-默认 `enforce: true`；`config.enforce === false` 是回滚开关——`restrict` 与全部 guard 都不注册，
-行为回到 P1。权限面只作用于**工具派发**，不改任何 CLI（CLI 仍是人/脚本的入口）。
+默认开启；`config.enforce === false` 是回滚开关——`restrict` 与全部 guard 都不注册，行为回到 P1。
+开启时还可配置 `config.enforce = { actorMode: 'single' | 'team' }`（默认 `single`；非法值按
+`single` 处理并记一条 mount warning，不崩）。权限面只作用于**工具派发**，不改任何 CLI（CLI 仍是
+人/脚本的入口）。
+
+**两种 actorMode（角色与结构分开管）**：
+
+| 模式 | 规则 4（actor 判定） | 规则 1/2/3/5 | 适用 |
+|---|---|---|---|
+| `single`（默认） | **不生效** | 全部生效 | 今天只有一个角色：会话同时是分析者/实现者/审查者 |
+| `team` | 生效 | 全部生效 | P3 落地、插件真的会派工之后 |
+
+**为什么今天默认 `single`**：`lib/stage.mjs` 的 `actor` 描述的是**目标设计**（分析者/实现者/审查者
+三角色），但角色分离要到 P3 才存在。若现在就按 actor 强制，`queued-implementation → implementing`
+（actor=plugin）没有任何东西会推进——任务进入该阶段后**永远出不去**（P2 落地时台账里已有这类任务）。
+`single` 不是放宽结构：**规则 3 在任何模式下都生效**，跳级（如 `analyzing → implementing`）照样拒绝；
+唯一放行的是"这条边该由谁走"。P3 落地时只需把默认值翻成 `team`（配置就绪，不必改代码）。
 
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|
@@ -1086,15 +1101,19 @@ list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤
 | 1 | 主会话调用团队工具 | `主会话不得直接调度团队。用 flow_task_update（即 flow_task 的 update 动作）推进阶段，插件会派工。` |
 | 2 | 主会话 `flow_task add` | `任务由插件按你的每句话自动创建，不需要也不允许手动建。若要补记一条，说明理由后由插件建。` |
 | 3 | `flow_task update` 带 `stage` 且该边不存在 | `<from> 只能到 <nextStages(from)>，你给了 <to>。` |
-| 4 | 边存在但 `edge.actor !== 'session'` | `<from> → <to> 由 <actor> 推进，不是你。你只能推进：<该阶段 actor=session 的边>。` |
+| 4 | `team` 模式下，边存在但 `edge.actor !== 'session'` | `<from> → <to> 由 <actor> 推进，不是你。你只能推进：<该阶段 actor=session 的边>。` |
 | 5 | `flow_subtask add/remove` 而父任务不在 `queued-implementation`/`implementing` | `只有实现阶段可以改子任务（当前 <阶段中文>）。` |
 
 规则 3/4 的唯一真源是 `lib/stage.mjs` 的 `edgeOf(from,to)` / `actorForEdge(from,to)` /
-`nextStages(from)`——`index.js` 不重写任何阶段判断。规则 1/2 只作用于主会话；3/4/5 对任何会话一致；
-子代理不受 1/2 限制（它负责派工与建任务）。同阶段重写（`from === to`）按幂等放行。
+`nextStages(from)`——`index.js` 不重写任何阶段判断。规则 4 是 `team` 模式的实现，**不删除**；
+`single` 只是不启用它。规则 1/2 只作用于主会话；3/4/5 对任何会话一致；子代理不受 1/2 限制
+（它负责派工与建任务）。同阶段重写（`from === to`）按幂等放行。
 `flow_task update` 因此新增 `stage` 通道（`TASK_UPDATE_FIELDS` + 工具 schema 的九值枚举）；
-写 `stage` 会派生 `status`（见 §5.1）。`flow_subtask` 目前尚未注册为工具，规则 5 的 guard 已就位，
-待该工具落地即生效。
+写 `stage` 会派生 `status`（见 §5.1）。
+
+**已知缺口（规则 5 暂不可达）**：`flow_subtask` 工具在 P2 时点**尚未注册**（schema 与
+"remove 是归档还是删除"的语义未定），因此规则 5 的 guard 已就位但没有触发点；**延后到 P4**，
+与否决语义一起交付。不得为让规则 5 可达而临时造一个语义未定的模型可见工具。
 
 ## 6 机械检查（`flow check`）
 
