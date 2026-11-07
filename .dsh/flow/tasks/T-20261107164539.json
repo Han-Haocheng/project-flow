@@ -1,0 +1,22 @@
+{
+  "title": "feat: CLI 状态块落地 + 修正投影无视 status 的真 bug（未完成 60→6）",
+  "type": "fix",
+  "status": "done",
+  "notes": "2026-11-07 完成（2a55fb6 + d3026fd，待推送）。\n\n## 交付 A：CLI 状态块（这是用户最初那条需求的落地）\n用户原话：「调用 flow_heartbeat start 后自动输出当前 project-flow 状态，保证每次心跳后 AI 能获取当前状态」。\n- heartbeat start/update 人类输出追加状态块（start 栈 ≤8，update ≤5）\n- --json 同构：heartbeat 把五键平铺在 data（因为 data.status 已被心跳自身状态占用且是别人用例钉死的），flow status 用 data.status\n- 复用 lib/capture.mjs 的 buildStatusBlock，没有在 bin 里重写装配（单点真源）\n- 未初始化不给零值块：data.status 缺席而不是显示「未完成 0」\n\n## 交付 B：真 bug 修正（d3026fd）\n实测 node bin/flow.mjs status 输出「未完成 60 ｜ created 58」，真值是 6。\n根因：lib/core.mjs 的 projectTaskStage 无视 status，把 54 条存量记录（36 done + 18 archived）一律投影成 stage='created' → done 任务进了待办栈顶。\n修法：lib/stage.mjs 新增 legacyStageFromStatus 作单点真源；core 只调用；capture.mjs 的 effectiveStage 回退也改为调用它（原来 active→created 与 stage.mjs 的 active→queued-analysis 分叉，第三例两处口径）；CONTRACT §3.2.1 原来那句「读投影补 created」本身就是 bug 的文档化，已改写。\n\n## 为什么 461 条全绿没抓到\ntask-67 的断言是 deepEqual(CLI 结果, buildStatusBlock(...)) —— 自洽性检查，只能证明两边用同一个函数，无法证明那个函数是对的。两个东西一致但两个都错。\n真值是 Lead 跑命令读出来的：先看见 60 觉得不对，再用脚本读磁盘原始记录算出 6/4/36/18。\n结论：每落地一个「给 AI 看的数字」，必须人肉验一次真值，自动化替代不了。\n\n## 变异\n- done→created：红 6 条；\n- counts 改回 task.stage：实测不红且不可能红 —— 执行者如实报告「这一行是零可观测效果的纯防御」，并指出它与造成本 bug 的死代码兜底同族（不硬凑红，有价值）；\n- effectiveStage 回退改回旧口径：Lead 补的第 8 条测试精准红；\n- 只加注释：全绿（反向对照）。\n\n## 顺带修正执行者自己的旧用例\nt-20261107-stage-machine 的 ⑤⑥ 曾把 bug 当契约写死（对 status:'active' 的存量记录断言 stage==='created'），已改为按 status 反推的正确契约。不改它们这个 bug 会被永远保护。\n\n门禁：469/469、五个 selftest 全 OK、check tasks exit 0。",
+  "commits": [
+    "2a55fb6",
+    "d3026fd"
+  ],
+  "schema": 1,
+  "id": "T-20261107164539",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "created_at": "2026-11-07T16:45:39+08:00",
+  "updated_at": "2026-11-07T16:45:39+08:00"
+}
