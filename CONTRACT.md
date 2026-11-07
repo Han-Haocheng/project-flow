@@ -45,6 +45,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/capture.mjs` | P1 捕获流水线：`agent/pre-step` 只做内存的排除/集合差去重，`agent/turn-stopping` 才落盘（`source.key` 跨进程去重、创建即推进 `queued-analysis`）；同时产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入，宿主无 core 时捕获自然降级） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
+| `lib/tools/subtasks.mjs` | P4 `flow_subtask` 工具：`add`（子任务直接落 `queued-analysis`）/ `update`（仅 notes+stage，走 `assertTransition`）/ `remove`（**软关闭**：`stage=done` + `notes` 追加 `[removed]`，不物理删除）；写入一律走 core 的 `addTask`/`updateTask` | index.js |
+| `lib/veto.mjs` | P4 分析期否决：`vetoSubtask`（会话自决、不建决策）/ `vetoTask`（建 modify\|delete 决策、任务停在 analyzing）/ `applyVetoAnswer`（modify 回 queued-analysis，delete 到 done）；**不碰团队板** | `index.js`（`flow_veto`） |
 | `lib/team-sync.mjs` | P3a **只读**团队板对账：`readTeamBoard(ctx, agent)`（真实宿主 API 以 `caller` 为授权凭据）与 `reconcile`（matched/missing/orphaned，零写入）；**不映射** `TeamTaskView.status` 与九阶段 | `index.js`（工具/面板读路径） |
 
 | `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
@@ -262,7 +264,9 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "created_at": "...",
   "updated_at": "...",
   "done_at": null,                      // 可选（T-09）：进入 done 的时刻；回 active/draft 清空
-  "archived_at": null                   // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
+  "archived_at": null,                  // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
+  "veto": { "by": "analysis", "reason": "...", "at": "..." }, // 可选（P4）：分析期否决记录，历史永不清
+  "decision": "D-20261107-01"           // 可选（P4）：主任务否决生成的待办决策 id；答完清为 null
 }
 ```
 
@@ -286,9 +290,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   引用；`title` 是任务身份，且面板标题是 `type: title` 的展示面；`type` 参与按类型统计，
   可改则历史漂移。**唯一例外**是 core 内部迁移函数 `normalizeTaskFormat()`（见下方「旧格式
   迁移」），`updateTask` 对外零例外。
-- **可更新白名单（显式）**：`status`、`owner`、`notes`、`commits`、`scope`、`acceptance`、
-  `experiment`、`parent`。白名单之外的自造键一律 `invalid`（同一条「cannot be changed」文案），
-  不做静默写入。
+- **可更新白名单（显式）**：`status`、`stage`、`owner`、`notes`、`commits`、`scope`、
+  `acceptance`、`experiment`、`parent`、`veto`、`decision`。白名单之外的自造键一律 `invalid`
+  （同一条「cannot be changed」文案），不做静默写入。`veto` 可写是因为否决可能发生在创建之后
+  （`flow_veto`）；它**从不被答案清除**——历史保留靠"没有清理路径"，不是靠不可写。
+  `decision` 是待办指针：否决时写入，用户答 `modify`/`delete` 后清为 `null`。
 - **系统维护键例外**：`updated_at`（每次 patch 恒刷新）、`done_at`、`archived_at`
   （`stampTaskTimes` 权威管理）**接受**写入但被写路径覆盖，**不**列入不可改清单。
   `checkpoints` 本版不动：不在白名单、无 CLI flag/工具参数，写入属未定义行为，仅供存量只读。
@@ -1113,9 +1119,41 @@ list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤
 `flow_task update` 因此新增 `stage` 通道（`TASK_UPDATE_FIELDS` + 工具 schema 的九值枚举）；
 写 `stage` 会派生 `status`（见 §5.1）。
 
-**已知缺口（规则 5 暂不可达）**：`flow_subtask` 工具在 P2 时点**尚未注册**（schema 与
-"remove 是归档还是删除"的语义未定），因此规则 5 的 guard 已就位但没有触发点；**延后到 P4**，
-与否决语义一起交付。不得为让规则 5 可达而临时造一个语义未定的模型可见工具。
+**规则 5 已可达（P4）**：`flow_subtask` 工具已注册（见 §5.5），P2 就位的规则 5 现在会真正触发；
+`single` 模式下父任务在 non-implementation 阶段调 `flow_subtask` 会被 guard 拒绝，文案带当前
+阶段中文。
+
+### 5.5 子任务与否决工具（P4）
+
+两个工具都由主插件注册（`index.js` 的 `buildToolDefinitions`）；`flow_task` 仍在 `tasks.js`
+子插件里，因此**不需要改 profile**。
+
+**`flow_subtask`**（父任务必须在 `queued-implementation` / `implementing`，否则 P2 规则 5 拒绝）：
+
+| 动作 | 语义 |
+|---|---|
+| `add` | `parent` 必填、`type`/`title` 必填；子任务**直接落 `queued-analysis`**（父在实现、子的分析从现在开始）；父存在性与成环由 core `addTask` 校验 |
+| `update` | **只允许** `notes` / `stage`；`stage` 走 `lib/stage.mjs` 的 `assertTransition`（与 `flow_task` 同一套边，非法跳级报合法后继） |
+| `remove` | **软关闭**：`stage='done'`（core 自动 `done_at`）+ `notes` 追加 `[removed] <reason>`；`reason` 必填 |
+
+**`remove` 为什么不做物理删除**（`lib/core.mjs` 的 `removeTask` 确实存在，但它不是这个语义）：
+
+1. **台账是审计记录**：物理删除之后，P3a 的 `orphaned`/`missing` 对账会把"被删掉的历史"看成
+   "板上多出来的幽灵"；
+2. **否决原因必须留痕**：`[removed] <reason>` 是 P4 否决链路的输入，删掉就没了；
+3. **`removeTask` 的正当用途是"误建的记录"**，不是"用户说不做的任务"——后者是**业务结果**，
+   不是**数据错误**。
+
+**`flow_veto`**（纯本地台账，**不调用任何 `agentTeams` 方法**）：
+
+| 动作 | 行为 |
+|---|---|
+| `veto` + `target:'task'`（默认） | 任务必须停在 `analyzing`；建一条 `kind:'choice'` 的 `flow_decision`（**选项固定 `modify` / `delete`**，推荐 `modify`），任务写 `veto` 与 `decision=<D-id>`，**stage 不变** |
+| `veto` + `target:'subtask'` | 会话自决、**不建决策**：子任务软关闭（`done` + `[removed]` + `veto`），父任务 `notes` 追加一行 `[veto] 子任务 … 已否决：…` |
+| `answer` + `choice:'modify'` | 关闭决策；清 `decision`；`stage='queued-analysis'` 重新入栈；**`veto` 历史保留** |
+| `answer` + `choice:'delete'` | 关闭决策；清 `decision`；`stage='done'`（`done_at` 落盘），交给既有 7 天归档规则；**不直接 archived**；`veto` 保留 |
+
+决策复用既有 `flow_decision`（唯一接口面）；任务侧只有 `veto`/`decision` 两个字段（见 §3.2）。
 
 ## 6 机械检查（`flow check`）
 

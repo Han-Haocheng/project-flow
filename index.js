@@ -80,6 +80,8 @@ import {
 // module sub-plugins (tasks.js / gates.js / experiments.js).
 import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
 import { readTeamBoard, reconcileLinks, teamStatusOf } from './lib/team-sync.mjs'
+import { buildDefinition as buildSubtaskDefinition } from './lib/tools/subtasks.mjs'
+import { applyVetoAnswer, vetoSubtask, vetoTask } from './lib/veto.mjs'
 import {
   buildStatusBlock,
   createCaptureState,
@@ -2250,6 +2252,47 @@ function decisionAskInput(args, c, root, contract, session) {
 function buildToolDefinitions(deps, settings) {
   const { ctx, toolRoot } = deps
   return [
+    /* P4: the subtask tool lives in lib/tools/subtasks.mjs (same definition
+       shape as the sub-plugin tools) and is mounted with this entry so guard
+       rule 5 (parent in an implementation stage) becomes reachable. */
+    buildSubtaskDefinition(deps),
+    {
+      name: 'flow_veto',
+      description:
+        'Record an analysis-phase veto. `action:"veto"` + `target:"task"` (default) keeps the task in analyzing but creates a flow_decision with exactly two choices — modify (re-queue to queued-analysis) or delete (complete it, then the normal 7-day archive rule applies) — and points the task\'s `decision` at it. `target:"subtask"` is self-decided by the session: the child is completed (never deleted), `[removed] <reason>` is appended to its notes, and the parent gets one notes line. `action:"answer"` applies the user\'s `choice` (modify|delete), closes the decision, and keeps the veto history.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['veto', 'answer'] },
+          target: { type: 'string', enum: ['task', 'subtask'], description: 'veto: which kind of task is vetoed (default task).' },
+          root: ROOT_PROPERTY,
+          id: { type: 'string', description: 'The task id (main task or subtask).' },
+          reason: { type: 'string', description: 'veto: why analysis rejects it (required).' },
+          choice: { type: 'string', enum: ['modify', 'delete'], description: 'answer: the user\'s choice.' },
+        },
+        required: ['action', 'id'],
+        additionalProperties: false,
+      },
+      output: toolOutput(),
+      isConcurrencySafe: false,
+      timeoutMs: WRITE_TIMEOUT_MS,
+      async execute(args, exec) {
+        const root = toolRoot(ctx, args, exec)
+        requireStore(root)
+        const c = requireCore()
+        const { contract } = c.loadContract(root)
+        const action = typeof args.action === 'string' ? args.action : ''
+        const id = typeof args.id === 'string' ? args.id.trim() : ''
+        if (id === '') throw new Error('flow_veto requires id')
+        if (action === 'veto') {
+          const target = typeof args.target === 'string' ? args.target : 'task'
+          if (target === 'subtask') return { root, ...vetoSubtask(root, contract, { taskId: id, reason: args.reason }) }
+          return { root, ...vetoTask(root, contract, { taskId: id, reason: args.reason }) }
+        }
+        if (action === 'answer') return { root, ...applyVetoAnswer(root, contract, { taskId: id, choice: args.choice }) }
+        throw new Error(`unknown flow_veto action: ${String(action)}`)
+      },
+    },
     {
       name: 'flow_status',
       description:

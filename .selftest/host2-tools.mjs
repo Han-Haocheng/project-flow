@@ -337,8 +337,8 @@ check('gate route present', gateRoute !== undefined && gateRoute.kind === 'exact
 
 // ------------------------------------------------------------- tool surface
 
-const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat', 'flow_decision']
-check('six tools registered', registeredTools.size === 6, `got ${[...registeredTools.keys()].join(', ')}`)
+const EXPECTED_TOOLS = ['flow_status', 'flow_exp', 'flow_task', 'flow_gate', 'flow_heartbeat', 'flow_decision', 'flow_subtask', 'flow_veto']
+check('eight tools registered', registeredTools.size === 8, `got ${[...registeredTools.keys()].join(', ')}`)
 for (const name of EXPECTED_TOOLS) {
   const definition = registeredTools.get(name)
   if (check(`${name}: registered`, definition !== undefined) === false) continue
@@ -1681,7 +1681,7 @@ const injectCtx = {
 }
 
 applyAll(injectCtx)
-eq('inject path: six tools registered', injectedTools.size, 6)
+eq('inject path: eight tools registered', injectedTools.size, 8)
 eq('inject path: three skills registered', injectedSkills.size, 3)
 check('inject path: fiber returned by ctx.inject', injectedFiber !== undefined)
 for (const dispose of injectedRouteDisposers.splice(0)) dispose()
