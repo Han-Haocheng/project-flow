@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "继续",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "14e9ec0cf6b9cd0cd702be56d333405a7dd3472d6eb46663cdd3a37fcbd6ed20",
+    "at": "2026-11-07T16:48:53.532Z",
+    "text": "继续"
+  },
+  "schema": 1,
+  "id": "T-20261108005524",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T00:55:24+08:00",
+  "updated_at": "2026-11-08T00:55:24+08:00",
+  "done_at": null,
+  "archived_at": null
+}
