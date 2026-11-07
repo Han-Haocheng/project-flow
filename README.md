@@ -166,7 +166,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：476 用例（41 个文件）
+node --test test/                        # core + CLI + check：488 用例（42 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

@@ -1066,6 +1066,36 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 恢复「已结束（dead）/可能已停」清单。`flow status` 的心跳明细同样只含可见行，摘要按全量
 `counts` 报（见 §5.3 上文）。
 
+### 5.4 会话工具面（P2 权限面，`config.enforce` 控制）
+
+默认 `enforce: true`；`config.enforce === false` 是回滚开关——`restrict` 与全部 guard 都不注册，
+行为回到 P1。权限面只作用于**工具派发**，不改任何 CLI（CLI 仍是人/脚本的入口）。
+
+**隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
+agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|
+list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤，`restrict` 对未知名字会抛；
+子代理 scope 不加限制）。`capture:false` 时 `agent/created` 钩子不注册，改由 `agent/pre-step`
+对同一会话做一次 per-agent restrict——这样插件挂载前就已存在的会话、以及关闭 capture 的项目
+也被覆盖。
+
+**拦截（`tools.guard`）**：`restrict` 只隐藏、不拦截；绕过可见面的 PTC / 子调度仍会走到 guard。
+规则（拒绝文案必须让下一步可执行）：
+
+| # | 条件 | 拒绝文案要点 |
+|---|---|---|
+| 1 | 主会话调用团队工具 | `主会话不得直接调度团队。用 flow_task_update（即 flow_task 的 update 动作）推进阶段，插件会派工。` |
+| 2 | 主会话 `flow_task add` | `任务由插件按你的每句话自动创建，不需要也不允许手动建。若要补记一条，说明理由后由插件建。` |
+| 3 | `flow_task update` 带 `stage` 且该边不存在 | `<from> 只能到 <nextStages(from)>，你给了 <to>。` |
+| 4 | 边存在但 `edge.actor !== 'session'` | `<from> → <to> 由 <actor> 推进，不是你。你只能推进：<该阶段 actor=session 的边>。` |
+| 5 | `flow_subtask add/remove` 而父任务不在 `queued-implementation`/`implementing` | `只有实现阶段可以改子任务（当前 <阶段中文>）。` |
+
+规则 3/4 的唯一真源是 `lib/stage.mjs` 的 `edgeOf(from,to)` / `actorForEdge(from,to)` /
+`nextStages(from)`——`index.js` 不重写任何阶段判断。规则 1/2 只作用于主会话；3/4/5 对任何会话一致；
+子代理不受 1/2 限制（它负责派工与建任务）。同阶段重写（`from === to`）按幂等放行。
+`flow_task update` 因此新增 `stage` 通道（`TASK_UPDATE_FIELDS` + 工具 schema 的九值枚举）；
+写 `stage` 会派生 `status`（见 §5.1）。`flow_subtask` 目前尚未注册为工具，规则 5 的 guard 已就位，
+待该工具落地即生效。
+
 ## 6 机械检查（`flow check`）
 
 `flow check` 把 `skills/ai-collaborative-dev-workflow/scripts/` 下的机械检查脚本包成

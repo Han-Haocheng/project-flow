@@ -78,6 +78,7 @@ import {
 // The one mount implementation: service lookup, ctx.effect registration, the
 // core-warning wrapper and the mount-warning channel are shared with the three
 // module sub-plugins (tasks.js / gates.js / experiments.js).
+import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
 import {
   buildStatusBlock,
   createCaptureState,
@@ -1574,7 +1575,7 @@ function decisionReminderText(root, contract, session, turn) {
  * accept one waterfall listener per plugin in older environments (host2-tools
  * asserts exactly one `agent/pre-step` hook); it stays memory-only.
  */
-function registerHeartbeatReminder(ctx, captureState) {
+function registerHeartbeatReminder(ctx, captureState, settings) {
   try {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
@@ -1597,6 +1598,12 @@ function registerHeartbeatReminder(ctx, captureState) {
           if (session === '') return decision
           const root = agentRoot(ctx, agent)
           if (root === undefined) return decision
+          // P2 §5.2 ①: hide the team tools from a main session's scope. Applied
+          // here as well as on `agent/created` so a session that predates the
+          // plugin mount (or one created while capture is off) is still covered.
+          if (settings !== null && typeof settings === 'object' && settings.enforce === true) {
+            restrictMainSessionTools(ctx, agent, settings.restrictedAgents)
+          }
           // P1 capture: memory only (filter → diff → queue). The write happens on
           // `agent/turn-stopping`, never on this per-step critical path.
           if (captureState !== null) recordPreStep(captureState, { root, session, messages: payload.messages })
@@ -1815,17 +1822,30 @@ function captureAutoStart(ctx, payload) {
 }
 
 /** Register the `agent/created` auto-start through `ctx.effect` (no-op without the event API). */
-function registerCapture(ctx, captureState) {
+function registerAgentCreated(ctx, captureState, settings) {
+  const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
+  // Capture owns this hook; with `capture:false` the listener is not registered
+  // at all (P1 rollback shape) and §5.2 ① falls back to the pre-step hook.
   if (captureState === null) return
   try {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
       const dispose = ctx.on('agent/created', (payload) => {
-        try {
-          captureAutoStart(ctx, payload)
-        } catch (error) {
-          // `agent/created` is serial: a throw would fail session creation.
-          warnMount(`capture heartbeat auto-start skipped: ${brief(error)}`, ctx)
+        // One hook for two independent duties: each has its own try/catch, and
+        // `agent/created` is serial (a throw would fail session creation).
+        if (captureState !== null) {
+          try {
+            captureAutoStart(ctx, payload)
+          } catch (error) {
+            warnMount(`capture heartbeat auto-start skipped: ${brief(error)}`, ctx)
+          }
+        }
+        if (enforce) {
+          try {
+            restrictMainSessionTools(ctx, payload === null || payload === undefined ? undefined : payload.agent, settings.restrictedAgents)
+          } catch (error) {
+            warnMount(`enforce: restrict skipped: ${brief(error)}`, ctx)
+          }
         }
       })
       return () => {
@@ -1835,10 +1855,172 @@ function registerCapture(ctx, captureState) {
           // A listener disposer must never break plugin unload.
         }
       }
-    }, 'project-flow: capture heartbeat auto-start')
+    }, 'project-flow: agent created hooks')
   } catch (error) {
-    warnMount(`capture: registration failed: ${brief(error)}`, ctx)
+    warnMount(`capture/enforce: registration failed: ${brief(error)}`, ctx)
   }
+}
+
+// ------------------------------------------------------- P2 permission surface
+//
+// Plan §5.2: a main session may do four things — advance a stage it owns, manage
+// subtasks in the implementation stages, read status and update its heartbeat.
+// Everything else is denied, and every denial says how to proceed correctly.
+//
+// `restrict` (per-agent scope, applied on agent creation) hides the team tools;
+// `guard` denies them again if a call bypasses the visible surface (PTC / nested
+// scheduling). Subagents are exempt from rules 1-2: they exist to dispatch work
+// and to create tasks.
+
+/** Tools a main session must not see (plan §5.2 ①). Unknown names are filtered. */
+const TEAM_TOOL_NAMES = Object.freeze([
+  'spawn_teammate',
+  'team_task_create',
+  'team_task_update',
+  'team_task_list',
+  'team_task_get',
+  'team_task_delete',
+  'subagent',
+  'subagent_fork',
+])
+
+const TEAM_TOOL_DENY = new Set(TEAM_TOOL_NAMES)
+
+const MAIN_SESSION_TEAM_DENY =
+  '项目流：主会话不得直接调度团队。用 flow_task_update（即 flow_task 的 update 动作）推进阶段，插件会派工。'
+
+const MAIN_SESSION_TASK_ADD_DENY =
+  '项目流：任务由插件按你的每句话自动创建，不需要也不允许手动建。若要补记一条，说明理由后由插件建。'
+
+/** Stages in which subtasks may be added/removed (plan §5.1). */
+const SUBTASK_STAGES = Object.freeze(['queued-implementation', 'implementing'])
+
+/** The stage record of one task, or `null` when it cannot be read (then allow). */
+function guardTaskOf(ctx, agent, id) {
+  try {
+    if (typeof id !== 'string' || id.trim() === '') return null
+    const root = agentRoot(ctx, agent)
+    if (root === undefined) return null
+    const c = coreModule()
+    if (c === null || typeof c.getTask !== 'function') return null
+    const loaded = c.loadContract(root)
+    return c.getTask(root, loaded.contract, id.trim())
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Rules 3 and 4: a `flow_task update` that names a stage must walk a real edge,
+ * and that edge must belong to the session. Both facts come from `lib/stage.mjs`
+ * (`edgeOf` / `actorForEdge` / `nextStages`) — a second stage table here would
+ * drift from the machine.
+ */
+function stageGuardReason(ctx, agent, args) {
+  const to = typeof args.stage === 'string' ? args.stage.trim() : ''
+  if (to === '') return undefined
+  const task = guardTaskOf(ctx, agent, args.id)
+  if (task === null) return undefined
+  const from = typeof task.stage === 'string' ? task.stage.trim() : ''
+  if (from === '') return undefined
+  if (from === to) return undefined // idempotent rewrite, same semantics as canTransition
+  const edge = edgeOf(from, to)
+  if (edge === null) {
+    const legal = nextStages(from)
+    return `项目流：${from} 只能到 ${legal.length === 0 ? '（无后继）' : legal.join('、')}，你给了 ${to}。`
+  }
+  if (edge.actor !== 'session') {
+    const mine = nextStages(from).filter((next) => actorForEdge(from, next) === 'session')
+    return `项目流：${from} → ${to} 由 ${String(edge.actor)} 推进，不是你。你只能推进：${mine.length === 0 ? '（无）' : mine.join('、')}。`
+  }
+  return undefined
+}
+
+/** Rule 5: subtasks may only be touched in the implementation stages. */
+function subtaskGuardReason(ctx, agent, args) {
+  const action = typeof args.action === 'string' ? args.action : ''
+  if (action !== 'add' && action !== 'remove') return undefined
+  let parentId = typeof args.parent === 'string' ? args.parent.trim() : ''
+  if (parentId === '' && typeof args.parentId === 'string') parentId = args.parentId.trim()
+  let parent = parentId === '' ? null : guardTaskOf(ctx, agent, parentId)
+  if (parent === null && action === 'remove') {
+    const record = guardTaskOf(ctx, agent, args.id)
+    if (record !== null && typeof record.parent === 'string' && record.parent.trim() !== '') {
+      parent = guardTaskOf(ctx, agent, record.parent.trim())
+    }
+  }
+  if (parent === null) return undefined
+  const stage = typeof parent.stage === 'string' ? parent.stage.trim() : ''
+  if (SUBTASK_STAGES.includes(stage)) return undefined
+  return `项目流：只有实现阶段可以改子任务（当前 ${STAGE_ZH[stage] ?? stage}）。`
+}
+
+/**
+ * The P2 guard predicate: `undefined` allows, a string denies. It never throws
+ * (a guard failure must not turn into a denied tool call) and it only inspects
+ * the tool names/shapes it knows; everything else is the normal tool layer.
+ */
+function enforceGuardReason(ctx, execution) {
+  try {
+    if (execution === null || execution === undefined) return undefined
+    const name = typeof execution.name === 'string' ? execution.name : ''
+    if (name === '') return undefined
+    const args = isPlainObject(execution.arguments) ? execution.arguments : {}
+    const agent = execution.agent
+    const main = rootSessionVerdict(ctx, agent) === true
+    if (main && TEAM_TOOL_DENY.has(name)) return MAIN_SESSION_TEAM_DENY
+    if (name === 'flow_task') {
+      const action = typeof args.action === 'string' ? args.action : ''
+      if (action === 'add') return main ? MAIN_SESSION_TASK_ADD_DENY : undefined
+      if (action === 'update') return stageGuardReason(ctx, agent, args)
+      return undefined
+    }
+    if (name === 'flow_subtask') return subtaskGuardReason(ctx, agent, args)
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Rule ① of §5.2: hide the team tools from a main session's scope. `restrict`
+ * refuses a context-global filter, so it is applied per agent on creation and
+ * only to main sessions; names the host does not provide are dropped first
+ * (`restrict` throws on unknown names).
+ */
+function restrictMainSessionTools(ctx, agent, restrictedAgents) {
+  try {
+    if (rootSessionVerdict(ctx, agent) !== true) return
+    if (isPlainObject(agent) === false) return
+    // One restriction per agent per mount: the pre-step fallback runs on every
+    // step, and stacking identical restrictions would accumulate layers.
+    const restricted = restrictedAgents instanceof WeakSet ? restrictedAgents : null
+    if (restricted !== null && restricted.has(agent)) return
+    const scope = agent.ctx
+    if (scope === undefined || scope === null) return
+    const tools = service(scope, 'tools')
+    if (tools === undefined || tools === null || typeof tools.restrict !== 'function') return
+    if (restricted !== null) restricted.add(agent)
+    let deny = TEAM_TOOL_NAMES.slice()
+    if (typeof tools.get === 'function') {
+      deny = deny.filter((name) => {
+        try {
+          return tools.get(name) !== undefined
+        } catch {
+          return false
+        }
+      })
+    }
+    if (deny.length === 0) return
+    tools.restrict({ deny })
+  } catch (error) {
+    warnMount(`enforce: restrict failed: ${brief(error)}`, ctx)
+  }
+}
+
+/** Whether the P2 permission surface is on (`config.enforce !== false`). */
+function enforceEnabled(config) {
+  return isPlainObject(config) === false || config.enforce !== false
 }
 
 /** Whether the P1 capture/status behaviour is on (`config.capture !== false`). */
@@ -2285,13 +2467,28 @@ function buildToolDefinitions(deps, settings) {
  */
 function registerTools(ctx, settings) {
   const heartbeatGate = settings !== null && typeof settings === 'object' && settings.heartbeatGate === true
+  const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
+  // Two independent guards, one predicate: the heartbeat write gate (a session
+  // without a working heartbeat may not edit/write) and the P2 permission
+  // surface (plan §5.2). Each failure inside a guard allows the call.
+  const guard =
+    heartbeatGate === false && enforce === false
+      ? undefined
+      : (scoped) => (execution) => {
+          if (heartbeatGate) {
+            const reason = heartbeatGuardReason(scoped, execution)
+            if (reason !== undefined) return reason
+          }
+          if (enforce) {
+            const reason = enforceGuardReason(scoped, execution)
+            if (reason !== undefined) return reason
+          }
+          return undefined
+        }
   registerToolDefinitions(ctx, {
     label: 'tools',
     build: (scoped) => buildToolDefinitions(toolDeps(scoped), settings),
-    // Hard gate: a session that never registered a `working` heartbeat may not
-    // write files. Only edit/write are denied, so read/bash/diagnostics keep
-    // working; every failure inside the guard itself allows the call.
-    guard: heartbeatGate ? (scoped) => (execution) => heartbeatGuardReason(scoped, execution) : undefined,
+    guard,
   })
 }
 
@@ -2461,7 +2658,14 @@ export function apply(ctx, config) {
   // `config.capture === false` is the rollback switch: no pre-step recording, no
   // turn-stopping flush and no heartbeat auto-start — the plugin behaves like P0.
   const captureEnabled = isPlainObject(config) === false || config.capture !== false
-  const settings = { heartbeatGate: heartbeatGateEnabled(config), capture: captureEnabled }
+  const settings = {
+    heartbeatGate: heartbeatGateEnabled(config),
+    capture: captureEnabled,
+    enforce: enforceEnabled(config),
+    // Per-mount dedupe for §5.2 ① (a re-apply restores the team tools until the
+    // new mount restricts again; a module-level set would skip that).
+    restrictedAgents: new WeakSet(),
+  }
   const captureState = captureEnabled ? createCaptureState() : null
 
   // The state read pool: one per apply, disposed with the effect that owns it.
@@ -2510,7 +2714,7 @@ export function apply(ctx, config) {
     warnMount(`system prompt: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerHeartbeatReminder(ctx, captureState)
+    registerHeartbeatReminder(ctx, captureState, settings)
   } catch (error) {
     warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
   }
@@ -2520,8 +2724,8 @@ export function apply(ctx, config) {
     warnMount(`heartbeat keepalive: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerCapture(ctx, captureState)
+    registerAgentCreated(ctx, captureState, settings)
   } catch (error) {
-    warnMount(`capture: registration failed: ${brief(error)}`, ctx)
+    warnMount(`capture/enforce: registration failed: ${brief(error)}`, ctx)
   }
 }
