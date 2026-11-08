@@ -324,6 +324,18 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   丢掉一条任务或实验）。重编号需同步文本引用：`decisions` 的 `blocks`、heartbeat 的 `task`、
   任务的 `parent`、实验的 `commits` 等；批量工具 `flow task renumber` 尚未提供，属后续可选卡。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
+- **`owner`（会话归属，D-20261108-05 = extend-owner）**：任务所属的**会话**。捕获流水线创建任务时
+  自动写为捕获会话 id；`''` = **未指定会话**（任何会话可领取）。
+  - **活跃会话保护**：`owner` 指向一个**活跃**会话时，其他会话不能改写或释放该任务——工具端以宿主
+    `agents` 注册表为活性证据，CLI 以心跳 pid/boot 活性为证据；拒绝文案统一含
+    `owned by active session`。该会话自己可以释放（`owner: ''`）。
+  - **领取 / 释放**：`flow_task update {owner:<自己的会话>}` 领取未指定（或已失效）的任务，且只能
+    领取到**调用会话自己**；CLI `flow task update <id> --owner <会话|none|null>`。`none`/`null`/`''`
+    表示释放回未指定会话。
+  - **失效自动释放**：会话结束（心跳 `status:'done'`）或 pid/boot 判死、且宿主注册表不再报告活跃时，
+    插件在 `agent/created` 扫描把该会话的任务 `owner` 清空为 `''`，供其他会话领取。外主机心跳
+    （`liveness:'foreign'`）与没有心跳记录的 owner（角色名/手写值）**不释放**——"无法证明死了"不是"死了"。
+  - `owner` 仍是可更新白名单字段，但改写要过上述会话守卫；`owner` 不参与阶段机，改它不触发描述门禁。
 - **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?}`。
   由捕获流水线写入；`control` 只是遗留只读值（不再写出）。`key` 是跨进程去重主料；`at` 是消息时间戳
   （payload 带 `timestamp` 时），否则是 pre-step 捕获时刻；`text` 保留整句（超过 4000 字符显式标截断）。
@@ -1104,9 +1116,9 @@ flow exp rm <id> [--yes]
 
 flow task list | show <id>
 flow task add    --title T --type <t> [--status draft|active|done|archived]
-                 [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
 flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
-                 [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
                  # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
                  # <s>: 九阶段之一（见 §3.2.1）；写 --stage 时 status 由阶段派生并同批落盘，
                  #      给 --stage done 会同时写 done_at（stampTaskTimes），两者同给且矛盾 → invalid
@@ -1173,6 +1185,9 @@ flow check tasks [--type-map <file.json>]
 flow check description [--task <T-id>] [--strict] [--json]
 ```
 
+- `task update --owner <会话|none|null>`：写任务的**会话归属**（§3.2）；`none`/`null`/`''` 释放为
+  未指定。活跃会话的任务不能被其他会话改写或释放（CLI 以心跳活性为证据，拒绝文案含
+  `owned by active session`）；`--owner` 不参与阶段机。
 - `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
 - `gate run --phase X` 不接 id（同时给 `--phase` 和 id → 用法错误）；批量结果在
   `data` 里是 `{phase, runs, skipped}`，人类输出显示「运行 N 条 · 通过 · 失败 · 跳过」
@@ -1184,8 +1199,8 @@ flow check description [--task <T-id>] [--strict] [--json]
   `start` 省略 `--task` 时按优先级认领任务：① `owner === session`；② `owner === --agent`
   （或上次心跳的 agent）；③ **最老的**无主（`owner` 为空）`active`；④ **最老的**无主 `draft`
   （③④ 按 `created_at` **升序**取最老，即 FIFO 队列；`updated_at` 不再参与认领排序；
-  `created_at` 缺失或不可解析的记录排在最后）。**他人名下的任务不会被抢**——并行主会话各建各的卡，
-  `claims` 才不会串味。都不命中才新建一条 `draft` 任务（标题取 `--goal`，缺省
+  `created_at` 缺失或不可解析的记录排在最后）。**他人名下的任务不会被抢**——owner 即任务的会话归属
+  （§3.2），并行主会话各建各的卡，`claims` 才不会串味；会话结束后其卡由插件自动释放为未指定。都不命中才新建一条 `draft` 任务（标题取 `--goal`，缺省
   「未命名任务」，owner 为 session）并回填 `task`。显式 `--task` 始终优先，不存在则 `not-found`。
   重复 `start` 保留首次 `started_at`，`turn` +1（core 的 `startHeartbeat` 也接受显式 `turn`），
   `stats.turns` 递增，
@@ -1488,6 +1503,9 @@ timestamp 时取 pre-step 捕获时刻。**残留**：`stale` 规则依赖消息
 **附件**：带 image/file 块的消息仍按同一套规则捕获；附件引用写入 `source.attachments`（形状见
 §3.2）。**只有附件、没有文字**的消息也建卡，title 用 `[附件] 图片 ×N` 一类的兜底，`source.text`
 保持 `''`——截图本身就是用户请求，不能因为它没有文字而静默丢弃。
+
+**会话归属**：捕获创建的任务自动写 `owner = 捕获会话 id`（§3.2 的会话归属），因此其他活跃会话
+不能抢；会话结束后由 `agent/created` 的扫描把 owner 释放为未指定。
 **方向性要求**：前缀必须**窄**（`Team message from ` 带空格；`Team message fromX` 不排除）——
 **宁可多捕获队友消息（界面可见、可软关闭），也不能漏捕获用户的真话（静默丢失、界面一切正常）**。
 **`nothing-pending` 是最弱原因**：pre-step 已给出 `no-messages`/`filtered-out`/`no-target` 时，
