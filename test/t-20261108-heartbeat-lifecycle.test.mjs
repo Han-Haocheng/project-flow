@@ -16,6 +16,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
 import { apply } from '../index.js'
 import { addTask, initProject, listTasks, loadContract } from '../lib/core.mjs'
 
@@ -137,7 +140,23 @@ function freshProject(label) {
   return { root, contract: loadContract(root).contract }
 }
 
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
 const heartbeatFile = (root, session) => path.join(root, '.agents', 'heartbeat', `${session}.json`)
+
+/** Real-subprocess CLI run (phase ② must keep the human escape hatch working). */
+function runCli(cwd, args) {
+  const env = { ...process.env }
+  delete env.DSH_SESSION_ID
+  const result = spawnSync(process.execPath, [BIN, ...args], { cwd, encoding: 'utf8', env })
+  let json = null
+  try {
+    json = JSON.parse(result.stdout)
+  } catch {
+    json = null
+  }
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr, json }
+}
 const readBeat = (root, session) => JSON.parse(fs.readFileSync(heartbeatFile(root, session), 'utf8'))
 
 /** `agent/created` and `agent/disposed` both deliver `{ agent }` (host carrier shape). */
@@ -291,4 +310,104 @@ test('⑧ 收回入口不是删能力：core 仍导出 startHeartbeat / endHeart
   assert.equal(typeof core.startHeartbeat, 'function')
   assert.equal(typeof core.endHeartbeat, 'function')
   assert.ok(listTasks !== undefined)
+})
+
+// ============================================ task-81 ②：会话面只剩 update/list/status
+
+test('⑨ 工具面枚举 === [update, list, status]（start/end 已收回，list/status 必须还在）', () => {
+  const { root } = freshProject('surface')
+  const harness = makeHarness(root)
+  const tool = harness.tools.get('flow_heartbeat')
+  assert.ok(tool, 'flow_heartbeat 必须仍然注册')
+  assert.deepEqual(
+    tool.parameters.properties.action.enum,
+    ['update', 'list', 'status'],
+    '会话面只能是 update/list/status——收多了（连 list/status 一起收）就是另一种越界',
+  )
+  // 拒绝文案必须可执行：给出路，而不是只说"不行"
+  const description = String(tool.description)
+  assert.match(description, /CLI/, '描述必须提到人的逃生口')
+  assert.doesNotMatch(description, /call start BEFORE replying/, '不得再教模型调用已被收回的 start')
+})
+
+test('⑩ start / end 被拒：文案含 CLI 与 update，且不写盘', async () => {
+  const { root, contract } = freshProject('refuse')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-t81-refuse')
+  addTask(root, contract, { type: 'feat', title: '拒绝用例' })
+  const tool = harness.tools.get('flow_heartbeat')
+  const exec = { agent }
+
+  for (const action of ['start', 'end']) {
+    await assert.rejects(
+      () => tool.execute({ action }, exec),
+      (error) => {
+        const message = String(error?.message ?? error)
+        assert.match(message, /CLI/, `${action}: 必须指出哪有逃生口`)
+        assert.match(message, /update/, `${action}: 必须指出会话能做什么`)
+        assert.match(message, new RegExp(`flow heartbeat ${action}`), `${action}: 必须给出确切的 CLI 命令`)
+        return true
+      },
+      `${action} 必须被拒`,
+    )
+  }
+  assert.equal(fs.existsSync(heartbeatFile(root, 'session-t81-refuse')), false, '被拒的调用不得写盘')
+})
+
+test('⑪ update 仍正常（会话唯一能写的心跳动作）', async () => {
+  const { root, contract } = freshProject('update-ok')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-t81-update')
+  addTask(root, contract, { type: 'feat', title: '更新用例' })
+  // 心跳由插件（此处等价地由 core）先开好
+  const core = await import('../lib/core.mjs')
+  core.startHeartbeat(root, contract, { session: agent.id, goal: '初始目标' })
+
+  const tool = harness.tools.get('flow_heartbeat')
+  const updated = await tool.execute({ action: 'update', last_action: '本轮做了什么', status: 'idle' }, { agent })
+  assert.equal(updated.heartbeat.status, 'idle')
+  assert.equal(updated.heartbeat.last_action, '本轮做了什么')
+  assert.equal(readBeat(root, agent.id).status, 'idle', '必须真的落盘')
+
+  // list / status 仍可读
+  const list = await tool.execute({ action: 'list' }, { agent })
+  assert.equal(list.items.length, 1)
+  const status = await tool.execute({ action: 'status' }, { agent })
+  assert.equal(status.record.status, 'idle')
+})
+
+test('⑫ 联合断言：入口收回 **且** 能力仍在（两条同时成立才算对）', async () => {
+  const core = await import('../lib/core.mjs')
+  const { root } = freshProject('joint')
+  const harness = makeHarness(root)
+  const enumValues = harness.tools.get('flow_heartbeat').parameters.properties.action.enum
+  // 只测枚举 → 能力被删也能绿；只测能力 → 入口没收回也能绿。必须同时断言。
+  assert.deepEqual(enumValues, ['update', 'list', 'status'])
+  assert.equal(typeof core.startHeartbeat, 'function', 'startHeartbeat 能力必须还在（插件与 CLI 都用它）')
+  assert.equal(typeof core.endHeartbeat, 'function', 'endHeartbeat 能力必须还在（插件在 agent/disposed 用它）')
+  assert.equal(typeof core.updateHeartbeat, 'function')
+})
+
+test('⑬ CLI 的 heartbeat start/end 仍是人的逃生口（真实子进程，不是 fake）', () => {
+  const { root } = freshProject('cli-escape')
+  const session = 'cli-t81-escape'
+
+  const started = runCli(root, ['heartbeat', 'start', '--session', session, '--goal', '人手动补开', '--json'])
+  assert.equal(started.code, 0, started.stdout + started.stderr)
+  assert.equal(started.json.data.status, 'working')
+  assert.equal(readBeat(root, session).goal, '人手动补开')
+
+  const ended = runCli(root, ['heartbeat', 'end', '--session', session, '--json'])
+  assert.equal(ended.code, 0, ended.stdout + ended.stderr)
+  assert.equal(ended.json.data.status, 'done')
+  assert.match(String(readBeat(root, session).ended_at), /^\d{4}-\d{2}-\d{2}T/)
+
+  // 工具面仍然拒绝，CLI 仍然成功：这正是"人的逃生口"与"会话能力"的分界
+  assert.deepEqual(
+    (() => {
+      const harness = makeHarness(root)
+      return harness.tools.get('flow_heartbeat').parameters.properties.action.enum
+    })(),
+    ['update', 'list', 'status'],
+  )
 })

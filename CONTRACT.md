@@ -616,7 +616,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - **主会话判定**：Host 用 `agents` 服务——`roots()` 返回的活根代理即主会话，`list()` /
   `get(id)` 用来识别「活着但不是 root」的子会话；宿主不提供该服务时回退会话日志 header
   （`origin === "subagent"` 或 `delegationDepth > 0` 判为子会话；fork 出的新主会话仍算主
-  会话）。`flow_heartbeat` 的 start/update/end 与 CLI `flow heartbeat start/update/end`
+  会话）。`flow_heartbeat` 的 update 与 CLI `flow heartbeat start/update/end`
   在子会话里**明确拒绝**（工具报错、CLI 退出 1），list/status 只读放行。
   **注意**：`lib/core.mjs` 不感知会话类型，拒绝发生在 Host 工具与 CLI 层；直接调 core
   API 的脚本自行负责只从主会话写入。
@@ -1819,7 +1819,7 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
   `get(id)` 存在但不在 `roots()` 里即子会话。宿主不可用时回退会话 header
   （`origin === "subagent"` / `delegationDepth > 0` 判为子会话）。判定为子会话时
   **不提醒、不拒绝写入**；判定不出来时也不阻断（宿主旧版本降级）。
-- **工具/CLI 明确拒绝**：`flow_heartbeat` 的 start/update/end 在子会话里抛错并给可行动
+- **工具/CLI 明确拒绝**：`flow_heartbeat` 的 update 在子会话里抛错并给可行动
   提示（不要静默写一个面板会隐藏的文件）；CLI `flow heartbeat start/update/end` 由
   `DSH_SESSION_ID` 对应会话日志 header 判定，子会话里退出码 1 并提示向主会话汇报。
   `list`/`status` 是只读，任何会话可调用。
@@ -1917,10 +1917,13 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
 
 模型侧另有 6 个工具：`flow_status`、`flow_exp`、`flow_task`、`flow_gate`、`flow_heartbeat`、
 `flow_decision`。
-`flow_heartbeat` 的 `action` 为 `start|update|end|list|status`，session 取当前会话 id，
-语义与 CLI `flow heartbeat ...` 完全一致（同一 `lib/core.mjs`）。start/update/end 只在
-主会话可用；心跳根解析到项目主工作区；`root` 参数仍可覆盖工作区，但不会绕开主工作区
-解析与会话判定。
+`flow_heartbeat` 的 `action` 为 **`update|list|status`**——生命周期（开与关）归插件，
+会话侧只剩"修改"与"读"。`update` 只在主会话可用；心跳根解析到项目主工作区；`root` 参数
+仍可覆盖工作区，但不会绕开主工作区解析与会话判定。
+`start`/`end` 被拒并给出路：文案说明生命周期归插件（`agent/created` 自动开、
+`agent/disposed` 自动关），并指出人要手动补时用 CLI `flow heartbeat start|end`——
+**CLI 是人的逃生口，不是会话能力**（CLI 与插件内部仍调 `core.startHeartbeat`/`endHeartbeat`，
+同一 `lib/core.mjs`；收回的是入口，不是能力）。
 `flow_decision` 的 `action` 为 `ask|list|show|answer|withdraw|gc`，与 CLI `flow decision ...`
 一一对应（同一 `lib/core.mjs`）。`ask`/`answer`/`withdraw`/`gc` 是写动作，**只在主会话可用**：
 子会话调用抛错并提示把待决策项写进最终报告、由主会话建/关 `D-` 记录；`list`/`show` 只读，

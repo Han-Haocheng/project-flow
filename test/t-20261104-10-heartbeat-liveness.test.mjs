@@ -463,7 +463,7 @@ test('活跃>6h + agents 命中：编辑/写门禁不拦；无 agents 或 status
   try {
     const guard = withAgents.ctx.get('tools').getGuard()
     assert.equal(guard({ name: 'edit', agent: agentFor('busy') }), undefined, 'agents 命中且 >6h 不应硬拦')
-    assert.match(String(guard({ name: 'edit', agent: agentFor('done') })), /flow_heartbeat start/, 'done 仍要拦')
+    assert.match(String(guard({ name: 'edit', agent: agentFor('done') })), /flow_heartbeat update/, 'done 仍要拦')
   } finally {
     withAgents.disposeAll()
   }
@@ -472,7 +472,7 @@ test('活跃>6h + agents 命中：编辑/写门禁不拦；无 agents 或 status
   mod.apply(withoutAgents.ctx, {})
   try {
     const guard = withoutAgents.ctx.get('tools').getGuard()
-    assert.match(String(guard({ name: 'edit', agent: agentFor('busy') })), /flow_heartbeat start/, '无 agents 时 stale 仍拦')
+    assert.match(String(guard({ name: 'edit', agent: agentFor('busy') })), /flow_heartbeat update/, '无 agents 时 stale 仍拦')
   } finally {
     withoutAgents.disposeAll()
   }

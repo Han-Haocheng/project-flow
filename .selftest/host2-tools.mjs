@@ -627,7 +627,7 @@ eq('pre-step: exactly one reminder hook', preStepHandlers.length, 1)
 const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
 check(
   'guard: root without heartbeat denies edit',
-  typeof rootEditReason === 'string' && rootEditReason.includes('flow_heartbeat start'),
+  typeof rootEditReason === 'string' && rootEditReason.includes('flow_heartbeat update'),
   String(rootEditReason),
 )
 check('guard: bash is never denied', guards[0]?.({ name: 'bash', agent: hbRootAgent }) === undefined)
@@ -649,16 +649,21 @@ check(
 check('guard: subagent is never denied a write', guards[0]?.({ name: 'edit', agent: hbSubAgent }) === undefined)
 const subHeartbeatFile = join(storeRoot, '.agents/heartbeat', `${hbSubAgent.id}.json`)
 const refused = await throws(
-  'flow_heartbeat: subagent start refused',
-  () => heartbeatTool.execute({ action: 'start', goal: '子代理不应写心跳' }, subExec),
+  'flow_heartbeat: subagent write refused',
+  () => heartbeatTool.execute({ action: 'update', last_action: '子代理不应写心跳' }, subExec),
   (message) => message.includes('main sessions') && message.includes('subagent'),
 )
 check('flow_heartbeat: refusal writes no file', refused && existsSync(subHeartbeatFile) === false)
 
 // The main session starts its heartbeat: reminder and gate clear.
-const hbStarted = await heartbeatTool.execute({ action: 'start', goal: 'host heartbeat scope', task: taskId }, hbRootExec)
-eq('flow_heartbeat start: session', hbStarted.session, hbRootAgent.id)
-eq('flow_heartbeat start: ledger root', hbStarted.root, storeRoot)
+// task-81 ②：会话工具不再提供 start —— 生命周期归插件。这里直接调 core，
+// 那正是插件在 `agent/created` 时走的同一条路。
+const hbStarted = core.startHeartbeat(storeRoot, core.loadContract(storeRoot).contract, {
+  session: hbRootAgent.id,
+  goal: 'host heartbeat scope',
+  task: taskId,
+})
+eq('heartbeat (core): session', hbStarted.session, hbRootAgent.id)
 const hbFile = join(storeRoot, '.agents/heartbeat', `${hbRootAgent.id}.json`)
 check('flow_heartbeat start: file written', existsSync(hbFile))
 const afterStart = await runPreStep(hbRootAgent)
@@ -670,8 +675,11 @@ check('guard: working heartbeat allows edit', guards[0]?.({ name: 'edit', agent:
 const hbList = await heartbeatTool.execute({ action: 'list' }, hbRootExec)
 eq('flow_heartbeat list: one visible heartbeat', hbList.items.length, 1)
 eq('flow_heartbeat list: no hidden legacy yet', hbList.counts.hidden, 0)
-const hbEnded = await heartbeatTool.execute({ action: 'end', note: '收尾' }, hbRootExec)
-eq('flow_heartbeat end: done', hbEnded.heartbeat.status, 'done')
+const hbEnded = core.endHeartbeat(storeRoot, core.loadContract(storeRoot).contract, {
+  session: hbRootAgent.id,
+  note: '收尾',
+})
+eq('heartbeat (core): end done', hbEnded.status, 'done')
 
 // A record left by the removed subagent automation is hidden from reads/panel.
 const legacyHeartbeatFile = join(storeRoot, '.agents/heartbeat', 'session-legacy-host2.json')
@@ -720,9 +728,10 @@ const wtCheckout = join(wtDir, 'checkout')
 gitRun(wtMain, ['worktree', 'add', '-q', wtCheckout, '-b', 'hb-host2-wt'])
 const wtAgent = mockAgent('session-hb-wt', wtCheckout)
 registerRootAgent(wtAgent)
-const wtStarted = await heartbeatTool.execute({ action: 'start', root: wtCheckout, goal: 'worktree 心跳' }, { agent: wtAgent })
-eq('flow_heartbeat worktree: ledger root is the main worktree', wtStarted.root, wtMain)
-eq('flow_heartbeat worktree: workspace reported', wtStarted.workspace, wtCheckout)
+const wtList = await heartbeatTool.execute({ action: 'list', root: wtCheckout }, { agent: wtAgent })
+eq('flow_heartbeat worktree: ledger root is the main worktree', wtList.root, wtMain)
+eq('flow_heartbeat worktree: workspace reported', wtList.workspace, wtCheckout)
+core.startHeartbeat(wtCheckout, core.loadContract(wtMain).contract, { session: wtAgent.id, goal: 'worktree 心跳' })
 check(
   'flow_heartbeat worktree: file lands in the main ledger',
   existsSync(join(wtMain, '.agents/heartbeat', `${wtAgent.id}.json`)),
@@ -1113,10 +1122,13 @@ const decTask = await taskTool.execute(
   decExec,
 )
 const decTaskId = decTask.task?.id
-const decHeartbeat = await heartbeatTool.execute(
-  { action: 'start', root: decRoot, goal: '决策工具测试', task: decTaskId },
-  decExec,
-)
+const decHeartbeat = {
+  heartbeat: core.startHeartbeat(decRoot, core.loadContract(decRoot).contract, {
+    session: decAgent.id,
+    goal: '决策工具测试',
+    task: decTaskId,
+  }),
+}
 const decTurn = decHeartbeat.heartbeat?.turn
 const decisionsDir = join(decRoot, '.dsh', 'flow', 'decisions')
 check('decision fixture: heartbeat turn recorded', Number.isInteger(decTurn), JSON.stringify(decHeartbeat))
@@ -1279,7 +1291,10 @@ check('H7 merged reminder: first turn lists the whole ledger', mergedText.includ
 // H8: working heartbeat + open decision → the decision section still appears,
 // the heartbeat section does not (the two gates are independent).
 const reminderExec7 = { agent: reminderAgent7 }
-await heartbeatTool.execute({ action: 'start', root: reminderRoot7, goal: '心跳工作中' }, reminderExec7)
+core.startHeartbeat(reminderRoot7, core.loadContract(reminderRoot7).contract, {
+  session: reminderAgent7.id,
+  goal: '心跳工作中',
+})
 const workingReminder = await runPreStep(reminderAgent7, 2)
 const workingText = reminderText(workingReminder)
 eq('H8 working heartbeat: one message', Array.isArray(workingReminder?.messages) ? workingReminder.messages.length : -1, 1)

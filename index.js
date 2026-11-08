@@ -1494,7 +1494,7 @@ function rootSessionVerdict(ctx, agent) {
 
 /** Human-readable refusal for a heartbeat write attempted from a subagent. */
 const ROOT_SESSION_HEARTBEAT_ONLY =
-  'flow_heartbeat start/update/end only serve main sessions: this call runs in a subagent session, which does not keep a heartbeat. Report progress in the child final message; only the parent (main) session registers and closes a heartbeat.'
+  'flow_heartbeat update/list/status only serve main sessions: this call runs in a subagent session, which does not keep a heartbeat. Report progress in the child final message; the plugin opens and closes the main session heartbeat automatically.'
 
 /**
  * Human-readable refusal for a decision write attempted from a subagent. The
@@ -1567,7 +1567,7 @@ function disciplineText(ctx, context) {
     const taskText = task === null ? '当前任务: 无' : `当前任务: ${clip(task.id, 40)} ${clip(task.title, 48)}`
     const text =
       `project-flow 纪律 · 根 ${root} · ${taskText} · 本会话心跳: ${status}。` +
-      '每轮开始先用 flow_heartbeat start 登记 goal/task/claims（claims 写本会话独占写入的文件域，供其他会话避让）；结束前调用 flow_heartbeat end。'
+      '心跳由插件在会话创建时自动开启（goal/task/claims 取自任务栈顶），结束时自动关闭，会话不需要也不能手动开或关；每轮用 flow_heartbeat update 登记 goal/task/claims（claims 写本会话独占写入的文件域，供其他会话避让）。'
     return clip(text, 380)
   } catch {
     return ''
@@ -1601,7 +1601,7 @@ function registerDisciplineSection(ctx) {
 }
 
 const HEARTBEAT_REMINDER_TEXT =
-  '【project-flow】本轮还没有 working 心跳。先调用 flow_heartbeat start 登记 goal/task/claims（claims 写本会话独占写入的文件域），结束前调用 flow_heartbeat end。'
+  '【project-flow】本轮还没有 working 心跳。心跳由插件在会话创建时自动开启、结束时自动关闭（会话不能手动开或关）；用 flow_heartbeat update 登记 goal/task/claims（claims 写本会话独占写入的文件域）。'
 
 /** Reminder budget: one bounded message, one text block. */
 const DECISION_QUESTION_CLIP = 60
@@ -2388,7 +2388,7 @@ function heartbeatGuardReason(ctx, execution) {
     const root = agentRoot(ctx, agent)
     if (root === undefined) return undefined
     if (heartbeatWorking(root, session, sessionIsLive(ctx, session)) !== false) return undefined
-    return '先调用 flow_heartbeat start 登记本轮目标与独占文件域'
+    return '心跳未登记：插件会在会话创建时自动开启；先 flow_heartbeat update 登记本轮目标与独占文件域'
   } catch {
     return undefined
   }
@@ -2541,11 +2541,15 @@ function buildToolDefinitions(deps, settings) {
     {
       name: 'flow_heartbeat',
       description:
-        'Main-session work heartbeat (start/update/end/list/status) for the project ledger; a subagent session must not call the write actions. Every turn: call start BEFORE replying — goal defaults to the current task title, claims lists the files this session exclusively writes so other main sessions avoid them — and call end before finishing. update refreshes status/last_action; list and status read the section. The ledger lives in the project main worktree, even when the current session runs in a linked worktree. Writes require a .dsh/flow store.',
+        'Main-session work heartbeat for the project ledger. The plugin owns the lifecycle: it opens the heartbeat automatically on `agent/created` (goal/default task/claims come from the task stack top) and closes it on `agent/disposed`, so a session cannot start or end one. A session only refreshes what it knows: update goal/task/claims/last_action/status. list and status read the section. A human can still open or close one by hand with the CLI (`flow heartbeat start|end`) as an escape hatch. The ledger lives in the project main worktree, even when the current session runs in a linked worktree. Writes require a .dsh/flow store.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['start', 'update', 'end', 'list', 'status'] },
+          action: {
+            type: 'string',
+            enum: ['update', 'list', 'status'],
+            description: 'update refreshes this session\'s heartbeat; list/status read the section. The lifecycle (start/end) belongs to the plugin.',
+          },
           root: ROOT_PROPERTY,
           goal: { type: 'string', description: 'What this turn works on. start defaults it to the current task title.' },
           task: {
@@ -2636,6 +2640,16 @@ function buildToolDefinitions(deps, settings) {
           }
         }
 
+        // Lifecycle is the plugin's: it is the only party that sees
+        // `agent/created` / `agent/disposed`. A session that could start one
+        // could fabricate a heartbeat, and one that could end one could close a
+        // heartbeat that is still alive. The message must give a way forward.
+        if (action === 'start' || action === 'end') {
+          throw new Error(
+            `flow_heartbeat ${action} is not a session action: the plugin opens the heartbeat on session creation and closes it on disposal, so this call was refused. Session scope is update (goal/task/claims/last_action/status) plus list/status. If you really need to ${action === 'start' ? 'open' : 'close'} one by hand, use the CLI: flow heartbeat ${action}`,
+          )
+        }
+
         const session = requireSession(exec)
         // Delegated child sessions never keep a heartbeat: refuse loudly with an
         // actionable hint instead of silently writing a hidden ledger file.
@@ -2646,22 +2660,6 @@ function buildToolDefinitions(deps, settings) {
         const c = requireCore()
         const { contract } = c.loadContract(root)
 
-        if (action === 'start') {
-          if (typeof c.startHeartbeat !== 'function') {
-            throw new Error('flow_heartbeat start needs a newer lib/core.mjs: heartbeat support is missing')
-          }
-          const input = pickFields(args, ['goal', 'task', 'claims', 'last_action'])
-          if (input.last_action === undefined && typeof args.note === 'string' && args.note.trim().length > 0) {
-            input.last_action = args.note.trim()
-          }
-          return {
-            root,
-            workspace,
-            store: true,
-            session,
-            heartbeat: c.startHeartbeat(root, contract, { session, ...input }),
-          }
-        }
         if (action === 'update') {
           if (typeof c.updateHeartbeat !== 'function') {
             throw new Error('flow_heartbeat update needs a newer lib/core.mjs: heartbeat support is missing')
@@ -2679,14 +2677,6 @@ function buildToolDefinitions(deps, settings) {
             }
           }
           return result
-        }
-        if (action === 'end') {
-          if (typeof c.endHeartbeat !== 'function') {
-            throw new Error('flow_heartbeat end needs a newer lib/core.mjs: heartbeat support is missing')
-          }
-          const options = { session }
-          if (typeof args.note === 'string' && args.note.trim().length > 0) options.note = args.note.trim()
-          return { root, workspace, store: true, session, heartbeat: c.endHeartbeat(root, contract, options) }
         }
         throw new Error(`unknown flow_heartbeat action: ${String(action)}`)
       },
