@@ -816,6 +816,13 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   `approve`/`reject`——想推荐拒绝必须显式传 `reject`；`input` 无 `options`，
   `recommendation`/`default` 为自由文本；`affects` 不得绝对路径、不得 `..` 逃逸，
   存储时 `\` → `/`、去 `./`、去尾 `/`。任一不满足 → `invalid`（退出码 2）。
+- **会话归属与可见性**：`asked_session` 是记录的所有者。agent 侧读面（每轮提醒、
+  `flow_decision` 的 list/计数）只返回**本会话**的记录，`asked_session` 为空的旧记录对任何
+  会话都不可见；面板与人工 CLI（无 `DSH_SESSION_ID`）保持全局视图；`flow_decision show`
+  按 id 显式查询不受限；`check decisions` 仍是全库提交门禁。
+- **归档清理**：Host workspace registry 的 `archivedSessionIds` 是归档真源。主会话每轮
+  `agent/pre-step` 在拼提醒前调用 `core.purgeArchivedDecisions`，删除该会话的全部 `D-`
+  记录（open 与已关闭都删），并清空相关任务的 `decision` 指针；幂等，无记录可删时不写盘。
 - **系统字段**：`fingerprint`、`superseded_by`、`answered_at`、`answer`、`withdraw` 由 core
   维护，调用方传入 → `invalid`；`id`/`schema`/`kind`/`asked_at`/`created_at`/`question`/
   `options` 一经创建不可改（没有独立 update 命令）。
@@ -2345,7 +2352,8 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
   `未完成 N 条 ｜ 栈顶 1 条`；`N>1` 时追加 `（另有 N-1 条待处理）`。阶段中文**只**
   来自 `buildStatusBlock().stack[].stageZh`（`lib/capture.mjs` → `lib/stage.mjs` 的
   `STAGE_ZH`），提醒里不得出现第二份阶段映射。
-- **B 段**沿用决策台账的明细行/排序/升级规则与首轮全量清单（`decisionRemindMax()`）；
+- **B 段**只列**本会话**的决策（`asked_session` 隔离，见 §3.6），别的会话的决策不显示、
+  不计数；沿用决策台账的明细行/排序/升级规则与首轮全量清单（`decisionRemindMax()`）；
   末尾**每次**都有「回答后当轮调用 `flow_decision answer <id> --choice <选项 id>；
   不要按推荐自行决定。」首轮再加「新会话第一步：运行 `flow decision list --open`」。
 - **C 段**（无 open 决策时**必须**出现，用户明确要求）：
