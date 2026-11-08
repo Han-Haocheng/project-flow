@@ -1,0 +1,40 @@
+{
+  "question": "控制指令（开始/继续/暂停/决策）改为插件直接识别并执行，且不记录为任务？",
+  "kind": "choice",
+  "rationale": "用户 2026-11-08 明确指示：能直接通过插件指令对开始、继续、暂停、决策进行控制，通过指令不用记录。原 D-20261108-01 选的是 degrade（仍记录），与本指示冲突，故开新决策 supersede。",
+  "options": [
+    {
+      "id": "command",
+      "label": "指令层：识别后直接执行、不建任务记录",
+      "impact": "取代 D-20261108-01 的 degrade（原方案仍记录为 control），控制指令完全不进台账"
+    },
+    {
+      "id": "keep-degrade",
+      "label": "维持 degrade",
+      "impact": "控制词仍落 control 记录，只是不进队列"
+    }
+  ],
+  "recommendation": "command",
+  "supersedes": "D-20261108-01",
+  "asked_session": "session-16dbc23f-b067-40dd-ad9f-dc75669e9b46",
+  "asked_turn": 61,
+  "schema": 1,
+  "id": "D-20261108-02",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "affects": [],
+  "answer": {
+    "choice": "command",
+    "note": "用户原话：「聊天中输入的都是任务，决策或建议通过命令输入，就像这条」——本条以 `/建议` 开头。⇒ 判据是「/ 前缀」，不是词表。",
+    "at": "2026-11-08T10:55:59+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-08T10:55:59+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "4d5613c8e14f54df",
+  "asked_at": "2026-11-08T10:55:37+08:00",
+  "created_at": "2026-11-08T10:55:37+08:00",
+  "updated_at": "2026-11-08T10:55:59+08:00"
+}

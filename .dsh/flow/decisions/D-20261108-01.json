@@ -25,7 +25,7 @@
   "schema": 1,
   "id": "D-20261108-01",
   "default": null,
-  "status": "answered",
+  "status": "superseded",
   "blocks": [],
   "affects": [],
   "supersedes": null,
@@ -37,9 +37,9 @@
   },
   "answered_at": "2026-11-08T10:47:58+08:00",
   "withdraw": null,
-  "superseded_by": null,
+  "superseded_by": "D-20261108-02",
   "fingerprint": "e27a1cb83d857147",
   "asked_at": "2026-11-08T01:11:22+08:00",
   "created_at": "2026-11-08T01:11:22+08:00",
-  "updated_at": "2026-11-08T10:47:58+08:00"
+  "updated_at": "2026-11-08T10:55:37+08:00"
 }
