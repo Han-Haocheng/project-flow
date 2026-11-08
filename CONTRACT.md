@@ -1155,6 +1155,19 @@ capture: {
 `nothing-pending` / `flush-failed` / `ok`；pre-step 的 `no-messages`（payload 空）/
 `filtered-out`（有消息但全被排除规则滤掉）/ `queued-n`（入队成功）/ `pre-step-failed`。
 
+**控制词降级（D-20261108-01 = degrade）**：`CONTROL_WORDS` 是**小清单**（继续/继续吧/暂停/停/好/
+好的/可以/嗯/收到/ok/okay）。`classifyUtterance(text)` 先归一化（trim、去首尾标点/引号/空白、
+全角字母数字转半角、小写），再**只做整串相等匹配**——`"继续修 P3b"` / `"好，那就按这个方案"` /
+`"暂停一下，先看这个"` 必须仍是 `utterance`。默认返回 `'utterance'`（安全侧）。
+
+命中 control 的捕获：`source.kind='control'`，**记录仍在**（`flow task list` 可见），但
+`isUnfinished` 返回 false → 状态块 `stack` / `unfinished` 自动排除（二者同源，不另写过滤）；
+面板用 `tasks.control = {count, ids}` 折叠成一行「控制词 N 条（不参与队列）」，**阶段桶与计数都不含
+control**，任务行仍是 14 键（不加第 15 键）。
+
+**安全方向**：真需求被误判 control → 记录仍在、只是不进栈（可接受）；控制词被误判 utterance →
+多一条噪音（可接受）；**白名单直接丢弃消息 → 绝对不可**。
+
 **四条排除规则**（`excludedBy` 记录最近一条的原因）：
 
 | # | 规则 | 判据 | `excludedBy` |

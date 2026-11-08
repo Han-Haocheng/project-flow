@@ -211,6 +211,7 @@ window.__ModuleLoader__.load({
       'tasks.stageGroup.done': '已完成',
       'tasks.stageEmpty': '任务台账里还没有任务。',
       'tasks.teamLine': '团队 {members} 成员 · {tasks} 张共享任务 · {orphaned} 条未关联',
+      'tasks.controlFold': '控制词 {n} 条（不参与队列）',
       'tasks.more': '还有 {n} 条未显示',
       'tasks.trendSummary': '近 {days} 天 · 新增 {created} · 完成 {done} · 归档 {archived}',
       'tasks.trendBar': '{date} 新增 {created} · 完成 {done} · 归档 {archived}',
@@ -381,6 +382,7 @@ window.__ModuleLoader__.load({
       'tasks.stageGroup.done': 'Done',
       'tasks.stageEmpty': 'The task ledger has no tasks yet.',
       'tasks.teamLine': 'Team {members} members · {tasks} shared tasks · {orphaned} unlinked',
+      'tasks.controlFold': 'Control words: {n} (not queued)',
       'tasks.more': '{n} more not shown',
       'tasks.trendSummary': 'Last {days}d · {created} new · {done} done · {archived} archived',
       'tasks.trendBar': '{date} · {created} new · {done} done · {archived} archived',
@@ -1073,6 +1075,11 @@ window.__ModuleLoader__.load({
              the three legacy arrays for grouping. */
           stageCounts: asObject(tasksSrc.stageCounts),
           stages: normalizeTaskStages(tasksSrc.stages),
+          /* task-77: control-word captures are counted, never bucketed. */
+          control: {
+            count: Math.max(0, Math.floor(asNumber(asObject(tasksSrc.control).count, 0))),
+            ids: asArray(asObject(tasksSrc.control).ids).map(asText).filter(Boolean),
+          },
           trend: normalizeTrend(tasksSrc.trend),
         },
         /* task-73: read-only Team-board summary. Absent on an older payload →
@@ -2251,6 +2258,15 @@ window.__ModuleLoader__.load({
         ),
         stageGroups.every((group) => group.rows.length === 0)
           ? React.createElement(EmptyLine, null, t('tasks.stageEmpty'))
+          : null,
+        /* task-77: control-word captures are folded into one muted line — they
+           are recorded but never occupy the queue, so they get no rows. */
+        tasks.control && tasks.control.count > 0
+          ? React.createElement(
+              'p',
+              { className: 'project-flow-muted project-flow-controlFold', title: (tasks.control.ids || []).join(', ') || undefined },
+              t('tasks.controlFold', { n: tasks.control.count })
+            )
           : null,
         /* task-73: one read-only team line. `available:false` hides it — "cannot
            read the board" must not look like "0 members / 0 tasks". */

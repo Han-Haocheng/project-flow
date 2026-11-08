@@ -2173,6 +2173,34 @@ check('TaskRow: stage badge renders after type: title and greys finished stages 
   );
 });
 
+check('TasksCard: control-word captures fold into one muted line (task-77)', () => {
+  const base = probe.normalize({})
+  const tasks = probe.normalize({
+    tasks: {
+      total: 3,
+      counts: { active: 1 },
+      active: [{ id: 'T-2', title: 'active', status: 'active' }],
+      control: { count: 2, ids: ['T-10', 'T-11'] },
+    },
+  }).tasks;
+  const card = renderWithState(probe.TasksCard, { tasks, t, now: NOW }, { reset: true });
+  const line = collect(card, 'project-flow-controlFold')[0];
+  assert.ok(line, 'control captures need their folded line');
+  assert.equal(textOf(line), '控制词 2 条（不参与队列）');
+  assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'control rows are not rendered as tasks');
+
+  // count 0 (or absent) hides the line entirely.
+  const none = renderWithState(probe.TasksCard, { tasks: base.tasks, t, now: NOW }, { reset: true });
+  assert.equal(collect(none, 'project-flow-controlFold').length, 0);
+
+  const english = renderWithState(
+    probe.TasksCard,
+    { tasks: probe.normalize({ tasks: { total: 2, counts: { active: 1 }, active: [{ id: 'T-2' }], control: { count: 1, ids: ['T-10'] } } }).tasks, t: tEn, now: NOW },
+    { reset: true }
+  );
+  assert.equal(textOf(collect(english, 'project-flow-controlFold')[0]), 'Control words: 1 (not queued)');
+});
+
 check('TasksCard: the team line renders only when the board was readable (task-73)', () => {
   const tasks = probe.normalize({}).tasks;
   const team = { available: true, members: 3, tasks: 4, linked: 2, missing: 1, orphaned: 2 };
