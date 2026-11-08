@@ -305,11 +305,11 @@ project-flow 的宿主入口（装配层）：声明 inject=['webServer'] 并 ap
 
 ### 3.7 lib/capture.mjs
 
-P1 捕获管线：在 agent/pre-step 只把本轮新增的用户话（排除 /命令、系统注入、队友消息、挂载前的历史与重复项）放进内存队列，再由 agent/turn-stopping 的 flushCapture 唯一写盘，落成 type=chore、source={kind:'utterance',key,at,text} 的任务并从 created 推进到 queued-analysis。它同时装配 §9 状态块（栈顶、阶段计数、最近捕获、Team），供 index.js、flow_status 与 CLI status 共用；不 import core（由调用方注入），pre-step 永不抛错/写盘。
+P1 捕获管线：在 agent/pre-step 只把本轮新增的用户话（排除 /命令、系统注入、队友消息、挂载前的历史与重复项）放进内存队列，再由 agent/turn-stopping 的 flushCapture 唯一写盘，落成 type=chore、source={kind:'utterance',key,at,text,attachments?} 的任务并从 created 推进到 queued-analysis。去重键以宿主稳定消息 id 为主料（无 id 时回落 timestamp+text），附件引用（image/file）规范化为 source.attachments 只存引用不存字节；纯附件无文字的消息也建卡并以「[附件] 图片 ×N」兜底标题。它同时装配 §9 状态块（栈顶、阶段计数、最近捕获、Team），供 index.js、flow_status 与 CLI status 共用；不 import core（由调用方注入），pre-step 永不抛错/写盘。
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| capture | 以 <root,session> 分桶维护待捕获队列与 lastKeys/seen 去重键，经结构排除、挂载窗口、命令前缀筛选后，由 flushCapture 按时间倒序串行写台账（source.key 预去重，失败把未写项回滚进队列），并输出可区分的 skip/excludedBy/error 诊断与栈顶/计数状态块；唯一写盘点固定在 turn-stopping。 | CAPTURE_CONTEXT_SENTINEL、SYSTEM_MESSAGE_PREFIXES、PEER_MESSAGE_PREFIXES、COMMAND_PREFIX、exclusionReasonOf、STACK_LIMIT、RECENT_CAPTURED_LIMIT、CAPTURED_TASK_TYPE、TITLE_MAX、SOURCE_TEXT_MAX、CAPTURE_GRACE_MS、isPlainObject、timeValue、compareStack、effectiveStage、isUnfinished、textOfContent、utteranceKey、isExcludedText、extractUtterance、stampOf、clipTitle、sourceTextOf、timestampMsOf、createCaptureState、markCapture、noteCaptureGate、describe、captureSummary、bucketKey、bucketOf、mountedAtOf、recordPreStep、pendingUtterances、flushCapture、compareUtteranceDesc、readTasks、captureStack、stackTop、TEAM_UNAVAILABLE、teamStatusOf、buildStatusBlock、stageName |
+| capture | 以 <root,session> 分桶维护待捕获队列与 lastKeys/seen 去重键，经结构排除、挂载窗口、命令前缀筛选后，由 flushCapture 按时间倒序串行写台账（source.key 预去重，失败把未写项回滚进队列），并输出可区分的 skip/excludedBy/error 诊断与栈顶/计数状态块；唯一写盘点固定在 turn-stopping。附件保真：attachmentsOfContent 把 image/file 块归一化为 source.attachments（畸形块跳过），utteranceKeyOf 以稳定消息 id 建身份键，attachmentTitle 为纯附件消息生成兜底标题。 | CAPTURE_CONTEXT_SENTINEL、SYSTEM_MESSAGE_PREFIXES、PEER_MESSAGE_PREFIXES、COMMAND_PREFIX、exclusionReasonOf、STACK_LIMIT、RECENT_CAPTURED_LIMIT、CAPTURED_TASK_TYPE、TITLE_MAX、SOURCE_TEXT_MAX、CAPTURE_GRACE_MS、isPlainObject、timeValue、compareStack、effectiveStage、isUnfinished、textOfContent、utteranceKey、isExcludedText、extractUtterance、stampOf、clipTitle、sourceTextOf、timestampMsOf、createCaptureState、markCapture、noteCaptureGate、describe、captureSummary、bucketKey、bucketOf、mountedAtOf、recordPreStep、pendingUtterances、flushCapture、compareUtteranceDesc、readTasks、captureStack、stackTop、TEAM_UNAVAILABLE、teamStatusOf、buildStatusBlock、stageName、utteranceKeyOf、attachmentsOfContent、attachmentTitle |
 
 ### 3.8 lib/checks.mjs
 
