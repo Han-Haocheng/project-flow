@@ -18,9 +18,9 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `l
 （`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发
 （`skills/ai-collaborative-dev-workflow/`，含 `references/`、`assets/`、`scripts/`，
 注册时带 `resourceBase` 目录），它的机械检查同时可由
-`flow check staged|release-baseline|state|doc|decisions|experiments|tasks` 触发（共七项，
+`flow check staged|release-baseline|state|doc|decisions|experiments|tasks|description` 触发（共八项，
 `flow check list` 是权威清单；`experiments` 在项目关闭实验区时直接 exit 0 跳过，`tasks`
-只读报告旧任务记录未归一）。
+只读报告旧任务记录未归一，`description` 检查描述台账漂移）。
 
 ## 初始化一个项目
 
@@ -37,6 +37,7 @@ node bin/flow.mjs --root <项目根> init [--name 名称]
   tasks/<id>.json           任务（T-YYYYMMDD-NN）
   gates/<id>.json           门禁定义（步骤 + 期望 + 超时）
   logs/<gateId>/<时间>.json 门禁运行记录
+  description/              项目描述台账（project.json / files/ / tasks/，见「项目描述」）
 ```
 
 ## 常用 CLI
@@ -56,6 +57,13 @@ flow task normalize [--type-map <file.json>] [--dry-run]
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
 flow gate run smoke             # 顺序执行步骤、首个失败即停、写运行记录
 flow gate logs smoke            # 最近运行记录
+
+flow desc build                 # 扫 include 范围，建/同步文件记录（哈希、import、模块边）
+flow desc status                # 文件数 / 模块数 / 缺语义 / 计划数
+flow desc plan T-… --template lib/core.mjs    # 分析阶段：写语义变更计划（--input 提交）
+flow desc apply T-…             # 实现阶段：把计划语义落进文件记录（计划转 implemented）
+flow desc render [--out p]      # 生成 description.render 指向的文档（确定性，勿手改）
+flow check description --task T-… [--strict]  # 审查阶段：计划对齐 + 漂移检查
 ```
 
 所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法 /
@@ -98,6 +106,57 @@ flow exp productize <id>        # 门禁通过后写产品化；失败实验用 
 `confirmed` 未产品化；`open` 超过观测周期只 warning（`experiment-window-elapsed`），结果仍
 由人判定。
 
+## 项目描述（强制语义更新）
+
+`.dsh/flow/description/` 记的不是「有哪些文件」，而是「每个文件/模块是干什么的」。结构（哈希、
+import、模块边）由 `flow desc build` **自动**同步；语义**不能自动推断**，只能由人/模型在分析阶段
+写进计划、在实现阶段 apply 到文件记录。三族记录的 schema、编码与校验见 `CONTRACT.md` §3.7，
+检查判定见 §6.1.4。
+
+为什么强制：注释会漂、地图会漏。语义台账把「改代码必须解释改了什么语义」变成**可检查的动作**，
+而不是靠审查者记得问；漂移（改了代码没改语义）由 `stale-hash` / `unknown-member` 这类检查抓，
+不靠人盯 diff。
+
+| 阶段（任务 `stage`） | 谁 | 做什么 | 命令 |
+|---|---|---|---|
+| 分析 `analyzing` | 分析者 / 中心 | 只读仓库，写**语义变更计划**：新增/修改/删除哪些文件与模块、各自的新语义是什么；不动代码 | `flow desc plan <T> --template <src>` → `--input plan.json` |
+| 实现 `implementing` | 实现者 | 照计划写代码；先同步结构，再把计划语义落进文件记录，最后补未计划模块的语义 | `flow desc build` → `flow desc apply <T>` → `flow desc set --input …` |
+| 审查 `reviewing` | 审查者 | 计划对齐 + 漂移检查 + 测试证据（`testGate` 的绿记录要晚于 `implemented_at`） | `flow check description --task <T>`（门禁里再用 `--strict`） |
+
+```text
+flow desc build                                   # 先建记录（结构齐全、语义为空）
+flow desc plan T-20261108113206 --template lib/core.mjs > plan.json
+$EDITOR plan.json                                 # 写 files[].semantics 与 modules[]
+flow desc plan T-20261108113206 --input plan.json # 分析阶段的产物；--rebase 只刷新 base
+flow desc build && flow desc apply T-20261108113206   # 实现阶段：结构同步 + 语义落盘
+flow desc show --path lib/core.mjs --graph tree   # 看一个文件的模块图
+flow desc render --out docs/description.md        # 生成文档（两次输出逐字相同）
+flow check description --task T-20261108113206    # 审查阶段：计划对齐 + 漂移
+```
+
+- **计划二选一**：`files` 非空 xor `noSemanticChange: true` + 非空 `reason`；确实没有语义变更
+  时写明理由，不要留空（`plan-missing` 会拦）。
+- **apply 后计划冻结**：之后要改语义就改文件记录（`flow desc set`），不要回改计划；审查阶段想改计划，
+  先把任务退回 `implementing`（阶段机见 `CONTRACT.md` §3.2.1）。
+- **不要手写结构字段**：`hash`/`imports`/`moduleEdges` 由 `build` 推导，手写只会在下一次 build 被覆盖、
+  或被 `stale-module-edges` 判红。
+
+**强制级别 `description.enforce`**：`auto`（默认——store 里已有 ≥1 条文件记录才约束任务阶段推进，
+新项目零记录时不受限）、`on`（恒约束，计划缺失即拒）、`off`（只关阶段门；`flow check description`
+仍可手动跑）。阶段门在**进入** `queued-implementation`（计划合法）/ `queued-review`（计划
+`implemented`、计划内文件全量检查通过、无 `unplanned-change`）/ `done`（再加测试证据：`testGate`
+有晚于证据起点的绿记录）时生效。
+
+**门禁**：`flow init` 的 `precommit` 多一步 `flow check description`、`release` 多一步
+`flow check description --strict`（`undescribed-file` 在严格模式下才算失败）。种子只对**空 gates
+目录**生效，已有项目要手动 `flow gate update … --step` 补步且**必须带上原步骤**（`--step` 是整体
+替换，见 `CONTRACT.md` §3.3.1）。
+
+**生成文档**：把 `description.render` 写成仓库相对路径（如 `docs/description.md`），
+`flow desc render` 从记录生成确定性 Markdown（无墙钟时间，两次逐字相同），`--check` 只比对不写；
+配置后 `check description` 也会比对，**手改生成物会红**（`render-stale`）——生成物是投影，不是第二个
+真源。
+
 ## 安装（本机 DSH）
 
 本地 bundle `@local/project-flow`，无 npm 依赖、无构建步骤：
@@ -132,7 +191,11 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
   CLI 与 agent 工具。
 - **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
-- **任务自动归档**：`precommit` 的第 3 步 `flow task archive` 把 `tasks.archiveAfterDays`
+- **描述台账可提交**：`.dsh/flow/description/` 与其它台账一样是**真相源**（语义要评审、要回溯），
+  随 `.dsh/flow/` 一起提交；只有 `.lock` 与 `*.tmp-*` 是临时文件（见 `CONTRACT.md` §8）。
+  `description.render` 指向的生成文档同样可提交，但它由 `flow desc render` 生成、**不要手改**
+  （`check description` 会比对出 `render-stale`）。
+- **任务自动归档**：`precommit` 里的 `flow task archive` 步把 `tasks.archiveAfterDays`
   （默认 **7** 天；`0` 关闭）**已满** N 天（按 `updated_at` 计，边界含端点）的任务改成
   `archived`——纯状态位、可逆、幂等。归档只由显式命令与门禁步骤触发，面板与读端点从不写；
   旧项目**缺哪步补哪步**（`decisions` 与 `tasks-archive` 两步，见 `CONTRACT.md` §3.3.1）。
@@ -166,7 +229,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：610 用例（50 个文件）
+node --test test/                        # core + CLI + check：700 用例（54 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

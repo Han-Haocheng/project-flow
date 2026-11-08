@@ -196,7 +196,7 @@ metadata:
   能力上不等同于下面的项目内检查。
 - 项目内可用的检查入口（任何装了本插件的机器都能跑）：
   - `node bin/flow.mjs check list`：列出全部内置检查（staged / release-baseline / state / doc /
-    decisions / experiments / tasks）；
+    decisions / experiments / tasks / description）；
   - `python3 skills/ai-collaborative-dev-workflow/scripts/gate.py check`：任务书结构校验
     （必填字段完整性，含 `schema`/`title`/`owner`/`created_at`/`updated_at` 等）。
 - 机械检查（DSH 内首选）：`flow check staged` / `flow check release-baseline` / `flow check state` / `flow check doc`，分别对应本技能目录下的 `scripts/check_staged_files.sh`、`scripts/release_baseline.sh`、`scripts/check_state.sh`、`scripts/doc_check.py`。
@@ -306,6 +306,14 @@ pulled → analyzing → assigned → implementing → reviewing
 | `reclaimed` | 中心逐卡回收 Team 卡、决定分支/工作树保留或清理；**项目台账是唯一 durable 真源** | 中心 | 会话结束前全部卡到达本状态（§10.7） |
 
 - `analyzing` / `reviewing` 分别由 `role: analyst` / `role: reviewer` 的卡承载；`rejected` 是回边不是终态；状态只写两份——Team 卡（执行视图）+ 项目台账（真源）。
+
+**语义变更计划进阶段门**（记录格式与校验以 `CONTRACT.md` §3.7 为准、判定见 §6.1.4；本节只规定谁在什么阶段跑哪条命令，**不重定义记录字段**）：
+
+- **分析**：分析者交任务书时**一并**交计划——`flow desc plan <T> --template <src>` 取骨架、`--input` 写入（新增/修改/删除哪些文件与模块、各自新语义）；确实无语义变更用 `--no-semantic-change --reason`，**不留空 `files`**。
+- **实现**：实现者写完代码 → `flow desc build`（同步哈希/import/模块边）→ `flow desc apply <T>`（把计划语义落进文件记录）→ `flow desc set --input` 补计划外模块；`apply` 后计划冻结，后续只改文件记录。
+- **审查**：审查者必跑 `flow check description --task <T>`（与 §1.4 五条清单并列，**不替代**任何一条），并确认 `description.testGate` 指向的门禁有晚于证据起点的 `ok:true` 记录；红了按检查给出的修复命令回实现者，**审查期不改计划**。
+- **中心**：合并后复跑 `flow check description` 并看门禁结果，不代写语义——代写会让「实现者解释自己改了什么」这条约束失效。
+- 结构字段（`hash`/`imports`/`moduleEdges`）一律由 `build` 推导，谁都不手写；手写会被下一次 build 覆盖或被 `stale-module-edges` 判红。
 
 ### 10.3.1 七阶段生命周期与现有状态（映射，写死；不扩展枚举）
 

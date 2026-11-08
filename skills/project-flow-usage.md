@@ -139,6 +139,56 @@ flow gate run precommit --json | node -e "let s='';process.stdin.on('data',d=>s+
 - `--json` 输出形状：成功 `{ok:true,data}`，失败 `{ok:false,error:{code,message}}`；
   退出码 0 成功 / 1 用法 / 2 校验 / 3 未找到 / 4 IO。
 
+## 项目描述：文件图 / 模块图 / 模块语义
+
+`.dsh/flow/description/` 把「有哪些文件」升级成「每个文件/模块干什么」：结构由命令自动同步，
+语义由你写。**不要手改 JSON**——锁与原子写都在 core，手改只会被 check 判成漂移。
+
+| 命令 | 作用 |
+|---|---|
+| `flow desc build [--dry-run]` | 扫 `include` 范围，建/同步文件记录（哈希、行数、import、模块边）；无变化不写盘 |
+| `flow desc status [--json]` | 文件数 / 模块数 / 缺语义 / 计划数（`flow status` 也有一行摘要） |
+| `flow desc show [--path <src>] [--graph tree\|mermaid]` | 看单个文件的模块与语义，或整张文件图 |
+| `flow desc set --input <json>` | 补/改文件或模块语义（单对象或数组；**不写结构字段**） |
+| `flow desc plan <T> --template <src>` | 打印计划骨架（由当前记录生成，先 build 再取） |
+| `flow desc plan <T> --input <json>` | 建/改语义变更计划（`--rebase` 只刷新 base）；`--show` 查看 |
+| `flow desc plan <T> --no-semantic-change --reason "…"` | 声明本次无语义变更（与 `files` 互斥） |
+| `flow desc apply <T> [--dry-run]` | 把计划语义落进文件记录，计划转 `implemented`（幂等） |
+| `flow desc render [--out <p>] [--check]` | 生成/比对 `description.render` 指向的文档 |
+| `flow check description [--task <T>] [--strict]` | 漂移检查；`--task` 加计划对齐，`--strict` 把欠账算失败 |
+
+**三阶段职责**（规则真源是 `CONTRACT.md` §3.7 / §6.1.4；本技能只规定谁在什么时候跑哪条命令，
+不重定义字段）：
+
+| 阶段 | 谁 | 做什么 | 怎样算过 |
+|---|---|---|---|
+| 分析 | 分析者 | 读代码写计划：哪些文件/模块新增、修改、删除，各自语义是什么；**不动代码** | 计划合法：`files` 非空 xor `noSemanticChange` + `reason` |
+| 实现 | 实现者 | 写代码 → `build` 同步结构 → `apply` 落语义 → `set` 补计划外模块 | 计划 `implemented`、无 `stale-hash` / `unknown-member` |
+| 审查 | 审查者 | 复跑 `flow check description --task <T>`，并确认 `testGate` 有晚于 `implemented_at` 的绿记录 | 检查全绿、测试证据齐 |
+
+```bash
+flow desc build                                    # 第一次先建记录（语义为空）
+flow desc plan T-20261108113206 --template lib/core.mjs > plan.json
+# 编辑 plan.json：files[].semantics、modules[]（id 用 slug，members 必须是真实声明名）
+flow desc plan T-20261108113206 --input plan.json  # 分析阶段的产物
+flow desc build                                    # 实现阶段：结构变化先进记录
+flow desc apply T-20261108113206                   # 语义落盘；计划冻结
+flow desc set --input modules.json                 # 补计划没覆盖的模块语义
+flow check description --task T-20261108113206     # 审查阶段
+```
+
+- **模块 id**：`^[a-z0-9][a-z0-9-]{0,40}$`、文件内唯一；`members` 写**声明名**（函数/类/顶层变量），
+  不是任意标识符。扫描可能漏（解构声明、匿名默认导出、生成代码）：**漏扫不要求归属、也不会假红**；
+  但已归属的成员必须真实存在。
+- **模块边不要手写**：`moduleEdges` 由 build 从「模块 A 的成员引用了模块 B 的成员」推导；手写会被
+  `stale-module-edges` 判红。
+- **语义下限**：项目/文件/模块的 `semantics` 去空白后要 ≥ `minSemanticsChars`（默认 10 字符）。
+  这是防呆不是质量线——「占位」「待补」能过检查，但审查者会打回。
+- **写窗口**：计划只在 `stage ∈ {queued-analysis, analyzing, implementing}` 可写；`apply` 后**冻结**。
+  审查阶段要改计划，先把任务退回 `implementing`，不要就地改。
+- **跳过是显式的**：`description.enabled=false`，或「`enforce: auto` 且一条文件记录都没有」时，
+  `check description` exit 0 并打印「未建立描述，跳过」；看 `mode` / `counts` 判断是真过还是没查。
+
 ## 项目状态
 
 ```bash
@@ -187,3 +237,7 @@ flow --json status     # 同上 + data.store 绝对路径
 | `错误（not-found）：experiment E-... not found` | id 不存在：`flow exp list` 核对 |
 | `gate run` 退出 0 但结果失败 | 门禁本身失败，检查 `data.steps[].tail` |
 | 记录读不出来 | `--json` 会带 warning；删除坏 JSON 前先备份，别手改 id |
+| `✗ plan-missing` | 该任务没有合法计划：先 `flow desc plan <T> --template <src>` 写一份；确实无语义变更就 `--no-semantic-change --reason "…"`（`files` 与它互斥） |
+| `✗ plan-unrealized` | 计划还是 `planned`：实现阶段跑 `flow desc apply <T>`；审查阶段才发现，说明漏了 apply，回实现者补，不要在审查期改计划 |
+| `✗ stale-hash` | 记录哈希 ≠ 当前文件（改了文件没 build）：`flow desc build`；然后确认 `semantics` 是否也要更新（测试证据起点取记录 `updated_at`） |
+| `✗ tests-missing` | `description.testGate` 没有晚于 `max(implemented_at, 计划内记录 updated_at)` 的绿记录：跑门禁（如 `flow gate run tests`），或先 `flow desc apply <T>` 刷新起点 |

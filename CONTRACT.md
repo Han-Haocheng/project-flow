@@ -35,7 +35,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
 | `bin/flow.mjs` | CLI：只做参数解析与输出，校验/加锁/原子写全部在 core | 人、脚本、门禁 |
 | `lib/core.mjs` | **唯一写者**：契约、记录 CRUD、门禁执行、心跳、决策 | 工具层、CLI、快照 |
-| `lib/source-scan.mjs` | 零依赖源码扫描器（叶子）：注释剥离与顶层声明（JS/TS/JSX、Python），产出 `declarations` 供模块归属推导；**不 import 任何 lib 模块** | （暂无人依赖；描述台账接入后由模型层使用） |
+| `lib/desc.mjs` | **描述台账模型**（纯函数）：`description/` 三族记录的校验、build 回填（哈希/import）、模块图推导（`moduleEdges`）、漂移检查（`checkDescription`）、确定性渲染。**不 import core**（与 `checks.mjs` 同一策略：模型只算，锁内编排与写盘在 core） | core |
+| `lib/source-scan.mjs` | 零依赖源码扫描器（仅 import `./util.mjs` 的 `FlowError` 用于非法入参）：JS/TS/JSX 的注释剥离与顶层声明、Python 的 `def`/`class`/顶层赋值/import；产出 `declarations`（含 `identifiers`）供模块归属推导。**不 import 其它 lib 模块**（扫描器不认识项目，只认识文本） | `lib/desc.mjs` |
 | `lib/lock.mjs` | 写锁与 CAS 接管（30 秒过期、`takeover-claim`） | core |
 | `lib/atomic.mjs` | 原子写（临时文件 + fsync + 改名 + 目录 fsync + 重试） | core、lock |
 | `lib/paths.mjs` | 路径 containment（拒绝绝对路径、`..` 逃逸、真实路径越界） | core |
@@ -93,7 +94,22 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
              "archiveAfterDays": 7 },
   "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
   "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 },
-  "decisions": { "dir": ".dsh/flow/decisions" }
+  "decisions": { "dir": ".dsh/flow/decisions" },
+  "description": {
+    "dir": ".dsh/flow/description",
+    "enabled": true,
+    "enforce": "auto",          // auto | on | off（§3.7「强制语义」）
+    "testGate": "tests",        // "" = 关闭测试证据要求
+    "include": ["**/*.mjs", "**/*.js", "**/*.cjs", "**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.py"],
+    "exclude": ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**", "**/coverage/**",
+                 ".dsh/**", ".dsh-ops/**", "test/**", "**/*.test.mjs", "**/*.spec.mjs",
+                 ".selftest/**", "docs/**"],
+    "render": "",               // 非空 = 生成文档的仓库相对路径（§3.7）
+    "minSemanticsChars": 10,
+    "maxFiles": 2000,
+    "maxScanBytes": 1048576,
+    "gitCheck": true
+  }
 }
 ```
 
@@ -119,6 +135,10 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
 | `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
 | `decisions` | object：`dir` 为 string | 逐字段回退 |
+| `description` | object：`dir` / `enforce` / `testGate` / `render` string、`enabled` / `gitCheck` boolean、`include` / `exclude` `string[]`、`minSemanticsChars` / `maxFiles` / `maxScanBytes` number | 逐字段回退 |
+| `description.enforce` | string，枚举 `auto` \| `on` \| `off`（**默认 `auto`**） | 非 string / 非枚举 → 回退 `auto` 并记 `manifest-invalid: description.enforce: expected auto\|on\|off, got <type>` |
+| `description.include` / `description.exclude` | **`string[]`（新增类型 kind）**：数组元素必须**全是** string | 非数组、或任一元素非 string → **整条回退默认值**（不逐元素过滤）并记 `manifest-invalid: description.<key>: expected string[], got <type>` |
+| `description.testGate` | string（空串 = 关闭测试证据要求） | 非 string → 回退 `tests` |
 | 其他键（含 legacy `runs`、任意未知键） | **不校验** | 原样保留、**无 warning** |
 
 `tasks.archiveAfterDays` 是**任务自动归档阈值**（天），默认 **7**：`0` 关闭归档；缺键补默认
@@ -139,6 +159,18 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 （提示设为 `true`），`check experiments` 不读目录、为此**不**发该 warning；**绝不自动开启**。
 开启就是把 `flow.json` 的 `experiments.enabled` 改成 `true`，下一次面板请求即生效。
 
+`description` 是**项目描述台账**（规则见 §3.7）：`dir` 是记录目录（`flow init` 创建，
+`storePaths()` 解析新增 `description` 一项，走与其它节相同的 `resolveDir` containment）；
+`enabled: false` 关闭整族的检查与阶段门（`check description` 与描述阶段门跳过、`flow status`
+不显示描述行），**不**删除已有记录——关开关不等于删数据；`enforce` 是**语义更新的强制级别**（`auto` 默认：
+store 里已有 ≥1 条文件记录才约束 `updateTask` 的阶段推进；`on` 恒约束；`off` 只关阶段门、
+`flow check description` 仍可手动跑，见 §3.7/§7）；`include` / `exclude` 是扫描范围
+（最小 glob：`**/` 匹配零或多段、`*` 匹配段内任意、`?` 单字符）；`maxFiles` / `maxScanBytes`
+是单次 build 的规模上限（超出记 warning 并截断，不 OOM）；`render` 非空时 `check description`
+把该文件与现算内容比对（`render-stale`）；`gitCheck: false` 关闭 `unplanned-change` 的 git 对账。
+`include` / `exclude` 的 `string[]` 是**新增的类型 kind**，且**整条校验**：一半合法一半违规的
+白名单比默认值更难预测，所以只做「全对才收」——违约时整条回退默认并记 `manifest-invalid`。
+
 `normalizeContract`（`storePaths` 与每个 API 都会调用）只做静默修复、**绝不 warning**——
 否则一次坏契约会让每条命令重复堆积诊断。只有 `loadContract` 把 issue 转成 warning。
 因此 `{"store":"x"}` 这类坏契约下 `flow status --json` 仍退出 0 并携带 warning，而不是
@@ -152,7 +184,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `decisions.dir` 是决策记录 `D-` 的目录（默认 `.dsh/flow/decisions`，缺键自动补默认值）。
 
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
-`gates` / `logs` / `decisions`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
+`gates` / `logs` / `decisions` / `description`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
 解析结果永远落在项目根内；不安全的值按下述规则降级并产生 warning。
 
 ### 2.1 manifest 路径 containment
@@ -523,10 +555,10 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | id | phase | enabled | 步骤（`expect` 均为 `exit 0`） | 标题 |
 |---|---|---|---|---|
 | `session-open` | manual | true | `"<包内绝对路径>/bin/flow.mjs" heartbeat status --require-active` | 会话心跳检查 |
-| `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` + `"<包内绝对路径>/bin/flow.mjs" task archive` | 提交前暂存区检查（含阻塞决策与到期任务归档） |
+| `precommit` | commit | true | `git diff --cached --check` + `"<包内绝对路径>/bin/flow.mjs" check decisions` + `"<包内绝对路径>/bin/flow.mjs" check description` + `"<包内绝对路径>/bin/flow.mjs" task archive` | 提交前暂存区检查（含阻塞决策、描述漂移与到期任务归档） |
 | `tests` | commit | false | `node --test test/` | 单元测试（默认关闭，按项目自填命令） |
 | `staged-files` | commit | false | `"<包内绝对路径>/bin/flow.mjs" check staged --allow src` | 暂存文件归属检查（占位） |
-| `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` + `"<包内绝对路径>/bin/flow.mjs" check experiments` | 发布基线检查（占位）+ 实验结果/产品化检查 |
+| `release` | release | false | `"<包内绝对路径>/bin/flow.mjs" check release-baseline --marker RELEASE` + `"<包内绝对路径>/bin/flow.mjs" check experiments` + `"<包内绝对路径>/bin/flow.mjs" check description --strict` | 发布基线检查（占位）+ 实验结果/产品化检查 + 描述严格检查 |
 
 引用本插件 CLI 的两个步骤用 `import.meta.url` 在运行时解析出的**包内绝对路径**
 （`PLUGIN_BIN`），因为门禁的 cwd 是项目根，不能假设根下存在 `bin/flow.mjs`。
@@ -545,6 +577,22 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 只是 warning。注意 `release` 种子**默认 `enabled: false`**，须项目执行
 `flow gate enable release` 才生效；已有项目缺这一步时手动
 `flow gate update release --step '<原步骤>' --step 'experiments=…>>exit 0'`。
+
+**本版新增的描述步同样只对空 gates 目录生效**：`precommit` 多一步 `check description`（与
+`check decisions` 同一个内置路由，见 §6.1.4），`release` 多一步 `check description --strict`。
+**已有项目两条都要手动补**：
+
+```bash
+flow gate update precommit --step '<原步骤>' \
+  --step 'description="<包内绝对路径>/bin/flow.mjs" check description>>exit 0'
+flow gate update release --step '<原步骤>' \
+  --step 'description="<包内绝对路径>/bin/flow.mjs" check description --strict>>exit 0'
+```
+
+`--step` 是整体替换：漏带原步骤等于把原步骤删掉——这是「种子不自动补步」的真实代价，写在这里防复发。
+`precommit` 用非严格模式（新文件只是 warning，不拦提交），`release` 用 `--strict`（发布不允许有
+`undescribed-file` 的欠账）。注意 `enforce` 只约束 `updateTask` 的阶段门，**不改变**这两步的判定：
+记录一旦存在就照常检查；跳过只发生在「关掉 `description.enabled`」或「`auto` 且零记录」时。
 
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
 
@@ -744,6 +792,173 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   维护，调用方传入 → `invalid`；`id`/`schema`/`kind`/`asked_at`/`created_at`/`question`/
   `options` 一经创建不可改（没有独立 update 命令）。
 
+### 3.7 项目描述记录 `description/`
+
+`.dsh/flow/description/` 是**语义台账**：不止记「有哪些文件」，还记「每个文件/模块是干什么的」。
+为什么单开一族记录而不塞进任务：任务的 `notes` 是一次性叙事、会随任务归档沉底，而语义是**随代码
+演进的长期资产**——同一个文件的语义被 A 任务改写、被 B 任务补模块、被 C 任务删除，读者只会在
+「当前这一份」里找答案。所以**文件记录是当前真相**，任务的语义变更只在计划记录里留过程。
+
+三族记录都是 `schema: 1`，写入只走 core（`buildDescription` / `setDescriptionFile` /
+`setDescriptionPlan` / `applyDescriptionPlan`）；`flow desc render` 与 `check description` 只读。
+直接改 JSON 的后果不是报错，而是**下一个人读到错语义**（由 `stale-hash` / `stale-module-edges`
+这类检查收口）。
+
+```text
+<root>/.dsh/flow/description/
+  project.json                项目级：名字 + 一句话语义 + revision + 计数缓存
+  files/<encoded-path>.json   文件级：哈希/行数/语义/模块/import/模块边
+  tasks/<T-id>.json           任务级：语义变更计划（planned | implemented）
+```
+
+**路径编码**：`files/` 的文件名把仓库相对 POSIX 路径按 `/` 分段，每段 `encodeURIComponent`，
+再用 `%2F` 连接；段内 `*` 额外转 `%2A`（Windows 保留字符，且让 `*` 不参与后续通配）。
+编码必须**可逆**，因为解码要还原真实路径；但**记录里的 `path` 才是真值**，文件名只是键——
+两者不一致视为坏记录（`unreadable`），不按文件名猜路径。路径输入先规范化（`\` → `/`、去
+`./`），拒绝绝对路径、`..` 与 `.dsh/flow` 自身；扫描**不跟随符号链接**、只收普通文件。
+
+**项目级 `project.json`**：
+
+```jsonc
+{
+  "schema": 1,
+  "name": "project-flow",              // 项目名（默认 contract.name）
+  "semantics": "项目一句话语义",        // 必填，去空白后 ≥ minSemanticsChars（默认 10）
+  "revision": "sha256:…",              // 整族摘要，由写路径重算
+  "generated_at": "...",               // build 时刻
+  "updated_at": "...",
+  "counts": { "files": 25, "modules": 130, "described": 25, "missingSemantics": 0 }
+}
+```
+
+- `counts` 只是**展示缓存**，不是校验依据：check 现算，缓存旧了不算错。把它当真相，等于
+  「没跑 build 就看不见漂移」。
+- `semantics` 空或去空白后短于 `minSemanticsChars` → `missing-semantics` fail。10 字符是**下限
+  防呆**而不是质量线：写「占位」「待补」照样能过，质量由审查者看。
+- `revision` 是**整族内容的摘要指纹**（覆盖各记录的 `hash` 与 `semantics`），由写路径（build / apply /
+  set）重算；它供展示与外部比对。**check 不信摘要**：逐条现算，摘要旧了不算错（同 `counts`）——
+  只信摘要的话，单条记录写坏也会被整体指纹掩盖。
+
+**文件级 `files/<encoded-path>.json`**：
+
+```jsonc
+{
+  "schema": 1,
+  "path": "lib/core.mjs",              // 真值（仓库相对 POSIX）
+  "language": "js",                    // js | python | unknown
+  "hash": "sha256:…",                  // 文件内容哈希；≠ 当前文件 → stale-hash
+  "bytes": 169430,
+  "lines": 3993,
+  "semantics": "…",                    // 必填（≥ minSemanticsChars）
+  "modules": [                         // 语义分区；无声明时允许为空
+    { "id": "contract", "title": "契约与路径", "semantics": "…", "members": ["loadContract"] }
+  ],
+  "imports": [ { "specifier": "./util.mjs", "kind": "static", "target": "lib/util.mjs" } ],
+  "moduleEdges": [ { "from": "contract", "to": "util", "count": 7, "why": ["loadContract → FlowError"] } ],
+  "created_at": "...", "updated_at": "..."
+}
+```
+
+- `imports[].kind`：`static`（`import x from` / `import {a} from`）、`reexport`（`export … from`）、
+  `dynamic`（`import(`）、`side-effect`（`import "x"`）。`target` 是仓库相对路径；解析不出（外部包、
+  别名、动态拼接）时为 `null`——**`null` 不算 `ghost-import`**，否则每个 npm 依赖都会假红。
+- `modules[].id`：`^[a-z0-9][a-z0-9-]{0,40}$`，文件内唯一。用 slug 而不是中文名，是因为 id 要进
+  `moduleEdges` 与 JSON 键位置；显示名放 `title`。
+- `members` 是**声明名**（函数/类/顶层变量），不是任意标识符：文件内**每个扫描到的顶层声明必须
+  恰好属于一个模块**（`unassigned-member` 抓漏、`duplicate-member` 抓重）；已登记的成员必须仍在
+  当前声明里（`unknown-member` 抓改名/删除——这正是「该更新语义了」的信号）。成员跨模块重复同样
+  fail：两个模块都声称拥有 `loadContract`，读者无法判断该看哪个。
+- `moduleEdges` **由 build 推导，不手写**：模块 A 的任一成员在代码里引用模块 B 的成员 ⇒ `A→B`；
+  `count` 是引用对数，`why` 取前 3 对 `"a → b"`；按 `(from,to)` 排序。手写边 100% 会过期，所以
+  记录里的边必须等于现算（`stale-module-edges`）；指向未知模块或自环是 `invalid-edge`。
+
+**任务级 `tasks/<T-id>.json`（语义变更计划）**：
+
+```jsonc
+{
+  "schema": 1,
+  "task": "T-20261108113206",
+  "status": "planned",                 // planned → implemented（apply 写；幂等）
+  "base": { "commit": "<sha>", "clean": true, "recorded_at": "..." },  // git 不可用 → commit: null
+  "noSemanticChange": false,
+  "reason": "",
+  "files": [
+    { "path": "lib/desc.mjs", "op": "add", "semantics": "…",
+      "modules": [{ "id": "scan", "title": "扫描", "op": "add", "semantics": "…", "members": ["scanFile"] }] },
+    { "path": "lib/core.mjs", "op": "change",
+      "modules": [{ "id": "task-store", "op": "change", "semantics": "…" }] },
+    { "path": "lib/old.mjs", "op": "remove" }
+  ],
+  "created_at": "...", "updated_at": "...",
+  "implemented_at": null,              // apply 写；测试证据的起点之一
+  "history": [ { "at": "...", "stage": "analyzing", "note": "…" } ]
+}
+```
+
+- **`files` 非空 xor `noSemanticChange: true` + 非空 `reason`**：两者都空 = 计划没写；两者都有 =
+  自相矛盾。允许「没计划」等于允许「不解释」，所以用异或而不是「至少一个」。
+- 文件 `op` 三态：`add` **必须**给 `semantics` 与至少一个模块（新文件没人知道它干什么，只能由
+  计划交代）；`change` 的 `semantics` / `members` **可省**（省 = 不变，免得为改一行模块说明复制
+  全文）；`remove` 只给 `path`（删除的语义就是「没了」）。模块 `op`：`add`（必须 `semantics` +
+  `members`）/ `change`（可选 `semantics`/`title`/`members`）/ `remove`（只给 `id`）；模块粒度让
+  「只改一个函数」不必重写整个文件的语义。
+- **写窗口**：计划可在 `stage ∈ {queued-analysis, analyzing, implementing}` 写；每次修订追加
+  `history`；`apply` 后**冻结**（要改语义就改文件记录，否则「计划」与「落盘语义」各说一套）。
+  审查阶段要改计划，先按阶段机退回 `implementing`（§3.2.1）——审查者不就地改计划。
+- `base` 是 `unplanned-change` 的**比较基准**：建计划时若 `gitCheck` 且 git 可用，工作树必须干净并
+  记 `base.commit`；检查时取 `git diff --name-only <base>` ∪ `git status --porcelain` 的未跟踪项，
+  `include` 命中的文件必须出现在计划 `files` 里（新增 = `add`、删除 = `remove`、其余 = `change`）。
+  git 不可用或 base 失效 → **warning 而非 fail**：门禁不能因为「没装 git」把整条流水线停掉。
+- `implemented_at` 只由 `apply` 写；**测试证据起点 = `max(implemented_at, 计划内文件记录
+  updated_at)`**——只认 `implemented_at` 会漏掉「apply 之后又改语义但没跑测试」的情况。
+
+**build：回填结构、保留语义、剪枝**：
+
+- 记录**不存在** → 建记录（结构齐全、`semantics: ""`）。JS 有声明时按 `// ---- 段名` 注释**种子
+  模块**（段名 slug 化；无段名则一个 `<文件名>` 模块）；Python 按 `class` 种子，模块外的顶层函数
+  归 `top-level`。种子只是**骨架**，build 不猜语义——否则台账会变成「看起来有人解释过」。
+- 记录**已存在** → 只同步结构字段（`hash`/`bytes`/`lines`/`language`/`imports`/`moduleEdges`），
+  **保留 `semantics` 与 `modules`（含已失效成员）**。失效成员留给 `unknown-member` 报，而不是被
+  build 静默清掉——清掉等于把「有人删了函数没更新语义」这条信息也一起删了。
+- 源文件已删 → 删记录（计 `pruned`）；重算 `project.json` 的 `revision` / `counts` / `generated_at`。
+- **无变化不写盘**：build 是高频命令（每次实现收尾都跑），无变化还写会让 mtime 抖动、污染 git 状态、
+  让「记录到底变没变」不可读。`--dry-run` 零写盘，只报将建/将改/将删。
+
+**扫描局限（已知漏扫，漏 ≠ 假红）**：`lib/source-scan.mjs` 是**词法近似**扫描器（剥注释 → 跳字符串
+→ 记括号深度），不是完整语言前端，下列写法可能**漏扫**：解构声明（`const {a,b} = …`）与匿名默认导出
+（`export default () => {}`）没有单一名字，不产生声明；正则字面量里的 `{}`（如 `/a{2}/`）会干扰括号
+深度，含正则的模块可能少收后续顶层声明；模板串插值里的标识符被整体掩码（不进 `identifiers`，插值里
+的 `import()` 也不计边）；生成代码（压缩/模板产物）同理；Python 只收列首 import（函数内延迟导入、
+`if TYPE_CHECKING:` 块内导入不计边），顶层链式赋值只认第一个名字。因此：**漏扫的声明不要求归属**
+（`unassigned-member` 只对扫描到的声明生效），**也不因漏扫而假红**；反过来，已归属的成员必须真实
+存在（`unknown-member`），这条不因扫描器能力打折。其它语言 → `language: 'unknown'`、
+`imports`/`declarations` 为空，只做**文件级**描述（不要求模块）。这份清单与
+`lib/source-scan.mjs` 文件尾的「已知局限」是**同一份**：改一处必须同步另一处，否则读者会按过期的
+能力预期写计划。
+
+**强制语义：enforce 与阶段门**。`updateTask` 是描述阶段门的**唯一实现点**（`assertDescriptionGate`，
+见 §7），`flow check description` 只是同一规则的可复跑证据通道：
+
+| 目标 stage | 描述要求 |
+|---|---|
+| `queued-implementation` | 计划存在且合法（`files` 非空 xor `noSemanticChange` + 非空 `reason`） |
+| `queued-review` | 计划 `status = implemented`；计划内文件通过 §6.1.4 全量检查；`unplanned-change = ∅` |
+| `done` | 上一行全部 + 测试证据：`testGate` 最近一次 `ok:true` 的 `finished_at` ≥ 证据起点 |
+
+- `enforce`：`auto`（默认，store 里已有 ≥1 条文件记录才生效）| `on`（恒生效）| `off`（阶段门关闭，
+  `flow check description` 仍可手动跑）。默认 `auto` 而不是 `on`：新项目第一次建任务时一条文件记录
+  都没有，若恒拦，会把「先建任务后补描述」这条最自然的顺序堵死。
+- 豁免：`parent` 非空的子任务；`options.source === 'internal'` 的内部写（`lib/veto.mjs`、
+  `tools/subtasks.mjs` 的 remove）；只写 `status` 不写 `stage` 的写入。豁免不是后门：它对应
+  「子任务的语义由父任务计划统一交代」「内部写不改变语义」「不推进阶段就不需要语义证据」。
+- 失败抛 `FlowError('invalid')`，消息带**可复制的修复命令**：
+  `description gate: <to>: <kind> <path>[:<module>] … — <修复命令>`。只说「不对」是浪费一次往返。
+
+**渲染**：`description.render` 非空时，`flow desc render` 从记录生成**确定性** Markdown（不读墙钟；
+两次运行逐字相同，否则 diff 永远在抖）。骨架：标题 + 文件/模块计数 + 项目语义 + 文件关系图
+（Mermaid `graph LR`）+ 每个文件的模块表（模块 / 语义 / 成员），排序统一（文件按 `path`、模块按
+记录顺序、边按 `(from,to)`）。手改生成物会被 `render-stale` 抓出来：生成物是投影，不是第二个真源。
+
 ## 4 写入语义
 
 **原子写**：`mkdir -p` → `open(<name>.tmp-<pid>-<seq>, 'wx')` → 写 → `fsyncSync(fd)`
@@ -905,6 +1120,17 @@ flow decision answer <id> --choice C [--note N] [--by user|agent]
 flow decision withdraw <id> --reason R [--by user|agent]
 flow decision gc     [--days N] [--dry-run]
 
+flow desc status [--json]
+flow desc build  [--dry-run]
+flow desc show   [--path <src>] [--graph tree|mermaid] [--json]
+flow desc set    --input <json>          # 单文件补丁或数组：补/改语义与模块
+flow desc plan   <T-id> --template <src> # stdout 打印计划骨架（当前记录形状）
+flow desc plan   <T-id> --input <json>   # 建/改语义变更计划（--rebase 只刷新 base）
+flow desc plan   <T-id> --show
+flow desc plan   <T-id> --no-semantic-change --reason <text>
+flow desc apply  <T-id> [--dry-run]
+flow desc render [--out <path>] [--check]
+
 flow check list
 flow check staged --allow <path> [--allow <path> ...]
 flow check release-baseline --marker <text> [--threshold <N>]
@@ -913,6 +1139,7 @@ flow check doc --file <path> --type task|design|incident|release
 flow check decisions
 flow check experiments
 flow check tasks [--type-map <file.json>]
+flow check description [--task <T-id>] [--strict] [--json]
 ```
 
 - `show|update|rm|run|logs|enable|disable` 的 id 可作位置参数，也可用 `--id`；两者都写且不一致 → 用法错误。
@@ -959,6 +1186,25 @@ flow check tasks [--type-map <file.json>]
 - `flow check tasks` 是第三个内置检查（见 §6.1.3）：只读地报告旧任务记录的结构问题
   （残留 `goal` 键 / 缺 `type`），有 issue 即 exit 1。**它不写盘、也不提供 `--fix`**；
   `--type-map <file.json>` 只用于校验与预演 type，真正补 type 要跑 `flow task normalize`。
+- `flow desc …` 是**项目描述台账**的命令面（记录格式见 §3.7）：`build` 建/同步结构（哈希/import/
+  模块边，无变化不写盘），`set` 只写语义与模块（结构字段永远由 build 维护，手写会被下一次 build
+  覆盖或由 check 报漂移），`plan` / `apply` 走「分析写计划 → 实现落语义」的两段式，`render` 只读记录
+  生成文档。所有子命令吃全局 `--root` / `--json`，退出码按 §5.2 的通用词汇（未初始化 → 1、
+  校验失败 → 2、`<T-id>` 不存在 → 3、IO → 4）。
+- `flow desc plan` 只在 `stage ∈ {queued-analysis, analyzing, implementing}` 可写；每次 `--input`
+  是一次修订，追加 `history`。`--template` 只打印骨架、**不写盘**（骨架由当前记录与扫描结果生成，
+  所以先 `build` 再取模板，否则拿到的是空壳）。`--rebase` 不重写 `files`，只刷新 `base`——改了计划
+  内容却只 rebase，`unplanned-change` 会在检查时把这笔账算出来。
+- `flow desc apply` 把计划里的文件/模块语义落进文件记录，并把计划置 `implemented` + 写
+  `implemented_at`；重复调用**幂等**（`applied:false`）。`--dry-run` 只报将改哪些记录、零写盘。
+- `flow desc render` 不带 `--out` 时打印到 stdout；`--check` **只比对不写**（与 `check description`
+  的 `render-stale` 同源），配置了 `description.render` 才有比对目标。生成物是投影：手改它不会改
+  记录，只会让下一次检查红。
+- `flow check description` 是第四个内置检查（见 §6.1.4）：只读、不取锁；`--task <T-id>` 追加四个
+  计划对齐的 kind（`plan-missing` / `plan-unrealized` / `unplanned-change` / `tests-missing`），
+  `--strict` 把 `undescribed-file` 从 warning 提升为 fail。store 里没有描述记录且
+  `description.enforce` 为 `auto` 时 **exit 0 跳过**并打印「未建立描述，跳过」——跳过是显式的，
+  不是静默假绿。
 - `flow init --no-gates` 跳过默认门禁种子（见 §3.3.1）。
 - `exp add` **不支持** `--id`（id 由 core 自动生成）；显式 id 只能直接调 `addExperiment`。
 - `exp add` 的七个规范字段（`--direction`/`--expected`/`--primary-metric`/`--guardrail`/
@@ -1034,9 +1280,14 @@ flow check tasks [--type-map <file.json>]
 `待决策 N（阻塞 M）`，随后是心跳汇总（`N（可能已停 M）`）与前 5 条心跳明细（文件名 /
 相对时间 / 状态行，超过 5 条提示总数），再往后是最多 3 条 open 决策明细（id / kind /
 question / 挂起时长或轮数，升级项带 `⚠`）与最近 3 条实验、最近 3 条任务、最近 3 次门禁运行。
+描述台账有一行摘要：`描述  <N> 文件 · <M> 模块 · 缺语义 <K> · 计划 <P>`（`description.enabled`
+为 `false` 时整行省略；一条记录都没有时也省略——零记录时喊「缺语义 0」是噪音）。
 未初始化时提示 `flow init`，退出码仍为 0。`--json` 的 `data` 增加
 `decisions: {items, counts:{open,blocking,escalated,answered,withdrawn,superseded,total}}`
-（`items` 只放前 3 条 open，与提醒/面板同一排序）。
+（`items` 只放前 3 条 open，与提醒/面板同一排序）。`data.counts` 另增
+`description: {files, modules, missingSemantics, described, plans}`：**现算**（与
+`descriptionStatus()` 同源），不读 `project.json` 的 `counts` 缓存——缓存只是展示缓存（§3.7），
+`flow status` 读它就会把「build 之后手改记录」藏起来。
 
 存在不可读记录时，人类输出的实验/任务/门禁计数追加 ` · +N 无法读取`；
 `--json` 的 `counts.{experiments,tasks,gates}` 各带并列 `unreadable`（`total` 不变）。
@@ -1251,13 +1502,13 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 `<pkg>/skills/ai-collaborative-dev-workflow/scripts/`），与 `--root` 指向的项目无关；
 解释器固定为 `bash`（`.sh`）与 `python3`（`doc_check.py`）。
 
-**内置例外（三个）**：`flow check decisions` / `flow check experiments` / `flow check tasks`
-不来自脚本目录，而由 `bin/flow.mjs` 特判路由到 `core.checkDecisions()` /
-`core.checkExperiments()` / `core.normalizeTaskFormat({fix:false})`（只读，
-复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
+**内置例外（四个）**：`flow check decisions` / `flow check experiments` / `flow check tasks` /
+`flow check description` 不来自脚本目录，而由 `bin/flow.mjs` 特判路由到
+`core.checkDecisions()` / `core.checkExperiments()` / `core.normalizeTaskFormat({fix:false})` /
+`core.checkDescription()`（只读，复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
 保持**不 import core、不读写 `.dsh/flow`** 的纪律：内置项由 bin 侧追加，不进
-`checks.CHECKS`/`listChecks()`。所以 **`check list` 共七项** = 四项脚本检查
-（`staged`/`release-baseline`/`state`/`doc`）+ 三个内置项 `decisions` / `experiments` / `tasks`：
+`checks.CHECKS`/`listChecks()`。所以 **`check list` 共八项** = 四项脚本检查
+（`staged`/`release-baseline`/`state`/`doc`）+ 四个内置项 `decisions` / `experiments` / `tasks` / `description`：
 
 ```json
 {"name":"decisions","interpreter":"core","script":"lib/core.mjs#checkDecisions",
@@ -1269,6 +1520,9 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 {"name":"tasks","interpreter":"core","script":"lib/core.mjs#normalizeTaskFormat",
  "description":"旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）",
  "args":"[--type-map <file.json>]"}
+{"name":"description","interpreter":"core","script":"lib/core.mjs#checkDescription",
+ "description":"描述台账漂移（缺记录/陈旧 hash/未归属声明/模块图不一致/缺语义）时失败（内置检查：bin 特判路由 core，只读）",
+ "args":"[--task <T-id>] [--strict]"}
 ```
 
 `interpreter: "core"` 是唯一非 `bash`/`python3` 的合法值，`script` 是包根相对的 POSIX 路径
@@ -1288,6 +1542,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 | `decisions` | `flow check decisions [--json]` | **不 spawn**：bin 特判路由 `core.checkDecisions()`（只读内置项，见 §6.1.1） |
 | `experiments` | `flow check experiments [--json]` | **不 spawn**：bin 特判路由 `core.checkExperiments()`（只读内置项，见 §6.1.2） |
 | `tasks` | `flow check tasks [--type-map <file.json>] [--json]` | **不 spawn**：bin 特判路由 `core.normalizeTaskFormat({fix:false})`（只读内置项，见 §6.1.3） |
+| `description` | `flow check description [--task <T-id>] [--strict] [--json]` | **不 spawn**：bin 特判路由 `core.checkDescription()`（只读内置项，见 §6.1.4；`lib/checks.mjs` 仍不 import core） |
 
 - 所有子命令都吃全局 `--root <dir>`（默认 cwd）与 `--json`。脚本以 `--root` 为 cwd 执行，
   所以脚本里的 `git diff --cached` / `git log` / `git rev-list` 落在项目根。
@@ -1380,6 +1635,61 @@ warning（不影响退出码，`--json` 给 `warnings[]`）：`status === 'open'
   带 map 但盘上仍缺 type 时额外提示「map 已校验但不写盘」。
 - 本检查**不提供 `--fix`**：`check` 家族只读（§6 开头、§6.1 开头）；写盘归 `flow task normalize`。
   不留「基线计数」之类的豁免参数——豁免等于把欠账变成长期合法状态。
+
+### 6.1.4 `check description`（项目描述门禁）
+
+只读、不写 store、不取锁（`core.checkDescription()`），与既有的三个内置项（`decisions` /
+`experiments` / `tasks`）同一路由方式：`lib/checks.mjs` 仍不 import core，由 bin 侧特判追加。记录格式与 build/apply 语义见 §3.7。
+
+**跳过条件（两条，均 exit 0，人类输出说明原因——不是静默绿）**：
+
+- `description.enabled === false`：描述功能关闭（记录保留、不删除，只是不再作为检查与阶段门的依据；
+  `flow status` 也不显示描述行）。
+- store 里没有任何文件记录且 `description.enforce` 为 `auto`：新项目的描述是**逐步建立**的，在
+  第一条记录出现前没有可比对的基准，硬拦只会逼项目把 precommit 整步注释掉。`enforce: 'on'` 下
+  不跳过（此时 `undescribed-file` 按 warning / `--strict` 的规则生效）。
+
+| kind | 触发条件 | 级别 |
+|---|---|---|
+| `undescribed-file` | `include` 命中、但没有任何文件记录（覆盖面欠账） | warn；`--strict` → fail |
+| `missing-record` | 计划 `files` 里的文件没有记录（计划写了却没 build） | fail |
+| `stale-hash` | 记录 `hash` ≠ 当前文件内容（改了代码没 build，或记录被手改） | fail |
+| `ghost-import` | 相对 import 的 `target` 在项目内但文件不存在（坏 import / 改名没同步） | fail |
+| `modules-missing` | 文件有扫描到的声明，但 `modules` 为空（语义没分区） | fail |
+| `unassigned-member` | 某个扫描到的顶层声明不属于任何模块（带行号） | fail |
+| `unknown-member` | 模块 `members` 里有当前声明中不存在的名字（改名/删除没更新语义） | fail |
+| `duplicate-member` | 同一成员被两个以上模块声明（读者不知道该看哪个） | fail |
+| `empty-module` | 模块 `members` 为空（空分区只是噪音） | fail |
+| `missing-semantics` | 项目/文件/模块语义为空或短于 `minSemanticsChars` | fail |
+| `invalid-edge` | `moduleEdges` 指向未知模块或自环 | fail |
+| `stale-module-edges` | 现算模块边 ≠ 记录（build 之后有人手改边，或扫描覆盖发生变化） | fail |
+| `render-stale` | 配置了 `description.render` 且该文件内容 ≠ 现算渲染（手改生成物） | fail |
+| `plan-missing` | 仅 `--task`：该任务没有计划记录，或计划非法（`files` 空且未声明 `noSemanticChange`） | fail |
+| `plan-unrealized` | 仅 `--task`：计划 `status` 仍是 `planned`（没跑 `flow desc apply`） | fail |
+| `unplanned-change` | 仅 `--task` 且 `gitCheck`：`base` 之后 `include` 命中的改动不在计划 `files` 里 | fail（git 不可用 / base 失效 → warn） |
+| `tests-missing` | 仅 `--task`：`testGate` 没有晚于 `max(implemented_at, 计划内记录 updated_at)` 的 `ok:true` 运行 | fail |
+
+- **为什么只有 `undescribed-file` 是 warning**：其余每一项都表示**已登记的内容与代码不一致**，
+  读者拿到的就是错语义，比「没写」更坏；而覆盖面欠账（新文件还没人写）如果一出现就打红，等于
+  逼项目把这一步从门禁里删掉——收紧留给 `--strict`（release / CI 用）。
+- `--task <T-id>` 只针对该任务的计划与计划内文件检查，并追加四个计划对齐 kind。`--strict` 与
+  `--task` **正交**：前者提升 warning 级别，后者扩充 kind 集合。`--task` 指向不存在的任务 →
+  用法错误（exit 2）而不是检查失败：拼错 id 与台账脏不是同一类事，混在一起就没人能修。
+- 输出形状：`{ok, mode, counts, failed:[{kind, path, module?, detail, hint}], warnings[]}`；
+  有 `failed` → exit 1（`error.code = "check-failed"`）。`mode` 回显生效的 `enforce`
+  （`auto` / `on` / `off`）：跳过与否要看 `mode` + `counts`，**不要只看 `ok:true`**——否则
+  「没检查」会被当成「检查通过」。
+- 人类输出：通过 `✓ description：文件 25 · 模块 130 · 缺语义 0 · 计划 1`；失败逐行
+  `✗ <kind> <path>[:<module>] — <detail>`，末行给一条**可复制**的修复命令（`flow desc build` /
+  `flow desc set --input …` / `flow desc apply <T>`），与 §7 阶段门 `invalid` 消息的 `<修复命令>`
+  同源——两边各写一套文案，很快就会出现「门禁说 A、check 说 B」。
+- 退出码沿用 §6.2：0 通过（含跳过）· 1 有 `failed` · 2 未初始化 / 用法（未知任务）· 4 读取失败。
+  **不出现 3**——本检查不 spawn 脚本，没有「解释器缺失」这一档。
+- 与门禁的关系：`precommit` 种子步骤跑 `check description`，`release` 跑
+  `check description --strict`（§3.3.1）；已有项目**不自动补步**，要手动 `gate update` 且带上
+  全部原步骤。阶段门（`updateTask`）用的是同一份 kind 与判定（`assertDescriptionGate`），CLI
+  只是人/门禁的复跑入口，**没有第二套规则**——两条规则分叉的那天，就会出现「门禁绿了但阶段
+  过不去」。
 
 ### 6.2 退出码
 
@@ -1562,6 +1872,28 @@ DECISION_SCHEMA / DECISION_STATUS / DECISION_KINDS
 DECISION_ESCALATE_TURNS / DECISION_ESCALATE_HOURS
 DECISION_GC_DAYS / DECISION_REMIND_MAX
 
+// 项目描述（`description/` 三族记录；schema/编码/build/check 规则见 §3.7/§6.1.4）
+DESCRIPTION_SCHEMA                   // 1
+DESCRIPTION_ENFORCE_MODES            // ['auto','on','off']
+readDescriptionProject(root, contract)              // project.json 或 null
+listDescriptionFiles(root, contract, {unreadable?}) // 文件记录数组，按 path 排序
+getDescriptionFile(root, contract, path)            // 无 → not-found
+getDescriptionPlan(root, contract, taskId)          // 无 → null（不是 not-found：计划可缺）
+descriptionStatus(root, contract)                   // {files, modules, missingSemantics, plans, described}
+checkDescription(root, contract, {taskId?, strict?, requireTests?, stage?})
+                                     // §6.1.4 的 kind 与退出语义；{ok, mode, counts, failed[], warnings[]}
+renderDescription(root, contract)                   // 确定性 Markdown 字符串（不写盘）
+buildDescription(root, contract, {dryRun?, now?})
+                                     // 锁内编排 + 纯函数回填：{created, updated, unchanged, pruned, warnings}
+setDescriptionFile(root, contract, patchOrPatches)
+                                     // 单对象或数组；{records, changed}（只写 semantics/modules）
+setDescriptionPlan(root, contract, taskId, input)   // {plan, amended}（修订追加 history）
+applyDescriptionPlan(root, contract, taskId, {dryRun?})
+                                     // {plan, applied, warnings}；planned → implemented，幂等
+assertDescriptionGate(root, contract, nextTask, {source})
+                                     // updateTask 内部用（非契约 API）：通过返回 undefined，
+                                     // 否则抛 FlowError('invalid')，消息带 `<修复命令>`
+
 experimentTree(records)              // [{...record, children:[...]}]，环安全
 readStoreState(root, contract)       // 面板聚合：experiments{items,counts,source}
                                      // tasks{items,counts,current,source}
@@ -1570,6 +1902,13 @@ readStoreState(root, contract)       // 面板聚合：experiments{items,counts,
                                      // decisions{items,counts}
                                      // counts.{experiments,tasks,gates}.unreadable：不可读文件数
 ```
+
+描述 API 的分层（为什么这些函数长在 core 而不在 `lib/desc.mjs`）：`desc.mjs` 只提供**纯函数**
+（扫描结果打包、图推导、检查规则、渲染字符串），**不取锁、不写盘、不 import core**；锁内编排与
+原子写在 core（`buildDescription` / `setDescriptionFile` / `setDescriptionPlan` /
+`applyDescriptionPlan`）。这样 `checkDescription` 与 `renderDescription` 能复用同一套纯函数做
+「记录 vs 代码」比对，而不被写路径的副作用污染——**检查与写入共用一份规则，漂移检查才可信**。
+`applyDescriptionPlan` 幂等：重复调用返回 `applied:false`（已 `implemented` 时不再改记录）。
 
 `readStoreState().decisions` **逐字等于** `summarizeDecisions(root, contract,
 {limit: DECISION_REMIND_MAX})`（两条读路径必须同形）：`items` 只含 `open`，按「升级优先 →
