@@ -190,7 +190,15 @@ metadata:
 
 ## 八、验证本技能
 
-- 结构校验：`python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py <本技能目录>`
+- 结构校验（可选，**非本项目依赖**）：若本机 `.codex` profile 装了 skill-creator，可用
+  `python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py <本技能目录>`。
+  **该路径属于个人 profile，仓库内没有这个文件，CI 与其他机器上不可用**——它校验的是技能元数据格式，
+  能力上不等同于下面的项目内检查。
+- 项目内可用的检查入口（任何装了本插件的机器都能跑）：
+  - `node bin/flow.mjs check list`：列出全部内置检查（staged / release-baseline / state / doc /
+    decisions / experiments / tasks）；
+  - `python3 skills/ai-collaborative-dev-workflow/scripts/gate.py check`：任务书结构校验
+    （必填字段完整性，含 `schema`/`title`/`owner`/`created_at`/`updated_at` 等）。
 - 机械检查（DSH 内首选）：`flow check staged` / `flow check release-baseline` / `flow check state` / `flow check doc`，分别对应本技能目录下的 `scripts/check_staged_files.sh`、`scripts/release_baseline.sh`、`scripts/check_state.sh`、`scripts/doc_check.py`。
 - 行为回归：`bash <本技能目录>/scripts/smoke_test.sh`（在 `/tmp` 建隔离仓库，不触碰当前工作区；需要可写 `/tmp` 与 `bash`）。
 - 精度层不是模式：接入 task/doc 检查只是让任务书与文档可脚本校验，协作流程仍是中心-贡献者；接入顺序先只读、再阻断。

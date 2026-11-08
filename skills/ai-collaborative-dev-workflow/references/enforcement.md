@@ -45,9 +45,12 @@
 **前置条件（代码之外）**：仓库分支保护把 `static` 与 `build` 设为 required checks；否则 workflow 红了也能合并，强制力不成立。
 
 ## 7 例外与留痕
-- 仅 `gate commit --force --reason "<理由>"` 可跳过本地检查；要求当次人工审批。
-- 提交 body 写 `Gate-Override: <理由>` 与 `Approved-By: <user>`。
-- CI 对 override 只警告不阻断；每周统计次数，连续两周 >3 次则复查规则是否过严。
+- 本地检查**没有跳过机制**：`gate.py` 不解析 `--force` / `--reason`，`commit` 分支把其余参数
+  **原样转给 `git commit`**（`git commit --force` 会直接报「未知选项」）。要绕过只能在**人**这一层
+  ——不跑 `gate commit`，本工具不提供、也不记录这种绕过。
+- 绕过时**必须**在提交 body 写 `Gate-Override: <理由>` 与 `Approved-By: <user>`，并要求当次人工审批。
+  这是**人工约定**：`gate.py` 与当前 CI **都不检查、不记录**它，它只对人起作用。
+- 每周统计 override 次数，连续两周 >3 次则复查规则是否过严（人工统计，同上是约定而非自动化）。
 
 ## 8 灰度与回滚
 1. **observe（1 周）**：hooks 只告警，不阻断；收集误报。
@@ -95,7 +98,7 @@
 | 机械 | README jar 名 = pom 版本 | pre-commit / CI |
 | 机械 | 令牌文件与生成值同源 | pre-commit（动令牌文件时）/ CI |
 | 机械 | 只推 dev、fast-forward、无标签 | pre-push / CI |
-| 机械 | 任务书必填字段完整 | gate task / CI（台账变更时） |
+| 机械 | 任务书必填字段完整 | gate check（task 规则）/ CI（台账变更时） |
 | 半机械 | 改 API 是否伴随前端改动 | gate commit 提示 |
 | 半机械 | 改 schema 是否伴随两侧 mapper | gate commit 提示 |
 | 判断 | 契约冻结、范围、设计债 | 人 |
@@ -105,11 +108,11 @@
 统一入口 `.agents/scripts/gate`（bash，Git Bash/WSL 可跑）。
 
 ~~~
-gate commit [--force --reason <txt>]
+gate commit
 gate build --scope <scope>|all
 gate push [--dry-run]
 gate release --dry-run
-gate task <TASK-ID>
+gate check              # 全部规则；含 task 规则（任务书必填字段完整性）
 gate doctor
 ~~~
 
@@ -139,8 +142,21 @@ gate doctor
 ### gate build
 按 scope 调既有命令；跨域改动要求 all；检测并发（pgrep mvn/vite、产物 mtime）→ 拒绝并提示等待。
 
-### gate task
-检查任务书字段：ID、工作目录、基线、文件域、契约影响、验证命令、提交规范、禁止项、停止条件；缺失即失败。
+### gate check（含 task 规则）
+`task` 不是独立子命令，而是 `gate check` 的一条规则：读 `GATE_TASK_ID` 或 `.agents/tasks/.current`
+（协作技能自己的存储，**flow 插件不读**），做任务书**必填字段完整性**校验。
+无任务时报 `TASK_ID_MISSING`；有任务时按 `precision_common.task_errors` 报缺字段。
+实测缺字段输出形如：
+
+```
+schema: REQUIRED: 缺少必填字段
+title: REQUIRED: 缺少必填字段
+owner: REQUIRED: 缺少必填字段
+created_at: REQUIRED: 缺少必填字段
+updated_at: REQUIRED: 缺少必填字段
+```
+
+`gate commit` 会先跑同一套 `check`，失败即不提交。
 
 ### gate doctor
 git 版本、hooks 是否安装、core.hooksPath、工作区状态、远端可达、LFS 状态、工具链版本。
