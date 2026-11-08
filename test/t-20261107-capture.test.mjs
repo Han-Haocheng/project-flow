@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { apply } from '../index.js'
 import { addTask, listTasks, loadContract, initProject, startHeartbeat } from '../lib/core.mjs'
 import {
@@ -23,6 +24,9 @@ import {
   noteCaptureGate,
   recordPreStep,
   utteranceKey,
+  utteranceKeyOf,
+  attachmentsOfContent,
+  attachmentTitle,
 } from '../lib/capture.mjs'
 
 const TEMP_ROOTS = []
@@ -645,4 +649,209 @@ test('诊断 excludedBy：五类原因各自可取到（表驱动：sentinel/pre
   await preStep(harness, agent, [again])
   status = await flowStatus(harness, agent, root)
   assert.equal(status.capture.excludedBy, 'dup')
+})
+
+
+// ------------------------- 8 捕获保真：附件落账与稳定消息身份（任务模块，2026-11-08）
+//
+// 真实宿主 `UserMessage` 是 `{id, role, content, source}`——有稳定 id、**没有**
+// timestamp（见 @deepseek-ai/dsh-llm 的 message typings）。旧实现按
+// `sha256(timestamp + '\0' + text)` 去重，在真实宿主里退化成"按文本去重"，
+// 且把 screenshot 的消息压成纯文字。本节把这三件事各钉一条用例。
+
+const HOST_IMAGE_1 = {
+  attachmentId: 'sha256:2f0577569e309fce81e222d8ac7176efd6897df4cdbf77e2c3a71179801fcdea',
+  mediaType: 'image/jpeg',
+  bytes: 190348,
+  width: 1265,
+  height: 1769,
+  name: '图片.png',
+}
+const HOST_IMAGE_2 = {
+  attachmentId: 'sha256:1c976ac8fa5447361b63176781b5700fe4b7ac2a1077de2c26ca78a6d1bde4eb',
+  mediaType: 'image/jpeg',
+  bytes: 184989,
+  width: 1257,
+  height: 1657,
+  name: '图片.png',
+}
+
+/** A real Host user message: stable `id`, no `timestamp`. */
+const hostMessage = (id, content) => ({ id, role: 'user', content })
+const imageBlock = (ref = {}, extra = {}) => ({ type: 'image', attachment: { ...HOST_IMAGE_1, ...ref }, ...extra })
+const fileBlock = (ref = {}) => ({
+  type: 'file',
+  attachment: { attachmentId: 'sha256:5e6f7a8b9c0d1e2f', name: 'report.pdf', bytes: 1024, ...ref },
+})
+const sha256Of = (material) => createHash('sha256').update(material, 'utf8').digest('hex')
+
+test('捕获保真①：图+文消息把附件引用写进 source.attachments，文字与 key 均按真实宿主形状', async () => {
+  const { root, contract } = freshProject('attach-image-text')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-image-text')
+  const message = hostMessage('msg-host-1', [imageBlock(), imageBlock(HOST_IMAGE_2, { offloaded: true }), { type: 'text', text: '当前状态' }])
+
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1, 'a screenshot + caption is one task')
+  const task = tasks[0]
+  assert.equal(task.title, '当前状态')
+  assert.equal(task.source.text, '当前状态', 'the caption is still stored verbatim')
+  assert.deepEqual(
+    task.source.attachments,
+    [
+      { kind: 'image', attachmentId: HOST_IMAGE_1.attachmentId, mediaType: 'image/jpeg', bytes: 190348, width: 1265, height: 1769, name: '图片.png' },
+      { kind: 'image', attachmentId: HOST_IMAGE_2.attachmentId, mediaType: 'image/jpeg', bytes: 184989, width: 1257, height: 1657, name: '图片.png', offloaded: true },
+    ],
+    'source.attachments keeps the durable refs (never the bytes) and the offloaded marker',
+  )
+  // 独立重算期望 key：身份必须以稳定 id 为主料（不是真实宿主不存在的 timestamp）。
+  assert.equal(
+    task.source.key,
+    sha256Of(['id', 'msg-host-1', '当前状态', HOST_IMAGE_1.attachmentId, HOST_IMAGE_2.attachmentId].join('\0')),
+    'the key is derived from the message id + text + attachment ids',
+  )
+  assert.notEqual(task.source.key, utteranceKey('', '当前状态'), 'the legacy text-only key must not be used when an id exists')
+})
+
+test('捕获保真②：只有附件没有文字也建卡——source.text 保持空，title 说明附件', async () => {
+  const { root, contract } = freshProject('attach-only')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-only')
+  const message = hostMessage('msg-host-2', [imageBlock()])
+
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1, 'an attachment-only message is still a user request')
+  const task = tasks[0]
+  assert.equal(task.source.text, '')
+  assert.equal(task.title, '[附件] 图片 ×1')
+  assert.equal(task.source.attachments.length, 1)
+})
+
+test('捕获保真③：图片+文件混合的消息 title 兜底分别计数', async () => {
+  const { root, contract } = freshProject('attach-mixed')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-mixed')
+  const message = hostMessage('msg-host-3', [imageBlock(), imageBlock(HOST_IMAGE_2), fileBlock()])
+
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].title, '[附件] 图片 ×2、文件 ×1')
+  assert.deepEqual(
+    tasks[0].source.attachments.map((entry) => entry.kind),
+    ['image', 'image', 'file'],
+  )
+  assert.deepEqual(tasks[0].source.attachments[2], {
+    kind: 'file',
+    attachmentId: 'sha256:5e6f7a8b9c0d1e2f',
+    name: 'report.pdf',
+    bytes: 1024,
+  })
+})
+
+test('捕获保真④：同文不同消息（不同 id）是两条任务；旧实现按文本去重会吞掉一条', async () => {
+  const { root, contract } = freshProject('attach-same-text')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-same-text')
+
+  await preStep(harness, agent, [
+    hostMessage('msg-a', [{ type: 'text', text: '继续' }]),
+    hostMessage('msg-b', [{ type: 'text', text: '继续' }]),
+  ])
+  await turnStopping(harness, agent)
+
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 2, 'two distinct messages with the same text must be two tasks')
+  assert.deepEqual(
+    tasks.map((task) => task.source.key).sort(),
+    [sha256Of(['id', 'msg-a', '继续'].join('\0')), sha256Of(['id', 'msg-b', '继续'].join('\0'))].sort(),
+  )
+})
+
+test('捕获保真⑤：同一条消息（同 id）重放不会重复建卡', async () => {
+  const { root, contract } = freshProject('attach-replay')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-replay')
+  const message = hostMessage('msg-same', [{ type: 'text', text: '同一条消息' }])
+
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+  assert.equal(tasksOf(root, contract).length, 1)
+
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(tasksOf(root, contract).length, 1, 'a replayed message keeps its identity')
+  assert.equal(status.capture.excludedBy, 'dup')
+})
+
+test('捕获保真⑥：没有 id 的旧消息回落到 timestamp+text 的旧 key（兼容）', async () => {
+  const { root, contract } = freshProject('attach-legacy')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-attach-legacy')
+  const at = recentStamp(-500)
+
+  await preStep(harness, agent, [{ role: 'user', content: [{ type: 'text', text: '旧消息' }], timestamp: at }])
+  await turnStopping(harness, agent)
+
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].source.key, utteranceKey(at, '旧消息'), 'messages without an id keep the legacy dedupe material')
+  assert.equal(utteranceKeyOf({ timestamp: at }, '旧消息', []), utteranceKey(at, '旧消息'))
+})
+
+test('捕获保真⑦：畸形附件块被跳过（不抛、不写 0 值假数据），offloaded 保留', () => {
+  const malformed = attachmentsOfContent([
+    { type: 'image', attachment: { attachmentId: '', mediaType: 'image/png', bytes: 1, width: 1, height: 1 } },
+    { type: 'image', attachment: { attachmentId: 'sha256:ok', mediaType: '', bytes: 1, width: 1, height: 1 } },
+    { type: 'file', attachment: { attachmentId: 'sha256:f', name: '', bytes: 1 } },
+    { type: 'image', attachment: { attachmentId: 'sha256:real', mediaType: 'image/jpeg', bytes: 10, width: 2, height: 2 } },
+    { type: 'text', text: 'ignored' },
+    { type: 'image' },
+    null,
+  ])
+  assert.deepEqual(malformed, [
+    { kind: 'image', attachmentId: 'sha256:real', mediaType: 'image/jpeg', bytes: 10, width: 2, height: 2 },
+  ])
+  assert.deepEqual(attachmentsOfContent('plain text'), [])
+  assert.deepEqual(attachmentsOfContent(undefined), [])
+  assert.equal(attachmentTitle([]), '[附件]')
+  assert.equal(attachmentTitle([{ kind: 'image' }, { kind: 'image' }]), '[附件] 图片 ×2')
+  assert.equal(attachmentTitle([{ kind: 'file' }]), '[附件] 文件 ×1')
+})
+
+test('捕获保真⑧：core 拒绝非法的 source.attachments（不静默写盘）', () => {
+  const { root, contract } = freshProject('attach-invalid')
+  const base = { type: 'chore', title: '非法附件', source: { kind: 'utterance', key: 'k', at: new Date().toISOString(), text: 'x' } }
+  assert.throws(
+    () => addTask(root, contract, { ...base, source: { ...base.source, attachments: [{ kind: 'image', attachmentId: '', mediaType: 'image/png', bytes: 1, width: 1, height: 1 }] } }),
+    /source\.attachments\[0\]\.attachmentId must be a non-empty string/,
+  )
+  assert.throws(
+    () => addTask(root, contract, { ...base, source: { ...base.source, attachments: [{ kind: 'file', attachmentId: 'sha256:x', name: 'a.txt', bytes: -1 }] } }),
+    /source\.attachments\[0\]\.bytes must be a non-negative integer/,
+  )
+  assert.throws(
+    () => addTask(root, contract, { ...base, source: { ...base.source, attachments: 'nope' } }),
+    /source\.attachments must be an array/,
+  )
+  // 合法形状可以落盘，并原样读回。
+  const task = addTask(root, contract, {
+    ...base,
+    source: {
+      ...base.source,
+      attachments: [{ kind: 'file', attachmentId: 'sha256:f1', name: 'notes.txt', bytes: 7 }],
+    },
+  })
+  assert.deepEqual(listTasks(root, contract).find((row) => row.id === task.id).source.attachments, [
+    { kind: 'file', attachmentId: 'sha256:f1', name: 'notes.txt', bytes: 7 },
+  ])
 })
