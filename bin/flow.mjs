@@ -55,6 +55,8 @@ const USAGE = `project-flow CLI（schema 2）
            queued-review|reviewing|done|archived；写 stage 时 status 自动派生（见 CONTRACT §3.2.1）
           标题即目标（goal 已并入 title）；title/type 不可改（update），旧记录由格式门禁迁移
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
+  task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账，零外部写入）
+  task unlink <TASK-ID>                   # 解除挂载（team=null；同样零外部写入）
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
   task normalize [--type-map <file.json>] [--dry-run]
@@ -153,7 +155,7 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -207,6 +209,8 @@ export const SPEC = Object.freeze({
     update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
     archive: { flags: ['older-than', 'dry-run'] },
     normalize: { flags: ['type-map', 'dry-run'] },
+    link: { flags: ['id', 'team'] },
+    unlink: { flags: ['id'] },
     rm: { flags: ['id', 'yes'] },
   }),
   gate: Object.freeze({
@@ -1175,7 +1179,7 @@ function readParentFlag(flags, core) {
 
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|normalize|rm>')
+  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|normalize|link|unlink|rm>')
   const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
@@ -1273,6 +1277,23 @@ async function cmdTask(ctx, sub) {
   if (sub === 'normalize') {
     // 写盘通道与只读门禁（check tasks）分开：--dry-run 只报告，真跑在 core 写锁内迁移。
     return runTaskNormalize(ctx)
+  }
+
+  if (sub === 'link') {
+    const teamSync = await loadTeamSync()
+    const id = requireString(flags, 'id', '用法: flow task link <TASK-ID> --team <BOARD-ID>')
+    const boardId = requireString(flags, 'team', '用法: flow task link <TASK-ID> --team <BOARD-ID>')
+    const record = teamSync.linkTask(ctx.root, contract, id, boardId)
+    if (!ctx.json) out(`已挂载 ${record.id} → ${record.team?.taskId ?? boardId}`)
+    return record
+  }
+
+  if (sub === 'unlink') {
+    const teamSync = await loadTeamSync()
+    const id = requireString(flags, 'id', '用法: flow task unlink <TASK-ID>')
+    const record = teamSync.unlinkTask(ctx.root, contract, id)
+    if (!ctx.json) out(`已解除 ${record.id} 的团队板挂载`)
+    return record
   }
 
   if (sub === 'rm') {
@@ -2451,6 +2472,22 @@ async function confirmDelete(ctx, label) {
 
 // ---------------------------------------------------------------- 入口
 
+/**
+ * The Team-sync module (P3b). Loaded lazily like `loadCore`: `flow --help` and the
+ * unrelated commands must not pay for a module they never call, and a package
+ * missing `lib/team-sync.mjs` still has a working CLI for everything else.
+ *
+ * Both entries write the **local ledger only** — linking never calls the Team
+ * service, so there is no external write to fail halfway.
+ */
+async function loadTeamSync() {
+  try {
+    return await import(new URL('../lib/team-sync.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载团队板同步模块（lib/team-sync.mjs）：${error?.message || String(error)}`)
+  }
+}
+
 async function loadCore() {
   try {
     return await import(new URL('../lib/core.mjs', import.meta.url).href)
@@ -2544,6 +2581,8 @@ async function main() {
     ['exp', 'task', 'gate', 'decision'].includes(command) &&
     [
       'show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw',
+      // task-83 P3b：`flow task link T-xxx --team B-yyy` / `flow task unlink T-xxx`
+      'link', 'unlink',
       // T-12 B2：exp 的三个新子命令同样允许 `flow exp review E-xxx`
       'review', 'productize', 'cleanup',
     ].includes(action) &&

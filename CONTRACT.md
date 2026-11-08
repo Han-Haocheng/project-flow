@@ -866,6 +866,8 @@ flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archi
                  # title 承载标题与目标：--goal 已删除（旧记录由 normalizeTaskFormat 迁移）；
                  # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
 flow task rm <id> [--yes]
+flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账）
+flow task unlink <TASK-ID>                   # 解除挂载（team=null）
 flow task archive [--older-than N] [--dry-run]
 flow task normalize [--type-map <file.json>] [--dry-run]
                  # 归一旧记录：goal 并入 title、按 map 补 type；--dry-run 只报告不改盘，
@@ -1962,9 +1964,13 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
 （宿主 JSDoc 原文 "exact live Agent used as the authority credential"），不是可选参数。
 缺失时 `readTeamBoard` 返回 `{ok:false, reason:'no-caller'}`，**不猜一个 agent 硬读**。
 
-- **`team` 字段（台账）**：`{ taskId: string, revision: number, owner: string|null, syncedAt: string }`。
-  进 `TASK_CREATE_KEYS`；**不进** `TASK_UPDATABLE_KEYS`（插件同步，会话不可写）——update 带
-  `team` 一律 `invalid: task team cannot be changed`（值没变也算改）。存量记录无此字段，读写行为不变。
+- **`team` 字段（台账）**：`{ taskId: string, revision: number, owner: string|null, syncedAt: string }`，
+  解除挂载时为 `null`（键保留 = "显式解除"，与"从没挂过"可区分）。进 `TASK_CREATE_KEYS`；
+  **P3b（task-83）起进 `TASK_UPDATABLE_KEYS`**，但只由**专用入口**写：`lib/team-sync.mjs` 的
+  `linkTask` / `unlinkTask`（CLI `flow task link|unlink`）。工具面白名单**不含** `team`、
+  CLI 的 `task update` 也没有 `--team`，所以会话无法通过 patch 改写链接。形状非法一律
+  `invalid: team.…`（revision 非负整数、taskId 非空串、owner 字符串或 null、syncedAt 非空时间戳）。
+  存量记录无此字段，读写行为不变。
 - **`lib/team-sync.mjs`**：
   - `readTeamBoard(ctx, agent)` → `{ok:true, members, tasks}`（行归一化：id/revision/subject/status/
     owner/blockedBy/writeScopes；Promise 视为契约不匹配）或 `{ok:false, reason}`，reason ∈
@@ -1976,6 +1982,11 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
     方式是跑完前后台账文件的 mtime 与 sha256 **不变**。
   - **不映射** `TeamTaskView.status`（`pending|in_progress|completed|deleted`）与九阶段：两套枚举
     的对应是 P3b 的语义决定，现在映射就是猜。
+  - `linkTask(root, contract, taskId, boardTaskId, {revision?, owner?, syncedAt?})` /
+    `unlinkTask(root, contract, taskId)`（P3b task-83）→ 更新后的台账记录。
+    **只写本地台账**（走 `updateTask`，单写者不变），patch 里只有 `team` 一个字段，
+    **绝不改 `stage`/`status`**（挂载不是状态推进）；**零个 `agentTeams` 调用**——
+    把团队板对齐是另一个显式步骤，派工触发点尚未落地。
 - **状态块 `team`**：`{available, members, tasks, linked, missing, orphaned}`；无团队服务时
   `available:false` 且 `members/tasks` 保留 0——**"读不到"与"没有"必须能区分**。CLI 进程没有
   `ctx.agentTeams`，因此 CLI 的 `--json` 恒 `available:false`（诚实降级，不假装 0）。
