@@ -324,6 +324,21 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   丢掉一条任务或实验）。重编号需同步文本引用：`decisions` 的 `blocks`、heartbeat 的 `task`、
   任务的 `parent`、实验的 `commits` 等；批量工具 `flow task renumber` 尚未提供，属后续可选卡。
 - 更新时 `scope` 逐键合并（`{allow:[...]}` 不会清掉 `deny`），其余字段整体替换。
+- **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?}`。
+  由捕获流水线写入；`control` 只是遗留只读值（不再写出）。`key` 是跨进程去重主料；`at` 是消息时间戳
+  （payload 带 `timestamp` 时），否则是 pre-step 捕获时刻；`text` 保留整句（超过 4000 字符显式标截断）。
+  - **`attachments`**（可选，仅非空时写）：消息携带的耐久附件引用，**只存引用、不存字节**：
+    `{kind:'image', attachmentId, mediaType, bytes, width, height, name?, offloaded?}` 或
+    `{kind:'file', attachmentId, name, bytes}`。`attachmentId` 是宿主附件服务的存储标识（文件为字节
+    sha256）；`offloaded:true` 表示该图在模型侧已由占位文本替代（引用仍保留）。畸形引用在捕获侧
+    跳过（不造 0 值假数据），core 对越过校验的非法形状抛 `invalid: source.attachments[i].…`。
+    `source` 整键不可更新，附件与 `key` 一样是**创建时事实**。
+  - **无文字消息**：image/file 块存在而纯文本为空时仍建任务，`source.text` 为 `''`，`title` 兜底为
+    `[附件] 图片 ×N` / `[附件] 文件 ×N` / `[附件] 图片 ×N、文件 ×M`。
+  - **去重身份**：宿主 `UserMessage` 是 `{id, role, content, source}`，**有稳定 `id`、无 `timestamp`**；
+    `key = sha256(['id', id, text, ...attachmentIds].join('\0'))`（无附件时没有尾部分隔符）。
+    无 `id` 的旧消息/夹具回落到 `sha256([timestamp, text, ...attachmentIds].join('\0'))`。
+    因此**同文不同消息是两条任务**，同一条消息（同 id）重放仍是一条。
 - **不可改字段（`applyTaskPatch` 单点拦截）**：`id`、`schema`、`created_at`、`title`、`type`。
   任何一条出现在 update patch 里都抛
   `FlowError('invalid', 'task <key> cannot be changed')`（CLI 映射 `exit 2`，`flow_task` 工具
@@ -1446,9 +1461,20 @@ capture: {
 | ④ | **Agent Teams 队友消息** | content 以固定前缀 **`Team message from `** 开头（**含末尾空格**） | `peer` |
 | — | 恢复会话的旧历史 | 时间戳早于挂载宽限窗口 `CAPTURE_GRACE_MS` | `stale` |
 
-规则 ④ 的判据是**文本约定，不是结构信号**：`UserMessage = {role, content, timestamp}` 没有
-sender 字段，队友消息与用户原话都以 `role:'user'` 出现在同一个 `payload.messages` 里。若宿主
-将来给消息加 sender 元数据，应改成按元数据判断并删除该前缀。
+规则 ④ 的判据是**文本约定，不是结构信号**：宿主 `UserMessage`（真实形状
+`{id, role, content, source}`，见 `@deepseek-ai/dsh-llm` 的 message typings）没有 sender 字段，
+队友消息与用户原话都以 `role:'user'` 出现在同一个 `payload.messages` 里。若宿主将来给消息加
+sender 元数据，应改成按元数据判断并删除该前缀。
+
+**消息身份与时间**：真实 `UserMessage` **没有 `timestamp`**（旧文档写的 `{role, content, timestamp}`
+是方案草图的错误假设）。去重键因此以稳定 `id` 为主料（见 §3.2「去重身份」）；`source.at` 在无
+timestamp 时取 pre-step 捕获时刻。**残留**：`stale` 规则依赖消息时间戳，真实宿主下该规则不触发
+——它当前只在带 `timestamp` 的夹具/兼容路径生效；修复需要宿主暴露消息时间或把消息 id 与会话日志
+时间关联，属后续卡。
+
+**附件**：带 image/file 块的消息仍按同一套规则捕获；附件引用写入 `source.attachments`（形状见
+§3.2）。**只有附件、没有文字**的消息也建卡，title 用 `[附件] 图片 ×N` 一类的兜底，`source.text`
+保持 `''`——截图本身就是用户请求，不能因为它没有文字而静默丢弃。
 **方向性要求**：前缀必须**窄**（`Team message from ` 带空格；`Team message fromX` 不排除）——
 **宁可多捕获队友消息（界面可见、可软关闭），也不能漏捕获用户的真话（静默丢失、界面一切正常）**。
 **`nothing-pending` 是最弱原因**：pre-step 已给出 `no-messages`/`filtered-out`/`no-target` 时，
