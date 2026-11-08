@@ -1600,12 +1600,45 @@ function registerDisciplineSection(ctx) {
   })
 }
 
-const HEARTBEAT_REMINDER_TEXT =
-  '【project-flow】本轮还没有 working 心跳。心跳由插件在会话创建时自动开启、结束时自动关闭（会话不能手动开或关）；用 flow_heartbeat update 登记 goal/task/claims（claims 写本会话独占写入的文件域）。'
-
-/** Reminder budget: one bounded message, one text block. */
+/**
+ * One bounded reminder message per turn: the WHOLE text shares one budget, so
+ * the sections cannot each spend 800 and add up to 2400.
+ */
+const REMINDER_LIMIT = 800
+/**
+ * The reminder renders the stack TOP only; the count it prints and the slice it
+ * takes use this one constant, so "栈顶 1 条" can never disagree with the rows.
+ */
+const REMINDER_STACK_ROWS = 1
+/** A command echo is bounded so a long `/建议 …` cannot eat the whole budget. */
+const COMMAND_ECHO_CLIP = 200
 const DECISION_QUESTION_CLIP = 60
-const DECISION_REMINDER_CLIP = 800
+
+/** The one sentence every decision-bearing reminder carries: how to answer. */
+const ANSWER_DECISION_HINT =
+  '回答后当轮调用 flow_decision answer <id> --choice <选项 id>；不要按推荐自行决定。'
+
+/**
+ * 无待决策时这一段**必须**出现（用户 2026-11-08 的明确要求）：把「决策必须落
+ * 台账」从模型的记忆里搬进每轮提醒。它的读者是模型，所以判据是「读了之后会
+ * 不会做对——先 ask 建档、再提问、答后 answer」，不是「人读着舒服」。
+ * 它不参与截断：预算先扣掉它，再分配给可牺牲的明细。
+ */
+const SUBMIT_DECISION_HINT =
+  '无待决策。需要用户裁决时：先 flow_decision ask（kind=choice|approval|input，问题里带 [D-xxx] 编号），用户答后再 flow_decision answer <id> --choice <选项>；不要在对话里直接问。'
+
+/** First turn (including fork/resume) tells the model where the full list lives. */
+const FIRST_TURN_HINT = '新会话第一步：运行 flow decision list --open 查看完整清单'
+
+/** Rows hidden by the row cap or by budget pressure are counted, never silently dropped. */
+function hiddenDecisionsHint(count) {
+  return `另有 ${count} 条决策，运行 flow decision list --open 查看全部`
+}
+
+/** Truncate an echo without pretending the tail is not missing. */
+function clipEcho(text, max) {
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text
+}
 
 /** One user-role reminder message; the fields match `MessageBase` + `role`. */
 function reminderMessage(session, turn, step, text) {
@@ -1659,17 +1692,51 @@ function decisionReminderLine(item) {
 }
 
 /**
- * The decision section of the per-turn reminder, or '' when nothing is open. The
- * first turn of a session lists the whole ledger; later turns cap the detail at
- * DECISION_REMIND_MAX rows and count the rest. Row order is core's and is never
- * re-sorted here.
+ * The current-task section (A/D) of the per-turn reminder, or null when the
+ * ledger cannot be read — then the whole reminder is skipped, because a
+ * fabricated "no unfinished tasks" would be worse than silence.
+ *
+ * `stageZh` comes from `buildStatusBlock`, whose only Chinese stage table is
+ * `lib/capture.mjs` → `lib/stage.mjs`'s STAGE_ZH. The reminder must never keep a
+ * second mapping: a renamed stage would silently stop matching.
  */
-function decisionReminderText(root, contract, session, turn) {
+function taskReminderSection(root, contract) {
   try {
-    if (hasStore(root) === false) return ''
-    if (isPlainObject(contract) === false) return ''
+    if (hasStore(root) === false) return null
     const c = requireCore()
-    if (typeof c.summarizeDecisions !== 'function') return ''
+    if (typeof c.listTasks !== 'function') return null
+    const block = buildStatusBlock(c, root, contract)
+    if (block.unfinished === 0 || block.stack.length === 0) {
+      return { lines: ['当前无未完成任务 ｜ 用户新说的每句话会自动成为任务'], extra: '' }
+    }
+    const top = block.stack[0]
+    const lines = [
+      `当前任务：${top.id} [${top.stageZh}] ${clip(top.title, 48)}`,
+      `未完成 ${block.unfinished} 条 ｜ 栈顶 ${REMINDER_STACK_ROWS} 条`,
+    ]
+    const extra =
+      block.unfinished > REMINDER_STACK_ROWS
+        ? `（另有 ${block.unfinished - REMINDER_STACK_ROWS} 条待处理）`
+        : ''
+    return { lines, extra }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The decision section (B), or null when nothing is open. Returns ROWS instead
+ * of text so the assembler can drop whole rows under budget pressure while
+ * always keeping the "how to answer" sentence. Row order is core's and is never
+ * re-sorted here. The first turn of a session lists the whole ledger; later
+ * turns cap the detail at DECISION_REMIND_MAX rows and count the rest.
+ */
+function decisionReminderSection(root, contract, session, turn) {
+  try {
+    if (hasStore(root) === false) return null
+    if (isPlainObject(contract) === false) return null
+    const c = requireCore()
+    if (typeof c.summarizeDecisions !== 'function') return null
     const firstTurn = Number.isInteger(turn) && turn === 1
     const info = { session, turn: Number.isInteger(turn) ? turn : null }
     if (firstTurn === false) info.limit = decisionRemindMax()
@@ -1677,35 +1744,85 @@ function decisionReminderText(root, contract, session, turn) {
     const items = isPlainObject(summary) && Array.isArray(summary.items) ? summary.items : []
     const counts = isPlainObject(summary) ? summary.counts : null
     const open = isPlainObject(counts) && typeof counts.open === 'number' ? counts.open : 0
-    if (open === 0 || items.length === 0) return ''
+    if (open === 0 || items.length === 0) return null
     const blocking = isPlainObject(counts) && typeof counts.blocking === 'number' ? counts.blocking : 0
-    const lines = [`【project-flow】有 ${open} 个待用户拍板的决策（阻塞 ${blocking}）：`]
-    for (const item of items) {
-      if (isPlainObject(item)) lines.push(decisionReminderLine(item))
-    }
-    const remaining = open - items.length
-    if (remaining > 0) lines.push(`还有 ${remaining} 条，运行 flow decision list --open 查看全部`)
-    lines.push('回答后当轮调用 flow_decision answer <id> --choice <选项 id>；不要按推荐自行决定。')
-    if (firstTurn) lines.push('新会话第一步：运行 flow decision list --open 查看完整清单')
-    return clip(lines.join('\n'), DECISION_REMINDER_CLIP)
+    const rows = items.filter((item) => isPlainObject(item)).map((item) => decisionReminderLine(item))
+    if (rows.length === 0) return null
+    return { open, blocking, rows, firstTurn }
   } catch {
-    return ''
+    return null
   }
 }
 
 /**
- * Per-turn fallback: on the first step of a turn, append ONE user reminder that
- * merges two independently gated sections — the open decisions (whatever the
- * heartbeat state is) and the missing `working` heartbeat. Both empty means no
- * message at all; otherwise a single message with a single text block carries
- * both, decision section first. `step` is 1-based in the loop; `0` is accepted
- * too so the hook survives a loop that counts differently.
+ * Assemble the single per-turn reminder (task-82; design agreed with exec-panel
+ * on 2026-11-08).
  *
- * `captureState` is the P1 capture queue (null when `config.capture === false`).
- * The pre-step listener owns the in-memory record call because the host may only
- * accept one waterfall listener per plugin in older environments (host2-tools
- * asserts exactly one `agent/pre-step` hook); it stays memory-only.
+ * Rule — **reserve first, never blind-clip the tail**:
+ * 1. the non-sacrificable parts are the command echo, the "how to answer /
+ *    how to submit" sentence and the "more decisions" pointer;
+ * 2. the rest is spent in priority order: A section (current task) → A's
+ *    "还有 N 条" line → B rows one by one;
+ * 3. under pressure, whole B rows are dropped from the END and counted in the
+ *    pointer, then A's extra line, then the whole A block. The text is never
+ *    sliced, because cutting the tail is exactly how the sentence the model
+ *    needs disappears while the message still looks complete.
+ *
+ * Assembly order is fixed: command echo (when any) → A → B. Exactly one
+ * `【project-flow】` prefix; when the command echo leads it already carries it.
  */
+function composeTurnReminder(root, contract, session, turn, commandText) {
+  const command = typeof commandText === 'string' && commandText !== '' ? clipEcho(commandText, COMMAND_ECHO_CLIP) : ''
+  const tasks = taskReminderSection(root, contract)
+  const decisions = decisionReminderSection(root, contract, session, turn)
+  if (tasks === null && decisions === null) return ''
+  const answerHint = decisions === null ? SUBMIT_DECISION_HINT : ANSWER_DECISION_HINT
+  const taskLines = tasks === null ? [] : tasks.lines.slice()
+  let taskExtra = tasks === null ? '' : tasks.extra
+  const rows = decisions === null ? [] : decisions.rows.slice()
+  const cappedHidden = decisions === null ? 0 : decisions.open - decisions.rows.length
+  let firstTurnHint = decisions !== null && decisions.firstTurn === true ? FIRST_TURN_HINT : ''
+
+  const render = () => {
+    const body = []
+    body.push(...taskLines)
+    if (taskExtra !== '') body.push(taskExtra)
+    if (decisions !== null) {
+      const hidden = cappedHidden + (decisions.rows.length - rows.length)
+      body.push(`待决策 ${decisions.open} 条${decisions.blocking > 0 ? `（阻塞 ${decisions.blocking}）` : ''}：`)
+      body.push(...rows)
+      body.push(answerHint)
+      if (firstTurnHint !== '') body.push(firstTurnHint)
+      if (hidden > 0) body.push(hiddenDecisionsHint(hidden))
+    } else {
+      body.push(answerHint)
+    }
+    if (body.length === 0) return command
+    const head = command === '' ? `【project-flow】${body[0]}` : command
+    const rest = command === '' ? body.slice(1) : body
+    return [head, ...rest].join('\n')
+  }
+
+  let text = render()
+  // Optional content is dropped in the documented order; the mandatory tail
+  // (answer/submit hint + pointer) is never touched.
+  while (text.length > REMINDER_LIMIT) {
+    if (rows.length > 0) {
+      rows.pop()
+    } else if (taskExtra !== '') {
+      taskExtra = ''
+    } else if (firstTurnHint !== '') {
+      firstTurnHint = ''
+    } else if (taskLines.length > 0) {
+      taskLines.length = 0
+    } else {
+      break
+    }
+    text = render()
+  }
+  return text
+}
+
 /**
  * One reminder line for the newest `/command` in this step's messages
  * (D-20261108-02). **Recognize only — never execute, never write the ledger.**
@@ -1735,7 +1852,23 @@ function commandReminderLine(ctx, warned, messages) {
   }
 }
 
-function registerHeartbeatReminder(ctx, captureState, settings) {
+/**
+ * Per-turn reminder (task-82): on the first step of a turn, append ONE user
+ * message whose content is the live current-task status plus the decision
+ * section — or, when no decision is open, the "how to submit one" sentence.
+ *
+ * The heartbeat section is gone on purpose: task-81 moved the heartbeat
+ * lifecycle into the plugin (`agent/created` / `agent/disposed`), so a session
+ * no longer has to be told to start or keep one. This hook now answers the two
+ * questions a session actually has to get right each turn: *what am I working
+ * on* and *what is waiting on the user*.
+ *
+ * `captureState` is the P1 capture queue (null when `config.capture === false`).
+ * The pre-step listener owns the in-memory record call because the host may only
+ * accept one waterfall listener per plugin in older environments (host2-tools
+ * asserts exactly one `agent/pre-step` hook); it stays memory-only.
+ */
+function registerTurnReminder(ctx, captureState, settings) {
   try {
     if (typeof ctx.on !== 'function') return
     // Unknown `/commands` warn once per mount (a typo must not spam every step).
@@ -1777,11 +1910,8 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
             )
           }
           const turn = Number.isInteger(payload.turn) ? payload.turn : null
-          const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
-          const heartbeatText =
-            heartbeatWorking(root, session, sessionIsLive(ctx, session)) === false ? HEARTBEAT_REMINDER_TEXT : ''
           const commandText = commandReminderLine(ctx, warnedCommands, payload.messages)
-          const text = [commandText, decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
+          const text = composeTurnReminder(root, decisionContractOf(root), session, turn, commandText)
           if (text === '') return decision
           const messages = Array.isArray(decision.messages) ? decision.messages.slice() : []
           messages.push(reminderMessage(session, payload.turn, step, text))
@@ -1797,9 +1927,9 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
           // A listener disposer must never break plugin unload.
         }
       }
-    }, 'project-flow: heartbeat reminder')
+    }, 'project-flow: turn reminder')
   } catch (error) {
-    warnMount(`heartbeat reminder unavailable: ${brief(error)}`, ctx)
+    warnMount(`turn reminder unavailable: ${brief(error)}`, ctx)
   }
 }
 
@@ -1990,11 +2120,15 @@ function captureTurnStop(ctx, state, payload) {
   })
 }
 
+/** Honest placeholder goal for a heartbeat opened on an empty task stack. */
+const EMPTY_STACK_GOAL = '（台账暂无未完成任务）'
+
 /**
- * Serial `agent/created` duty: open this session's heartbeat from the **stack
- * top** so it is never an empty shell (an empty heartbeat would defeat the write
- * gate). No unfinished task means no heartbeat at all — one mount warning, no
- * fallback, no invented goal.
+ * Serial `agent/created` duty: open this session's heartbeat. The lifecycle is
+ * the plugin's (a session cannot start one), so creation must be **total**: the
+ * stack top supplies goal/task/claims when it exists, and an empty stack opens a
+ * heartbeat with a placeholder goal and `task: null` — a heartbeat that never
+ * opens is a dead end for the session (see the comment inside), not a warning.
  */
 function captureAutoStart(ctx, payload) {
   const target = captureTarget(ctx, payload)
@@ -2003,23 +2137,26 @@ function captureAutoStart(ctx, payload) {
   if (c === null || typeof c.loadContract !== 'function' || typeof c.startHeartbeat !== 'function') return
   const loaded = c.loadContract(target.root)
   if (isPlainObject(loaded) === false) return
-  const top = stackTop(c, target.root, loaded.contract)
-  if (top === null) {
-    warnMount(
-      'heartbeat auto-start skipped: the task stack is empty (no unfinished task), so no heartbeat was opened — create a task first',
-      ctx,
-    )
-    return
-  }
   // `agent/created` can fire more than once for one session (resume/clear); an
   // already-working heartbeat is left alone instead of having its turn bumped.
   if (heartbeatWorking(target.root, target.session, sessionIsLive(ctx, target.session)) === true) return
-  c.startHeartbeat(target.root, loaded.contract, {
-    session: target.session,
-    goal: typeof top.title === 'string' ? top.title : '',
-    task: typeof top.id === 'string' ? top.id : '',
-    claims: captureClaims(top),
-  })
+  const top = stackTop(c, target.root, loaded.contract)
+  // Creation is unconditional. Since the session surface lost `start` (the
+  // plugin owns the lifecycle), a skipped auto-start has **no recovery path**:
+  // the write gate denies edits, and `update` throws `not-found` on a missing
+  // record — the reminder's advice would point at a dead end. An empty stack
+  // therefore opens a heartbeat with an honest placeholder goal, `task: null`,
+  // and **no invented task** (`createTask: false`); the first captured task
+  // repoints it on `agent/turn-stopping`.
+  const input = { session: target.session, createTask: false }
+  if (top !== null) {
+    input.goal = typeof top.title === 'string' ? top.title : ''
+    input.task = typeof top.id === 'string' ? top.id : ''
+    input.claims = captureClaims(top)
+  } else {
+    input.goal = EMPTY_STACK_GOAL
+  }
+  c.startHeartbeat(target.root, loaded.contract, input)
 }
 
 /**
@@ -2058,25 +2195,31 @@ function captureAutoEnd(ctx, payload) {
   }
 }
 
-/** Register the `agent/created` auto-start through `ctx.effect` (no-op without the event API). */
+/**
+ * Register the `agent/created` hooks through `ctx.effect` (no-op without the
+ * event API).
+ *
+ * The hook stays registered even with `capture:false`: heartbeat creation is the
+ * plugin's lifecycle duty and must not depend on the capture flag (the close
+ * hook is unconditional for the same reason). The capture/enforce duties inside
+ * it keep the old gate — with `capture:false` they do not run, and §5.2 ① still
+ * falls back to the pre-step hook.
+ */
 function registerAgentCreated(ctx, captureState, settings) {
   const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
-  // Capture owns this hook; with `capture:false` the listener is not registered
-  // at all (P1 rollback shape) and §5.2 ① falls back to the pre-step hook.
-  if (captureState === null) return
   try {
     if (typeof ctx.on !== 'function') return
     ctx.effect(() => {
       const dispose = ctx.on('agent/created', (payload) => {
-        // One hook for two independent duties: each has its own try/catch, and
+        // One hook for three duties: each has its own try/catch, and
         // `agent/created` is serial (a throw would fail session creation).
-        if (captureState !== null) {
-          try {
-            captureAutoStart(ctx, payload)
-          } catch (error) {
-            warnMount(`capture heartbeat auto-start skipped: ${brief(error)}`, ctx)
-          }
+        try {
+          captureAutoStart(ctx, payload)
+        } catch (error) {
+          warnMount(`heartbeat auto-start skipped: ${brief(error)}`, ctx)
         }
+        // P1 rollback shape: `capture:false` keeps the REST of the hook inert.
+        if (captureState === null) return
         if (enforce) {
           try {
             restrictMainSessionTools(ctx, payload === null || payload === undefined ? undefined : payload.agent, settings.restrictedAgents, settings.boardMode)
@@ -3094,9 +3237,9 @@ export function apply(ctx, config) {
     warnMount(`system prompt: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerHeartbeatReminder(ctx, captureState, settings)
+    registerTurnReminder(ctx, captureState, settings)
   } catch (error) {
-    warnMount(`heartbeat reminder: registration failed: ${brief(error)}`, ctx)
+    warnMount(`turn reminder: registration failed: ${brief(error)}`, ctx)
   }
   try {
     registerHeartbeatKeepalive(ctx, captureState)

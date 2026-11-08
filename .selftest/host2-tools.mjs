@@ -616,7 +616,7 @@ const hbRootExec = { agent: hbRootAgent }
 
 const reminded = await runPreStep(hbRootAgent)
 check(
-  'pre-step: root session without heartbeat is reminded',
+  'pre-step: root session is reminded (task/decision section)',
   reminded !== null && Array.isArray(reminded.messages) && reminded.messages.length === 1 && reminded.messages[0].role === 'user',
   JSON.stringify(reminded),
 )
@@ -668,8 +668,15 @@ const hbFile = join(storeRoot, '.agents/heartbeat', `${hbRootAgent.id}.json`)
 check('flow_heartbeat start: file written', existsSync(hbFile))
 const afterStart = await runPreStep(hbRootAgent)
 check(
-  'pre-step: working heartbeat needs no reminder',
-  afterStart !== null && (afterStart.messages === undefined || afterStart.messages.length === 0),
+  'pre-step: working heartbeat still gets the turn reminder (task/decision section)',
+  afterStart !== null && Array.isArray(afterStart.messages) && afterStart.messages.length === 1,
+  JSON.stringify(afterStart),
+)
+check(
+  'pre-step: the heartbeat prompt is gone from the reminder (task-82)',
+  reminderText(afterStart).includes('working 心跳') === false &&
+    reminderText(afterStart).includes('flow_heartbeat start') === false,
+  reminderText(afterStart),
 )
 check('guard: working heartbeat allows edit', guards[0]?.({ name: 'edit', agent: hbRootAgent }) === undefined)
 const hbList = await heartbeatTool.execute({ action: 'list' }, hbRootExec)
@@ -1246,11 +1253,13 @@ const subDecisionShow = await decisionTool.execute(
 )
 eq('flow_decision show: subagent allowed', subDecisionShow.decision?.id, askedApproval.decision?.id)
 
-// ------------------------ merged per-turn reminder: decisions + heartbeat
+// ------------------------ per-turn reminder: current task + decisions
 //
-// H7-H12: ONE message, ONE text block, the decision section first and the
-// heartbeat section second. Fixtures go through lib/core.mjs so asked_turn and
-// asked_at are exact; ordering itself is core's job and must not be redone here.
+// H7-H12: ONE message, ONE text block, the current-task section first and the
+// decision section second. The heartbeat section was removed by task-82 (its
+// lifecycle belongs to the plugin now). Fixtures go through lib/core.mjs so
+// asked_turn and asked_at are exact; ordering itself is core's job and must not
+// be redone here.
 
 let reminderSeq = 0
 
@@ -1282,10 +1291,14 @@ const mergedReminder = await runPreStep(reminderAgent7)
 const mergedText = reminderText(mergedReminder)
 eq('H7 merged reminder: one message', Array.isArray(mergedReminder?.messages) ? mergedReminder.messages.length : -1, 1)
 eq('H7 merged reminder: one text block', Array.isArray(mergedReminder?.messages?.[0]?.content) ? mergedReminder.messages[0].content.length : -1, 1)
-for (const needle of ['【project-flow】', reminderItem7.id, '待用户拍板', 'working 心跳', '不要按推荐自行决定']) {
+for (const needle of ['【project-flow】', reminderItem7.id, '待决策', '当前无未完成任务', '不要按推荐自行决定']) {
   check(`H7 merged reminder: text carries ${needle}`, mergedText.includes(needle), mergedText)
 }
-check('H7 merged reminder: decision section comes first', mergedText.indexOf('待用户拍板') < mergedText.indexOf('working 心跳'), mergedText)
+check(
+  'H7 merged reminder: the current-task section comes first',
+  mergedText.indexOf('当前无未完成任务') < mergedText.indexOf('待决策'),
+  mergedText,
+)
 check('H7 merged reminder: first turn lists the whole ledger', mergedText.includes('新会话第一步'), mergedText)
 
 // H8: working heartbeat + open decision → the decision section still appears,
@@ -1298,16 +1311,17 @@ core.startHeartbeat(reminderRoot7, core.loadContract(reminderRoot7).contract, {
 const workingReminder = await runPreStep(reminderAgent7, 2)
 const workingText = reminderText(workingReminder)
 eq('H8 working heartbeat: one message', Array.isArray(workingReminder?.messages) ? workingReminder.messages.length : -1, 1)
-check('H8 working heartbeat: decision section kept', workingText.includes(reminderItem7.id) && workingText.includes('待用户拍板'), workingText)
+check('H8 working heartbeat: decision section kept', workingText.includes(reminderItem7.id) && workingText.includes('待决策'), workingText)
 check('H8 working heartbeat: heartbeat section absent', workingText.includes('working 心跳') === false, workingText)
 
-// H10: no heartbeat and no open decision → the heartbeat section alone.
-const reminderRoot10 = reminderRoot('rem-heartbeat-only')
+// H10: no open decision → the C section (how to submit) must appear.
+const reminderRoot10 = reminderRoot('rem-no-decision')
 const reminderAgent10 = mockAgent('session-dec-rem10', reminderRoot10)
 registerRootAgent(reminderAgent10)
-const heartbeatOnly = reminderText(await runPreStep(reminderAgent10))
-check('H10 heartbeat only: one heartbeat section', heartbeatOnly.includes('本轮还没有 working 心跳'), JSON.stringify(heartbeatOnly))
-check('H10 heartbeat only: no decision section', heartbeatOnly.includes('待用户拍板') === false, JSON.stringify(heartbeatOnly))
+const noDecisionText = reminderText(await runPreStep(reminderAgent10))
+check('H10 no decision: the submit hint appears', noDecisionText.includes('无待决策') && noDecisionText.includes('flow_decision ask'), JSON.stringify(noDecisionText))
+check('H10 no decision: no decision section', noDecisionText.includes('待决策 1 条') === false, JSON.stringify(noDecisionText))
+check('H10 no decision: no heartbeat prompt', noDecisionText.includes('working 心跳') === false, JSON.stringify(noDecisionText))
 
 // H11: the first turn lists every open item, later turns cap at
 // DECISION_REMIND_MAX and say how many are hidden.
@@ -1328,7 +1342,7 @@ eq(
   fourIds.filter((id) => limitedTurnText.includes(id)).length,
   3,
 )
-check('H11 limited turn: remaining hint', limitedTurnText.includes('还有 1 条'), limitedTurnText)
+check('H11 limited turn: remaining hint', limitedTurnText.includes('另有 1 条决策'), limitedTurnText)
 
 // H12: an item asked by this session 3 turns ago is escalated, carries ⚠ and is
 // ordered first by core.
