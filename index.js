@@ -1376,6 +1376,34 @@ function agentRoot(ctx, agent) {
 }
 
 /**
+ * Whether the session's heartbeat file exists and is still **open**
+ * (`working`/`idle`) — the precondition for closing it on `agent/disposed`.
+ *
+ * Separate from {@link heartbeatWorking} on purpose: that one answers "is the
+ * session actively working" (a `working` record + liveness evidence) and is used
+ * by the auto-start skip rule; closing must also cover an `idle` session. Every
+ * failure answers `false` (do not touch what we cannot prove is open); the
+ * caller never throws.
+ */
+function heartbeatOpen(root, session) {
+  if (typeof root !== 'string' || root.length === 0) return false
+  if (hasStore(root) === false) return false
+  const c = coreModule()
+  if (c === null || typeof c.heartbeatStatus !== 'function') return false
+  const id = usableSessionId(session)
+  if (id === '') return false
+  try {
+    const loaded = c.loadContract(root)
+    const status = c.heartbeatStatus(root, loaded.contract, id)
+    const record = status !== null && typeof status === 'object' ? status.record : null
+    if (record === null || typeof record !== 'object') return false
+    return record.status === 'working' || record.status === 'idle'
+  } catch {
+    return false
+  }
+}
+
+/**
  * Whether the session's heartbeat is `working`: `true` / `false`, or `null`
  * when it cannot be decided (no store, no core, unsafe session id, broken
  * record). Hooks treat `null` as "do not interfere".
@@ -1994,6 +2022,42 @@ function captureAutoStart(ctx, payload) {
   })
 }
 
+/**
+ * `agent/disposed` duty: close this session's heartbeat.
+ *
+ * Lifecycle belongs to the plugin: only it sees `agent/created` (open) and
+ * `agent/disposed` (close). A session that could close its own heartbeat could
+ * also close one that is still alive — so the session-facing tool keeps only
+ * `update`, while the CLI keeps `start`/`end` as the **human** escape hatch.
+ *
+ * This runs on a teardown path, so it must never throw and must never warn:
+ * a heartbeat that is missing, already `done`, whose root cannot be resolved or
+ * whose ledger is locked is **silently skipped**. Turning session disposal into
+ * a failure — or into log noise nobody can act on — is worse than a stale
+ * record (the 6 h staleness rule still reaps it).
+ */
+function captureAutoEnd(ctx, payload) {
+  try {
+    const target = captureTarget(ctx, payload)
+    if (target === null) return
+    const c = coreModule()
+    if (c === null || typeof c.loadContract !== 'function' || typeof c.endHeartbeat !== 'function') return
+    const loaded = c.loadContract(target.root)
+    if (isPlainObject(loaded) === false) return
+    // Idempotent: only an open heartbeat is closed. `endHeartbeat` throws
+    // `not-found` for a missing file, and would rewrite `ended_at` + append the
+    // note again for an already-closed one (resume/clear can dispose twice).
+    if (heartbeatOpen(target.root, target.session) !== true) return
+    c.endHeartbeat(target.root, loaded.contract, {
+      session: target.session,
+      status: 'done',
+      note: '会话结束（插件自动关闭）',
+    })
+  } catch {
+    // See the doc comment: disposal has no recipient for an error.
+  }
+}
+
 /** Register the `agent/created` auto-start through `ctx.effect` (no-op without the event API). */
 function registerAgentCreated(ctx, captureState, settings) {
   const enforce = settings !== null && typeof settings === 'object' && settings.enforce === true
@@ -2032,6 +2096,41 @@ function registerAgentCreated(ctx, captureState, settings) {
     }, 'project-flow: agent created hooks')
   } catch (error) {
     warnMount(`capture/enforce: registration failed: ${brief(error)}`, ctx)
+  }
+}
+
+/**
+ * Register the `agent/disposed` auto-close through `ctx.effect`.
+ *
+ * Registered **independently of `capture`**: the flag governs utterance capture,
+ * not ledger hygiene. Gating the close on it would re-open the ghost defect in
+ * the rollback shape (a heartbeat opened before the flag flipped would never be
+ * closed). Subagents are excluded by `captureTarget` — they never get a heartbeat.
+ */
+function registerAgentDisposed(ctx) {
+  try {
+    if (typeof ctx.on !== 'function') return
+    ctx.effect(() => {
+      const dispose = ctx.on('agent/disposed', (payload) => {
+        // Teardown path: the handler is total (captureAutoEnd never throws), and
+        // even a defect in it must not reach the host's disposal sequence.
+        try {
+          captureAutoEnd(ctx, payload)
+        } catch {
+          // contained by design
+        }
+      })
+      return () => {
+        try {
+          if (typeof dispose === 'function') dispose()
+        } catch {
+          // A listener disposer must never break plugin unload.
+        }
+      }
+    }, 'project-flow: agent disposed hook')
+  } catch (error) {
+    // A missing hook is the ghost-heartbeat leak: say so once at mount time.
+    warnMount(`capture heartbeat auto-end: registration failed: ${brief(error)}`, ctx)
   }
 }
 
@@ -3019,4 +3118,6 @@ export function apply(ctx, config) {
   } catch (error) {
     warnMount(`capture/enforce: registration failed: ${brief(error)}`, ctx)
   }
+  // Lifecycle close is independent of `capture`: see registerAgentDisposed.
+  registerAgentDisposed(ctx)
 }
