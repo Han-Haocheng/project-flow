@@ -1,30 +1,31 @@
-// task-77 · D-20261108-01 = degrade：控制词记录但降级。
+// task-77/78 · D-20261108-02 = command：聊天=任务，`/命令`=非任务。
 //
-// 安全方向是这张卡的全部：真需求被误判成 control 时记录仍在（只是不进栈），
-// 而控制词被误判成 utterance 只是多一条噪音。**唯一不可接受的是把消息丢掉**，
-// 所以分类默认 utterance，且只做整串相等匹配（绝不做包含匹配）。
+// 判据是结构信号（以 `/` 开头，`trimStart()` 之后），不是词表。D-01 的 `degrade` 已被
+// D-02 取代：`control` 只作为**遗留值**留在 core 校验与面板折叠里，不再产生新记录。
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { addTask, initProject, listTasks, loadContract } from '../lib/core.mjs'
+import { addTask, initProject, listTasks, loadContract, updateTask } from '../lib/core.mjs'
 import { buildSnapshot } from '../lib/state-snapshot.mjs'
 import { buildStatusBlock } from '../lib/capture.mjs'
+import { COMMANDS, commandNameOf, parseCommand } from '../lib/commands.mjs'
+import { apply } from '../index.js'
 import {
-  CONTROL_WORDS,
-  classifyUtterance,
+  COMMAND_PREFIX,
   createCaptureState,
   flushCapture,
   recordPreStep,
+  textOfContent,
 } from '../lib/capture.mjs'
 
 const TEMP_ROOTS = []
 
 function freshProject(label) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), `pf-t77-control-${label}-`))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), `pf-t78-command-${label}-`))
   TEMP_ROOTS.push(root)
-  initProject(root, { name: `t77-${label}`, noGates: true })
+  initProject(root, { name: `t78-${label}`, noGates: true })
   return { root, contract: loadContract(root).contract }
 }
 
@@ -42,73 +43,78 @@ const message = (text) => ({
   timestamp: new Date().toISOString(),
 })
 
-/** Run the real capture path for one sentence and return the created record. */
+/** Run the real capture path for one sentence and return the created record (if any). */
 function captureOne(root, contract, text) {
   const state = createCaptureState()
   recordPreStep(state, { root, session: 's', messages: [message(text)] })
-  const result = flushCapture(state, { core: { addTask, listTasks, updateTask: updateTaskOf() }, root, contract, session: 's' })
-  return { task: result.created[0], state }
+  const result = flushCapture(state, { core: { addTask, listTasks, updateTask }, root, contract, session: 's' })
+  return { task: result.created[0] ?? null, state }
 }
 
-function updateTaskOf() {
-  // The real core updater (imported lazily to keep this helper next to its use).
-  return coreUpdateTask
-}
-let coreUpdateTask = null
-const coreReady = import('../lib/core.mjs').then((core) => {
-  coreUpdateTask = core.updateTask
+// ------------------------------------------------------- ① `/` 命令不捕获
+
+test('①「/建议 …」不产生任务，excludedBy="command"', () => {
+  const { root, contract } = freshProject('advice')
+  const { task, state } = captureOne(root, contract, '/建议 这样做更好')
+  assert.equal(task, null, 'a command must never become a task')
+  assert.equal(listTasks(root, contract).length, 0)
+  assert.equal(state.lastExcludedBy, 'command')
 })
-await coreReady
 
-// ---------------------------------------------------------------- 分类本身
-
-test('① 控制词：整串（含标点/全角/大小写）→ control', () => {
-  for (const text of ['继续', '  继续。 ', '继续！', 'OK', 'ok', '好的', '嗯', '收到', '可以', '暂停', '停']) {
-    assert.equal(classifyUtterance(text), 'control', `expected control for ${JSON.stringify(text)}`)
+test('② 六类已知命令都不产生任务（/继续 /暂停 /开始 /决策 /状态 /建议）', () => {
+  const { root, contract } = freshProject('commands')
+  for (const text of ['/继续', '/暂停', '/开始', '/决策 D-1 modify', '/状态', '/建议 先做 A']) {
+    const { task } = captureOne(root, contract, text)
+    assert.equal(task, null, `command must not become a task: ${text}`)
   }
+  assert.equal(listTasks(root, contract).length, 0)
 })
 
-test('② 包含控制词的真句子 → utterance（本卡最关键的反向约束）', () => {
-  for (const text of [
-    '继续修 P3b',
-    '好，那就按这个方案',
-    '暂停一下，先看这个',
-    '可以把这个改成降级吗',
-    '收到，请继续',
-    '好的我们开始',
-  ]) {
-    assert.equal(classifyUtterance(text), 'utterance', `a real request must stay utterance: ${JSON.stringify(text)}`)
-  }
-  // 白名单保持小：每多一个词，多一分误降级风险。
-  assert.ok(CONTROL_WORDS.length <= 12, `CONTROL_WORDS grew to ${CONTROL_WORDS.length}; keep it small`)
-  assert.ok(CONTROL_WORDS.every((word) => word === word.trim().toLowerCase()), 'entries are normalized lowercase')
+test('③ `"/"` 不在开头 → 仍是任务（防误伤）', () => {
+  const { root, contract } = freshProject('no-false-positive')
+  const { task } = captureOne(root, contract, '这条以 / 开头？')
+  assert.ok(task, 'only a leading slash makes it a command')
+  assert.equal(listTasks(root, contract)[0].title, '这条以 / 开头？')
 })
 
-// ---------------------------------------------------------------- 捕获落盘
+test('④ `" /建议"`（前导空格）→ 仍不产生任务（trimStart 之后再判）', () => {
+  const { root, contract } = freshProject('leading-space')
+  const { task } = captureOne(root, contract, ' /建议 前导空格')
+  assert.equal(task, null)
+  assert.equal(listTasks(root, contract).length, 0)
+})
 
-test('③ 捕获「继续」→ source.kind=control，且 unfinished/stack 都不含它', async () => {
-  const { root, contract } = freshProject('control')
+test('⑤ `"继续"`（纯聊天，无 /）→ 产生任务且 kind="utterance"（聊天都是任务）', () => {
+  const { root, contract } = freshProject('chat-word')
   const { task } = captureOne(root, contract, '继续')
-  assert.ok(task, 'the control capture is recorded (never dropped)')
-  const stored = listTasks(root, contract).find((entry) => entry.id === task.id)
-  assert.equal(stored.source.kind, 'control')
-  const block = buildStatusBlock({ listTasks }, root, contract)
-  assert.equal(block.unfinished, 0, 'a control word must not count as unfinished')
-  assert.equal(block.stack.length, 0, 'a control word must not occupy the stack')
-})
-
-test('④ 捕获「帮我修 P3b」→ source.kind=utterance，在 unfinished/stack 里', async () => {
-  const { root, contract } = freshProject('utterance')
-  const { task } = captureOne(root, contract, '帮我修 P3b')
-  const stored = listTasks(root, contract).find((entry) => entry.id === task.id)
+  assert.ok(task, 'D-02: plain chat stays a task')
+  const stored = listTasks(root, contract)[0]
   assert.equal(stored.source.kind, 'utterance')
   const block = buildStatusBlock({ listTasks }, root, contract)
   assert.equal(block.unfinished, 1)
   assert.ok(block.stack.some((row) => row.id === task.id))
 })
 
-test('⑤ source.kind 非法值 → invalid，文案列出两个合法值', () => {
-  const { root, contract } = freshProject('invalid-kind')
+test('⑥ 遗留兼容：存量 kind="control" 仍能过校验，仍被阶段桶跳过并计入 tasks.control', async () => {
+  const { root, contract } = freshProject('legacy-control')
+  addTask(root, contract, {
+    type: 'chore',
+    title: '继续',
+    source: { kind: 'control', key: 'legacy-1', at: '2026-11-08T09:00:00+08:00', text: '继续' },
+  })
+  const real = addTask(root, contract, { type: 'feat', title: '帮我修 P3b', stage: 'queued-analysis' })
+  const snap = await buildSnapshot({ root, realRoot: root, entry: { path: root, name: path.basename(root) }, hostWarnings: [] })
+  const tasks = snap.tasks
+  assert.equal(tasks.control.count, 1, 'a legacy control record still folds')
+  assert.equal(tasks.stages.created.length, 0, 'legacy control records stay out of the buckets')
+  assert.equal(tasks.stages['queued-analysis'][0].id, real.id)
+  const bucketSum = Object.values(tasks.stageCounts).reduce((total, value) => total + value, 0)
+  assert.equal(bucketSum + tasks.control.count, tasks.total)
+  assert.equal(buildStatusBlock({ listTasks }, root, contract).unfinished, 1, 'only the real task counts')
+})
+
+test('⑦ source.kind 非法值 → invalid；control 仍是合法遗留值', () => {
+  const { root, contract } = freshProject('kind-validation')
   assert.throws(
     () =>
       addTask(root, contract, {
@@ -116,29 +122,80 @@ test('⑤ source.kind 非法值 → invalid，文案列出两个合法值', () =
         title: 'x',
         source: { kind: 'noise', key: 'k', at: '2026-11-08T09:00:00+08:00', text: 'x' },
       }),
-    (error) =>
-      error.code === 'invalid' &&
-      error.message.includes("'utterance'") &&
-      error.message.includes("'control'")
+    (error) => error.code === 'invalid' && error.message.includes("'utterance'") && error.message.includes("'control'")
   )
+  assert.equal(COMMAND_PREFIX, '/')
 })
 
-// ------------------------------------------------- 面板投影：control 单独成行
+// -------------------------------------------- ⑧ 命令解析（只识别，不执行）
 
-test('⑥ tasks.control 计数/ids 完整，且守恒：阶段桶 + control == 总数', async () => {
-  const { root, contract } = freshProject('projection')
-  addTask(root, contract, { type: 'chore', title: '继续', source: { kind: 'control', key: 'k1', at: '2026-11-08T09:00:00+08:00', text: '继续' } })
-  addTask(root, contract, { type: 'chore', title: '好的', source: { kind: 'control', key: 'k2', at: '2026-11-08T09:01:00+08:00', text: '好的' } })
-  const real = addTask(root, contract, { type: 'feat', title: '帮我修 P3b', stage: 'queued-analysis' })
+test('⑧ parseCommand 表驱动：六个已知命令 → {name,rest}；未知/无前缀/null；前导空格可识别', () => {
+  assert.deepEqual([...COMMANDS], ['建议', '继续', '暂停', '开始', '决策', '状态'])
+  assert.deepEqual(parseCommand('/建议 这样做更好'), { name: '建议', rest: '这样做更好' })
+  assert.deepEqual(parseCommand('/继续'), { name: '继续', rest: '' })
+  assert.deepEqual(parseCommand(' /决策 D-1 modify'), { name: '决策', rest: 'D-1 modify' })
+  assert.deepEqual(parseCommand('/状态'), { name: '状态', rest: '' })
+  assert.equal(parseCommand('/foo'), null, 'unknown command is not parsed')
+  assert.equal(parseCommand('/'), null)
+  assert.equal(parseCommand('这条以 / 开头？'), null)
+  assert.equal(parseCommand(''), null)
+  assert.equal(commandNameOf('/foo bar'), 'foo')
+  assert.equal(commandNameOf('no slash'), '')
+})
 
-  const snap = await buildSnapshot({ root, realRoot: root, entry: { path: root, name: path.basename(root) }, hostWarnings: [] })
-  const tasks = snap.tasks
-  assert.equal(tasks.control.count, 2)
-  assert.equal(tasks.control.ids.length, 2)
-  assert.equal(tasks.stages.created.length, 0, 'control tasks are not in the created bucket')
-  assert.equal(tasks.stages['queued-analysis'].length, 1)
-  assert.equal(tasks.stages['queued-analysis'][0].id, real.id)
-  const bucketSum = Object.values(tasks.stageCounts).reduce((total, value) => total + value, 0)
-  assert.equal(bucketSum + tasks.control.count, tasks.total, 'stage buckets + control must conserve the total')
-  assert.equal(tasks.control.ids.includes(real.id), false)
+test('⑨ reminder 注入命令行（不写台账）；未知命令 warn 一次且不重复', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-t78-reminder-'))
+  TEMP_ROOTS.push(root)
+  initProject(root, { name: 't78-reminder', noGates: true })
+  const contract = loadContract(root).contract
+
+  const handlers = new Map()
+  const warns = []
+  const effects = []
+  const tools = { register: () => () => {}, guard: () => () => {}, restrict: () => () => {}, get: () => undefined }
+  const main = { id: 'session-cmd', session: { cwd: root, header: { origin: 'main' } }, ctx: { get: () => tools } }
+  const ctx = {
+    get(name) {
+      if (name === 'tools') return tools
+      if (name === 'agents') return { roots: () => [main], list: () => [main], get: () => undefined }
+      if (name === 'workingDirectory') return { get: () => root }
+      if (name === 'webServer') return { register: () => () => {}, getOrigin: () => 'http://127.0.0.1:0' }
+      return undefined
+    },
+    effect(fn) {
+      const dispose = fn()
+      if (typeof dispose === 'function') effects.push(dispose)
+      return () => {}
+    },
+    on(name, handler) {
+      const set = handlers.get(name) ?? new Set()
+      set.add(handler)
+      handlers.set(name, set)
+      return () => set.delete(handler)
+    },
+    logger: { warn: (line) => warns.push(String(line)) },
+  }
+  apply(ctx, {})
+  const preStep = async (text, step = 0) => {
+    const listener = [...(handlers.get('agent/pre-step') ?? [])][0]
+    assert.ok(listener, 'the reminder hook must be registered')
+    return listener(
+      { agent: main, messages: [message(text)], turn: 1, step, signal: { aborted: false } },
+      async () => ({ kind: 'enter', messages: [] }),
+    )
+  }
+
+  // 已知命令 → 提醒里出现一行，但台账零写入。
+  const decision = await preStep('/建议 这样做更好')
+  const reminder = (decision.messages || []).map((entry) => textOfContent(entry.content)).join('\n')
+  assert.ok(reminder.includes('【project-flow】收到命令 /建议：这样做更好'), reminder)
+  assert.equal(listTasks(root, contract).length, 0, 'a command never writes the ledger')
+
+  // 未知命令 → 不注入、warn 一次；重复 step 不重复 warn。
+  const unknown = await preStep('/foo bar')
+  const unknownText = (unknown.messages || []).map((entry) => textOfContent(entry.content)).join('\n')
+  assert.ok(!unknownText.includes('收到命令'), 'an unknown command gets no reminder line')
+  assert.equal(warns.filter((line) => line.includes('unknown command /foo')).length, 1)
+  await preStep('/foo again')
+  assert.equal(warns.filter((line) => line.includes('unknown command /foo')).length, 1, 'warn once per mount')
 })

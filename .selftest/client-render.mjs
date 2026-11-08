@@ -2186,7 +2186,7 @@ check('TasksCard: control-word captures fold into one muted line (task-77)', () 
   const card = renderWithState(probe.TasksCard, { tasks, t, now: NOW }, { reset: true });
   const line = collect(card, 'project-flow-controlFold')[0];
   assert.ok(line, 'control captures need their folded line');
-  assert.equal(textOf(line), '控制词 2 条（不参与队列）');
+  assert.equal(textOf(line), '历史控制词 2 条（遗留，不再新增）');
   assert.equal(collect(card, 'project-flow-taskRow').length, 1, 'control rows are not rendered as tasks');
 
   // count 0 (or absent) hides the line entirely.
@@ -2198,7 +2198,7 @@ check('TasksCard: control-word captures fold into one muted line (task-77)', () 
     { tasks: probe.normalize({ tasks: { total: 2, counts: { active: 1 }, active: [{ id: 'T-2' }], control: { count: 1, ids: ['T-10'] } } }).tasks, t: tEn, now: NOW },
     { reset: true }
   );
-  assert.equal(textOf(collect(english, 'project-flow-controlFold')[0]), 'Control words: 1 (not queued)');
+  assert.equal(textOf(collect(english, 'project-flow-controlFold')[0]), 'Legacy control words: 1 (no longer recorded)');
 });
 
 check('TasksCard: the team line renders only when the board was readable (task-73)', () => {

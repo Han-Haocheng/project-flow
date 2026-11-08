@@ -46,6 +46,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
 | `lib/tools/subtasks.mjs` | P4 `flow_subtask` 工具：`add`（子任务直接落 `queued-analysis`）/ `update`（仅 notes+stage，走 `assertTransition`）/ `remove`（**软关闭**：`stage=done` + `notes` 追加 `[removed]`，不物理删除）；写入一律走 core 的 `addTask`/`updateTask` | index.js |
+| `lib/commands.mjs` | D-02 命令解析（`建议/继续/暂停/开始/决策/状态`）：**只识别、不执行**；capture 对 `/` 前缀不入账，reminder 只注入一行给模型看 | `index.js`（reminder） |
 | `lib/veto.mjs` | P4 分析期否决：`vetoSubtask`（会话自决、不建决策）/ `vetoTask`（建 modify\|delete 决策、任务停在 analyzing）/ `applyVetoAnswer`（modify 回 queued-analysis，delete 到 done）；**不碰团队板** | `index.js`（`flow_veto`） |
 | `lib/team-sync.mjs` | P3a **只读**团队板对账：`readTeamBoard(ctx, agent)`（真实宿主 API 以 `caller` 为授权凭据）与 `reconcile`（matched/missing/orphaned，零写入）；**不映射** `TeamTaskView.status` 与九阶段 | `index.js`（工具/面板读路径） |
 
@@ -1154,19 +1155,22 @@ capture: {
 `skipped` 的取值：turn-stopping 的 `no-target` / `no-core` / `no-contract` /
 `nothing-pending` / `flush-failed` / `ok`；pre-step 的 `no-messages`（payload 空）/
 `filtered-out`（有消息但全被排除规则滤掉）/ `queued-n`（入队成功）/ `pre-step-failed`。
+`excludedBy` 的取值：`sentinel|prefix|peer|stale|dup|command|null`（`command` 见下方 `/` 命令契约）。
 
-**控制词降级（D-20261108-01 = degrade）**：`CONTROL_WORDS` 是**小清单**（继续/继续吧/暂停/停/好/
-好的/可以/嗯/收到/ok/okay）。`classifyUtterance(text)` 先归一化（trim、去首尾标点/引号/空白、
-全角字母数字转半角、小写），再**只做整串相等匹配**——`"继续修 P3b"` / `"好，那就按这个方案"` /
-`"暂停一下，先看这个"` 必须仍是 `utterance`。默认返回 `'utterance'`（安全侧）。
+**聊天=任务，`/命令`=非任务（D-20261108-02 = command；取代 D-01 的 degrade）**：
 
-命中 control 的捕获：`source.kind='control'`，**记录仍在**（`flow task list` 可见），但
-`isUnfinished` 返回 false → 状态块 `stack` / `unfinished` 自动排除（二者同源，不另写过滤）；
-面板用 `tasks.control = {count, ids}` 折叠成一行「控制词 N 条（不参与队列）」，**阶段桶与计数都不含
-control**，任务行仍是 14 键（不加第 15 键）。
-
-**安全方向**：真需求被误判 control → 记录仍在、只是不进栈（可接受）；控制词被误判 utterance →
-多一条噪音（可接受）；**白名单直接丢弃消息 → 绝对不可**。
+- **判据是结构信号**：`text.trimStart().startsWith('/')`（`trimStart()` 之后判，前导空格也算）。命中 →
+  **完全不捕获**（不入队、不落盘），`excludedBy = 'command'`（第六类）。
+- **命令本身不进台账、不占面板任何位置**——不要在面板里找"命令去哪了"，答案是"哪都没有"。
+- **命令识别层**（`lib/commands.mjs`）只解析、**绝不执行**：已知命令 `建议/继续/暂停/开始/决策/状态`
+  → `{name, rest}`；每步 reminder 注入一行 `【project-flow】收到命令 /建议：…` 让模型看见；
+  未知 `/foo` → 不注入、每次 mount warn 一次。`/继续` 让谁继续、`/暂停` 暂停哪一层**尚未定义**，
+  实现"执行"属于发明语义，本版不做。
+- **`control` 是遗留值**：`source.kind` 仍接受 `'control'`（旧记录要过校验），但**不再写入**；
+  `isUnfinished` 仍排除它、阶段桶仍跳过它、面板折叠行改为「历史控制词 N 条（遗留，不再新增）」，
+  `tasks.control = {count, ids}` 只读兼容。任务行仍是 14 键（不加第 15 键）。
+- 纯聊天（含「继续」「好」这类词）**一律是任务**（`source.kind='utterance'`）——词表方案已删除，
+  因为"猜词"会漏词或过宽，而 `/` 是用户显式声明的意图。
 
 **四条排除规则**（`excludedBy` 记录最近一条的原因）：
 

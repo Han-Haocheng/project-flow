@@ -82,6 +82,7 @@ import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
 import { readTeamBoard, reconcileLinks, teamStatusOf } from './lib/team-sync.mjs'
 import { buildDefinition as buildSubtaskDefinition } from './lib/tools/subtasks.mjs'
 import { answerDecisionAndApply, applyVetoAnswer, vetoSubtask, vetoTask } from './lib/veto.mjs'
+import { commandNameOf, parseCommand } from './lib/commands.mjs'
 import {
   buildStatusBlock,
   createCaptureState,
@@ -89,6 +90,7 @@ import {
   noteCaptureGate,
   recordPreStep,
   stackTop,
+  textOfContent,
 } from './lib/capture.mjs'
 import {
   mountWarnings,
@@ -1676,9 +1678,40 @@ function decisionReminderText(root, contract, session, turn) {
  * accept one waterfall listener per plugin in older environments (host2-tools
  * asserts exactly one `agent/pre-step` hook); it stays memory-only.
  */
+/**
+ * One reminder line for the newest `/command` in this step's messages
+ * (D-20261108-02). **Recognize only — never execute, never write the ledger.**
+ * An unknown `/foo` is reported once per mount and produces no line.
+ */
+function commandReminderLine(ctx, warned, messages) {
+  try {
+    const list = Array.isArray(messages) ? messages : []
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+      const message = list[index]
+      const text = textOfContent(message === null || message === undefined ? undefined : message.content)
+      if (text.trimStart().startsWith('/') === false) continue
+      const parsed = parseCommand(text)
+      if (parsed === null) {
+        const name = commandNameOf(text)
+        if (name !== '' && warned.has(name) === false) {
+          warned.add(name)
+          warnMount(`commands: unknown command /${name}（识别到但未执行；已知：建议/继续/暂停/开始/决策/状态）`, ctx)
+        }
+        return ''
+      }
+      return `【project-flow】收到命令 /${parsed.name}：${parsed.rest === '' ? '（无参数）' : parsed.rest}`
+    }
+    return ''
+  } catch {
+    return ''
+  }
+}
+
 function registerHeartbeatReminder(ctx, captureState, settings) {
   try {
     if (typeof ctx.on !== 'function') return
+    // Unknown `/commands` warn once per mount (a typo must not spam every step).
+    const warnedCommands = new Set()
     ctx.effect(() => {
       const dispose = ctx.on('agent/pre-step', async (payload, next) => {
         // `next()` 抛错**故意不兜底**：waterfall 必须交出合法的 PreStepDecision
@@ -1719,7 +1752,8 @@ function registerHeartbeatReminder(ctx, captureState, settings) {
           const decisionsText = decisionReminderText(root, decisionContractOf(root), session, turn)
           const heartbeatText =
             heartbeatWorking(root, session, sessionIsLive(ctx, session)) === false ? HEARTBEAT_REMINDER_TEXT : ''
-          const text = [decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
+          const commandText = commandReminderLine(ctx, warnedCommands, payload.messages)
+          const text = [commandText, decisionsText, heartbeatText].filter((part) => part !== '').join('\n')
           if (text === '') return decision
           const messages = Array.isArray(decision.messages) ? decision.messages.slice() : []
           messages.push(reminderMessage(session, payload.turn, step, text))
