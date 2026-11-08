@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/host/state.mjs",
   "language": "js",
-  "hash": "sha256:56034a7192f5561e24b8eaec7e95de85c3abb52c57637f3abc69d3d577f36379",
-  "bytes": 25132,
-  "lines": 744,
+  "hash": "sha256:b3f1cf4ac5335025a8371e545696a75becbbe70e41e7bb9e2b9b072d36f61b2c",
+  "bytes": 26444,
+  "lines": 780,
   "semantics": "Host 读路径：fork 子进程池、请求级快照调用、GET state 路由、面板载荷组装与 TUI 读路径；主线程不碰同步 store 读。",
   "modules": [
     {
@@ -18,7 +18,7 @@
     {
       "id": "state-read-isolation",
       "title": "state read isolation",
-      "semantics": "读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader。",
+      "semantics": "读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader；台账根解析由 ledger-root 负责，主线程不碰同步 store 读。",
       "members": [
         "STATE_DEADLINE_MS",
         "STATE_READY_MS",
@@ -34,9 +34,19 @@
         "requestStateSnapshot",
         "handleState",
         "collectPanelState",
-        "panelStateReader",
-        "resolveLedgerRoot",
-        "gitTopLevel"
+        "panelStateReader"
+      ]
+    },
+    {
+      "id": "ledger-root",
+      "title": "ledger root",
+      "semantics": "台账根解析：请求 root 是 linked worktree 根时归一到项目主工作区的 store（判据是 .git 为文件 + git worktree list 首条，与 root 有无 store 副本无关），普通目录/子目录保持自身作用域；git 全部异步执行，失败降级为请求 root。",
+      "members": [
+        "gitQuiet",
+        "gitTopLevel",
+        "gitMainWorktree",
+        "isFile",
+        "resolveLedgerRoot"
       ]
     }
   ],
@@ -48,6 +58,11 @@
     },
     {
       "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:fs/promises",
       "kind": "static",
       "target": null
     },
@@ -127,7 +142,16 @@
       "target": "lib/host/team.mjs"
     }
   ],
-  "moduleEdges": [],
+  "moduleEdges": [
+    {
+      "from": "state-read-isolation",
+      "to": "ledger-root",
+      "count": 1,
+      "why": [
+        "collectPanelState → resolveLedgerRoot"
+      ]
+    }
+  ],
   "created_at": "2026-11-08T13:40:31+08:00",
-  "updated_at": "2026-11-08T14:28:02+08:00"
+  "updated_at": "2026-11-08T15:03:19+08:00"
 }

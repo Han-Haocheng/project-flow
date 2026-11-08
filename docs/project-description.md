@@ -1,7 +1,7 @@
 # 项目描述：project-flow
 
 > 生成物：由 `flow desc render` 从 `.agents/description/` 生成，不要手改。
-> 文件 43 ｜ 模块 117 ｜ 未描述 0
+> 文件 43 ｜ 模块 118 ｜ 未描述 0
 
 ## 1 项目语义
 
@@ -558,10 +558,16 @@ Host 技能注册：三个内嵌技能的 frontmatter 解析与通过 skills 服
 
 Host 读路径：fork 子进程池、请求级快照调用、GET state 路由、面板载荷组装与 TUI 读路径；主线程不碰同步 store 读。
 
+```mermaid
+graph LR
+  m1["state-read-isolation"] --> m2["ledger-root"]
+```
+
 | 模块 | 语义 | 成员 |
 |---|---|---|
 | top | 模块头与 import：读路径依赖的服务、快照 API 与共享助手。 | inject |
-| state-read-isolation | 读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader。 | STATE_DEADLINE_MS、STATE_READY_MS、STATE_MAX_IDLE、STATE_MAX_CHILDREN、stateMaxChildren、STATE_WORKER_DEFAULT_SCRIPT、stateWorkerScript、stateWorkerEnv、STATE_POOLS、statePoolOf、StateWorkerPool、requestStateSnapshot、handleState、collectPanelState、panelStateReader、resolveLedgerRoot、gitTopLevel |
+| state-read-isolation | 读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader；台账根解析由 ledger-root 负责，主线程不碰同步 store 读。 | STATE_DEADLINE_MS、STATE_READY_MS、STATE_MAX_IDLE、STATE_MAX_CHILDREN、stateMaxChildren、STATE_WORKER_DEFAULT_SCRIPT、stateWorkerScript、stateWorkerEnv、STATE_POOLS、statePoolOf、StateWorkerPool、requestStateSnapshot、handleState、collectPanelState、panelStateReader |
+| ledger-root | 台账根解析：请求 root 是 linked worktree 根时归一到项目主工作区的 store（判据是 .git 为文件 + git worktree list 首条，与 root 有无 store 副本无关），普通目录/子目录保持自身作用域；git 全部异步执行，失败降级为请求 root。 | gitQuiet、gitTopLevel、gitMainWorktree、isFile、resolveLedgerRoot |
 
 ### 3.18 lib/host/team.mjs
 

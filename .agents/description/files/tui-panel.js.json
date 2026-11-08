@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "tui-panel.js",
   "language": "js",
-  "hash": "sha256:01c178b77140e3e5bdcc6e340c838515448053fc7d6f4d0ca3af5def300009ee",
-  "bytes": 28681,
-  "lines": 721,
+  "hash": "sha256:b442fdf6e94a59b734822a30ae05bcc0063272fbafebc299f34fba04e66ed0cc",
+  "bytes": 29341,
+  "lines": 730,
   "semantics": "TUI（终端）侧的只读看板：把 `state` payload 投影成可脱离 React 测试的纯字符串视图模型，再交给宿主 ui kit 渲染成注册在 `tuiPanels` 上的侧栏面板，是 web 侧 client.js 面板的终端等价物。由 tui-host.js 的独立 Cordis 行装配，web/desktop 宿主不加载它；本文件不读台账、没有写路径，也不做 i18n（文案硬编码中文）。",
   "modules": [
     {
@@ -66,5 +66,5 @@
   "imports": [],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:12:25+08:00"
+  "updated_at": "2026-11-08T15:01:29+08:00"
 }
