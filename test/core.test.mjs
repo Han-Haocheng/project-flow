@@ -2265,22 +2265,30 @@ test('决策 summarize：升级优先 + asked_at 旧的在前，counts 统计全
     asked_session: 'session-other', asked_turn: 1, asked_at: '2026-10-03T18:00:00+08:00',
   })
   const now = Date.parse('2026-10-04T00:00:00+08:00')
-  const summary = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now })
-  assert.deepEqual(summary.items.map((item) => item.id), [old.decision.id, newer.decision.id, other.decision.id])
-  assert.deepEqual(summary.items.map((item) => item.escalated), [true, true, false])
-  assert.deepEqual(summary.items.map((item) => item.turnAge), [4, 3, null])
-  assert.deepEqual(summary.counts, {
+  // 全局视图（无 session：面板 / 人工 CLI）：三条都在场，升级只看记录年龄。
+  const global = summarizeDecisions(root, contract, { now })
+  assert.deepEqual(global.items.map((item) => item.id), [old.decision.id, newer.decision.id, other.decision.id])
+  assert.deepEqual(global.items.map((item) => item.escalated), [true, true, false])
+  assert.deepEqual(global.counts, {
     open: 3, blocking: 0, escalated: 2, answered: 0, withdrawn: 0, superseded: 0, total: 3,
   })
-  const limited = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now, limit: 2 })
-  assert.equal(limited.items.length, 2)
-  assert.equal(limited.counts.open, 3)
+  // 会话视图（提醒 / flow_decision 工具）：只含本会话记录，升级可用轮次。
+  const summary = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now })
+  assert.deepEqual(summary.items.map((item) => item.id), [old.decision.id, newer.decision.id])
+  assert.deepEqual(summary.items.map((item) => item.escalated), [true, true])
+  assert.deepEqual(summary.items.map((item) => item.turnAge), [4, 3])
+  assert.deepEqual(summary.counts, {
+    open: 2, blocking: 0, escalated: 2, answered: 0, withdrawn: 0, superseded: 0, total: 2,
+  })
+  const limited = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now, limit: 1 })
+  assert.equal(limited.items.length, 1)
+  assert.equal(limited.counts.open, 2)
 
   answerDecision(root, contract, newer.decision.id, { choice: 'approve' })
   const after = summarizeDecisions(root, contract, { session: 'session-me', turn: 5, now })
-  assert.equal(after.counts.open, 2)
+  assert.equal(after.counts.open, 1)
   assert.equal(after.counts.answered, 1)
-  assert.equal(after.counts.total, 3)
+  assert.equal(after.counts.total, 2)
 })
 
 test('checkDecisions：仅 open + blocking + affects 命中暂存文件才失败', () => {

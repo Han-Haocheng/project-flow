@@ -215,8 +215,8 @@ test('A+C：有栈顶任务、无待决策 → 当前任务 + 无待决策 + 如
 test('A+B：有栈顶任务 + 待决策 → 待决策段、回答指引、段序、单一前缀', async () => {
   const { root, contract } = freshProject('task-decision')
   const task = seedTask(root, contract, { title: '处理决策模块', stage: 'implementing' })
-  const decision = seedDecision(root, contract, '是否开启提醒改版？')
   const agent = harness.addRoot('session-t82-b', root)
+  const decision = seedDecision(root, contract, '是否开启提醒改版？', { asked_session: agent.id })
 
   const text = reminderText(await runPreStep(agent))
 
@@ -247,8 +247,8 @@ test('D：无未完成任务 → 明确说「当前无未完成任务」，且�
 
 test('D+B：没有未完成任务但有 open 决策时，待决策段仍然出现', async () => {
   const { root, contract } = freshProject('no-task-decision')
-  const decision = seedDecision(root, contract, '空栈时是否仍提醒决策？')
   const agent = harness.addRoot('session-t82-db', root)
+  const decision = seedDecision(root, contract, '空栈时是否仍提醒决策？', { asked_session: agent.id })
 
   const text = reminderText(await runPreStep(agent))
 
@@ -276,11 +276,11 @@ test('命令行：有 / 命令时放最前，且前缀只出现一次', async ()
 test('首轮列全部、次轮按上限折叠：首轮 4 条全列，次轮 3 条 + 「另有 1 条决策」', async () => {
   const { root, contract } = freshProject('cap')
   seedTask(root, contract, { title: '决策折叠' })
+  const agent = harness.addRoot('session-t82-cap', root)
   const ids = []
   for (let index = 0; index < 4; index += 1) {
-    ids.push(seedDecision(root, contract, `第 ${index + 1} 条待决问题`).id)
+    ids.push(seedDecision(root, contract, `第 ${index + 1} 条待决问题`, { asked_session: agent.id }).id)
   }
-  const agent = harness.addRoot('session-t82-cap', root)
 
   const firstTurn = reminderText(await runPreStep(agent, { turn: 1 }))
   for (const id of ids) assert.ok(firstTurn.includes(id), `first turn must list ${id}\n${firstTurn}`)
@@ -295,11 +295,15 @@ test('首轮列全部、次轮按上限折叠：首轮 4 条全列，次轮 3 �
 test('预算：超长标题 + 8 条决策 + 长命令 → ≤800，且「怎么答」逐字完整、明细整行舍弃并计数', async () => {
   const { root, contract } = freshProject('budget')
   seedTask(root, contract, { title: '超长标题'.repeat(60), stage: 'implementing' })
+  const agent = harness.addRoot('session-t82-budget', root)
   const ids = []
   for (let index = 0; index < 8; index += 1) {
-    ids.push(seedDecision(root, contract, `预算压力下的第 ${index + 1} 条问题：${'细节'.repeat(20)}`).id)
+    ids.push(
+      seedDecision(root, contract, `预算压力下的第 ${index + 1} 条问题：${'细节'.repeat(20)}`, {
+        asked_session: agent.id,
+      }).id,
+    )
   }
-  const agent = harness.addRoot('session-t82-budget', root)
   const longCommand = `/建议 ${'这是一段很长的命令正文'.repeat(40)}`
 
   const text = reminderText(

@@ -143,7 +143,8 @@
         "client.js",
         "bin/flow.mjs",
         "CONTRACT.md",
-        "lib/host/session.mjs"
+        "lib/host/session.mjs",
+        "lib/host/tools.mjs"
       ],
       "sections": {
         "lib/core.mjs": [
@@ -158,12 +159,16 @@
         ],
         "lib/host/session.mjs": [
           "reminder"
+        ],
+        "lib/host/tools.mjs": [
+          "tools"
         ]
       },
       "tests": [
         "test/t-20261107-veto.test.mjs",
         "test/t-20261108-control-word.test.mjs",
-        "test/t-20261108-decision-cli-option.test.mjs"
+        "test/t-20261108-decision-cli-option.test.mjs",
+        "test/t-20261108-decision-session-scope.test.mjs"
       ]
     },
     "heartbeats": {
