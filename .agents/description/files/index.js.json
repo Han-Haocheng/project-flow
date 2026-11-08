@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "index.js",
   "language": "js",
-  "hash": "sha256:8121c7368d22155255799e14488476d6043175fdabd5aef1cd2af17a483dee6d",
-  "bytes": 11705,
-  "lines": 319,
+  "hash": "sha256:aed85ecb59ef0c0f7b590381b4647d9e4ebb902daffbd1ce1c32935f5320d33d",
+  "bytes": 11765,
+  "lines": 321,
   "semantics": "project-flow 的宿主入口（装配层）：声明 inject=['webServer'] 并 apply 一次装配——把读/写路由交给 lib/host/state.mjs 与 lib/host/routes.mjs，把工具、技能、系统提示、会话钩子与权限面交给 lib/host/* 的对应模块；本文件只做装配与 mountJsonRoute，不含业务实现。",
   "modules": [
     {
@@ -134,5 +134,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:43:41+08:00",
-  "updated_at": "2026-11-08T14:08:02+08:00"
+  "updated_at": "2026-11-08T16:03:01+08:00"
 }
