@@ -2,9 +2,15 @@
   "schema": 1,
   "path": "bin/flow.mjs",
   "language": "js",
+<<<<<<< HEAD
   "hash": "sha256:6348b76ec52a8946a9f7d547c183b8555254c58119974741504059d81eeebae6",
   "bytes": 136638,
   "lines": 3280,
+=======
+  "hash": "sha256:03ec53795215a1c64a714793c93dfceca39a5cae3276337b225cb9d22a345d81",
+  "bytes": 136383,
+  "lines": 3275,
+>>>>>>> dsh-8e974661-5f43
   "semantics": "project-flow 的唯一 CLI 入口（package.json 的 bin 字段），由 skills 与测试以子进程方式调用：解析 argv、按命令分派、格式化人类/--json 输出，并把错误映射成 0/1/2/3/4 退出码。它不直接读写 .dsh/flow 台账——存储、校验与门禁执行全部懒加载委托 lib/core.mjs（脚本检查另走 lib/checks.mjs）——因此台账语义变更应落在 core/desc，而不是这个文件。",
   "modules": [
     {
@@ -118,7 +124,7 @@
     {
       "id": "flow-desc",
       "title": "flow desc 与 gate 命令",
-      "semantics": "flow desc 子命令面（status/build/show/set/plan/apply/render）的实现，以及同一源码段内、没有独立段头的 gate 子命令（list/show/add/update/enable/disable/rm/run/logs）；desc 的台账读写与校验全部委托 core，仅 desc plan --template 懒加载 lib/desc.mjs 做只读源码扫描，--out 与 description.render 被限制在项目根内。",
+      "semantics": "flow desc 子命令面（status/build/show/set/plan/apply/render）的实现，以及同一源码段内、没有独立段头的 gate 子命令（list/show/add/update/enable/disable/rm/run/logs）；desc 的台账读写与校验全部委托 core，仅 desc plan --template 懒加载 lib/desc.mjs 做只读源码扫描，--out 与 description.render 被限制在项目根内；plan --rebase 在计划 implemented 后只刷新 base。",
       "members": [
         "descModeOf",
         "descInsideRoot",
@@ -743,5 +749,9 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
+<<<<<<< HEAD
   "updated_at": "2026-11-08T14:37:06+08:00"
+=======
+  "updated_at": "2026-11-08T14:35:35+08:00"
+>>>>>>> dsh-8e974661-5f43
 }

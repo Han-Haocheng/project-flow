@@ -3,21 +3,26 @@
   "task": "T-20261108112830",
   "status": "implemented",
   "base": {
-    "commit": "92e2dbc05eb23a7194af55b39865413af76ef4d9",
+    "commit": "71e7f672ba250715d6b1f7cf6a520abbaae36e4c",
     "clean": true,
-    "recorded_at": "2026-11-08T13:05:44+08:00"
+    "recorded_at": "2026-11-08T14:36:52+08:00"
   },
   "noSemanticChange": true,
   "reason": "父卡只做协调与验收：源码语义变更由 D1-D5 子卡各自落地，本卡不直接改源码",
   "files": [],
   "created_at": "2026-11-08T13:05:44+08:00",
-  "updated_at": "2026-11-08T13:15:17+08:00",
+  "updated_at": "2026-11-08T14:36:52+08:00",
   "implemented_at": "2026-11-08T13:15:17+08:00",
   "history": [
     {
       "at": "2026-11-08T13:05:44+08:00",
       "stage": "implementing",
       "note": ""
+    },
+    {
+      "at": "2026-11-08T14:36:52+08:00",
+      "stage": "implementing",
+      "note": "rebase：base 92e2dbc05eb23a7194af55b39865413af76ef4d9 → 71e7f672ba250715d6b1f7cf6a520abbaae36e4c（只刷新比较基准；语义、状态、implemented_at 不变）"
     }
   ]
 }

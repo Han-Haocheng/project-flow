@@ -412,6 +412,43 @@ test('desc apply：non-implementing 退 2；--dry-run 零写盘；apply 幂等�
   assert.equal(again.json.data.plan.implemented_at, applied.json.data.plan.implemented_at)
 })
 
+test('desc plan --rebase：implemented 计划只刷新 base（exit 0、语义与 implemented_at 不变）', () => {
+  const root = freshProject('plan-rebase-impl', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescriptionCli(root)
+  describeAll(root)
+  const task = addTask(root, 'rebase 已实现', ['--stage', 'analyzing'])
+  const input = {
+    files: [{ path: 'lib/a.mjs', op: 'change', semantics: '文件语义：implemented 之后 rebase 不得改这一版。' }],
+  }
+  const planned = runCli(root, ['desc', 'plan', task.id, '--input', JSON.stringify(input), '--json'])
+  assert.equal(planned.code, 0, planned.stdout + planned.stderr)
+  setStage(root, task.id, 'queued-implementation')
+  setStage(root, task.id, 'implementing')
+  const applied = runCli(root, ['desc', 'apply', task.id, '--json'])
+  assert.equal(applied.code, 0, applied.stdout + applied.stderr)
+  const implementedAt = applied.json.data.plan.implemented_at
+  const historyLength = applied.json.data.plan.history.length
+
+  const rebased = runCli(root, ['desc', 'plan', task.id, '--rebase', '--json'])
+  assert.equal(rebased.code, 0, rebased.stdout + rebased.stderr)
+  assert.equal(rebased.json.data.rebased, true)
+  assert.equal(rebased.json.data.plan.status, 'implemented')
+  assert.equal(rebased.json.data.plan.implemented_at, implementedAt, 'rebase 不得改动 implemented_at')
+  assert.equal(rebased.json.data.plan.history.length, historyLength + 1)
+  assert.match(rebased.json.data.note, /implemented/)
+  assert.equal(
+    readDescRecords(root).find((record) => record.path === 'lib/a.mjs').semantics,
+    input.files[0].semantics,
+    'rebase 只刷新 base，不得重写语义',
+  )
+
+  // 非 rebase 路径仍冻结：--input 在 implemented 计划上 exit 2。
+  const frozen = runCli(root, ['desc', 'plan', task.id, '--input', JSON.stringify(input), '--json'])
+  assert.equal(frozen.code, 2, frozen.stdout + frozen.stderr)
+  assert.equal(frozen.json.error.code, 'invalid')
+  assert.match(frozen.json.error.message, /已 implemented/)
+})
+
 // ------------------------------------------------------------------- render
 
 test('desc render：未建立退 1；--out 写根内文件、越界退 1；--check 未配置 0 / 缺失与不一致 1', () => {

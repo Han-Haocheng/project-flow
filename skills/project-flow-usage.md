@@ -151,7 +151,7 @@ flow gate run precommit --json | node -e "let s='';process.stdin.on('data',d=>s+
 | `flow desc show [--path <src>] [--graph tree\|mermaid]` | 看单个文件的模块与语义，或整张文件图 |
 | `flow desc set --input <json>` | 补/改文件或模块语义（单对象或数组；**不写结构字段**） |
 | `flow desc plan <T> --template <src>` | 打印计划骨架（由当前记录生成，先 build 再取） |
-| `flow desc plan <T> --input <json>` | 建/改语义变更计划（`--rebase` 只刷新 base）；`--show` 查看 |
+| `flow desc plan <T> --input <json>` | 建/改语义变更计划（`--rebase` 只刷新 base，计划 implemented 后仍可用）；`--show` 查看 |
 | `flow desc plan <T> --no-semantic-change --reason "…"` | 声明本次无语义变更（与 `files` 互斥） |
 | `flow desc apply <T> [--dry-run]` | 把计划语义落进文件记录，计划转 `implemented`（幂等） |
 | `flow desc render [--out <p>] [--check]` | 生成/比对 `description.render` 指向的文档 |
