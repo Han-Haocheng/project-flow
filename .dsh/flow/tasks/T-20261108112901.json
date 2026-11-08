@@ -1,0 +1,37 @@
+{
+  "type": "feat",
+  "title": "feat: 源码扫描器 lib/source-scan.mjs（JS/TS/Python 结构与标识符，零依赖）",
+  "notes": "D1。接口按计划 §4.1 冻结：languageOf(path) / scanSource(path,text)。扫描实现可参考 test/t-20261107-module-boundaries.test.mjs 的剥注释/跳字符串逻辑，但必须独立成 lib 模块。写域仅两个文件，禁 git 写。",
+  "scope": {
+    "allow": [
+      "lib/source-scan.mjs",
+      "test/t-20261108-desc-scan.test.mjs"
+    ],
+    "deny": [
+      ".git/",
+      "lib/core.mjs",
+      "bin/",
+      "index.js",
+      "CONTRACT.md",
+      "README.md"
+    ]
+  },
+  "acceptance": [
+    "scanSource(path,text) 返回 {language, imports[], declarations[]}，declarations 含 name/kind/exported/startLine/endLine/identifiers[]",
+    "JS/TS 扫描：注释与字符串（含模板串、转义）不误判；多行 import；export {x} from / export * as；动态 import() 与 import.meta 区分",
+    "Python 扫描：列首 def/async def/class 与顶层赋值；import/from .x import y",
+    "languageOf：mjs/js/cjs/ts/tsx/jsx=js，py=python，其余 null",
+    "node --test test/t-20261108-desc-scan.test.mjs 全绿；node --check lib/source-scan.mjs 通过",
+    "零依赖：只用 node 内置模块；不 import lib/ 其它模块（叶子）"
+  ],
+  "parent": "T-20261108112830",
+  "stage": "queued-analysis",
+  "schema": 1,
+  "id": "T-20261108112901",
+  "status": "active",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-11-08T11:29:01+08:00",
+  "updated_at": "2026-11-08T11:29:01+08:00"
+}

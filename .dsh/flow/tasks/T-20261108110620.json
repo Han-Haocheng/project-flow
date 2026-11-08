@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "/问题 智能体团队的人物卡不会挂载到项目流的对应任务上，项目流的任务在处理或是分析中时，也不会改变状态，我印象中，是只允许通过项目流插件进行间接调度，通过这种方式隔离职责吗？",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "f57a121a9736cfd4d2db6aa01ab26278346ff5e66db748b89b3995e345075a35",
+    "at": "2026-11-08T03:03:58.298Z",
+    "text": "/问题 智能体团队的人物卡不会挂载到项目流的对应任务上，项目流的任务在处理或是分析中时，也不会改变状态，我印象中，是只允许通过项目流插件进行间接调度，通过这种方式隔离职责吗？"
+  },
+  "schema": 1,
+  "id": "T-20261108110620",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:06:20+08:00",
+  "updated_at": "2026-11-08T11:06:20+08:00",
+  "done_at": null,
+  "archived_at": null
+}

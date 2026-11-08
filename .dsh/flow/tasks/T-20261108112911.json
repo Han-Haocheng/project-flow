@@ -1,0 +1,36 @@
+{
+  "type": "feat",
+  "title": "feat: 描述模型 lib/desc.mjs（build 回填/图推导/漂移检查/渲染）",
+  "notes": "D2。读依赖 D1 的 lib/source-scan.mjs（接口已冻结）；本卡只写纯逻辑 + 文件系统读，不做锁/原子写编排（那是 D3）。build 的写入以「返回待写记录列表」还是「自行写」由 D2 定：优先纯函数 + D3 编排写。写域两个文件，禁 git 写。",
+  "scope": {
+    "allow": [
+      "lib/desc.mjs",
+      "test/t-20261108-desc-model.test.mjs"
+    ],
+    "deny": [
+      ".git/",
+      "lib/core.mjs",
+      "lib/source-scan.mjs",
+      "bin/",
+      "CONTRACT.md"
+    ]
+  },
+  "acceptance": [
+    "buildDescription 纯逻辑：扫描 → 记录 reconcile（保留 semantics/modules、同步 hash/imports/moduleEdges、剪枝、无变化不写）",
+    "模块边推导确定性（排序稳定、why 取样 ≤3）；成员归属/覆盖/重复/未知成员判定",
+    "include/exclude 最小 glob（** 零段、* 段内）并有测试；路径编码 encode/decode 往返",
+    "checkDescription 覆盖 §4.4 全部 kind：stale-hash/modules-missing/unassigned-member/unknown-member/duplicate-member/empty-module/missing-semantics/invalid-edge/stale-module-edges/ghost-import/undescribed-file/render-stale",
+    "renderDescription 确定性 Markdown（Mermaid 文件图 + 每文件模块图/模块表），无墙钟时间",
+    "node --test test/t-20261108-desc-model.test.mjs 全绿；不 import lib/core.mjs（依赖方向 core→desc→source-scan/util）"
+  ],
+  "parent": "T-20261108112830",
+  "stage": "queued-analysis",
+  "schema": 1,
+  "id": "T-20261108112911",
+  "status": "active",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-11-08T11:29:11+08:00",
+  "updated_at": "2026-11-08T11:29:11+08:00"
+}

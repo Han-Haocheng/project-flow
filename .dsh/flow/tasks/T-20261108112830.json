@@ -1,0 +1,55 @@
+{
+  "title": "feat: 项目描述台账（文件图/模块图/模块语义）+ 分析-执行-审查三阶段强制更新 — 让结构可查、语义明确、漂移可拦",
+  "type": "feat",
+  "stage": "implementing",
+  "owner": "lead",
+  "schema": 1,
+  "id": "T-20261108112830",
+  "status": "active",
+  "parent": null,
+  "scope": {
+    "allow": [
+      "lib/source-scan.mjs",
+      "lib/desc.mjs",
+      "lib/core.mjs",
+      "bin/flow.mjs",
+      "test/t-20261108-desc-",
+      "test/core.test.mjs",
+      "test/checks.test.mjs",
+      "test/t-20261107-status-block.test.mjs",
+      "CONTRACT.md",
+      "README.md",
+      "skills/project-flow-usage.md",
+      "skills/ai-collaborative-dev-workflow/SKILL.md",
+      ".dsh/flow/description",
+      ".dsh/flow/flow.json",
+      ".dsh/flow/gates",
+      "docs/project-description.md"
+    ],
+    "deny": [
+      ".git/",
+      "lib/capture.mjs",
+      "lib/veto.mjs",
+      "lib/tools/",
+      "lib/state-snapshot.mjs",
+      "index.js",
+      "client.js"
+    ]
+  },
+  "acceptance": [
+    "docs/project-description.md 生成物：文件关系图 + 每文件模块图 + 模块语义（Mermaid，确定性）",
+    "flow desc build/status/show/set/plan/apply/render 全部可用，--json 形状稳定，退出码按 0/1/2/3/4",
+    "flow check description：漂移/未归属/缺语义/ghost-import/计划未落地/未计划改动 均失败并给修复命令；干净时 exit 0；--strict 把未描述文件升级为失败",
+    "阶段门：analyzing→queued-implementation 需计划；implementing→queued-review 需 implemented+全量检查+无未计划改动；reviewing→done 需测试门禁绿记录且晚于 implemented_at",
+    "auto/on/off 开关、子任务与 internal 豁免、noSemanticChange 出口均有测试",
+    "node --check 全绿；node --test test/ 全绿；六个 .selftest/*.mjs 全绿；文档哨兵（README 数字、check 清单、CONTRACT §1.1）全绿",
+    "本仓库 flow check description 与 --strict 均 exit 0；precommit 含 description 步骤并跑绿"
+  ],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "计划已获用户批准（exit_plan_mode）。执行拆分见子任务 D1-D6；实现波次按依赖推进，Lead 只派工/验收/提交。声明：Task 卡片真源在本会话主工作区，实现者禁 git 写。",
+  "created_at": "2026-11-08T11:28:30+08:00",
+  "updated_at": "2026-11-08T11:28:47+08:00",
+  "done_at": null,
+  "archived_at": null
+}

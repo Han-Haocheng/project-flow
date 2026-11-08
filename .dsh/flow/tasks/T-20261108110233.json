@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "/提问 提问命令只需要解答就行，智能体团队不能移除，已经完成的任务吗？",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "50c8b4963198ac8d7c5045a37e13b2f04dd25b022b4d47b4add83579fb0758a5",
+    "at": "2026-11-08T02:59:48.718Z",
+    "text": "/提问 提问命令只需要解答就行，智能体团队不能移除，已经完成的任务吗？"
+  },
+  "schema": 1,
+  "id": "T-20261108110233",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:02:33+08:00",
+  "updated_at": "2026-11-08T11:02:33+08:00",
+  "done_at": null,
+  "archived_at": null
+}

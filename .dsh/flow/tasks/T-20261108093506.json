@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "当前状态",
+  "stage": "archived",
+  "source": {
+    "kind": "utterance",
+    "key": "75ec6a0c432de8c9f1df7178fdea8bc39089e6b26a2e42a8364ab89538645a2f",
+    "at": "2026-11-08T01:32:45.821Z",
+    "text": "当前状态"
+  },
+  "schema": 1,
+  "id": "T-20261108093506",
+  "status": "archived",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "契约边界样本，保留归档。成因已定位（exec-core 只读查会话日志）：这是用户从 Web UI 亲手发的消息（source.kind=user，带 rpcId），按 D-20261108-02「聊天=任务」契约本就该成为任务，不是误捕。保留作为将来定『附件判据』的样本（本条消息含 2 张 jpeg）。",
+  "created_at": "2026-11-08T09:35:06+08:00",
+  "updated_at": "2026-11-08T11:30:09+08:00",
+  "done_at": null,
+  "archived_at": "2026-11-08T11:30:09+08:00"
+}

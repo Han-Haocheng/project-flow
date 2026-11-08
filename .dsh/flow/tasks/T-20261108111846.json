@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "/提问 决策事项依旧不按照强制流程走？",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "fdb096895a357553c37b9fdba407942ff2dec4feab4bda8ef637cc45c242002b",
+    "at": "2026-11-08T03:17:56.820Z",
+    "text": "/提问 决策事项依旧不按照强制流程走？"
+  },
+  "schema": 1,
+  "id": "T-20261108111846",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:18:46+08:00",
+  "updated_at": "2026-11-08T11:18:46+08:00",
+  "done_at": null,
+  "archived_at": null
+}

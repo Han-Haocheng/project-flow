@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "/提问 心跳功能理应移除在会话上的开始和关闭功能，完全由插件进行创建，会话只能修改",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "0848c9a27fc487cf106e0fef8f98a22bf02eb4d73a2eb1f7380ead45728f0712",
+    "at": "2026-11-08T03:06:20.307Z",
+    "text": "/提问 心跳功能理应移除在会话上的开始和关闭功能，完全由插件进行创建，会话只能修改"
+  },
+  "schema": 1,
+  "id": "T-20261108110820",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:08:20+08:00",
+  "updated_at": "2026-11-08T11:08:20+08:00",
+  "done_at": null,
+  "archived_at": null
+}

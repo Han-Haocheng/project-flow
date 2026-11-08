@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "/决策 决策模块和心跳我交给其他会话处理，你专门负责处理任务模块",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "be719c2a5eb4520b381555626e99fbb18846f110947fcd41d2b4a0f8c5d54aaa",
+    "at": "2026-11-08T03:22:11.305Z",
+    "text": "/决策 决策模块和心跳我交给其他会话处理，你专门负责处理任务模块"
+  },
+  "schema": 1,
+  "id": "T-20261108112504",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:25:04+08:00",
+  "updated_at": "2026-11-08T11:25:04+08:00",
+  "done_at": null,
+  "archived_at": null
+}

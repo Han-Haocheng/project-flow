@@ -1,0 +1,36 @@
+{
+  "type": "feat",
+  "title": "feat: CLI 接入 flow desc 命令面 + check description 内置检查",
+  "notes": "D4。写 bin/flow.mjs + 两个测试文件。依赖 D3 的 core 导出（§5.3）。注意：bin/ 被心跳会话 claim，动工前 Lead 确认其已收口；只做新增区块与 check 路由，避开 heartbeat/decision 段。",
+  "scope": {
+    "allow": [
+      "bin/flow.mjs",
+      "test/t-20261108-desc-cli.test.mjs",
+      "test/checks.test.mjs",
+      "test/t-20261107-status-block.test.mjs"
+    ],
+    "deny": [
+      ".git/",
+      "lib/",
+      "index.js",
+      "CONTRACT.md"
+    ]
+  },
+  "acceptance": [
+    "flow desc status|build|show|set|plan|apply|render 全部实现，参数/用法进 USAGE，非法参数 exit 1，校验失败 exit 2",
+    "flow check description 作为内置检查（bin 特判路由 core，lib/checks.mjs 保持 core-free），--task/--strict/--json；check list 与 CONTRACT §6.1 同步",
+    "flow status 文本增描述摘要行（--json counts.description），状态块用例更新",
+    "按来源拆分：--input 只收文件/数组，--template 生成骨架，--no-semantic-change 必带 --reason",
+    "新增 test/t-20261108-desc-cli.test.mjs 与 test/checks.test.mjs 更新；全绿"
+  ],
+  "parent": "T-20261108112830",
+  "stage": "queued-analysis",
+  "schema": 1,
+  "id": "T-20261108112930",
+  "status": "active",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-11-08T11:29:30+08:00",
+  "updated_at": "2026-11-08T11:29:30+08:00"
+}

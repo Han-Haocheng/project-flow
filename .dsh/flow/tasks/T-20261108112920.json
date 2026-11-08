@@ -1,0 +1,39 @@
+{
+  "type": "feat",
+  "title": "feat: core 接入描述台账（契约/存储 API/阶段门/种子门禁/status）",
+  "notes": "D3。写 lib/core.mjs（唯一写者，锁内原子写）+ 三个测试文件。依赖 D2 的 lib/desc.mjs 导出；接口见计划 §5.3。deny：index.js/capture/veto/tools（其他会话域）。",
+  "scope": {
+    "allow": [
+      "lib/core.mjs",
+      "test/t-20261108-desc-core.test.mjs",
+      "test/t-20261108-desc-gate.test.mjs",
+      "test/core.test.mjs"
+    ],
+    "deny": [
+      ".git/",
+      "index.js",
+      "lib/capture.mjs",
+      "lib/veto.mjs",
+      "lib/tools/",
+      "lib/desc.mjs",
+      "bin/"
+    ]
+  },
+  "acceptance": [
+    "flow.json description 节默认值 + 类型校验（含 string[] kind，非法回退 + manifest-invalid）；storePaths().description；initProject 建目录",
+    "core 导出：DESCRIPTION_SCHEMA/ENFORCE_MODES、readDescriptionProject、listDescriptionFiles、getDescriptionFile、getDescriptionPlan、descriptionStatus、checkDescription、renderDescription、buildDescription、setDescriptionFile、setDescriptionPlan、applyDescriptionPlan",
+    "updateTask 阶段门：目标 queued-implementation/queued-review/done 三档要求（计划存在/implemented+全量检查/再加测试证据）；enforce auto|on|off；子任务与 source:internal 豁免；invalid 消息含修复命令",
+    "种子门禁 precommit 增 description 步、release 增 description --strict；flow status counts 增 description",
+    "更新 test/core.test.mjs 种子门禁用例；新增 test/t-20261108-desc-core.test.mjs 与 desc-gate.test.mjs；全绿"
+  ],
+  "parent": "T-20261108112830",
+  "stage": "queued-analysis",
+  "schema": 1,
+  "id": "T-20261108112920",
+  "status": "active",
+  "owner": "",
+  "checkpoints": [],
+  "commits": [],
+  "created_at": "2026-11-08T11:29:20+08:00",
+  "updated_at": "2026-11-08T11:29:20+08:00"
+}
