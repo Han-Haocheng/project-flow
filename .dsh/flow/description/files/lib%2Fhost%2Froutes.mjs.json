@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "path": "lib/host/routes.mjs",
+  "language": "js",
+  "hash": "sha256:de83cfa1e43ad318daffa9ae970c51a3f8f7ac771fbaef60dbd5be965bce08e7",
+  "bytes": 7069,
+  "lines": 234,
+  "semantics": "Host 写路由：面板仅有的两个写入口 init（建台账）与 gate（开关门禁），都经同一 root 作用域后交给 lib/core.mjs。",
+  "modules": [
+    {
+      "id": "init-http",
+      "title": "init HTTP",
+      "semantics": "POST init：校验 root、限制请求体与创建数量，调用 core.initProject 并返回创建摘要。",
+      "members": [
+        "handleInit"
+      ]
+    },
+    {
+      "id": "gate-http",
+      "title": "gate HTTP",
+      "semantics": "POST gate：校验 root 与 id/enabled，调用 core.updateGate 翻转开关。",
+      "members": [
+        "handleGate"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "./shared.mjs",
+      "kind": "static",
+      "target": "lib/host/shared.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:40:31+08:00",
+  "updated_at": "2026-11-08T13:43:12+08:00"
+}

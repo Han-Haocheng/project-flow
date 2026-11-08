@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/core.mjs",
   "language": "js",
-  "hash": "sha256:3184673709c7c24d23524bd9f9257d39032d8a874ed5410c799d7a865fe108ff",
-  "bytes": 215104,
-  "lines": 5031,
+  "hash": "sha256:972aaeeb617a9bae167ac5ead415c55484b796183533498759b843657802d9d6",
+  "bytes": 215126,
+  "lines": 5032,
   "semantics": "flow store 的唯一写者与核心实现：契约解析、store 锁与原子写、实验/任务/门禁/决策/心跳/描述台账的校验与 CRUD 都收敛在这里，CLI（bin/flow.mjs）、flow_* 工具与只读面板共享它的导出。它只依赖 node 内置模块和 lib/{util,paths,atomic,lock,runner,stage,proc,desc}.mjs，不依赖 lib/checks.mjs，也不允许被 lib/desc.mjs 反向引用。",
   "modules": [
     {
@@ -1034,5 +1034,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:08:29+08:00"
+  "updated_at": "2026-11-08T13:42:08+08:00"
 }

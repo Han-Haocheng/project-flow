@@ -20,9 +20,9 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "",
+  "notes": "实现已闭环：2551162 收回会话面 start/end（枚举 update|list|status，CLI 留作人的逃生口）；a5ee68e 让 agent/disposed 自动关；3c50072 让创建无条件（空台账占位 goal + task:null + createTask:false，capture:false 也开；CONTRACT §9.2 与测试 ⑭—⑰ 同步），验证 610/610/0。交接文档：`.dsh-ops/briefs/handoff-heartbeat-20261108.md`（8 节骨架 + 自检通过）。未完成：宿主重启激活、真机验证、阶段机流转。",
   "created_at": "2026-11-08T11:08:20+08:00",
-  "updated_at": "2026-11-08T11:08:20+08:00",
+  "updated_at": "2026-11-08T13:27:37+08:00",
   "done_at": null,
   "archived_at": null
 }

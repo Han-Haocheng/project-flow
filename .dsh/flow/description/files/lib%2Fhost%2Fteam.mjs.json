@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "path": "lib/host/team.mjs",
+  "language": "js",
+  "hash": "sha256:5d4c6f2d896d05f3140091524c70cd4a5f5693c6bbda3dcf0da16793e450952a",
+  "bytes": 3803,
+  "lines": 104,
+  "semantics": "Host 团队板读面：以最近主会话 agent 为授权凭据读取 Team 板，做只读对账并组装面板 team 行；零写入。",
+  "modules": [
+    {
+      "id": "p3a-read-only-team-board",
+      "title": "P3a: read-only team board",
+      "semantics": "团队板只读对账：caller 缓存、teamStatusFor、applyTeamBoard（面板载荷 enrichment）与 TEAM_UNAVAILABLE 兜底。",
+      "members": [
+        "TEAM_UNAVAILABLE",
+        "TEAM_CALLERS",
+        "teamCallerState",
+        "rememberTeamCaller",
+        "teamCallerOf",
+        "teamStatusFor",
+        "applyTeamBoard"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../team-sync.mjs",
+      "kind": "static",
+      "target": "lib/team-sync.mjs"
+    },
+    {
+      "specifier": "./session.mjs",
+      "kind": "static",
+      "target": "lib/host/session.mjs"
+    },
+    {
+      "specifier": "./shared.mjs",
+      "kind": "static",
+      "target": "lib/host/shared.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:40:31+08:00",
+  "updated_at": "2026-11-08T13:43:12+08:00"
+}

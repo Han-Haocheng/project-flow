@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "你负责处理项目的整体框架，包括：与dsh和相关插件之间的接口、全生命周期等整体性内容",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "5c7aafcf7c55cc9caf94f3828e464fbd8576cc3da4886f19142dbc40468d75d2",
+    "at": "2026-11-08T04:34:44.050Z",
+    "text": "你负责处理项目的整体框架，包括：与dsh和相关插件之间的接口、全生命周期等整体性内容"
+  },
+  "schema": 1,
+  "id": "T-20261108124525",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T12:45:25+08:00",
+  "updated_at": "2026-11-08T12:45:25+08:00",
+  "done_at": null,
+  "archived_at": null
+}

@@ -1,0 +1,161 @@
+{
+  "schema": 1,
+  "path": "scripts/module-domain.mjs",
+  "language": "js",
+  "hash": "sha256:6e9e7418c0796dc4f6e0ed38899d5239f2803ca72014d87b37f2d40d9006bf21",
+  "bytes": 15242,
+  "lines": 363,
+  "semantics": "模块写域哨兵：读 docs/module-domain.json，提供 verify（覆盖/锚点/幽灵检查）、matrix（矩阵）与 check（按 git 改动判越界，越界 exit 1）。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "top",
+      "semantics": "常量与工具：被忽略目录/文件、non-module 前缀、JSON 读取与相对路径处理。",
+      "members": [
+        "HERE",
+        "ROOT",
+        "DATA_FILE",
+        "IGNORED_DIRS",
+        "IGNORED_FILES",
+        "NON_MODULE_PREFIXES",
+        "die",
+        "loadData",
+        "rel",
+        "walk",
+        "actualFiles",
+        "isDirEntry",
+        "matches",
+        "matchOwned",
+        "moduleNames",
+        "ownershipIndex"
+      ]
+    },
+    {
+      "id": "verify",
+      "title": "verify",
+      "semantics": "verify：每个文件恰好一个 owns、无幽灵、section 锚点存在唯一有序、共享文件都有归属。",
+      "members": [
+        "verify"
+      ]
+    },
+    {
+      "id": "check",
+      "title": "check",
+      "semantics": "check：把改动文件分为 owned/shared/foreign，foreign 判红并指出归属模块。",
+      "members": [
+        "changedFiles",
+        "classify",
+        "check"
+      ]
+    },
+    {
+      "id": "matrix",
+      "title": "matrix",
+      "semantics": "matrix：打印 11 个模块的独占/共享/测试计数与职责。",
+      "members": [
+        "matrix"
+      ]
+    },
+    {
+      "id": "main",
+      "title": "main",
+      "semantics": "入口：参数分发与退出码（0 通过 / 1 越界 / 2 用法）。",
+      "members": [
+        "main"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:child_process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:url",
+      "kind": "static",
+      "target": null
+    }
+  ],
+  "moduleEdges": [
+    {
+      "from": "check",
+      "to": "top",
+      "count": 7,
+      "why": [
+        "changedFiles → NON_MODULE_PREFIXES",
+        "changedFiles → ROOT",
+        "changedFiles → die"
+      ]
+    },
+    {
+      "from": "main",
+      "to": "check",
+      "count": 2,
+      "why": [
+        "main → changedFiles",
+        "main → check"
+      ]
+    },
+    {
+      "from": "main",
+      "to": "matrix",
+      "count": 1,
+      "why": [
+        "main → matrix"
+      ]
+    },
+    {
+      "from": "main",
+      "to": "top",
+      "count": 2,
+      "why": [
+        "main → die",
+        "main → loadData"
+      ]
+    },
+    {
+      "from": "main",
+      "to": "verify",
+      "count": 1,
+      "why": [
+        "main → verify"
+      ]
+    },
+    {
+      "from": "matrix",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "matrix → moduleNames"
+      ]
+    },
+    {
+      "from": "verify",
+      "to": "top",
+      "count": 6,
+      "why": [
+        "verify → ROOT",
+        "verify → actualFiles",
+        "verify → isDirEntry"
+      ]
+    }
+  ],
+  "created_at": "2026-11-08T13:40:31+08:00",
+  "updated_at": "2026-11-08T13:43:12+08:00"
+}

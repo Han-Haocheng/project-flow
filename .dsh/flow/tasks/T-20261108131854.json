@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "任务流程不归你管理，你负责框架性质的问题，分清各个模块的职责以及模块的边界，最好不同的模块在并行调整时不会出现冲突",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "d0872a4dd0d83f174d6723e4b3d4427f184858ec0de375c788dd99224bcc6430",
+    "at": "2026-11-08T05:08:16.828Z",
+    "text": "任务流程不归你管理，你负责框架性质的问题，分清各个模块的职责以及模块的边界，最好不同的模块在并行调整时不会出现冲突"
+  },
+  "schema": 1,
+  "id": "T-20261108131854",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T13:18:54+08:00",
+  "updated_at": "2026-11-08T13:18:54+08:00",
+  "done_at": null,
+  "archived_at": null
+}

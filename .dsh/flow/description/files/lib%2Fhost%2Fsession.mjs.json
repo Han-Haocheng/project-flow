@@ -1,0 +1,226 @@
+{
+  "schema": 1,
+  "path": "lib/host/session.mjs",
+  "language": "js",
+  "hash": "sha256:1096e16f442b8789fdd01974c406c80034c574e6ed6f0458cf449c8836944373",
+  "bytes": 50322,
+  "lines": 1192,
+  "semantics": "Host 会话面：会话 id 判定、心跳存活与可见性、per-turn 提醒组装、捕获流水线与 agent/created|disposed 钩子；与 index.js 的循环用 sessionHooks 注入打破。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "top",
+      "semantics": "模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。",
+      "members": [
+        "inject"
+      ]
+    },
+    {
+      "id": "heartbeats",
+      "title": "heartbeats",
+      "semantics": "会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。",
+      "members": [
+        "sessionIdOf",
+        "usableSessionId",
+        "requireSession",
+        "liveSessionIds",
+        "sessionIsLive",
+        "applyAgentLiveness",
+        "applyHeartbeatVisibility",
+        "agentRoot",
+        "heartbeatOpen",
+        "heartbeatWorking",
+        "rootSessionVerdict",
+        "ROOT_SESSION_HEARTBEAT_ONLY",
+        "ROOT_SESSION_DECISION_ONLY",
+        "heartbeatRootOf",
+        "currentTaskOf"
+      ]
+    },
+    {
+      "id": "reminder",
+      "title": "reminder",
+      "semantics": "per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息。",
+      "members": [
+        "disciplineText",
+        "registerDisciplineSection",
+        "REMINDER_LIMIT",
+        "REMINDER_STACK_ROWS",
+        "COMMAND_ECHO_CLIP",
+        "DECISION_QUESTION_CLIP",
+        "ANSWER_DECISION_HINT",
+        "SUBMIT_DECISION_HINT",
+        "FIRST_TURN_HINT",
+        "hiddenDecisionsHint",
+        "clipEcho",
+        "reminderMessage",
+        "decisionContractOf",
+        "decisionSuspendedText",
+        "decisionReminderLine",
+        "taskReminderSection",
+        "decisionReminderSection",
+        "composeTurnReminder",
+        "commandReminderLine",
+        "registerTurnReminder",
+        "heartbeatKeepalive",
+        "registerHeartbeatKeepalive"
+      ]
+    },
+    {
+      "id": "capture",
+      "title": "capture",
+      "semantics": "捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务；agent/created 自动开心跳、agent/disposed 自动关闭。",
+      "members": [
+        "captureTarget",
+        "captureClaims",
+        "captureTurnStop",
+        "EMPTY_STACK_GOAL",
+        "captureAutoStart",
+        "captureAutoEnd",
+        "registerAgentCreated",
+        "registerAgentDisposed"
+      ]
+    },
+    {
+      "id": "session-switches",
+      "title": "session switches",
+      "semantics": "会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。",
+      "members": [
+        "sessionHookCaller",
+        "captureEnabled",
+        "heartbeatGateEnabled",
+        "heartbeatGuardReason"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:child_process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:url",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../plugin/shared.mjs",
+      "kind": "static",
+      "target": "lib/plugin/shared.mjs"
+    },
+    {
+      "specifier": "../stage.mjs",
+      "kind": "static",
+      "target": "lib/stage.mjs"
+    },
+    {
+      "specifier": "../team-sync.mjs",
+      "kind": "static",
+      "target": "lib/team-sync.mjs"
+    },
+    {
+      "specifier": "../tools/subtasks.mjs",
+      "kind": "static",
+      "target": "lib/tools/subtasks.mjs"
+    },
+    {
+      "specifier": "../veto.mjs",
+      "kind": "static",
+      "target": "lib/veto.mjs"
+    },
+    {
+      "specifier": "../commands.mjs",
+      "kind": "static",
+      "target": "lib/commands.mjs"
+    },
+    {
+      "specifier": "../capture.mjs",
+      "kind": "static",
+      "target": "lib/capture.mjs"
+    },
+    {
+      "specifier": "../plugin/mount.mjs",
+      "kind": "static",
+      "target": "lib/plugin/mount.mjs"
+    },
+    {
+      "specifier": "./shared.mjs",
+      "kind": "static",
+      "target": "lib/host/shared.mjs"
+    }
+  ],
+  "moduleEdges": [
+    {
+      "from": "capture",
+      "to": "heartbeats",
+      "count": 6,
+      "why": [
+        "captureAutoEnd → heartbeatOpen",
+        "captureAutoStart → heartbeatWorking",
+        "captureAutoStart → sessionIsLive"
+      ]
+    },
+    {
+      "from": "capture",
+      "to": "session-switches",
+      "count": 1,
+      "why": [
+        "registerAgentCreated → sessionHookCaller"
+      ]
+    },
+    {
+      "from": "reminder",
+      "to": "capture",
+      "count": 1,
+      "why": [
+        "registerHeartbeatKeepalive → captureTurnStop"
+      ]
+    },
+    {
+      "from": "reminder",
+      "to": "heartbeats",
+      "count": 12,
+      "why": [
+        "disciplineText → agentRoot",
+        "disciplineText → currentTaskOf",
+        "disciplineText → rootSessionVerdict"
+      ]
+    },
+    {
+      "from": "reminder",
+      "to": "session-switches",
+      "count": 1,
+      "why": [
+        "registerTurnReminder → sessionHookCaller"
+      ]
+    },
+    {
+      "from": "session-switches",
+      "to": "heartbeats",
+      "count": 5,
+      "why": [
+        "heartbeatGuardReason → agentRoot",
+        "heartbeatGuardReason → heartbeatWorking",
+        "heartbeatGuardReason → rootSessionVerdict"
+      ]
+    }
+  ],
+  "created_at": "2026-11-08T13:40:31+08:00",
+  "updated_at": "2026-11-08T13:43:12+08:00"
+}

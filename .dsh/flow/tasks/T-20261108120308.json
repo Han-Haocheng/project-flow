@@ -1,0 +1,45 @@
+{
+  "type": "chore",
+  "title": "当前会话处理心跳模块",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "3cf1067b6105cf0121ce6ebc93d24a73c09286c5d107ef4b34267a62f09f7b3f",
+    "at": "2026-11-08T03:26:05.627Z",
+    "text": "当前会话处理心跳模块"
+  },
+  "schema": 1,
+  "id": "T-20261108120308",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [
+      "index.js",
+      "test/",
+      "CONTRACT.md",
+      "README.md"
+    ],
+    "deny": [
+      ".git/",
+      ".dsh/"
+    ]
+  },
+  "acceptance": [
+    "空台账与 capture:false 下，主会话由插件自动获得心跳；flow_heartbeat update 不再 not-found",
+    "重复 agent/created 不涨 turn；重复 agent/disposed 改 ended_at / note 只一次",
+    "CONTRACT §9.2 与实现一致（创建无条件、与 capture 无关、空栈占位不造任务）",
+    "node --test test/ 全绿；心跳四文件 60/60"
+  ],
+  "checkpoints": [],
+  "commits": [
+    "3c50072",
+    "2551162",
+    "a5ee68e"
+  ],
+  "notes": "心跳模块收口（本会话 session-847fbd1c）。实现三笔提交：`3c50072`（创建无条件——空台账/capture:false 死路修复；agent/created 钩子与 capture 解耦；CONTRACT §9.2/§P2 与测试 ⑭—⑰ 同步）、`2551162`（会话面收回 start/end，工具枚举 update|list|status，CLI 留逃生口）、`a5ee68e`（agent/disposed 自动关，幂等静默）。验证：3c50072 提交树 610/610/0（临时 worktree 实测后 CAS 合入）；当前 HEAD 707/707/0（2026-11-08 13:27）。交接文档：`.dsh-ops/briefs/handoff-heartbeat-20261108.md`（8 节固定骨架，自检脚本 `.dsh-ops/tmp/handoff_check.py` 全通过）。未完成：宿主重启激活与真机验证；阶段机流转（本会话不越权）。风险：P2 禁派工、共享工作树提交冲突、旧插件 ghost。\n\n交接接收（session-93c13ae7，2026-11-08 13:41，独立工作树 dsh-93c13ae7-9ec3 @ e6a128f）：三提交均为 HEAD 祖先；干净树 node --test test/ 700/700；心跳四文件 60/60；契约 §9.2 与交付代码的工具枚举（update|list|status）静态一致。宿主仍旧插件（本会话 flow_heartbeat start 仍可用）⇒ 重启未发生、P0 未验。重启前置：主工作树框架重构提交且全量测试绿（现 index.js 重构未提交）。\n重启窗口已定（D-20261108-04，用户裁决）：等框架重构提交且全量测试绿后再 /restart；届时按 handoff §4/§7 做真机验证（工具枚举 update|list|status、空台账自动开、结束自动关、提醒不再教 start）。",
+  "created_at": "2026-11-08T12:03:08+08:00",
+  "updated_at": "2026-11-08T13:45:06+08:00",
+  "done_at": null,
+  "archived_at": null
+}

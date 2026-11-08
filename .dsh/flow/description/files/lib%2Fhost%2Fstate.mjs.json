@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "path": "lib/host/state.mjs",
+  "language": "js",
+  "hash": "sha256:45a9636790802c5b8a6ea9a8db47455148f52d1c89d67c1b5b03820db67db6ee",
+  "bytes": 23265,
+  "lines": 696,
+  "semantics": "Host 读路径：fork 子进程池、请求级快照调用、GET state 路由、面板载荷组装与 TUI 读路径；主线程不碰同步 store 读。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "top",
+      "semantics": "模块头与 import：读路径依赖的服务、快照 API 与共享助手。",
+      "members": [
+        "inject"
+      ]
+    },
+    {
+      "id": "state-read-isolation",
+      "title": "state read isolation",
+      "semantics": "读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader。",
+      "members": [
+        "STATE_DEADLINE_MS",
+        "STATE_READY_MS",
+        "STATE_MAX_IDLE",
+        "STATE_MAX_CHILDREN",
+        "stateMaxChildren",
+        "STATE_WORKER_DEFAULT_SCRIPT",
+        "stateWorkerScript",
+        "stateWorkerEnv",
+        "STATE_POOLS",
+        "statePoolOf",
+        "StateWorkerPool",
+        "requestStateSnapshot",
+        "handleState",
+        "collectPanelState",
+        "panelStateReader"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:child_process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:url",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../plugin/shared.mjs",
+      "kind": "static",
+      "target": "lib/plugin/shared.mjs"
+    },
+    {
+      "specifier": "../stage.mjs",
+      "kind": "static",
+      "target": "lib/stage.mjs"
+    },
+    {
+      "specifier": "../team-sync.mjs",
+      "kind": "static",
+      "target": "lib/team-sync.mjs"
+    },
+    {
+      "specifier": "../tools/subtasks.mjs",
+      "kind": "static",
+      "target": "lib/tools/subtasks.mjs"
+    },
+    {
+      "specifier": "../veto.mjs",
+      "kind": "static",
+      "target": "lib/veto.mjs"
+    },
+    {
+      "specifier": "../commands.mjs",
+      "kind": "static",
+      "target": "lib/commands.mjs"
+    },
+    {
+      "specifier": "../capture.mjs",
+      "kind": "static",
+      "target": "lib/capture.mjs"
+    },
+    {
+      "specifier": "../plugin/mount.mjs",
+      "kind": "static",
+      "target": "lib/plugin/mount.mjs"
+    },
+    {
+      "specifier": "./shared.mjs",
+      "kind": "static",
+      "target": "lib/host/shared.mjs"
+    },
+    {
+      "specifier": "./session.mjs",
+      "kind": "static",
+      "target": "lib/host/session.mjs"
+    },
+    {
+      "specifier": "../host/routes.mjs",
+      "kind": "static",
+      "target": "lib/host/routes.mjs"
+    },
+    {
+      "specifier": "./team.mjs",
+      "kind": "static",
+      "target": "lib/host/team.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:40:31+08:00",
+  "updated_at": "2026-11-08T13:43:12+08:00"
+}

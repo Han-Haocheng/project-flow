@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/desc.mjs",
   "language": "js",
-  "hash": "sha256:c67d5fdd26fa4f4d817a855b8635f85aa58bf32c6d7eb80b7d7ca294c6ad706d",
-  "bytes": 83129,
-  "lines": 2124,
+  "hash": "sha256:b52b6d19b304dda98d6593dc8de0297eb0dae80a9fee87e7fd6aa55de3d3f025",
+  "bytes": 83145,
+  "lines": 2125,
   "semantics": "lib/desc.mjs 是「项目描述台账」的模型层：只做纯计算与只读文件系统访问——路径/glob 归一、扫描结果到记录的建记录与对账、补丁与计划的归一核对、模块边推导、确定性 Markdown 渲染、git 降级探测都在这里，任何写盘（锁内编排 + 原子写）都不在本文件。它被 lib/core.mjs 以 desc.* 整体消费、被 bin/flow.mjs 的 `desc plan --template` 懒加载；依赖方向固定 core → desc → source-scan/util，本模块不得 import core。",
   "modules": [
     {
@@ -652,5 +652,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:11:11+08:00"
+  "updated_at": "2026-11-08T13:41:59+08:00"
 }

@@ -2,214 +2,24 @@
   "schema": 1,
   "path": "index.js",
   "language": "js",
-  "hash": "sha256:b4ae17e03b28a67a6ac88c360efaa988316b02d28a18903f5ca7661548f2dadc",
-  "bytes": 133938,
-  "lines": 3256,
-  "semantics": "project-flow 的宿主半（共享 `@local/project-flow` 入口）：在宿主 webServer 上注册只读的 `/api/project-flow/state` 与两条写路由 `/api/project-flow/init`、`/api/project-flow/gate`，挂载 flow_status / flow_heartbeat / flow_decision / flow_veto 与子任务工具、注册三个技能，并承载心跳、每轮提醒与决策机制。所有台账读写都转交 `lib/core.mjs`（与 CLI 同一个写入器），阻塞读跑在 fork 的 `lib/state-snapshot.mjs` worker 里，所以本文件在请求主线程不组装 payload、也不同步访问 store；client.js 经 HTTP、tui-host.js 经 `panelStateReader` 依赖它，tasks.js / gates.js / experiments.js 三个子插件入口复用同一 lib/plugin 挂载管道。",
+  "hash": "sha256:c3ed3eb45225f5362a9ed30221d5627f03a22a98bbb2cbca91cad4360df3fcba",
+  "bytes": 11702,
+  "lines": 319,
+  "semantics": "project-flow 的宿主入口（装配层）：声明 inject=['webServer'] 并 apply 一次装配——把读/写路由交给 lib/host/state.mjs 与 lib/host/routes.mjs，把工具、技能、系统提示、会话钩子与权限面交给 lib/host/* 的对应模块；本文件只做装配与 mountJsonRoute，不含业务实现。",
   "modules": [
     {
       "id": "top",
-      "title": "入口依赖与常量",
-      "semantics": "入口的依赖声明与常量：`inject = ['webServer']`、三条 API 路径、init 的 8KB body 与 50/20 条回显上限、心跳 session id 的 80 字符与 `^[A-Za-z0-9._:-]+$` 约束，以及 `SUBAGENT_ORIGIN` 字面量；本模块只有常量，不执行路由或台账逻辑。",
+      "title": "top",
+      "semantics": "入口依赖与常量：inject=['webServer']（TUI 宿主无 webServer 时本入口保持 pending，子插件仍可用），以及从 lib/host/* 引入的装配符号。",
       "members": [
-        "inject",
-        "toolRoot",
-        "PACKAGE_ROOT",
-        "ROUTE_PATH",
-        "INIT_ROUTE_PATH",
-        "GATE_ROUTE_PATH",
-        "MAX_INIT_BODY_BYTES",
-        "MAX_INIT_CREATED",
-        "MAX_INIT_WARNINGS",
-        "HEARTBEAT_GATE_TOOLS",
-        "HEARTBEAT_SESSION_MAX",
-        "HEARTBEAT_SESSION_PATTERN",
-        "SUBAGENT_ORIGIN"
+        "inject"
       ]
     },
     {
-      "id": "workspace-inspection",
-      "title": "workspace inspection",
-      "semantics": "只做异步的台账存在性探测 `hasStoreAsync`：`stat` `<root>/.dsh/flow/flow.json` 并判 isFile，供 HTTP/TUI 在读或写之前区分「未初始化」；任何异常（不存在、无权限、指向目录）都返回 false 且不抛，且不读台账内容。",
+      "id": "tools",
+      "title": "tools",
+      "semantics": "装配：mountJsonRoute 把一条路由挂到 webServer（effect 内注册、卸载即注销）；apply 依次建 state 池、挂三条路由、注册工具/技能/提示/提醒/心跳钩子，并用 sessionHooks 注入 restrict 与 team caller 记忆。",
       "members": [
-        "hasStoreAsync"
-      ]
-    },
-    {
-      "id": "workspace-scope",
-      "title": "workspace scope",
-      "semantics": "工作区注册表与根作用域的唯一实现：`workspacePath` 用纯路径算术规范化注册行（不触盘），`canonicalRoot`/`isDirectory` 对请求根做 realpath 与目录校验，`rootWithin`/`rootAccepted` 要求根等于或位于某注册工作区之内、或自带 flow 台账，`rootName` 决定显示名（`flow.json` 的 name > 最内层注册工作区标题 > 目录名）。不变量：只有被接受的根才会被读或写，注册表每个请求只枚举一次，缺挂载的注册行不产生文件系统调用。",
-      "members": [
-        "canonicalRoot",
-        "isDirectory",
-        "workspacePath",
-        "listWorkspaces",
-        "rootWithin",
-        "rootAccepted",
-        "rootName"
-      ]
-    },
-    {
-      "id": "http",
-      "title": "HTTP",
-      "semantics": "同源与 JSON 响应封装：`sendJson`/`sendError` 统一输出 `application/json; charset=utf-8`、`cache-control: no-store`、content-length 以及 `{ok:false,error:{code,message}}` 形状；`originAllowed` 仅在请求带 Origin 头时要求它等于 `webServer.getOrigin()`，无 Origin（非浏览器客户端）放行，取不到期望 origin 则拒绝。",
-      "members": [
-        "sendJson",
-        "sendError",
-        "originAllowed"
-      ]
-    },
-    {
-      "id": "state-read-isolation",
-      "title": "state read isolation",
-      "semantics": "把阻塞式快照读取隔离到 per-`apply` 的 fork 工作池（`StateWorkerPool`：1800ms 读取 deadline、4000ms ready 超时、空闲 unref、stdio ignore、env 白名单、一请求独占一个 child），`handleState` 只做方法/同源/单根作用域校验并转发；worker 超时、崩溃、池已销毁统一成 `state-timeout` / `state-worker-crashed` / `state-worker-unavailable` 的 `ok:false`，因此宿主事件循环从不同步读 store。",
-      "members": [
-        "STATE_DEADLINE_MS",
-        "STATE_READY_MS",
-        "STATE_MAX_IDLE",
-        "STATE_MAX_CHILDREN",
-        "stateMaxChildren",
-        "STATE_WORKER_DEFAULT_SCRIPT",
-        "stateWorkerScript",
-        "stateWorkerEnv",
-        "STATE_POOLS",
-        "statePoolOf",
-        "StateWorkerPool",
-        "requestStateSnapshot",
-        "handleState"
-      ]
-    },
-    {
-      "id": "p3a-read-only-team-board",
-      "title": "P3a: read-only team board",
-      "semantics": "只读 Team 看板投影：Team 服务以 live Agent 作授权凭据，故 `TEAM_CALLERS`（按 ctx 的 WeakMap）只记住最后一个主会话 agent，无凭据或服务时输出 `available:false`（面板隐藏该行而不是报 0）；`applyTeamBoard` 只在快照 fork 之后用内存中的 Team 数据做链接对账，`collectPanelState` 是 HTTP 响应与 TUI 共用的唯一投影（含 not-initialized、agents 标注、心跳过滤），`panelStateReader` 是它在 TUI 侧不抛错的包装。",
-      "members": [
-        "TEAM_UNAVAILABLE",
-        "TEAM_CALLERS",
-        "teamCallerState",
-        "rememberTeamCaller",
-        "teamCallerOf",
-        "teamStatusFor",
-        "applyTeamBoard",
-        "collectPanelState",
-        "panelStateReader"
-      ]
-    },
-    {
-      "id": "init-http",
-      "title": "init HTTP",
-      "semantics": "init 写路由：`readBody` 以 8KB 为界读 JSON，超限立即 `tooLarge` 并在后台排空剩余字节（不让响应等流）；`handleInit` 依次校验 POST、同源、JSON body、root 是已存在目录且通过根作用域，然后把目录交给 `lib/core.mjs` 的 `initProject` 落盘，conflict 映射 409，created/warnings 各截断到 50/20，并用 `already-initialized:` 前缀判定重复初始化。",
-      "members": [
-        "readBody",
-        "handleInit"
-      ]
-    },
-    {
-      "id": "gate-http",
-      "title": "gate HTTP",
-      "semantics": "gate 写路由：与 init 共享 POST、同源、8KB body、根作用域四道门，额外要求 `id` 非空、`enabled` 为布尔且该根已有台账，最后只经 `lib/core.mjs` 的 `loadContract` + `updateGate` 翻转一个门禁定义；响应仅回显 `{id, enabled}`，不暴露台账其余内容。",
-      "members": [
-        "handleGate"
-      ]
-    },
-    {
-      "id": "heartbeats",
-      "title": "heartbeats",
-      "semantics": "会话心跳、捕获与每轮提醒的宿主侧主体：从 `exec.agent.id` / `DSH_SESSION_ID` 取 session，读可选 `agents` 服务的 live 证据（live 覆盖 6h 超时但绝不复活 core 判定的 dead），用 `roots()`/`origin` 区分主会话与子代理，在 agent/created 自动开心跳（空栈用占位 goal）、turn-stopping 续期并排空捕获队列、agent/disposed 关闭仍 open 的心跳，同时产出受 800 字符总预算约束的每轮提醒（命令回显 → 当前任务 → 待决策，超预算按整行从尾部丢弃）与常驻纪律段。不变量：hook 路径永不抛，子代理不建心跳，捕获永不创建心跳，stale 行必须在 agents 标注之后才允许过滤。",
-      "members": [
-        "sessionIdOf",
-        "usableSessionId",
-        "requireSession",
-        "liveSessionIds",
-        "sessionIsLive",
-        "applyAgentLiveness",
-        "applyHeartbeatVisibility",
-        "agentRoot",
-        "heartbeatOpen",
-        "heartbeatWorking",
-        "rootSessionVerdict",
-        "ROOT_SESSION_HEARTBEAT_ONLY",
-        "ROOT_SESSION_DECISION_ONLY",
-        "heartbeatRootOf",
-        "currentTaskOf",
-        "disciplineText",
-        "registerDisciplineSection",
-        "REMINDER_LIMIT",
-        "REMINDER_STACK_ROWS",
-        "COMMAND_ECHO_CLIP",
-        "DECISION_QUESTION_CLIP",
-        "ANSWER_DECISION_HINT",
-        "SUBMIT_DECISION_HINT",
-        "FIRST_TURN_HINT",
-        "hiddenDecisionsHint",
-        "clipEcho",
-        "reminderMessage",
-        "decisionContractOf",
-        "decisionSuspendedText",
-        "decisionReminderLine",
-        "taskReminderSection",
-        "decisionReminderSection",
-        "composeTurnReminder",
-        "commandReminderLine",
-        "registerTurnReminder",
-        "heartbeatKeepalive",
-        "registerHeartbeatKeepalive",
-        "captureTarget",
-        "captureClaims",
-        "captureTurnStop",
-        "EMPTY_STACK_GOAL",
-        "captureAutoStart",
-        "captureAutoEnd",
-        "registerAgentCreated",
-        "registerAgentDisposed"
-      ]
-    },
-    {
-      "id": "p2-permission-surface",
-      "title": "P2 permission surface",
-      "semantics": "P2 权限面：用 `config.enforce` / `actorMode` / `boardMode` 生成拒绝清单（`spawn_teammate` 与 `subagent*` 永远拒绝，`plugin` 模式连 `team_task_*` 也隐藏）并把 `flow_task update` 的阶段跳变、子任务阶段、actor 归属与心跳写门禁合并成一个 guard 判定；阶段规则表来自 `lib/stage.mjs` 的 `edgeOf`/`actorForEdge`/`nextStages`，本文件不复制，guard 内部失败一律放行（undefined）。",
-      "members": [
-        "DISPATCH_TOOL_NAMES",
-        "BOARD_TOOL_NAMES",
-        "TEAM_TOOL_NAMES",
-        "DISPATCH_TOOL_DENY",
-        "TEAM_TOOL_DENY",
-        "MAIN_SESSION_TEAM_DENY",
-        "MAIN_SESSION_TASK_ADD_DENY",
-        "SUBTASK_STAGES",
-        "guardTaskOf",
-        "stageGuardReason",
-        "subtaskGuardReason",
-        "enforceGuardReason",
-        "restrictMainSessionTools",
-        "enforceEnabled",
-        "resolveActorMode",
-        "resolveBoardMode",
-        "captureEnabled",
-        "heartbeatGateEnabled",
-        "heartbeatGuardReason"
-      ]
-    },
-    {
-      "id": "decisions",
-      "title": "decisions",
-      "semantics": "决策与模型工具定义：`buildToolDefinitions` 借 `lib/core.mjs` 写入器定义 flow_veto / flow_status / flow_heartbeat / flow_decision（外加 `lib/tools/subtasks.mjs` 的子任务工具，root 统一走共享 `toolRoot`、写操作先 `requireStore`），`decisionAskInput` 把本会话的 heartbeat turn 写进 `asked_turn` 作为挂起轮数的凭据；`registerTools` 只把心跳门禁与 P2 guard 合成为一个 predicate，交给共享 `registerToolDefinitions` 完成单 effect 注册、核心警告包装与卸载。",
-      "members": [
-        "decisionTurnOf",
-        "decisionOptionInput",
-        "decisionAskInput",
-        "buildToolDefinitions",
-        "registerTools"
-      ]
-    },
-    {
-      "id": "skills",
-      "title": "技能与入口装配",
-      "semantics": "技能注册与插件入口：`SKILL_META` 只列三个技能名（描述与 whenToUse 一律取自技能文件 frontmatter，避免第二处真相），`readSkillFrontmatter` 是刻意最小化的 YAML 子集解析（只认 `metadata.when-to-use` 与单行标量，缺失静默为 undefined），`registerSkills` 优先 `skills/<name>/SKILL.md` 目录布局（带 resourceBase）否则扁平 `.md`，缺文件/空内容只记 mount warning；`mountJsonRoute` 把 handler 包成绝不 reject 进宿主、已发响应则 destroy 的路由，`apply` 是插件入口：清上一轮 mountWarnings、按 config 解析 capture/heartbeatGate/enforce/actorMode/boardMode、替换 per-ctx 快照 worker 池，再依次挂三条路由、工具、技能、纪律段、每轮提醒、keepalive 与 created/disposed 四个 hook。",
-      "members": [
-        "SKILL_META",
-        "readSkillFrontmatter",
-        "registerSkills",
         "mountJsonRoute",
         "apply"
       ]
@@ -223,11 +33,6 @@
     },
     {
       "specifier": "node:fs",
-      "kind": "static",
-      "target": null
-    },
-    {
-      "specifier": "node:fs/promises",
       "kind": "static",
       "target": null
     },
@@ -285,320 +90,49 @@
       "specifier": "./lib/plugin/mount.mjs",
       "kind": "static",
       "target": "lib/plugin/mount.mjs"
+    },
+    {
+      "specifier": "./lib/host/shared.mjs",
+      "kind": "static",
+      "target": "lib/host/shared.mjs"
+    },
+    {
+      "specifier": "./lib/host/session.mjs",
+      "kind": "static",
+      "target": "lib/host/session.mjs"
+    },
+    {
+      "specifier": "./lib/host/routes.mjs",
+      "kind": "static",
+      "target": "lib/host/routes.mjs"
+    },
+    {
+      "specifier": "./lib/host/team.mjs",
+      "kind": "static",
+      "target": "lib/host/team.mjs"
+    },
+    {
+      "specifier": "./lib/host/enforce.mjs",
+      "kind": "static",
+      "target": "lib/host/enforce.mjs"
+    },
+    {
+      "specifier": "./lib/host/tools.mjs",
+      "kind": "static",
+      "target": "lib/host/tools.mjs"
+    },
+    {
+      "specifier": "./lib/host/skills.mjs",
+      "kind": "static",
+      "target": "lib/host/skills.mjs"
+    },
+    {
+      "specifier": "./lib/host/state.mjs",
+      "kind": "static",
+      "target": "lib/host/state.mjs"
     }
   ],
-  "moduleEdges": [
-    {
-      "from": "decisions",
-      "to": "heartbeats",
-      "count": 7,
-      "why": [
-        "buildToolDefinitions → ROOT_SESSION_DECISION_ONLY",
-        "buildToolDefinitions → ROOT_SESSION_HEARTBEAT_ONLY",
-        "buildToolDefinitions → heartbeatRootOf"
-      ]
-    },
-    {
-      "from": "decisions",
-      "to": "p2-permission-surface",
-      "count": 5,
-      "why": [
-        "buildToolDefinitions → captureEnabled",
-        "registerTools → DISPATCH_TOOL_DENY",
-        "registerTools → TEAM_TOOL_DENY"
-      ]
-    },
-    {
-      "from": "decisions",
-      "to": "p3a-read-only-team-board",
-      "count": 1,
-      "why": [
-        "buildToolDefinitions → teamStatusFor"
-      ]
-    },
-    {
-      "from": "decisions",
-      "to": "top",
-      "count": 1,
-      "why": [
-        "buildToolDefinitions → toolRoot"
-      ]
-    },
-    {
-      "from": "gate-http",
-      "to": "http",
-      "count": 3,
-      "why": [
-        "handleGate → originAllowed",
-        "handleGate → sendError",
-        "handleGate → sendJson"
-      ]
-    },
-    {
-      "from": "gate-http",
-      "to": "init-http",
-      "count": 1,
-      "why": [
-        "handleGate → readBody"
-      ]
-    },
-    {
-      "from": "gate-http",
-      "to": "workspace-inspection",
-      "count": 1,
-      "why": [
-        "handleGate → hasStoreAsync"
-      ]
-    },
-    {
-      "from": "gate-http",
-      "to": "workspace-scope",
-      "count": 4,
-      "why": [
-        "handleGate → canonicalRoot",
-        "handleGate → isDirectory",
-        "handleGate → listWorkspaces"
-      ]
-    },
-    {
-      "from": "heartbeats",
-      "to": "p2-permission-surface",
-      "count": 2,
-      "why": [
-        "registerAgentCreated → restrictMainSessionTools",
-        "registerTurnReminder → restrictMainSessionTools"
-      ]
-    },
-    {
-      "from": "heartbeats",
-      "to": "p3a-read-only-team-board",
-      "count": 2,
-      "why": [
-        "registerAgentCreated → rememberTeamCaller",
-        "registerTurnReminder → rememberTeamCaller"
-      ]
-    },
-    {
-      "from": "heartbeats",
-      "to": "top",
-      "count": 4,
-      "why": [
-        "agentRoot → toolRoot",
-        "rootSessionVerdict → SUBAGENT_ORIGIN",
-        "usableSessionId → HEARTBEAT_SESSION_MAX"
-      ]
-    },
-    {
-      "from": "init-http",
-      "to": "http",
-      "count": 3,
-      "why": [
-        "handleInit → originAllowed",
-        "handleInit → sendError",
-        "handleInit → sendJson"
-      ]
-    },
-    {
-      "from": "init-http",
-      "to": "top",
-      "count": 3,
-      "why": [
-        "handleInit → MAX_INIT_CREATED",
-        "handleInit → MAX_INIT_WARNINGS",
-        "readBody → MAX_INIT_BODY_BYTES"
-      ]
-    },
-    {
-      "from": "init-http",
-      "to": "workspace-scope",
-      "count": 5,
-      "why": [
-        "handleInit → canonicalRoot",
-        "handleInit → isDirectory",
-        "handleInit → listWorkspaces"
-      ]
-    },
-    {
-      "from": "p2-permission-surface",
-      "to": "heartbeats",
-      "count": 8,
-      "why": [
-        "enforceGuardReason → rootSessionVerdict",
-        "guardTaskOf → agentRoot",
-        "heartbeatGuardReason → agentRoot"
-      ]
-    },
-    {
-      "from": "p2-permission-surface",
-      "to": "top",
-      "count": 1,
-      "why": [
-        "heartbeatGuardReason → HEARTBEAT_GATE_TOOLS"
-      ]
-    },
-    {
-      "from": "p3a-read-only-team-board",
-      "to": "heartbeats",
-      "count": 3,
-      "why": [
-        "collectPanelState → applyAgentLiveness",
-        "collectPanelState → applyHeartbeatVisibility",
-        "rememberTeamCaller → rootSessionVerdict"
-      ]
-    },
-    {
-      "from": "p3a-read-only-team-board",
-      "to": "state-read-isolation",
-      "count": 1,
-      "why": [
-        "collectPanelState → requestStateSnapshot"
-      ]
-    },
-    {
-      "from": "p3a-read-only-team-board",
-      "to": "workspace-inspection",
-      "count": 1,
-      "why": [
-        "collectPanelState → hasStoreAsync"
-      ]
-    },
-    {
-      "from": "p3a-read-only-team-board",
-      "to": "workspace-scope",
-      "count": 3,
-      "why": [
-        "collectPanelState → rootName",
-        "panelStateReader → canonicalRoot",
-        "panelStateReader → listWorkspaces"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "decisions",
-      "count": 1,
-      "why": [
-        "apply → registerTools"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "gate-http",
-      "count": 1,
-      "why": [
-        "apply → handleGate"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "heartbeats",
-      "count": 5,
-      "why": [
-        "apply → registerAgentCreated",
-        "apply → registerAgentDisposed",
-        "apply → registerDisciplineSection"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "http",
-      "count": 1,
-      "why": [
-        "mountJsonRoute → sendError"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "init-http",
-      "count": 1,
-      "why": [
-        "apply → handleInit"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "p2-permission-surface",
-      "count": 5,
-      "why": [
-        "apply → captureEnabled",
-        "apply → enforceEnabled",
-        "apply → heartbeatGateEnabled"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "state-read-isolation",
-      "count": 4,
-      "why": [
-        "apply → STATE_POOLS",
-        "apply → StateWorkerPool",
-        "apply → handleState"
-      ]
-    },
-    {
-      "from": "skills",
-      "to": "top",
-      "count": 4,
-      "why": [
-        "apply → GATE_ROUTE_PATH",
-        "apply → INIT_ROUTE_PATH",
-        "apply → ROUTE_PATH"
-      ]
-    },
-    {
-      "from": "state-read-isolation",
-      "to": "http",
-      "count": 3,
-      "why": [
-        "handleState → originAllowed",
-        "handleState → sendError",
-        "handleState → sendJson"
-      ]
-    },
-    {
-      "from": "state-read-isolation",
-      "to": "p3a-read-only-team-board",
-      "count": 1,
-      "why": [
-        "handleState → collectPanelState"
-      ]
-    },
-    {
-      "from": "state-read-isolation",
-      "to": "top",
-      "count": 2,
-      "why": [
-        "StateWorkerPool → PACKAGE_ROOT",
-        "handleState → ROUTE_PATH"
-      ]
-    },
-    {
-      "from": "state-read-isolation",
-      "to": "workspace-inspection",
-      "count": 1,
-      "why": [
-        "handleState → hasStoreAsync"
-      ]
-    },
-    {
-      "from": "state-read-isolation",
-      "to": "workspace-scope",
-      "count": 4,
-      "why": [
-        "handleState → canonicalRoot",
-        "handleState → isDirectory",
-        "handleState → listWorkspaces"
-      ]
-    },
-    {
-      "from": "workspace-scope",
-      "to": "workspace-inspection",
-      "count": 2,
-      "why": [
-        "rootAccepted → hasStoreAsync",
-        "rootName → hasStoreAsync"
-      ]
-    }
-  ],
-  "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:12:25+08:00"
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:43:41+08:00",
+  "updated_at": "2026-11-08T13:43:51+08:00"
 }

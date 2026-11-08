@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "background job workflow-babafd8047c94e0a (workflow: project-description-w1) finished [status: completed, 3 agents]. Rea…",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "766f177a3ad13d7c0ce0aa3a03f684f1f9c3a3f0b2e14201bed62ff34d720339",
+    "at": "2026-11-08T03:50:57.805Z",
+    "text": "background job workflow-babafd8047c94e0a (workflow: project-description-w1) finished [status: completed, 3 agents]. Read its output with job_output."
+  },
+  "schema": 1,
+  "id": "T-20261108115351",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T11:53:51+08:00",
+  "updated_at": "2026-11-08T11:53:51+08:00",
+  "done_at": null,
+  "archived_at": null
+}

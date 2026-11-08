@@ -1,0 +1,32 @@
+{
+  "type": "chore",
+  "title": "当前会话处理决策模块",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "7ac8ed2f9260344851e6e4bc4162afdf800dec40b7825b82872d0e4483bb0e3a",
+    "at": "2026-11-08T03:26:18.748Z",
+    "text": "当前会话处理决策模块"
+  },
+  "schema": 1,
+  "id": "T-20261108120646",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "0e71a05",
+    "52eeea9",
+    "afc7668"
+  ],
+  "notes": "决策模块会话收口（实现 + 交接完成；卡保持 active 等 description gate 解除后再置 done）。\n\n## 交付\n- 0e71a05 feat(reminder)：每轮【project-flow】= 命令行 → A 当前任务 → B 待决策 / C 无待决策提交指引（无任务走 D）；删心跳提示段；800 预算预留再分配；单前缀；STAGE_ZH 单源；capture 前缀排除。测试 test/t-20261108-reminder.test.mjs 10 条 + host2 H7/H8/H10/H11 新口径。\n- 52eeea9 docs(contract)：§9.2.3 提醒规格 + registerTurnReminder 改名。\n- afc7668 chore(flow)：关 T-20261108111115/T-20261108111846，开 T-20261108120326，建 D-20261108-03。\n- 交接文档：.dsh-ops/briefs/handoff-decisions-20261108.md。\n\n## 未决\nD-20261108-03 等用户裁决；/restart 激活；T-20261108120326 CLI --option 缺陷待修；76 提交未推送（未获推送指令）。",
+  "created_at": "2026-11-08T12:06:46+08:00",
+  "updated_at": "2026-11-08T13:34:34+08:00",
+  "done_at": null,
+  "archived_at": null
+}
