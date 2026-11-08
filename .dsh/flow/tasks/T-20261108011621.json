@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "Team message from exec-panel:\ntask-76 完成（第四类排除 + `excludedBy`），可提交。\n\n## 实现（`lib/capture.mjs`）\n- 新增 `PEER_MESSAGE_PREFIX…",
+  "stage": "done",
+  "source": {
+    "kind": "utterance",
+    "key": "75ea5bfe506a9314e4dc06585a6c7f62865e77993b689751a83046dbe36cf89c",
+    "at": "2026-11-07T17:02:32.417Z",
+    "text": "Team message from exec-panel:\ntask-76 完成（第四类排除 + `excludedBy`），可提交。\n\n## 实现（`lib/capture.mjs`）\n- 新增 `PEER_MESSAGE_PREFIXES = ['Team message from ']`（**带末尾空格**），与 `SYSTEM_MESSAGE_PREFIXES` 分开——这样 `excludedBy` 能报 `peer` 而不是混进 `prefix`。\n- 新增 `exclusionReasonOf(text)` → `'sentinel'|'prefix'|'peer'|null`；`isExcludedText` 改为委托它（保留原\"非字符串/空串视为排除\"语义）。\n- `recordPreStep` 记录 `excludedBy`：结构前缀三类 + `stale`（早于 GRACE）+ `dup`（上一 step 集合差/本批已见），**最后一条被排除消息的原因**胜出。\n- `captureSummary` / 状态块 `capture` 增加 `excludedBy`。\n- 注释写明：**这是文本约定不是结构信号**（`UserMessage` 无 sender 字段），宿主若加 sender 元数据应改按元数据并删除前缀。\n\n## 测试（capture 17→21 条，全绿）\n①`Team message from ` 开头 → 不建任务且 `excludedBy='peer'`、`skipped='filtered-out'`；②边界 `Team message fromX`（无空格）→ **仍捕获**（防过宽）；③正常用户消息 → 捕获且 `excludedBy=null`；④表驱动五类 `excludedBy`（sentinel/prefix/peer 纯函数 + stale/dup 走 pre-step）。原有三条排除规则用例全部保持通过。\n\n## 变异\n| 变异 | 结果 |\n|---|---|\n| M1 删 `Team message from ` | 排除④红 |\n| M2 前缀写成 `Team message`（过宽） | 边界用例红 |\n| M3 `excludedBy` 恒 null | 表驱动红 |\n| R1 只加注释 | 21/21 绿 |\n\n## 真值\n```\nnode --test test/ → 552 tests / 551 pass / 1 fail\n唯一红：README 声明 548（46 文件），实际 552（46 文件）\n五个 selftest：host2-tools/harness ALL PASS；client-render 100、poll 25、registration 31\n```\nCONTRACT 我改的是 **§5.4.1**（捕获诊断所在节），不是 §6——§6 是 `flow check` 机械检查，不记录捕获排除规则。已写\"四条排除规则\"表 + 方向性要求（宁可多捕获队友消息，不可漏用户真话）。\n\n## 两个只读观察（没碰台账）\n`git status` 里有两个未跟踪任务文件，内容如下：\n- `T-20261108001427.json`：`Team message from exec-panel: …`，`stage=done`（你已软关闭，符合预期）；\n- `T-20261108005524.json`：标题/`source.text` 都是 **「继续」**，`stage=queued-analysis`——**这是真实用户消息，capture 工作正常**，不是误捕获。\n\n按卡我没动 `.dsh/flow/**`，这两个文件留给你的提交策略决定（是否纳入版本库）。"
+  },
+  "schema": 1,
+  "id": "T-20261108011621",
+  "status": "done",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "2026-11-08 误捕关闭（重载前旧代码所建）。内容为 exec-panel 的 task-76 报告，以 role=user 出现在 agent/pre-step 的 messages 里。第四类排除规则已在 4211f4e 加入 PEER_MESSAGE_PREFIXES，但插件需重载才生效；本条创建于 01:16，当时仍跑旧代码。重载后未再出现同类误捕。",
+  "created_at": "2026-11-08T01:16:21+08:00",
+  "updated_at": "2026-11-08T09:33:35+08:00",
+  "done_at": "2026-11-08T09:33:35+08:00",
+  "archived_at": null
+}
