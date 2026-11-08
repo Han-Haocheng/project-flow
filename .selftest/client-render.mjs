@@ -3347,6 +3347,43 @@ for (const name of hostFixtures) {
   });
 }
 
+check('Gate switch: a worktree session writes to ledgerRoot, never to its own checkout', () => {
+  /* D-20261108: the panel reads the project main worktree's ledger, so the only
+     correct write root is `ledgerRoot`. Posting the session cwd would flip the
+     gate in that worktree's committed store copy — invisible to the next poll. */
+  const payload = panelViewPayload();
+  payload.root = '/tmp/pf-wt/checkout';
+  payload.ledgerRoot = '/tmp/pf-wt/main';
+  payload.worktree = true;
+  payload.currentHead = { sha: 'abc1234', subject: 'wt work', branch: 'panel-wt', dirty: 0 };
+  const view = probe.normalize(payload);
+  assert.equal(view.ledgerRoot, '/tmp/pf-wt/main');
+
+  const calls = [];
+  const previousFetch = window.fetch;
+  window.fetch = (url, init) => {
+    const body = JSON.parse(String(init && init.body));
+    calls.push({ url: String(url), body });
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ ok: true, root: body.root, gate: { id: body.id, enabled: false } }),
+    });
+  };
+  try {
+    const full = renderWithState(probe.PanelView, panelViewProps(view), { reset: true });
+    const switches = collect(full, 'project-flow-switch');
+    assert.ok(switches.length >= 1, 'no gate switch rendered');
+    switches[0].props.onClick();
+    assert.equal(calls.length, 1, 'the switch must POST exactly once');
+    assert.ok(calls[0].url.includes('api/project-flow/gate'), 'wrong endpoint: ' + calls[0].url);
+    assert.equal(calls[0].body.root, '/tmp/pf-wt/main', 'gate write root must be the ledger root, not the session cwd');
+  } finally {
+    if (previousFetch === undefined) delete window.fetch;
+    else window.fetch = previousFetch;
+  }
+});
+
 // ------------------------------------------------------------------- summary
 const failed = results.filter((entry) => !entry.ok);
 console.log('');

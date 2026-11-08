@@ -753,3 +753,26 @@ test('T-13 A4：旧 payload（无 parent/depth）平铺、无前缀不崩', () =
   ]);
   assert.ok(!texts.some((text) => text.includes('└─') || text.includes('[父在')));
 })
+
+test('worktree payload：meta 同时给出台账分支与当前分支，心跳行带分支徽标', () => {
+  /* 2026-11-08：linked worktree 会话读主工作区台账。TUI 与 web 头部口径一致：
+     只显示单一分支会让「数据来自哪条分支」看起来像错的。 */
+  const payload = fixture()
+  payload.worktree = true
+  payload.ledgerRoot = '/proj/project-flow'
+  payload.currentHead = { sha: 'abc1234', branch: 'panel-wt', dirty: 0 }
+  payload.heartbeats[0].branch = 'panel-wt'
+  payload.heartbeats[0].worktree = '.agents/worktrees/panel-wt'
+
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW })
+  assert.match(model.meta, /main · 7bb0fe0 · 干净/)
+  assert.match(model.meta, /当前 panel-wt/)
+
+  const heartbeat = model.sections.find((section) => section.title === '心跳')
+  assert.ok(heartbeat.rows.some((row) => row.text.includes('panel-wt')), '心跳行必须标出分支')
+
+  /* 旧 payload（无 worktree/currentHead/分支字段）保持原来的单分支 meta。 */
+  const legacy = panelModel(fixture(), { width: 80, height: 40, now: NOW })
+  assert.equal(/当前/.test(legacy.meta), false)
+  assert.equal(legacy.meta, 'main · 7bb0fe0 · 干净')
+})

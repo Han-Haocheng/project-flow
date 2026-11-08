@@ -1966,9 +1966,26 @@ worktree 时，面板读主工作区的 `.agents/` 台账，payload 带 `root`�
 头部据此同时显示「台账分支」与「当前分支」。**普通子目录不重定向**——只有真正的工作树根才归一到
 主工作区，避免子目录静默继承父仓库的台账。
 
+归一的判据只看「请求 root 是不是 linked worktree 根」（root 下 `.git` 是文件，且
+`git worktree list --porcelain` 的第一条与它不同），**与 root 自己有没有 store 无关**：台账
+（`.agents/`）是入库的，所以每个 linked worktree 检出都自带一份 store 副本；把「有副本」当成
+不归一的短路会让每个 worktree 会话读自己的分支私账（实测同一面板 tasks 96 vs 主台账 93），而
+心跳来自主工作区——一个面板混两个台账。归一只在**主工作区确实有 store** 时发生；主工作区没有
+store（或 git 答不出来）时保持请求 root 自己的作用域，与心跳根的降级规则同向。
+
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
+面板的**写**端点同样以台账根为准：门禁开关 POST 的 body 是
+`{root: <payload.ledgerRoot>, id, enabled}`（旧宿主 payload 没有 `ledgerRoot` 时回退请求 root）；
+否则 worktree 会话的开关会改写该工作树入库的私有副本，主台账不变、下一次轮询又「弹回」。
+`init` 仍用请求 root——未初始化时不存在可归一的台账根。
+
+心跳行在记录带可选 `branch`/`worktree`（§3.5）时**原样透传**这两个字段；旧记录不产生该键，
+旧读端忽略多余键。Web 面板据此渲染分支徽标（悬停带 worktree 相对路径），TUI 面板在行尾附
+分支名。TUI 头部与 Web 同口径：linked worktree 会话的 meta 行为
+「<台账分支> · <sha7> · <干净/改动> · 当前 <工作区分支>」。
+
 `heartbeats` 节由读子进程取**全量行**（`lib/state-snapshot.mjs` 调
 `readHeartbeatSection(…, {visibility:'all'})`），再由**宿主侧**做最终可见性过滤；payload 里
 `heartbeats` 是**行数组**（item = CLI section item + `title`/`statusLine`，**没有**

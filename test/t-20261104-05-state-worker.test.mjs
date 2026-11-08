@@ -637,3 +637,112 @@ test('TUI 读路径：panelStateReader 对假死 root 返回 state-timeout，不
   assert.equal(payload.error.code, 'state-timeout', JSON.stringify(payload))
   assert.ok(elapsed <= TIMEOUT_BUDGET_MS, `TUI 读路径应 ≤${TIMEOUT_BUDGET_MS}ms，实际 ${elapsed}ms`)
 })
+
+// ------------------------------------------ 面板读路径：worktree 台账归一
+//
+// 2026-11-08 回归：台账（.agents/）已入库，所以每个 linked worktree 检出都自带
+// 一份 store 副本。旧实现用「root 有 store → 保持自己的作用域」做短路，导致
+// worktree 会话的侧栏读自己那份分支私账（实测 tasks 96 vs 主工作区 93），而
+// 心跳来自主工作区——一个面板混两个台账。判据必须只看「root 是不是 linked
+// worktree 根」，与它有没有 store 副本无关。
+
+function gitFixture(root, args) {
+  return execFileSync('git', ['-C', root, ...args], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Flow Test',
+      GIT_AUTHOR_EMAIL: 'flow-test@example.invalid',
+      GIT_COMMITTER_NAME: 'Flow Test',
+      GIT_COMMITTER_EMAIL: 'flow-test@example.invalid',
+    },
+  }).trim()
+}
+
+/** 一个台账已提交的 git 项目（与本仓库的真实布局一致）。 */
+function committedProject(label) {
+  const root = tempRoot(label)
+  core.initProject(root, { name: label, noGates: true })
+  const { contract } = core.loadContract(root)
+  core.addTask(root, contract, { type: 'feat', title: `${label} task`, status: 'active' })
+  gitFixture(root, ['init', '-q'])
+  gitFixture(root, ['add', '-A'])
+  gitFixture(root, ['-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', 'init'])
+  return root
+}
+
+test('worktree 侧栏：台账归一主工作区，即使 worktree 自带已入库 store 副本', async () => {
+  const main = committedProject('wt-ledger')
+  const mainBranch = gitFixture(main, ['branch', '--show-current'])
+  const checkout = path.join(tempRoot('wt-ledger-dir'), 'checkout')
+  gitFixture(main, ['worktree', 'add', '-q', checkout, '-b', 'panel-wt'])
+
+  /* 让两侧台账真的不同：在 worktree 自己那份副本里再建一条任务。 */
+  const wtContract = core.loadContract(checkout).contract
+  core.addTask(checkout, wtContract, { type: 'feat', title: 'worktree only', status: 'active' })
+
+  const { routes, ctx } = await mount([main])
+  const res = await startState(routes, checkout).done
+  const payload = json(res)
+  assert.equal(payload.ok, true, res.body)
+  assert.equal(payload.root, fs.realpathSync(checkout), 'payload.root 仍是请求的工作区')
+  assert.equal(payload.ledgerRoot, fs.realpathSync(main), 'ledgerRoot 必须是主工作区')
+  assert.equal(payload.worktree, true)
+  assert.equal(payload.tasks.total, 1, '必须读主工作区台账（1 条），而不是 worktree 副本（2 条）')
+  assert.equal(payload.head.branch, mainBranch, 'head 是台账根的分支')
+  assert.equal(payload.currentHead.branch, 'panel-wt', 'currentHead 是请求工作区的分支')
+
+  /* TUI 与 HTTP 同一投影：两条读路径都必须归一到主工作区。 */
+  const readPanelState = plugin.panelStateReader(ctx)
+  const tui = await readPanelState(checkout)
+  assert.equal(tui.ledgerRoot, fs.realpathSync(main))
+  assert.equal(tui.tasks.total, 1)
+})
+
+test('普通子目录不归一：父仓库有台账也不静默继承', async () => {
+  const main = committedProject('wt-subdir')
+  const sub = path.join(main, 'docs')
+  fs.mkdirSync(sub)
+
+  const { routes } = await mount([main])
+  const payload = json(await startState(routes, sub).done)
+  assert.equal(payload.ok, false)
+  assert.equal(payload.error.code, 'not-initialized', JSON.stringify(payload.error))
+  assert.equal(payload.root, fs.realpathSync(sub))
+})
+
+test('心跳行透传 branch/worktree：面板分支徽标的数据前提（旧记录形状不变）', async () => {
+  const root = makeProject('hb-branch-row')
+  const dir = path.join(root, '.agents', 'heartbeat')
+  fs.mkdirSync(dir, { recursive: true })
+  const now = new Date().toISOString()
+  const base = {
+    schema: 1,
+    agent: '',
+    goal: '分支徽标',
+    task: null,
+    claims: [],
+    status: 'working',
+    last_action: '',
+    started_at: now,
+    updated_at: now,
+    ended_at: null,
+  }
+  fs.writeFileSync(
+    path.join(dir, 'session-branch.json'),
+    JSON.stringify({ ...base, session: 'session-branch', branch: 'wt-branch', worktree: '.agents/worktrees/wt' }),
+  )
+  fs.writeFileSync(path.join(dir, 'session-legacy.json'), JSON.stringify({ ...base, session: 'session-legacy' }))
+
+  const { routes } = await mount([root])
+  const payload = json(await startState(routes, root).done)
+  const row = payload.heartbeats.find((item) => item.session === 'session-branch')
+  assert.ok(row, '新心跳行必须在 payload 里：' + JSON.stringify(payload.heartbeats))
+  assert.equal(row.branch, 'wt-branch')
+  assert.equal(row.worktree, '.agents/worktrees/wt')
+
+  const legacy = payload.heartbeats.find((item) => item.session === 'session-legacy')
+  assert.ok(legacy, '旧心跳行必须在 payload 里')
+  assert.equal(Object.prototype.hasOwnProperty.call(legacy, 'branch'), false, '旧记录的行使形状不受影响')
+  assert.equal(Object.prototype.hasOwnProperty.call(legacy, 'worktree'), false)
+})

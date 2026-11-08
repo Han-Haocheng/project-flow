@@ -84,9 +84,15 @@ function dirtyText(head) {
   return ''
 }
 
-function headMeta(head) {
-  const value = asObject(head) || {}
-  return [asText(value.branch), asText(value.sha).slice(0, 7), dirtyText(value)].filter(Boolean).join(' · ')
+function headMeta(payload) {
+  const head = asObject(payload.head) || {}
+  const parts = [asText(head.branch), asText(head.sha).slice(0, 7), dirtyText(head)].filter(Boolean)
+  /* Branch provenance (2026-11-08): a linked-worktree session reads the project
+     main worktree's ledger, so name both branches instead of hiding which one
+     the data comes from. The web header carries the same pair. */
+  const current = asText((asObject(payload.currentHead) || {}).branch)
+  if (payload.worktree === true && current !== '') parts.push('当前 ' + clip(current, 16))
+  return parts.join(' · ')
 }
 
 function taskTitle(task) {
@@ -280,9 +286,12 @@ function buildHeartbeatRows(heartbeats, hostHidden) {
     if (goal === '') continue
     const age = shortAgo(beat.ageSeconds)
     const isDead = dead(beat) === true
+    /* Branch badge (2026-11-08): only records written after the field existed
+       carry it; older heartbeats keep their previous single-line shape. */
+    const branch = asText(beat.branch)
     const glyph = isDead ? '×' : status === 'working' ? '▶' : status === 'done' ? '✓' : '·'
     const tone = isDead ? 'error' : beat.stale === true ? 'warning' : status === 'working' ? 'accent' : 'dim'
-    rows.push(row(glyph + ' ' + goal + (isDead ? ' · 已结束' : '') + (age === '' ? '' : ' · ' + age), tone))
+    rows.push(row(glyph + ' ' + goal + (branch === '' ? '' : ' · ' + clip(branch, 16)) + (isDead ? ' · 已结束' : '') + (age === '' ? '' : ' · ' + age), tone))
   }
   const hidden = shown.length - Math.min(shown.length, MAX_BEAT_ROWS)
   if (hidden > 0) rows.push(row('…另有 ' + hidden + ' 条心跳', 'dim'))
@@ -360,7 +369,7 @@ function readyModel(payload, now) {
 
   return {
     header: '项目流程 · ' + (asText(contract.name) || 'project-flow'),
-    meta: headMeta(payload.head),
+    meta: headMeta(payload),
     counters,
     sections,
     footer: GUIDE,

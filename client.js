@@ -3366,6 +3366,13 @@ window.__ModuleLoader__.load({
          the next success and the start of the retry is silent (P1-1). */
       const phase = refreshing ? 'busy' : failed ? 'error' : 'idle';
 
+      /* Write root (D-20261108 panel): the gate POST must target the directory
+         that owns the ledger. In a linked-worktree session the panel reads the
+         project main worktree's ledger, so writing to the session cwd would flip
+         the gate in that worktree's committed store copy instead — a silent
+         branch-private edit that the next poll (reading the main ledger) undoes. */
+      const ledgerWriteRoot = asText(view ? view.ledgerRoot : '') || workspaceRoot;
+
       /* Screen-reader announcement (D-20261105-06): the polite region only writes
          on a PHASE TRANSITION — background polls never flip `refreshing`, so the
          2.5 s loop stays silent; a manual refresh announces once when it starts
@@ -3462,9 +3469,10 @@ window.__ModuleLoader__.load({
               'tasks.title',
               React.createElement(TasksCard, { tasks: view.tasks, team: view.team, t, now, showTitle: false, stateRoot, showTrend: display.showTrend !== false })
             ),
-            /* Gate definitions sit between tasks and live signals. */
+            /* Gate definitions sit between tasks and live signals. The switch is
+               a write, so it targets the ledger root, not the session cwd. */
             view.gates
-              ? foldCard('gates', 'gates.title', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot, showTitle: false }))
+              ? foldCard('gates', 'gates.title', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot: ledgerWriteRoot, showTitle: false }))
               : null,
             heartbeatsVisible
               ? foldCard(
