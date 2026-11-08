@@ -2,9 +2,9 @@
   "schema": 1,
   "name": "project-flow",
   "semantics": "project-flow：以 .dsh/flow 为单一真相源的项目流程台账（实验/任务/门禁/决策/心跳）与只读面板；description 台账记录文件图、模块图与模块语义，并在分析→执行→审查三阶段强制同步。",
-  "revision": "sha256:7edb18ecd564053e126b9bcc5d690a5aaac537092e90766b110cf9a223450c41",
-  "generated_at": "2026-11-08T16:03:13+08:00",
-  "updated_at": "2026-11-08T16:03:13+08:00",
+  "revision": "sha256:103f6ce39235f4850664ca533e1df527f0617437dd6e7d5c4424359c23fb463c",
+  "generated_at": "2026-11-08T16:08:17+08:00",
+  "updated_at": "2026-11-08T16:08:17+08:00",
   "counts": {
     "files": 43,
     "modules": 118,

@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/capture.mjs",
   "language": "js",
-  "hash": "sha256:0cec82705c2ca4c3642e7e2eb55e6cc1fe088ba8a5a984ac1965184cc14c90ba",
-  "bytes": 32495,
-  "lines": 730,
+  "hash": "sha256:f86bf557aa3901407b2ce3828c14f3eec590ec7487bcc2892e72d4036324f876",
+  "bytes": 32803,
+  "lines": 735,
   "semantics": "P1 捕获管线：在 agent/pre-step 只把本轮新增的用户话（排除 /命令、系统注入、队友消息、挂载前的历史与重复项）放进内存队列，再由 agent/turn-stopping 的 flushCapture 唯一写盘，落成 type=chore、source={kind:'utterance',key,at,text,attachments?} 的任务并从 created 推进到 queued-analysis。去重键以宿主稳定消息 id 为主料（无 id 时回落 timestamp+text），附件引用（image/file）规范化为 source.attachments 只存引用不存字节；纯附件无文字的消息也建卡并以「[附件] 图片 ×N」兜底标题。它同时装配 §9 状态块（栈顶、阶段计数、最近捕获、Team），供 index.js、flow_status 与 CLI status 共用；不 import core（由调用方注入），pre-step 永不抛错/写盘。",
   "modules": [
     {
@@ -75,5 +75,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T14:40:48+08:00"
+  "updated_at": "2026-11-08T16:03:47+08:00"
 }

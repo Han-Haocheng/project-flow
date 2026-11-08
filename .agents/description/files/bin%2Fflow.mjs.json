@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "bin/flow.mjs",
   "language": "js",
-  "hash": "sha256:53750d00dccc7a83845b61dbc3b76ecd4c5f17731decfc809be88b0c3a63d51a",
-  "bytes": 136849,
-  "lines": 3283,
+  "hash": "sha256:9e6df0c30aa75c11824c495abd38ba4b9bbbe7d2a08e2f8ed1624961706215c8",
+  "bytes": 138062,
+  "lines": 3304,
   "semantics": "project-flow 的唯一 CLI 入口（package.json 的 bin 字段），由 skills 与测试以子进程方式调用：解析 argv、按命令分派、格式化人类/--json 输出，并把错误映射成 0/1/2/3/4 退出码。它不直接读写 .dsh/flow 台账——存储、校验与门禁执行全部懒加载委托 lib/core.mjs（脚本检查另走 lib/checks.mjs）——因此台账语义变更应落在 core/desc，而不是这个文件。",
   "modules": [
     {
@@ -743,5 +743,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T15:22:27+08:00"
+  "updated_at": "2026-11-08T16:03:47+08:00"
 }

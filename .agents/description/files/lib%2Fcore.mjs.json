@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/core.mjs",
   "language": "js",
-  "hash": "sha256:76f5f0a4ad1da8204465c7b8beacd8e44a476768fab8fac2e2732723dc084ffb",
-  "bytes": 220451,
-  "lines": 5110,
+  "hash": "sha256:05095981ea1a0593f78842239722afbe09aec40ea59a719c881082a6dcb2ccf0",
+  "bytes": 225934,
+  "lines": 5233,
   "semantics": "flow store 的唯一写者与核心实现：契约解析、store 锁与原子写、实验/任务/门禁/决策/心跳/描述台账的校验与 CRUD 都收敛在这里，CLI（bin/flow.mjs）、flow_* 工具与只读面板共享它的导出。它只依赖 node 内置模块和 lib/{util,paths,atomic,lock,runner,stage,proc,desc}.mjs，不依赖 lib/checks.mjs，也不允许被 lib/desc.mjs 反向引用。",
   "modules": [
     {
@@ -194,7 +194,9 @@
         "removeTask",
         "archiveWindowDays",
         "archivableTaskFiles",
-        "archiveTasks"
+        "archiveTasks",
+        "normalizeOwnerInput",
+        "releaseDeadSessionTasks"
       ]
     },
     {
@@ -968,7 +970,7 @@
     {
       "from": "tasks",
       "to": "contract",
-      "count": 16,
+      "count": 18,
       "why": [
         "addTask → assertInitialized",
         "addTask → normalizeContract",
@@ -1015,6 +1017,14 @@
     },
     {
       "from": "tasks",
+      "to": "heartbeat-write-api",
+      "count": 1,
+      "why": [
+        "releaseDeadSessionTasks → heartbeatStatus"
+      ]
+    },
+    {
+      "from": "tasks",
       "to": "storage-helpers",
       "count": 17,
       "why": [
@@ -1035,5 +1045,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T15:21:54+08:00"
+  "updated_at": "2026-11-08T16:03:47+08:00"
 }

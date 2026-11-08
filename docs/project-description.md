@@ -397,6 +397,7 @@ graph LR
   m6["tasks"] --> m3["default-gate-seeds"]
   m6["tasks"] --> m15["description-stage-gate"]
   m6["tasks"] --> m5["experiments"]
+  m6["tasks"] --> m12["heartbeat-write-api"]
   m6["tasks"] --> m4["storage-helpers"]
   m6["tasks"] --> m0["top"]
 ```
@@ -409,7 +410,7 @@ graph LR
 | default-gate-seeds | flow init 时种子门禁（session-open/precommit/tests/release）的定义与写入，以及全库写路径共用的 withLock；不变量：只在 gates 目录里一个 .json 都没有时 seed，withLock 的 fn 必须同步且不可重入。 | defaultGateSeeds、seedDefaultGates、withLock |
 | storage-helpers | 集合与单条记录的读写原语：readCollection 跳过坏记录并以 unreadable 报告、requireText/optional* 收紧字段类型、assertSafeId 拒绝路径穿越、nextId/nextTaskId 生成不撞号的 id、sortByUpdatedDesc/sortByCreatedAsc 固定排序；各 CRUD 模块都建立在这些原语上。 | readCollection、unreadableCollector、assertTargetFree、assertSafeId、readRecord、sortByUpdatedDesc、sortByCreatedAsc、nextId、nextTaskId、assertPattern、requireText、optionalText、optionalBoolean、optionalEnum、optionalInt、stringArray、slugify、statusCounts |
 | experiments | 实验台账：schema2 七字段（direction/expected/primaryMetric/guardrails/falsify/windowDays/stopLoss）校验、终态补强（confirmed 需 measured+metrics、pivoted 需 learned+后继）与 CRUD；schema≠2 的旧记录只读，reviewExperimentRecord/checkExperiments 是 check 命令的唯一判定实现。 | normalizeParent、isLegacyExperiment、schema2FieldProblems、normalizeSchema2Fields、normalizeCleanup、warnTerminalGaps、validateExperimentTerminal、validateExperimentFields、buildExperiment、applyExperimentPatch、experimentIds、warnTaskExperiment、experimentContext、listExperiments、getExperiment、addExperiment、updateExperiment、cleanupExperiment、productizeExperiment、REVIEW_BRANCH、reviewExperimentRecord、checkExperiments、removeExperiment、createsCycle、experimentTree |
-| tasks | 任务台账：创建/更新字段白名单校验、由 stage 派生 status、started/done/archived 时间戳投影、旧记录 goal 合并与 type 回填迁移、终态归档；updateTask 在写盘之前调用描述阶段门，被拒时不留任何磁盘残留。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks |
+| tasks | 任务台账：创建/更新字段白名单校验、由 stage 派生 status、started/done/archived 时间戳投影、旧记录 goal 合并与 type 回填迁移、终态归档；updateTask 在写盘之前调用描述阶段门，被拒时不留任何磁盘残留。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks、normalizeOwnerInput、releaseDeadSessionTasks |
 | gates | 门禁定义的 CRUD 与 step 规范化：step id 唯一、expect 默认 exit 0 且语法未知时只告警、timeoutSeconds 有下限、phase 限于 commit/release/manual；这里只存定义，执行入口 runGate 在决策段。 | buildStep、validateGateFields、buildGate、applyGatePatch、gateIds、listGates、getGate、addGate、updateGate、removeGate |
 | decisions-2 | 决策记录与门禁执行：kind+问题文本的 sha256 指纹去重、open 才可答复、关闭后不可再改（重问需 supersede 新记录）、GC 只清关闭记录；同段还收纳 runGate/runGatesByPhase/listGateRuns，按 step 顺序执行、首个失败即停，并把合并输出写到 .dsh/flow/logs/<gateId>/<timestamp>.json。 | codePointLength、decisionFingerprint、normalizeDecisionAffect、normalizeDecisionAffects、normalizeDecisionBlocks、buildDecisionOptions、decisionOptionId、normalizeDecisionSupersedes、normalizeDecisionFields、buildDecision、decisionRecords、decisionIds、decisionSortedNewest、annotateDecision、decisionOpenOrder、listDecisions、getDecision、decisionClosedHint、addDecision、requireOpenDecision、answerDecision、withdrawDecision、gcDecisions、summarizeDecisions、decisionAffectsMatch、decisionStagedFiles、checkDecisions、isoFileStamp、runGate、runGatesByPhase、listGateRuns |
 | heartbeats | 心跳相关的两个常量：正文裁剪上限 MAX_HEARTBEAT_CLIP（400 字符）与已废弃 subagent 自动化写入的 LEGACY_SUBAGENT_AGENT 标记；读侧据此隐藏遗留记录。 | MAX_HEARTBEAT_CLIP、LEGACY_SUBAGENT_AGENT |
@@ -526,7 +527,7 @@ graph LR
 | top | 模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。 | inject |
 | heartbeats | 会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。 | sessionIdOf、usableSessionId、requireSession、liveSessionIds、sessionIsLive、applyAgentLiveness、applyHeartbeatVisibility、agentRoot、heartbeatOpen、heartbeatWorking、rootSessionVerdict、ROOT_SESSION_HEARTBEAT_ONLY、ROOT_SESSION_DECISION_ONLY、heartbeatRootOf、currentTaskOf |
 | reminder | per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息。 | disciplineText、registerDisciplineSection、REMINDER_LIMIT、REMINDER_STACK_ROWS、COMMAND_ECHO_CLIP、DECISION_QUESTION_CLIP、ANSWER_DECISION_HINT、SUBMIT_DECISION_HINT、FIRST_TURN_HINT、hiddenDecisionsHint、clipEcho、reminderMessage、decisionContractOf、decisionSuspendedText、decisionReminderLine、taskReminderSection、decisionReminderSection、composeTurnReminder、commandReminderLine、registerTurnReminder、heartbeatKeepalive、registerHeartbeatKeepalive |
-| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务；agent/created 自动开心跳、agent/disposed 自动关闭。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed |
+| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务；agent/created 自动开心跳、agent/disposed 自动关闭。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、releaseDeadOwners |
 | session-switches | 会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。 | sessionHookCaller、captureEnabled、heartbeatGateEnabled、heartbeatGuardReason、claimTargetOf、claimMatches、heartbeatClaimsOf、claimsGateEnabled、claimsGuardReason |
 
 ### 3.15 lib/host/shared.mjs
@@ -763,7 +764,7 @@ flow_task 工具定义（从 index.js 原样移出），覆盖 list/show/add/upd
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition |
+| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe |
 
 ### 3.34 lib/util.mjs
 

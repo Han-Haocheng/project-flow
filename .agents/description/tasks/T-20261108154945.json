@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "task": "T-20261108154945",
+  "status": "implemented",
+  "base": {
+    "commit": "c040e7f5b8067bfdd471bde8c99f09814fbe136c",
+    "clean": true,
+    "recorded_at": "2026-11-08T16:09:36+08:00"
+  },
+  "noSemanticChange": false,
+  "reason": "",
+  "files": [
+    {
+      "path": "lib/core.mjs",
+      "op": "change",
+      "modules": [
+        {
+          "id": "tasks",
+          "op": "change",
+          "members": [
+            "arrayOfStringsOrObjects",
+            "validateTaskFields",
+            "deriveTaskStatus",
+            "buildTask",
+            "isStamp",
+            "stampTaskTimes",
+            "projectTaskTimes",
+            "applyTaskPatch",
+            "taskIds",
+            "normalizeParentInput",
+            "taskRecordMap",
+            "assertTaskParent",
+            "projectTaskParent",
+            "projectTaskType",
+            "projectTaskStage",
+            "projectTaskRecord",
+            "listTasks",
+            "getTask",
+            "addTask",
+            "updateTask",
+            "TASK_GOAL_SEPARATOR",
+            "migrationType",
+            "taskTypeMissing",
+            "mergedTaskTitle",
+            "taskFormatIssues",
+            "normalizeTaskRecord",
+            "normalizeTaskFormat",
+            "removeTask",
+            "archiveWindowDays",
+            "archivableTaskFiles",
+            "archiveTasks",
+            "normalizeOwnerInput",
+            "releaseDeadSessionTasks"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "lib/host/session.mjs",
+      "op": "change",
+      "modules": [
+        {
+          "id": "capture",
+          "op": "change",
+          "members": [
+            "captureTarget",
+            "captureClaims",
+            "captureTurnStop",
+            "EMPTY_STACK_GOAL",
+            "captureAutoStart",
+            "captureAutoEnd",
+            "registerAgentCreated",
+            "registerAgentDisposed",
+            "releaseDeadOwners"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "lib/tools/tasks.mjs",
+      "op": "change",
+      "modules": [
+        {
+          "id": "tasks",
+          "op": "change",
+          "members": [
+            "buildDefinition",
+            "sessionOfExec",
+            "sessionLiveProbe"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "lib/capture.mjs",
+      "op": "change"
+    },
+    {
+      "path": "bin/flow.mjs",
+      "op": "change"
+    }
+  ],
+  "created_at": "2026-11-08T16:03:36+08:00",
+  "updated_at": "2026-11-08T16:09:36+08:00",
+  "implemented_at": "2026-11-08T16:03:47+08:00",
+  "history": [
+    {
+      "at": "2026-11-08T16:03:36+08:00",
+      "stage": "queued-analysis",
+      "note": ""
+    },
+    {
+      "at": "2026-11-08T16:09:36+08:00",
+      "stage": "implementing",
+      "note": "rebase：base 7e1c7b87a61e120540fa8fadb54a6af83037a753 → c040e7f5b8067bfdd471bde8c99f09814fbe136c（只刷新比较基准；语义、状态、implemented_at 不变）"
+    }
+  ]
+}

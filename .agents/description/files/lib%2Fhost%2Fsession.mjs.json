@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/host/session.mjs",
   "language": "js",
-  "hash": "sha256:5abf99a4205c7579048a0fc2e93b276d678602565df68c65bbdc6d059c519925",
-  "bytes": 54929,
-  "lines": 1298,
+  "hash": "sha256:dd3913a010b185e0e9b24d415e382449a4ce447c38662fdf7afd5c24c044f8b7",
+  "bytes": 56227,
+  "lines": 1325,
   "semantics": "Host 会话面：会话 id 判定、心跳存活与可见性、per-turn 提醒组装、捕获流水线与 agent/created|disposed 钩子；与 index.js 的循环用 sessionHooks 注入打破。",
   "modules": [
     {
@@ -78,7 +78,8 @@
         "captureAutoStart",
         "captureAutoEnd",
         "registerAgentCreated",
-        "registerAgentDisposed"
+        "registerAgentDisposed",
+        "releaseDeadOwners"
       ]
     },
     {
@@ -174,7 +175,7 @@
     {
       "from": "capture",
       "to": "heartbeats",
-      "count": 6,
+      "count": 7,
       "why": [
         "captureAutoEnd → heartbeatOpen",
         "captureAutoStart → heartbeatWorking",
@@ -227,5 +228,5 @@
     }
   ],
   "created_at": "2026-11-08T13:40:31+08:00",
-  "updated_at": "2026-11-08T16:03:13+08:00"
+  "updated_at": "2026-11-08T16:08:17+08:00"
 }
