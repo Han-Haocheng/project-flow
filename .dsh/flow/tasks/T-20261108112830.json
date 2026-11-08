@@ -46,10 +46,18 @@
     "本仓库 flow check description 与 --strict 均 exit 0；precommit 含 description 步骤并跑绿"
   ],
   "checkpoints": [],
-  "commits": [],
-  "notes": "计划已获用户批准（exit_plan_mode）。执行拆分见子任务 D1-D6；实现波次按依赖推进，Lead 只派工/验收/提交。声明：Task 卡片真源在本会话主工作区，实现者禁 git 写。",
+  "commits": [
+    "cdbf14c",
+    "334ad34",
+    "e0e4118",
+    "5f6402f",
+    "e276189",
+    "92e2dbc",
+    "ef024db"
+  ],
+  "notes": "父卡（协调/验收）：D1-D6 全部完成并各自提交（cdbf14c/334ad34/e0e4118/5f6402f/e276189/92e2dbc/ef024db）。验证：干净 worktree（detach ef024db）node --test test/ 700/700、flow check description --strict exit 0、六项 selftest 全绿。父卡自身停在 implementing：done 门被真实并发状态拦下——description gate: unplanned-change scripts/module-domain.mjs（另一会话未提交的新文件在 include 范围）。解锁步骤：该会话提交后 ①flow desc plan T-20261108112830 --rebase 刷新 base ②grep README 用例数按新实测更新（其新增测试文件会改变计数）③flow gate run tests ④重放 implementing→queued-review→reviewing→done。",
   "created_at": "2026-11-08T11:28:30+08:00",
-  "updated_at": "2026-11-08T11:28:47+08:00",
+  "updated_at": "2026-11-08T13:18:15+08:00",
   "done_at": null,
   "archived_at": null
 }
