@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "path": "lib/plugin/mount.mjs",
+  "language": "js",
+  "hash": "sha256:aa925633bc714542cc7b7a084b2db63ccabd665e7d488ea9c2b237b8c4e1bd31",
+  "bytes": 7403,
+  "lines": 211,
+  "semantics": "Host 挂载管线：防御式取 Cordis 服务、在 ctx.inject 可用时延迟注册、把注册包进 effect 以便卸载注销、包装 execute 让 core 警告到达调用方，并让同一挂载问题只报一次。index.js 与 tasks/gates/experiments 三个子插件共用这套语义，任何入口都不应向宿主抛错。",
+  "modules": [
+    {
+      "id": "mount",
+      "title": "挂载管线",
+      "semantics": "provide 在 ctx.inject 可用时等目标服务出现再注册并把注册包进 effect（卸载即 dispose），否则仅在服务已存在时同步注册；registerToolDefinitions 逐个注册并吞掉单个失败，mountModule 只挂一个定义，所有异常都收敛为 warnMount 而不透传给宿主。",
+      "members": [
+        "service",
+        "mountWarnings",
+        "warnMount",
+        "provide",
+        "wrapToolDefinition",
+        "toolDeps",
+        "registerToolDefinitions",
+        "mountModule"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "./shared.mjs",
+      "kind": "static",
+      "target": "lib/plugin/shared.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "path": "lib/tools/subtasks.mjs",
+  "language": "js",
+  "hash": "sha256:e2621a7a20348f17c8393482e1da3526b5acca926422df5a7fd15bc6d6077924",
+  "bytes": 5981,
+  "lines": 126,
+  "semantics": "flow_subtask 工具定义（P4）：补上这个工具后 P2 的「仅实现阶段可用」规则才真正可达。写全部走 core 的 addTask/updateTask，add 固定子任务 stage=queued-analysis，update 只允许 notes/stage 且越界由 stage.mjs 的 assertTransition 拒绝，remove 不是物理删除。",
+  "modules": [
+    {
+      "id": "subtasks",
+      "title": "flow_subtask 工具",
+      "semantics": "add 只转发 type/title/notes/scope/acceptance 并把 parent 与 stage=queued-analysis 交给 core，父任务存在性与禁环由 core 校验；update 的字段白名单只有 notes/stage，改 stage 前先 assertTransition；remove 必须给 reason，效果是 stage=done 加 notes 追加 [removed]，绝不物理删除。",
+      "members": [
+        "SUBTASK_UPDATE_FIELDS",
+        "SUBTASK_ADD_FIELDS",
+        "TASK_TYPE_ENUM",
+        "removedNote",
+        "buildDefinition"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../stage.mjs",
+      "kind": "static",
+      "target": "lib/stage.mjs"
+    },
+    {
+      "specifier": "../plugin/shared.mjs",
+      "kind": "static",
+      "target": "lib/plugin/shared.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

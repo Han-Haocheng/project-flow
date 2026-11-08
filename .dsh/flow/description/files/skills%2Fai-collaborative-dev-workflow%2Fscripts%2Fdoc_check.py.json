@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "path": "skills/ai-collaborative-dev-workflow/scripts/doc_check.py",
+  "language": "python",
+  "hash": "sha256:36b43c65487dcd5885bbe78ead0657317d5db56567e643e838412ba0db34060c",
+  "bytes": 5334,
+  "lines": 134,
+  "semantics": "按可选文档标准校验生成文档：任务/设计/事故/发布四类各自要求的章节必须存在且非空，并检查行数上限、模糊词、design 的备选方案、release 的升级或迁移步骤；未决问题缺 owner 只告警。被 gate.py 的 commit check 与 flow check doc 复用，配置读 .agents/doc-standard.json。",
+  "modules": [
+    {
+      "id": "top-level",
+      "title": "文档校验",
+      "semantics": "validate 用 doc-standard 的 required_sections/max_lines/vague_words（缺省内置四类模板）判定：缺章节或章节全空是错、超行是错、出现模糊词是错；design 的「方案」须含备选或替代，release 的「破坏性变更」有内容时须含升级或迁移，incident 的根因写成粗心或疏忽只告警。",
+      "members": [
+        "DEFAULT_REQUIRED",
+        "DEFAULT_MAX",
+        "DEFAULT_VAGUE",
+        "load_std",
+        "parse",
+        "find_section",
+        "validate",
+        "main"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "argparse",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "json",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "re",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "sys",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "pathlib",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "precision_common",
+      "kind": "static",
+      "target": null
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

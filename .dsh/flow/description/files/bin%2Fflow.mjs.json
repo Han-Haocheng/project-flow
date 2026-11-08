@@ -1,0 +1,747 @@
+{
+  "schema": 1,
+  "path": "bin/flow.mjs",
+  "language": "js",
+  "hash": "sha256:70e9a7dd91233c6cdd31542596f083803d38158f34da73ef969d7f471f3d1c65",
+  "bytes": 136144,
+  "lines": 3272,
+  "semantics": "project-flow 的唯一 CLI 入口（package.json 的 bin 字段），由 skills 与测试以子进程方式调用：解析 argv、按命令分派、格式化人类/--json 输出，并把错误映射成 0/1/2/3/4 退出码。它不直接读写 .dsh/flow 台账——存储、校验与门禁执行全部懒加载委托 lib/core.mjs（脚本检查另走 lib/checks.mjs）——因此台账语义变更应落在 core/desc，而不是这个文件。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "top",
+      "semantics": "CLI 的静态契约层：保存 USAGE 帮助文本、两套退出码映射，以及 BOOL/VALUE/REPEAT 三类 flag 全集和按（命令,子命令）声明的 SPEC 白名单；assertFlagsAllowed 在任何 core 读写之前拒绝未声明的 flag，使不支持参数不可能触达写路径。",
+      "members": [
+        "USAGE",
+        "EXIT",
+        "EXIT_BY_CODE",
+        "CHECK_EXIT_BY_CODE",
+        "STATUS_HEARTBEAT_ROWS",
+        "BOOL_FLAGS",
+        "VALUE_FLAGS",
+        "REPEAT_FLAGS",
+        "SPEC",
+        "GLOBAL_FLAGS",
+        "specOfSpec",
+        "describeFlags",
+        "assertFlagsAllowed",
+        "CliError"
+      ]
+    },
+    {
+      "id": "section-1",
+      "title": "参数解析",
+      "semantics": "把原始 argv 拆成 flags、repeated 与 positional：支持 --k=v 与 --k v、把 -h 归一成 help，并按 BOOL/VALUE/REPEAT 集合校验取值；未知参数与缺值只记入 errors 不立即抛，由 main 统一按 usage 失败。",
+      "members": [
+        "parseArgv"
+      ]
+    },
+    {
+      "id": "section-2",
+      "title": "输出工具",
+      "semantics": "终端与 --json 输出的共享原语：stdout/stderr 写入、JSON 信封、按 CJK 双宽计算的对齐/截断/表格，以及时间与耗时格式化；只在人类输出路径使用，其中 pad 与 lib/util.mjs 的同名函数语义不同、不可合并。",
+      "members": [
+        "jsonMode",
+        "topCommand",
+        "out",
+        "errOut",
+        "emitJson",
+        "charWidth",
+        "textWidth",
+        "pad",
+        "clip",
+        "table",
+        "fmtTime",
+        "fmtDuration"
+      ]
+    },
+    {
+      "id": "section-3",
+      "title": "心跳：主会话判定与心跳根",
+      "semantics": "心跳、决策与 status 共用的前置与展示辅助：读 DSH 会话日志头判定 delegation（子会话禁止写心跳）、把心跳根解析到项目主工作区，并集中收集 core/契约警告、提供年龄/会话短名/claims 格式化。",
+      "members": [
+        "readSessionHeader",
+        "zstdText",
+        "sessionOriginOf",
+        "assertMainSessionHeartbeat",
+        "heartbeatWorkspaceOf",
+        "fmtAge",
+        "shortSession",
+        "fmtClaims",
+        "pendingWarnings",
+        "coreRef",
+        "collectWarnings",
+        "drainCoreWarnings",
+        "loadContractFor",
+        "printWarnings"
+      ]
+    },
+    {
+      "id": "section-4",
+      "title": "参数取值",
+      "semantics": "把 flags 里的原始字符串归一成命令可用的强类型值：非负/正整数、JSON 对象或任意 JSON（desc set 允许数组）、逗号列表、必填字符串与 gate --step 的 'id=命令>>expect'；格式不合法一律抛 usage，不做静默降级。",
+      "members": [
+        "readString",
+        "readInteger",
+        "readPositiveInteger",
+        "readJsonObject",
+        "readJsonValue",
+        "readList",
+        "requireString",
+        "parseStep"
+      ]
+    },
+    {
+      "id": "section-5",
+      "title": "命令实现",
+      "semantics": "init 与 status 两条命令的实现：init 把 name/force/no-gates 转交 core.initProject 并打印新建文件与种子门禁；status 聚合实验/任务/门禁/决策/心跳/描述计数，并刻意区分「台账未初始化或不可读」与「计数为零」。",
+      "members": [
+        "cmdInit",
+        "unreadableTail",
+        "countsOf",
+        "cmdStatus"
+      ]
+    },
+    {
+      "id": "t-12-b2",
+      "title": "T-12 B2：实验与任务命令",
+      "semantics": "exp 与 task 两类命令的实现：收集各子命令 flag，把 schema-2 七个判定字段与 parent/experiment 归一后交给 core，并输出表格或记录详情；CLI 只做输入归一与展示，所有落盘仍由 core 在写锁内完成。",
+      "members": [
+        "splitEntries",
+        "experimentSeven",
+        "cmdExp",
+        "printArchiveResult",
+        "readParentFlag",
+        "cmdTask"
+      ]
+    },
+    {
+      "id": "flow-desc",
+      "title": "flow desc 与 gate 命令",
+      "semantics": "flow desc 子命令面（status/build/show/set/plan/apply/render）的实现，以及同一源码段内、没有独立段头的 gate 子命令（list/show/add/update/enable/disable/rm/run/logs）；desc 的台账读写与校验全部委托 core，仅 desc plan --template 懒加载 lib/desc.mjs 做只读源码扫描，--out 与 description.render 被限制在项目根内。",
+      "members": [
+        "descModeOf",
+        "descInsideRoot",
+        "descRelativeLabel",
+        "descTreeLines",
+        "descPlanShape",
+        "printDescPlan",
+        "loadDescModel",
+        "descPlanTemplate",
+        "cmdDesc",
+        "cmdGate"
+      ]
+    },
+    {
+      "id": "section-8",
+      "title": "心跳",
+      "semantics": "心跳记录的人类可读详情：把 session/agent/goal/task/claims/status/年龄/turn/时间戳/stats 排成对齐的 label-value 行；纯展示、不改记录，start/update/end/status 复用同一渲染。",
+      "members": [
+        "printHeartbeat"
+      ]
+    },
+    {
+      "id": "9-p1",
+      "title": "§9 项目状态块（P1 数据面）",
+      "semantics": "§9 项目状态块与 heartbeat 子命令的 CLI 侧：懒加载 lib/capture.mjs 的 buildStatusBlock 作为栈与计数的唯一真源，这里只做显示截断（HEARTBEAT_STACK_ROWS=5）和折叠提示，并编排 start/update/end/list/status/gc；块装配失败只记 warning，绝不让已落盘的心跳写入失败。",
+      "members": [
+        "HEARTBEAT_STACK_ROWS",
+        "heartbeatStatusBlock",
+        "loadCapture",
+        "statusBlockOf",
+        "printStatusBlock",
+        "printHeartbeatList",
+        "cmdHeartbeat"
+      ]
+    },
+    {
+      "id": "flow-check",
+      "title": "flow check",
+      "semantics": "flow check 的分派层：check list 合并 lib/checks.mjs 的脚本检查与内置 BUILTIN_CHECKS（decisions/experiments/tasks/description），四个内置项在此特判路由到 core、其余才懒加载 checks 模块；退出码按检查语义归一（失败 1、用法 2、缺失 3、IO 4）。",
+      "members": [
+        "loadChecks",
+        "BUILTIN_CHECKS",
+        "cmdCheck"
+      ]
+    },
+    {
+      "id": "flow-decision",
+      "title": "flow decision",
+      "semantics": "决策台账命令与四个内置检查的实现：decision ask/list/show/answer/withdraw/gc 的输入归一（answer 会自动应用否决），以及 check decisions/experiments/tasks/description 的只读执行、逐行报告与 check-failed 载荷；检查不写盘，台账写仍全部委托 core。",
+      "members": [
+        "parseDecisionOption",
+        "decisionSessionInfo",
+        "decisionSuspended",
+        "printDecisionList",
+        "cmdDecision",
+        "runCheckDecisions",
+        "runCheckExperiments",
+        "loadTypeMap",
+        "warnTypeMapExtras",
+        "runCheckTasks",
+        "runCheckDescription"
+      ]
+    },
+    {
+      "id": "section-12",
+      "title": "任务格式归一",
+      "semantics": "flow task normalize 的 CLI 实现：先用只读预览（fix:false）算归一结果，--dry-run 只报告、真跑才在 core 写锁内迁移，写盘后再读盘统计真实残留；永不猜 type，合并后 title 超过 120 列时提示复查。",
+      "members": [
+        "TASK_TITLE_REVIEW_WIDTH",
+        "plannedTaskTitle",
+        "displayWidthOf",
+        "runTaskNormalize"
+      ]
+    },
+    {
+      "id": "section-13",
+      "title": "展示辅助",
+      "semantics": "命令的人类输出辅助：printRecord/printGate/printRun/printGatePhaseRun/printTree 负责记录、门禁、运行、phase 批运行与树形结构的排版；confirmDelete 负责 rm 前确认（--yes 可跳过；--json 或非 TTY 必须显式 --yes，绝不隐式删除）。",
+      "members": [
+        "printRecord",
+        "printGate",
+        "printRun",
+        "printGatePhaseRun",
+        "printTree",
+        "confirmDelete"
+      ]
+    },
+    {
+      "id": "section-14",
+      "title": "入口",
+      "semantics": "进程入口：懒加载 core 与 team-sync（缺模块时给可操作的 io 错误），把 show/update/rm 等子命令的位置参数归一到 flags.id、按命令分派到各 cmd*，并在成功/失败两条路径统一收集 warnings、把 CliError 与检查载荷映射成 0/1/2/3/4 退出码。",
+      "members": [
+        "loadTeamSync",
+        "loadCore",
+        "exitCodeOf",
+        "dispatch",
+        "main"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:os",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:zlib",
+      "kind": "static",
+      "target": null
+    }
+  ],
+  "moduleEdges": [
+    {
+      "from": "9-p1",
+      "to": "section-2",
+      "count": 5,
+      "why": [
+        "cmdHeartbeat → out",
+        "printHeartbeatList → clip",
+        "printHeartbeatList → out"
+      ]
+    },
+    {
+      "from": "9-p1",
+      "to": "section-3",
+      "count": 7,
+      "why": [
+        "cmdHeartbeat → assertMainSessionHeartbeat",
+        "cmdHeartbeat → heartbeatWorkspaceOf",
+        "cmdHeartbeat → loadContractFor"
+      ]
+    },
+    {
+      "from": "9-p1",
+      "to": "section-4",
+      "count": 1,
+      "why": [
+        "cmdHeartbeat → readString"
+      ]
+    },
+    {
+      "from": "9-p1",
+      "to": "section-8",
+      "count": 1,
+      "why": [
+        "cmdHeartbeat → printHeartbeat"
+      ]
+    },
+    {
+      "from": "9-p1",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "cmdHeartbeat → CliError"
+      ]
+    },
+    {
+      "from": "flow-check",
+      "to": "flow-decision",
+      "count": 4,
+      "why": [
+        "cmdCheck → runCheckDecisions",
+        "cmdCheck → runCheckDescription",
+        "cmdCheck → runCheckExperiments"
+      ]
+    },
+    {
+      "from": "flow-check",
+      "to": "section-2",
+      "count": 1,
+      "why": [
+        "cmdCheck → out"
+      ]
+    },
+    {
+      "from": "flow-check",
+      "to": "section-4",
+      "count": 3,
+      "why": [
+        "cmdCheck → readInteger",
+        "cmdCheck → readPositiveInteger",
+        "cmdCheck → readString"
+      ]
+    },
+    {
+      "from": "flow-check",
+      "to": "top",
+      "count": 2,
+      "why": [
+        "cmdCheck → CliError",
+        "loadChecks → CliError"
+      ]
+    },
+    {
+      "from": "flow-decision",
+      "to": "section-13",
+      "count": 1,
+      "why": [
+        "cmdDecision → printRecord"
+      ]
+    },
+    {
+      "from": "flow-decision",
+      "to": "section-2",
+      "count": 9,
+      "why": [
+        "cmdDecision → out",
+        "loadTypeMap → out",
+        "printDecisionList → clip"
+      ]
+    },
+    {
+      "from": "flow-decision",
+      "to": "section-3",
+      "count": 9,
+      "why": [
+        "cmdDecision → collectWarnings",
+        "cmdDecision → loadContractFor",
+        "loadTypeMap → coreRef"
+      ]
+    },
+    {
+      "from": "flow-decision",
+      "to": "section-4",
+      "count": 5,
+      "why": [
+        "cmdDecision → readPositiveInteger",
+        "cmdDecision → readString",
+        "cmdDecision → requireString"
+      ]
+    },
+    {
+      "from": "flow-decision",
+      "to": "top",
+      "count": 3,
+      "why": [
+        "cmdDecision → CliError",
+        "loadTypeMap → CliError",
+        "parseDecisionOption → CliError"
+      ]
+    },
+    {
+      "from": "flow-desc",
+      "to": "section-13",
+      "count": 4,
+      "why": [
+        "cmdGate → confirmDelete",
+        "cmdGate → printGate",
+        "cmdGate → printGatePhaseRun"
+      ]
+    },
+    {
+      "from": "flow-desc",
+      "to": "section-2",
+      "count": 8,
+      "why": [
+        "cmdDesc → clip",
+        "cmdDesc → out",
+        "cmdDesc → table"
+      ]
+    },
+    {
+      "from": "flow-desc",
+      "to": "section-3",
+      "count": 3,
+      "why": [
+        "cmdDesc → collectWarnings",
+        "cmdDesc → loadContractFor",
+        "cmdGate → loadContractFor"
+      ]
+    },
+    {
+      "from": "flow-desc",
+      "to": "section-4",
+      "count": 7,
+      "why": [
+        "cmdDesc → readJsonValue",
+        "cmdDesc → readString",
+        "cmdDesc → requireString"
+      ]
+    },
+    {
+      "from": "flow-desc",
+      "to": "top",
+      "count": 4,
+      "why": [
+        "cmdDesc → CliError",
+        "cmdGate → CliError",
+        "descPlanTemplate → CliError"
+      ]
+    },
+    {
+      "from": "section-1",
+      "to": "top",
+      "count": 3,
+      "why": [
+        "parseArgv → BOOL_FLAGS",
+        "parseArgv → REPEAT_FLAGS",
+        "parseArgv → VALUE_FLAGS"
+      ]
+    },
+    {
+      "from": "section-12",
+      "to": "flow-decision",
+      "count": 2,
+      "why": [
+        "runTaskNormalize → loadTypeMap",
+        "runTaskNormalize → warnTypeMapExtras"
+      ]
+    },
+    {
+      "from": "section-12",
+      "to": "section-2",
+      "count": 1,
+      "why": [
+        "runTaskNormalize → out"
+      ]
+    },
+    {
+      "from": "section-12",
+      "to": "section-3",
+      "count": 2,
+      "why": [
+        "runTaskNormalize → drainCoreWarnings",
+        "runTaskNormalize → loadContractFor"
+      ]
+    },
+    {
+      "from": "section-12",
+      "to": "section-4",
+      "count": 1,
+      "why": [
+        "runTaskNormalize → readString"
+      ]
+    },
+    {
+      "from": "section-13",
+      "to": "section-2",
+      "count": 8,
+      "why": [
+        "confirmDelete → out",
+        "printGate → out",
+        "printGate → textWidth"
+      ]
+    },
+    {
+      "from": "section-13",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "confirmDelete → CliError"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "9-p1",
+      "count": 1,
+      "why": [
+        "dispatch → cmdHeartbeat"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "flow-check",
+      "count": 1,
+      "why": [
+        "dispatch → cmdCheck"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "flow-decision",
+      "count": 1,
+      "why": [
+        "dispatch → cmdDecision"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "flow-desc",
+      "count": 2,
+      "why": [
+        "dispatch → cmdDesc",
+        "dispatch → cmdGate"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "section-1",
+      "count": 1,
+      "why": [
+        "main → parseArgv"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "section-2",
+      "count": 5,
+      "why": [
+        "main → emitJson",
+        "main → errOut",
+        "main → jsonMode"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "section-3",
+      "count": 4,
+      "why": [
+        "main → coreRef",
+        "main → drainCoreWarnings",
+        "main → pendingWarnings"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "section-5",
+      "count": 2,
+      "why": [
+        "dispatch → cmdInit",
+        "dispatch → cmdStatus"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "t-12-b2",
+      "count": 2,
+      "why": [
+        "dispatch → cmdExp",
+        "dispatch → cmdTask"
+      ]
+    },
+    {
+      "from": "section-14",
+      "to": "top",
+      "count": 9,
+      "why": [
+        "dispatch → CliError",
+        "exitCodeOf → EXIT",
+        "exitCodeOf → EXIT_BY_CODE"
+      ]
+    },
+    {
+      "from": "section-3",
+      "to": "section-2",
+      "count": 1,
+      "why": [
+        "printWarnings → errOut"
+      ]
+    },
+    {
+      "from": "section-3",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "assertMainSessionHeartbeat → CliError"
+      ]
+    },
+    {
+      "from": "section-4",
+      "to": "top",
+      "count": 6,
+      "why": [
+        "parseStep → CliError",
+        "readInteger → CliError",
+        "readJsonObject → CliError"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "9-p1",
+      "count": 2,
+      "why": [
+        "cmdStatus → printStatusBlock",
+        "cmdStatus → statusBlockOf"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "flow-decision",
+      "count": 1,
+      "why": [
+        "cmdStatus → decisionSessionInfo"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "section-2",
+      "count": 3,
+      "why": [
+        "cmdInit → out",
+        "cmdStatus → out",
+        "cmdStatus → textWidth"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "section-3",
+      "count": 3,
+      "why": [
+        "cmdInit → collectWarnings",
+        "cmdStatus → collectWarnings",
+        "cmdStatus → fmtAge"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "section-4",
+      "count": 1,
+      "why": [
+        "cmdInit → readString"
+      ]
+    },
+    {
+      "from": "section-5",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "cmdStatus → STATUS_HEARTBEAT_ROWS"
+      ]
+    },
+    {
+      "from": "section-8",
+      "to": "section-2",
+      "count": 3,
+      "why": [
+        "printHeartbeat → fmtTime",
+        "printHeartbeat → out",
+        "printHeartbeat → textWidth"
+      ]
+    },
+    {
+      "from": "section-8",
+      "to": "section-3",
+      "count": 3,
+      "why": [
+        "printHeartbeat → fmtAge",
+        "printHeartbeat → fmtClaims",
+        "printHeartbeat → shortSession"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-12",
+      "count": 1,
+      "why": [
+        "cmdTask → runTaskNormalize"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-13",
+      "count": 5,
+      "why": [
+        "cmdExp → confirmDelete",
+        "cmdExp → printRecord",
+        "cmdExp → printTree"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-14",
+      "count": 1,
+      "why": [
+        "cmdTask → loadTeamSync"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-2",
+      "count": 9,
+      "why": [
+        "cmdExp → clip",
+        "cmdExp → fmtTime",
+        "cmdExp → out"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-3",
+      "count": 2,
+      "why": [
+        "cmdExp → loadContractFor",
+        "cmdTask → loadContractFor"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "section-4",
+      "count": 9,
+      "why": [
+        "cmdExp → readJsonObject",
+        "cmdExp → readList",
+        "cmdExp → readString"
+      ]
+    },
+    {
+      "from": "t-12-b2",
+      "to": "top",
+      "count": 3,
+      "why": [
+        "cmdExp → CliError",
+        "cmdTask → CliError",
+        "experimentSeven → CliError"
+      ]
+    }
+  ],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:08:38+08:00"
+}

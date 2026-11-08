@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "path": "lib/commands.mjs",
+  "language": "js",
+  "hash": "sha256:0ff78459d0db9598d67a8c3ce115634b6fd1b3fd41212fbd04d1ec441a747802",
+  "bytes": 1882,
+  "lines": 41,
+  "semantics": "识别并解析 /建议 /继续 /暂停 /开始 /决策 /状态 六条聊天命令，只做纯解析、从不执行。capture 用它跳过命令消息，每步提醒把命中的命令展示给模型；命令语义本身尚未定义。",
+  "modules": [
+    {
+      "id": "commands",
+      "title": "命令解析",
+      "semantics": "COMMANDS 是六条中文命令的唯一白名单；commandNameOf 剥掉斜杠后取首段（只用于展示），parseCommand 对裸斜杠、非命令与未知命令一律返回 null，rest 保留参数原文，两者都无副作用。",
+      "members": [
+        "COMMANDS",
+        "commandNameOf",
+        "parseCommand"
+      ]
+    }
+  ],
+  "imports": [],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

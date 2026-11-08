@@ -1,19 +1,28 @@
 {
   "type": "feat",
   "title": "feat: CLI 接入 flow desc 命令面 + check description 内置检查",
-  "notes": "D4。写 bin/flow.mjs + 两个测试文件。依赖 D3 的 core 导出（§5.3）。注意：bin/ 被心跳会话 claim，动工前 Lead 确认其已收口；只做新增区块与 check 路由，避开 heartbeat/decision 段。",
+  "notes": "D4 完成：flow desc 七个子命令（status/build/show/set/plan/apply/render）+ check description 内置检查（BUILTIN_CHECKS 末位、cmdCheck 短路、check-failed payload）+ flow status 描述行/counts + core.setDescriptionProject。commit e276189。指定测试 91/91；flag-spec 7/7；module-boundaries 5/5；全量 node --test test/ 700/700。集成修复：D2 模块图断言的顺序敏感改为成员资格；core.test.mjs 七项→八项+description 名单；README 数字并入 D5 提交。",
   "scope": {
     "allow": [
       "bin/flow.mjs",
+      "lib/core.mjs",
       "test/t-20261108-desc-cli.test.mjs",
       "test/checks.test.mjs",
-      "test/t-20261107-status-block.test.mjs"
+      "test/t-20261107-status-block.test.mjs",
+      "test/t-20261106-check-tasks.test.mjs",
+      "test/t-20261108-desc-core.test.mjs"
     ],
     "deny": [
       ".git/",
-      "lib/",
       "index.js",
-      "CONTRACT.md"
+      "CONTRACT.md",
+      "README.md",
+      "lib/desc.mjs",
+      "lib/source-scan.mjs",
+      "lib/capture.mjs",
+      "lib/veto.mjs",
+      "lib/tools/",
+      "lib/state-snapshot.mjs"
     ]
   },
   "acceptance": [
@@ -24,13 +33,15 @@
     "新增 test/t-20261108-desc-cli.test.mjs 与 test/checks.test.mjs 更新；全绿"
   ],
   "parent": "T-20261108112830",
-  "stage": "queued-analysis",
+  "stage": "done",
   "schema": 1,
   "id": "T-20261108112930",
-  "status": "active",
-  "owner": "",
+  "status": "done",
+  "owner": "lead",
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-11-08T11:29:30+08:00",
-  "updated_at": "2026-11-08T11:29:30+08:00"
+  "updated_at": "2026-11-08T13:04:08+08:00",
+  "done_at": "2026-11-08T13:04:08+08:00",
+  "archived_at": null
 }

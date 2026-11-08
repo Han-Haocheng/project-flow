@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "path": "lib/tools/gates.mjs",
+  "language": "js",
+  "hash": "sha256:a9bb77a12ad6d36961cc9a4dd0bf132da48a103445f385fab069d8aa2a77af0d",
+  "bytes": 5030,
+  "lines": 123,
+  "semantics": "flow_gate 工具定义（从 index.js 原样移出），覆盖 list/show/add/update/remove/run/logs；list 在无 store 时返回空目录与 init 提示而不报错。run 会真正在项目根执行门禁步骤并写运行记录，logs 默认取最近 5 条（上限 50），add 必须给门禁 slug。",
+  "modules": [
+    {
+      "id": "gates",
+      "title": "flow_gate 工具",
+      "semantics": "add 要求 id 非空 slug，update 至少要改一个字段；list 在无 store 时返回 store:false 与 init 提示，其余 action 先 requireStore 再走 core；run 调 core.runGate 真正执行步骤并落运行记录，logs 的 limit 经 pickInteger 限制在 1 到 50。",
+      "members": [
+        "buildDefinition"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../plugin/shared.mjs",
+      "kind": "static",
+      "target": "lib/plugin/shared.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

@@ -44,5 +44,9 @@
       ".json",
       ".csv"
     ]
+  },
+  "description": {
+    "dir": ".dsh/flow/description",
+    "render": "docs/project-description.md"
   }
 }

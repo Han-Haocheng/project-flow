@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "path": "lib/paths.mjs",
+  "language": "js",
+  "hash": "sha256:c38c24e7022703d2ac9f57d70ded19f99a1d1836490883eeb7a43934fe94c62e",
+  "bytes": 7292,
+  "lines": 178,
+  "semantics": "清单路径包含性校验：flow.json 声明的每个 store 路径（root/experiments/tasks/gates/logs/current/heartbeats）都必须落在项目根内，符号链接经 realpath 逐层确认。不安全值不抛错——返回 undefined 并记 manifest-path-rejected 警告，由调用方退回默认目录；core 重导出 containedPath。",
+  "modules": [
+    {
+      "id": "paths",
+      "title": "路径包含",
+      "semantics": "containedPath 先把清单值按根解析，再同时比较词法包含与逐层 realpath：绝对路径（除 allowAbsolute）、.. 逃逸、指向根外的符号链接都返回 undefined 并记 manifest-path-rejected；containedDir 在同样判定失败时返回调用方给的根内默认值。",
+      "members": [
+        "UNSAFE_PATH_PREVIEW_MAX",
+        "unsafePathPreview",
+        "noteUnsafeManifestPath",
+        "pathWithin",
+        "memoizedRealpath",
+        "pathMemoOf",
+        "realPathStaysInside",
+        "containedPath",
+        "containedDir"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "./util.mjs",
+      "kind": "static",
+      "target": "lib/util.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

@@ -1,19 +1,20 @@
 {
   "type": "docs",
   "title": "docs: 契约/README/技能同步项目描述台账与三阶段语义职责",
-  "notes": "D5。只写文档四个文件；接口以计划 §3-§5 冻结文本为准，实现若偏离由 Lead 裁决后回改。README 数字必须最后按实测更新（node --test test/ 的用例数/文件数）。",
+  "notes": "D5 完成：CONTRACT §1.1 source-scan 表述、§6 内置例外四个/共八项/内置项 JSON 加 description、§6.1 表、§6.1.4 文案与 bin 对齐；README 检查清单八项 + 用例数 700/54；SKILL.md 检查枚举加 description；contract-check-tasks 断言八项。commit 92e2dbc。文档哨兵全绿（doc-drift/module-map/contract-check-tasks）。",
   "scope": {
     "allow": [
       "CONTRACT.md",
       "README.md",
       "skills/project-flow-usage.md",
-      "skills/ai-collaborative-dev-workflow/SKILL.md"
+      "skills/ai-collaborative-dev-workflow/SKILL.md",
+      "test/t-20261106-contract-check-tasks.test.mjs"
     ],
     "deny": [
       ".git/",
       "lib/",
       "bin/",
-      "test/",
+      "test/t-2026110",
       ".dsh/flow/"
     ]
   },
@@ -25,13 +26,15 @@
     "文档哨兵（README 数字、check 清单、CONTRACT §6.1/§1.1）全绿"
   ],
   "parent": "T-20261108112830",
-  "stage": "queued-analysis",
+  "stage": "done",
   "schema": 1,
   "id": "T-20261108112941",
-  "status": "active",
-  "owner": "",
+  "status": "done",
+  "owner": "lead",
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-11-08T11:29:41+08:00",
-  "updated_at": "2026-11-08T11:29:41+08:00"
+  "updated_at": "2026-11-08T13:04:08+08:00",
+  "done_at": "2026-11-08T13:04:08+08:00",
+  "archived_at": null
 }

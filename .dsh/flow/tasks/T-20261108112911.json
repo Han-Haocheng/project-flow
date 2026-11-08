@@ -1,7 +1,7 @@
 {
   "type": "feat",
   "title": "feat: 描述模型 lib/desc.mjs（build 回填/图推导/漂移检查/渲染）",
-  "notes": "D2。读依赖 D1 的 lib/source-scan.mjs（接口已冻结）；本卡只写纯逻辑 + 文件系统读，不做锁/原子写编排（那是 D3）。build 的写入以「返回待写记录列表」还是「自行写」由 D2 定：优先纯函数 + D3 编排写。写域两个文件，禁 git 写。",
+  "notes": "D2 完成：lib/desc.mjs（2124 行，21 导出与冻结契约逐字一致，依赖 desc→source-scan/util，不 import core）+ test/t-20261108-desc-model.test.mjs（23 用例全绿）。commit 334ad34。真实仓库只读自检：34 文件 101 模块，种子零结构失败；core.mjs 14 模块/225 声明全归属/52 条模块边。与 D3 的衔接要点：检查项带 level(fail|warn) 需分区；scanSourceAt 的 text 是不可枚举属性勿展开；decodePath 先去 .json；checkProject 的 undescribed-file 需全 include 范围 scannedMap；计划 members 是并集断言、set patch 是整体替换。",
   "scope": {
     "allow": [
       "lib/desc.mjs",
@@ -24,13 +24,17 @@
     "node --test test/t-20261108-desc-model.test.mjs 全绿；不 import lib/core.mjs（依赖方向 core→desc→source-scan/util）"
   ],
   "parent": "T-20261108112830",
-  "stage": "queued-analysis",
+  "stage": "done",
   "schema": 1,
   "id": "T-20261108112911",
-  "status": "active",
-  "owner": "",
+  "status": "done",
+  "owner": "lead",
   "checkpoints": [],
-  "commits": [],
+  "commits": [
+    "334ad34"
+  ],
   "created_at": "2026-11-08T11:29:11+08:00",
-  "updated_at": "2026-11-08T11:29:11+08:00"
+  "updated_at": "2026-11-08T12:22:06+08:00",
+  "done_at": "2026-11-08T12:21:36+08:00",
+  "archived_at": null
 }

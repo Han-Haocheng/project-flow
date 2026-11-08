@@ -28,13 +28,15 @@
     "flow gate run tests 绿，D6 推到审查/完成；描述记录与文档提交"
   ],
   "parent": "T-20261108112830",
-  "stage": "queued-analysis",
+  "stage": "implementing",
   "schema": 1,
   "id": "T-20261108112951",
   "status": "active",
-  "owner": "",
+  "owner": "lead",
   "checkpoints": [],
   "commits": [],
   "created_at": "2026-11-08T11:29:51+08:00",
-  "updated_at": "2026-11-08T11:29:51+08:00"
+  "updated_at": "2026-11-08T13:04:52+08:00",
+  "done_at": null,
+  "archived_at": null
 }

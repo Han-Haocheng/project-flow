@@ -1,0 +1,1038 @@
+{
+  "schema": 1,
+  "path": "lib/core.mjs",
+  "language": "js",
+  "hash": "sha256:3184673709c7c24d23524bd9f9257d39032d8a874ed5410c799d7a865fe108ff",
+  "bytes": 215104,
+  "lines": 5031,
+  "semantics": "flow store 的唯一写者与核心实现：契约解析、store 锁与原子写、实验/任务/门禁/决策/心跳/描述台账的校验与 CRUD 都收敛在这里，CLI（bin/flow.mjs）、flow_* 工具与只读面板共享它的导出。它只依赖 node 内置模块和 lib/{util,paths,atomic,lock,runner,stage,proc,desc}.mjs，不依赖 lib/checks.mjs，也不允许被 lib/desc.mjs 反向引用。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "全局常量",
+      "semantics": "文件头部的全局常量：store 路径、各类 id 正则、实验/任务状态与类型词表、门禁阶段，以及 store 布局说明；被各模块直接引用，改这里等于改全库的 id 与状态口径。",
+      "members": [
+        "SCHEMA_VERSION",
+        "STORE_REL",
+        "CONTRACT_REL",
+        "EXP_ID_RE",
+        "TASK_ID_RE",
+        "REF_ID_RE",
+        "GATE_ID_RE",
+        "EXPERIMENT_SCHEMA",
+        "EXPERIMENT_STATUS",
+        "EXPERIMENT_LEGACY_STATUS",
+        "EXPERIMENT_REQUIRED_FIELDS",
+        "EXPERIMENT_SYSTEM_FIELDS",
+        "EXPERIMENT_DIRECTION_MAX",
+        "EXPERIMENT_CLEANUP_MAX",
+        "EXPERIMENT_WINDOW_MAX_DAYS",
+        "TASK_TYPES",
+        "TASK_STATUS",
+        "GATE_PHASES"
+      ]
+    },
+    {
+      "id": "decisions",
+      "title": "决策常量与全局默认值",
+      "semantics": "决策、心跳、实验、任务共用的常量与默认值：决策状态/种类、问题与理由长度上限、固定 approve/reject 选项，心跳超时与 Windows 会话名黑名单，PLUGIN_BIN，EXPERIMENT_DEFAULTS/TASK_DEFAULTS 及可写字段白名单、DAY_MS；它们是 defaultContract 与各 build*/apply* 校验的唯一常量来源。",
+      "members": [
+        "DECISION_SCHEMA",
+        "DECISION_STATUS",
+        "DECISION_KINDS",
+        "DECISION_ESCALATE_TURNS",
+        "DECISION_ESCALATE_HOURS",
+        "DECISION_GC_DAYS",
+        "DECISION_REMIND_MAX",
+        "DECISION_ID_RE",
+        "DECISION_OPTION_ID_RE",
+        "DECISION_QUESTION_MAX",
+        "DECISION_RATIONALE_MAX",
+        "DECISION_BY",
+        "DECISION_APPROVAL_OPTIONS",
+        "HEARTBEAT_STALE_SECONDS",
+        "HEARTBEAT_SCHEMA",
+        "HEARTBEAT_STATUS",
+        "HEARTBEAT_ACTIVE_STATUS",
+        "HEARTBEAT_PATCH_KEYS",
+        "HEARTBEAT_SESSION_MAX",
+        "HEARTBEAT_CLAIM_MAX",
+        "WINDOWS_RESERVED_SESSION_NAMES",
+        "WINDOWS_UNSAFE_SESSION_CHARS_RE",
+        "PLUGIN_BIN",
+        "EXPERIMENT_DEFAULTS",
+        "TASK_DEFAULTS",
+        "TASK_CREATE_KEYS",
+        "TASK_IMMUTABLE_KEYS",
+        "TASK_UPDATABLE_KEYS",
+        "TASK_SYSTEM_KEYS",
+        "TASK_ARCHIVE_AFTER_DAYS",
+        "TASK_ARCHIVE_MAX_DAYS",
+        "DAY_MS"
+      ]
+    },
+    {
+      "id": "contract",
+      "title": "契约",
+      "semantics": "契约的读写与归一：defaultContract 给全部默认值，sanitizeContract 逐字段校验非法值并回退默认同时记 manifest-invalid，loadContract/saveContract 负责 flow.json，initProject 建库并 seed 门禁；storePaths 把契约目录解析为绝对路径并强制 containment，所有读写都先经过它。",
+      "members": [
+        "defaultContract",
+        "valueType",
+        "contractShapes",
+        "matchesContractKind",
+        "sanitizeContract",
+        "normalizeContract",
+        "loadContract",
+        "saveContract",
+        "resolveDir",
+        "storePaths",
+        "assertInitialized",
+        "initLockContract",
+        "initProject"
+      ]
+    },
+    {
+      "id": "default-gate-seeds",
+      "title": "种子门禁与写锁",
+      "semantics": "flow init 时种子门禁（session-open/precommit/tests/release）的定义与写入，以及全库写路径共用的 withLock；不变量：只在 gates 目录里一个 .json 都没有时 seed，withLock 的 fn 必须同步且不可重入。",
+      "members": [
+        "defaultGateSeeds",
+        "seedDefaultGates",
+        "withLock"
+      ]
+    },
+    {
+      "id": "storage-helpers",
+      "title": "存储与校验原语",
+      "semantics": "集合与单条记录的读写原语：readCollection 跳过坏记录并以 unreadable 报告、requireText/optional* 收紧字段类型、assertSafeId 拒绝路径穿越、nextId/nextTaskId 生成不撞号的 id、sortByUpdatedDesc/sortByCreatedAsc 固定排序；各 CRUD 模块都建立在这些原语上。",
+      "members": [
+        "readCollection",
+        "unreadableCollector",
+        "assertTargetFree",
+        "assertSafeId",
+        "readRecord",
+        "sortByUpdatedDesc",
+        "sortByCreatedAsc",
+        "nextId",
+        "nextTaskId",
+        "assertPattern",
+        "requireText",
+        "optionalText",
+        "optionalBoolean",
+        "optionalEnum",
+        "optionalInt",
+        "stringArray",
+        "slugify",
+        "statusCounts"
+      ]
+    },
+    {
+      "id": "experiments",
+      "title": "实验台账",
+      "semantics": "实验台账：schema2 七字段（direction/expected/primaryMetric/guardrails/falsify/windowDays/stopLoss）校验、终态补强（confirmed 需 measured+metrics、pivoted 需 learned+后继）与 CRUD；schema≠2 的旧记录只读，reviewExperimentRecord/checkExperiments 是 check 命令的唯一判定实现。",
+      "members": [
+        "normalizeParent",
+        "isLegacyExperiment",
+        "schema2FieldProblems",
+        "normalizeSchema2Fields",
+        "normalizeCleanup",
+        "warnTerminalGaps",
+        "validateExperimentTerminal",
+        "validateExperimentFields",
+        "buildExperiment",
+        "applyExperimentPatch",
+        "experimentIds",
+        "warnTaskExperiment",
+        "experimentContext",
+        "listExperiments",
+        "getExperiment",
+        "addExperiment",
+        "updateExperiment",
+        "cleanupExperiment",
+        "productizeExperiment",
+        "REVIEW_BRANCH",
+        "reviewExperimentRecord",
+        "checkExperiments",
+        "removeExperiment",
+        "createsCycle",
+        "experimentTree"
+      ]
+    },
+    {
+      "id": "tasks",
+      "title": "任务台账",
+      "semantics": "任务台账：创建/更新字段白名单校验、由 stage 派生 status、started/done/archived 时间戳投影、旧记录 goal 合并与 type 回填迁移、终态归档；updateTask 在写盘之前调用描述阶段门，被拒时不留任何磁盘残留。",
+      "members": [
+        "arrayOfStringsOrObjects",
+        "validateTaskFields",
+        "deriveTaskStatus",
+        "buildTask",
+        "isStamp",
+        "stampTaskTimes",
+        "projectTaskTimes",
+        "applyTaskPatch",
+        "taskIds",
+        "normalizeParentInput",
+        "taskRecordMap",
+        "assertTaskParent",
+        "projectTaskParent",
+        "projectTaskType",
+        "projectTaskStage",
+        "projectTaskRecord",
+        "listTasks",
+        "getTask",
+        "addTask",
+        "updateTask",
+        "TASK_GOAL_SEPARATOR",
+        "migrationType",
+        "taskTypeMissing",
+        "mergedTaskTitle",
+        "taskFormatIssues",
+        "normalizeTaskRecord",
+        "normalizeTaskFormat",
+        "removeTask",
+        "archiveWindowDays",
+        "archivableTaskFiles",
+        "archiveTasks"
+      ]
+    },
+    {
+      "id": "gates",
+      "title": "门禁定义",
+      "semantics": "门禁定义的 CRUD 与 step 规范化：step id 唯一、expect 默认 exit 0 且语法未知时只告警、timeoutSeconds 有下限、phase 限于 commit/release/manual；这里只存定义，执行入口 runGate 在决策段。",
+      "members": [
+        "buildStep",
+        "validateGateFields",
+        "buildGate",
+        "applyGatePatch",
+        "gateIds",
+        "listGates",
+        "getGate",
+        "addGate",
+        "updateGate",
+        "removeGate"
+      ]
+    },
+    {
+      "id": "decisions-2",
+      "title": "决策台账与门禁运行",
+      "semantics": "决策记录与门禁执行：kind+问题文本的 sha256 指纹去重、open 才可答复、关闭后不可再改（重问需 supersede 新记录）、GC 只清关闭记录；同段还收纳 runGate/runGatesByPhase/listGateRuns，按 step 顺序执行、首个失败即停，并把合并输出写到 .dsh/flow/logs/<gateId>/<timestamp>.json。",
+      "members": [
+        "codePointLength",
+        "decisionFingerprint",
+        "normalizeDecisionAffect",
+        "normalizeDecisionAffects",
+        "normalizeDecisionBlocks",
+        "buildDecisionOptions",
+        "decisionOptionId",
+        "normalizeDecisionSupersedes",
+        "normalizeDecisionFields",
+        "buildDecision",
+        "decisionRecords",
+        "decisionIds",
+        "decisionSortedNewest",
+        "annotateDecision",
+        "decisionOpenOrder",
+        "listDecisions",
+        "getDecision",
+        "decisionClosedHint",
+        "addDecision",
+        "requireOpenDecision",
+        "answerDecision",
+        "withdrawDecision",
+        "gcDecisions",
+        "summarizeDecisions",
+        "decisionAffectsMatch",
+        "decisionStagedFiles",
+        "checkDecisions",
+        "isoFileStamp",
+        "runGate",
+        "runGatesByPhase",
+        "listGateRuns"
+      ]
+    },
+    {
+      "id": "heartbeats",
+      "title": "心跳常量",
+      "semantics": "心跳相关的两个常量：正文裁剪上限 MAX_HEARTBEAT_CLIP（400 字符）与已废弃 subagent 自动化写入的 LEGACY_SUBAGENT_AGENT 标记；读侧据此隐藏遗留记录。",
+      "members": [
+        "MAX_HEARTBEAT_CLIP",
+        "LEGACY_SUBAGENT_AGENT"
+      ]
+    },
+    {
+      "id": "heartbeat-workspace-root",
+      "title": "心跳工作根",
+      "semantics": "把心跳目录解析到项目主工作树（git worktree 探测 + 进程内缓存），使同一项目的 linked worktree 会话共享同一份台账；git 不可用或主工作树没有 store 时降级回 cwd 并记 heartbeat-root-degraded。",
+      "members": [
+        "MAIN_WORKSPACE_CACHE",
+        "GIT_PROBE_TIMEOUT_MS",
+        "GIT_PROBE_MAX_BUFFER",
+        "gitProbe",
+        "gitMainWorktree",
+        "resolveHeartbeatWorkspace",
+        "heartbeatWorkspace",
+        "clipText",
+        "parseHeartbeatStamp"
+      ]
+    },
+    {
+      "id": "heartbeat-liveness",
+      "title": "心跳活性判定",
+      "semantics": "心跳的只读活性判定：以 host/boot_id/pid/pid_start 证据区分 live/dead/stale/foreign/unknown，无证据时回退到 6 小时年龄规则；纯读不写盘，且一次性 CLI 进程不得用自身 pid 覆盖宿主的活性证据。",
+      "members": [
+        "BOOT_ID_FILE",
+        "cachedBootId",
+        "currentBootId",
+        "isFlowCliEntrypoint",
+        "pidStartTime",
+        "pidAlive",
+        "heartbeatEvidenceOf",
+        "isCliWriter",
+        "heartbeatWriterEvidence",
+        "heartbeatAgeOf",
+        "livenessOf",
+        "heartbeatIsActive",
+        "heartbeatFiles",
+        "readHeartbeatJson",
+        "readHeartbeats",
+        "heartbeatDirPath",
+        "heartbeatMax",
+        "richHeartbeatJson",
+        "readHeartbeatSection"
+      ]
+    },
+    {
+      "id": "heartbeat-write-api",
+      "title": "心跳写 API",
+      "semantics": "心跳写 API：session 名当文件名前的安全校验（Windows 保留名、非法字符、尾点/空格、80 字符上限）、claims 裁剪、start/update/end/status/gc；start 幂等保留首个 started_at，无匹配任务时按 created_at FIFO 复用或新建草稿任务卡。",
+      "members": [
+        "windowsReservedSessionName",
+        "assertSessionName",
+        "resolveHeartbeatSession",
+        "normalizeClaims",
+        "readHeartbeatRecord",
+        "pickSessionTask",
+        "heartbeatTaskClaims",
+        "startHeartbeat",
+        "updateHeartbeat",
+        "endHeartbeat",
+        "heartbeatStatus",
+        "gcLegacyHeartbeats"
+      ]
+    },
+    {
+      "id": "aggregate",
+      "title": "只读聚合",
+      "semantics": "面板与 flow status 的只读聚合：readStoreState 一次读出 experiments/tasks/gates/decisions/heartbeat 段与状态计数，不跑 git、不执行门禁、不写盘。",
+      "members": [
+        "summarizeRun",
+        "readStoreState"
+      ]
+    },
+    {
+      "id": "description",
+      "title": "描述台账",
+      "semantics": "项目描述台账在 core 侧的编排：契约段归一（enforce/minSemanticsChars/maxScanBytes 等）、记录与计划的读写、build 同步结构与 moduleEdges、check 漂移校验、render 与 apply；写路径全部在 withLock 内用 writeJsonAtomic，读路径一律无锁，扫描/校验纯逻辑留在 lib/desc.mjs。",
+      "members": [
+        "DESCRIPTION_SCHEMA",
+        "DESCRIPTION_ENFORCE_MODES",
+        "DESCRIPTION_MIN_SEMANTICS",
+        "DESCRIPTION_MAX_SCAN_BYTES",
+        "DESCRIPTION_GATE_STAGES",
+        "DESCRIPTION_PLAN_STAGES",
+        "descriptionConfigOf",
+        "descriptionMinSemantics",
+        "descriptionMaxScanBytes",
+        "descriptionEnforce",
+        "safeRelativePath",
+        "descriptionNow",
+        "descriptionLayoutOf",
+        "descriptionPaths",
+        "readJsonRecord",
+        "compareByPath",
+        "descriptionFilesAt",
+        "descriptionRevisionOf",
+        "descriptionPlanCount",
+        "writeDescriptionProject",
+        "readDescriptionProject",
+        "listDescriptionFiles",
+        "getDescriptionFile",
+        "getDescriptionPlan",
+        "descriptionStatus",
+        "renderDescription",
+        "descriptionIssue",
+        "checkDescription",
+        "buildDescription",
+        "setDescriptionFile",
+        "setDescriptionProject",
+        "mergePlanInput",
+        "descriptionScopeMatcher",
+        "planBaseOf",
+        "setDescriptionPlan",
+        "applyDescriptionPlan"
+      ]
+    },
+    {
+      "id": "description-stage-gate",
+      "title": "描述阶段门",
+      "semantics": "updateTask 调用的阶段门适配器：仅在 queued-implementation/queued-review/done 且非内部写、非子任务、enforce≠off 时生效，前者只查计划形状，后两者跑完整 checkDescription（done 另需测试证据），失败抛 invalid 并附修复命令。",
+      "members": [
+        "descriptionGateFailure",
+        "descriptionGateHint",
+        "planGateItems",
+        "assertDescriptionGate"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:child_process",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:crypto",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:url",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "./util.mjs",
+      "kind": "static",
+      "target": "lib/util.mjs"
+    },
+    {
+      "specifier": "./paths.mjs",
+      "kind": "static",
+      "target": "lib/paths.mjs"
+    },
+    {
+      "specifier": "./atomic.mjs",
+      "kind": "static",
+      "target": "lib/atomic.mjs"
+    },
+    {
+      "specifier": "./lock.mjs",
+      "kind": "static",
+      "target": "lib/lock.mjs"
+    },
+    {
+      "specifier": "./runner.mjs",
+      "kind": "static",
+      "target": "lib/runner.mjs"
+    },
+    {
+      "specifier": "./stage.mjs",
+      "kind": "static",
+      "target": "lib/stage.mjs"
+    },
+    {
+      "specifier": "./desc.mjs",
+      "kind": "static",
+      "target": "lib/desc.mjs"
+    },
+    {
+      "specifier": "./util.mjs",
+      "kind": "reexport",
+      "target": "lib/util.mjs"
+    },
+    {
+      "specifier": "./paths.mjs",
+      "kind": "reexport",
+      "target": "lib/paths.mjs"
+    },
+    {
+      "specifier": "./atomic.mjs",
+      "kind": "reexport",
+      "target": "lib/atomic.mjs"
+    },
+    {
+      "specifier": "./lock.mjs",
+      "kind": "reexport",
+      "target": "lib/lock.mjs"
+    },
+    {
+      "specifier": "./proc.mjs",
+      "kind": "reexport",
+      "target": "lib/proc.mjs"
+    },
+    {
+      "specifier": "./runner.mjs",
+      "kind": "reexport",
+      "target": "lib/runner.mjs"
+    }
+  ],
+  "moduleEdges": [
+    {
+      "from": "aggregate",
+      "to": "contract",
+      "count": 1,
+      "why": [
+        "readStoreState → normalizeContract"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "decisions",
+      "count": 1,
+      "why": [
+        "readStoreState → DECISION_REMIND_MAX"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "decisions-2",
+      "count": 2,
+      "why": [
+        "readStoreState → listGateRuns",
+        "readStoreState → summarizeDecisions"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "experiments",
+      "count": 1,
+      "why": [
+        "readStoreState → listExperiments"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "gates",
+      "count": 1,
+      "why": [
+        "readStoreState → listGates"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "heartbeat-liveness",
+      "count": 1,
+      "why": [
+        "readStoreState → readHeartbeatSection"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "storage-helpers",
+      "count": 1,
+      "why": [
+        "readStoreState → statusCounts"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "tasks",
+      "count": 1,
+      "why": [
+        "readStoreState → listTasks"
+      ]
+    },
+    {
+      "from": "aggregate",
+      "to": "top",
+      "count": 2,
+      "why": [
+        "readStoreState → EXPERIMENT_STATUS",
+        "readStoreState → TASK_STATUS"
+      ]
+    },
+    {
+      "from": "contract",
+      "to": "decisions",
+      "count": 1,
+      "why": [
+        "defaultContract → TASK_ARCHIVE_AFTER_DAYS"
+      ]
+    },
+    {
+      "from": "contract",
+      "to": "default-gate-seeds",
+      "count": 3,
+      "why": [
+        "initProject → seedDefaultGates",
+        "initProject → withLock",
+        "saveContract → withLock"
+      ]
+    },
+    {
+      "from": "contract",
+      "to": "top",
+      "count": 12,
+      "why": [
+        "assertInitialized → CONTRACT_REL",
+        "defaultContract → SCHEMA_VERSION",
+        "defaultContract → STORE_REL"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "contract",
+      "count": 24,
+      "why": [
+        "addDecision → assertInitialized",
+        "addDecision → normalizeContract",
+        "answerDecision → assertInitialized"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "decisions",
+      "count": 13,
+      "why": [
+        "annotateDecision → DECISION_ESCALATE_HOURS",
+        "annotateDecision → DECISION_ESCALATE_TURNS",
+        "answerDecision → DECISION_BY"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "default-gate-seeds",
+      "count": 5,
+      "why": [
+        "addDecision → withLock",
+        "answerDecision → withLock",
+        "gcDecisions → withLock"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "gates",
+      "count": 1,
+      "why": [
+        "runGatesByPhase → listGates"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "storage-helpers",
+      "count": 22,
+      "why": [
+        "addDecision → assertTargetFree",
+        "addDecision → readCollection",
+        "answerDecision → optionalEnum"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "tasks",
+      "count": 1,
+      "why": [
+        "addDecision → taskIds"
+      ]
+    },
+    {
+      "from": "decisions-2",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "runGatesByPhase → GATE_PHASES"
+      ]
+    },
+    {
+      "from": "default-gate-seeds",
+      "to": "contract",
+      "count": 2,
+      "why": [
+        "seedDefaultGates → storePaths",
+        "withLock → storePaths"
+      ]
+    },
+    {
+      "from": "default-gate-seeds",
+      "to": "gates",
+      "count": 2,
+      "why": [
+        "seedDefaultGates → buildGate",
+        "seedDefaultGates → gateIds"
+      ]
+    },
+    {
+      "from": "description",
+      "to": "contract",
+      "count": 19,
+      "why": [
+        "applyDescriptionPlan → assertInitialized",
+        "applyDescriptionPlan → normalizeContract",
+        "buildDescription → assertInitialized"
+      ]
+    },
+    {
+      "from": "description",
+      "to": "decisions-2",
+      "count": 1,
+      "why": [
+        "checkDescription → listGateRuns"
+      ]
+    },
+    {
+      "from": "description",
+      "to": "default-gate-seeds",
+      "count": 5,
+      "why": [
+        "applyDescriptionPlan → withLock",
+        "buildDescription → withLock",
+        "setDescriptionFile → withLock"
+      ]
+    },
+    {
+      "from": "description",
+      "to": "storage-helpers",
+      "count": 4,
+      "why": [
+        "applyDescriptionPlan → assertSafeId",
+        "descriptionFilesAt → readCollection",
+        "getDescriptionPlan → assertSafeId"
+      ]
+    },
+    {
+      "from": "description",
+      "to": "tasks",
+      "count": 5,
+      "why": [
+        "applyDescriptionPlan → getTask",
+        "applyDescriptionPlan → projectTaskStage",
+        "checkDescription → getTask"
+      ]
+    },
+    {
+      "from": "description-stage-gate",
+      "to": "contract",
+      "count": 1,
+      "why": [
+        "assertDescriptionGate → normalizeContract"
+      ]
+    },
+    {
+      "from": "description-stage-gate",
+      "to": "description",
+      "count": 8,
+      "why": [
+        "assertDescriptionGate → DESCRIPTION_GATE_STAGES",
+        "assertDescriptionGate → checkDescription",
+        "assertDescriptionGate → descriptionConfigOf"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "contract",
+      "count": 17,
+      "why": [
+        "addExperiment → assertInitialized",
+        "addExperiment → normalizeContract",
+        "checkExperiments → assertInitialized"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "decisions",
+      "count": 2,
+      "why": [
+        "buildExperiment → EXPERIMENT_DEFAULTS",
+        "checkExperiments → DAY_MS"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "default-gate-seeds",
+      "count": 5,
+      "why": [
+        "addExperiment → withLock",
+        "cleanupExperiment → withLock",
+        "productizeExperiment → withLock"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "storage-helpers",
+      "count": 20,
+      "why": [
+        "addExperiment → assertTargetFree",
+        "buildExperiment → assertPattern",
+        "buildExperiment → nextId"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "tasks",
+      "count": 1,
+      "why": [
+        "checkExperiments → listTasks"
+      ]
+    },
+    {
+      "from": "experiments",
+      "to": "top",
+      "count": 11,
+      "why": [
+        "applyExperimentPatch → EXPERIMENT_SYSTEM_FIELDS",
+        "buildExperiment → EXPERIMENT_SCHEMA",
+        "buildExperiment → EXP_ID_RE"
+      ]
+    },
+    {
+      "from": "gates",
+      "to": "contract",
+      "count": 10,
+      "why": [
+        "addGate → assertInitialized",
+        "addGate → normalizeContract",
+        "getGate → normalizeContract"
+      ]
+    },
+    {
+      "from": "gates",
+      "to": "default-gate-seeds",
+      "count": 3,
+      "why": [
+        "addGate → withLock",
+        "removeGate → withLock",
+        "updateGate → withLock"
+      ]
+    },
+    {
+      "from": "gates",
+      "to": "storage-helpers",
+      "count": 17,
+      "why": [
+        "addGate → assertTargetFree",
+        "buildGate → assertPattern",
+        "buildGate → requireText"
+      ]
+    },
+    {
+      "from": "gates",
+      "to": "top",
+      "count": 3,
+      "why": [
+        "buildGate → GATE_ID_RE",
+        "validateGateFields → GATE_ID_RE",
+        "validateGateFields → GATE_PHASES"
+      ]
+    },
+    {
+      "from": "heartbeat-liveness",
+      "to": "contract",
+      "count": 2,
+      "why": [
+        "readHeartbeatSection → normalizeContract",
+        "readHeartbeats → normalizeContract"
+      ]
+    },
+    {
+      "from": "heartbeat-liveness",
+      "to": "decisions",
+      "count": 5,
+      "why": [
+        "heartbeatIsActive → HEARTBEAT_STALE_SECONDS",
+        "livenessOf → HEARTBEAT_STALE_SECONDS",
+        "readHeartbeatSection → HEARTBEAT_ACTIVE_STATUS"
+      ]
+    },
+    {
+      "from": "heartbeat-liveness",
+      "to": "heartbeat-workspace-root",
+      "count": 6,
+      "why": [
+        "heartbeatAgeOf → parseHeartbeatStamp",
+        "readHeartbeatJson → clipText",
+        "readHeartbeatJson → parseHeartbeatStamp"
+      ]
+    },
+    {
+      "from": "heartbeat-liveness",
+      "to": "heartbeats",
+      "count": 2,
+      "why": [
+        "readHeartbeatJson → LEGACY_SUBAGENT_AGENT",
+        "richHeartbeatJson → LEGACY_SUBAGENT_AGENT"
+      ]
+    },
+    {
+      "from": "heartbeat-workspace-root",
+      "to": "heartbeats",
+      "count": 1,
+      "why": [
+        "clipText → MAX_HEARTBEAT_CLIP"
+      ]
+    },
+    {
+      "from": "heartbeat-workspace-root",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "resolveHeartbeatWorkspace → CONTRACT_REL"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "contract",
+      "count": 9,
+      "why": [
+        "endHeartbeat → assertInitialized",
+        "endHeartbeat → normalizeContract",
+        "gcLegacyHeartbeats → assertInitialized"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "decisions",
+      "count": 11,
+      "why": [
+        "assertSessionName → HEARTBEAT_SESSION_MAX",
+        "assertSessionName → WINDOWS_UNSAFE_SESSION_CHARS_RE",
+        "endHeartbeat → HEARTBEAT_SCHEMA"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "default-gate-seeds",
+      "count": 4,
+      "why": [
+        "endHeartbeat → withLock",
+        "gcLegacyHeartbeats → withLock",
+        "startHeartbeat → withLock"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "heartbeat-liveness",
+      "count": 11,
+      "why": [
+        "endHeartbeat → heartbeatDirPath",
+        "endHeartbeat → heartbeatWriterEvidence",
+        "gcLegacyHeartbeats → heartbeatDirPath"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "heartbeat-workspace-root",
+      "count": 5,
+      "why": [
+        "endHeartbeat → heartbeatWorkspace",
+        "gcLegacyHeartbeats → heartbeatWorkspace",
+        "heartbeatStatus → heartbeatWorkspace"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "heartbeats",
+      "count": 1,
+      "why": [
+        "gcLegacyHeartbeats → LEGACY_SUBAGENT_AGENT"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "storage-helpers",
+      "count": 9,
+      "why": [
+        "normalizeClaims → stringArray",
+        "pickSessionTask → sortByCreatedAsc",
+        "startHeartbeat → assertTargetFree"
+      ]
+    },
+    {
+      "from": "heartbeat-write-api",
+      "to": "tasks",
+      "count": 2,
+      "why": [
+        "startHeartbeat → buildTask",
+        "startHeartbeat → taskIds"
+      ]
+    },
+    {
+      "from": "storage-helpers",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "slugify → GATE_ID_RE"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "contract",
+      "count": 16,
+      "why": [
+        "addTask → assertInitialized",
+        "addTask → normalizeContract",
+        "archiveTasks → assertInitialized"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "decisions",
+      "count": 8,
+      "why": [
+        "applyTaskPatch → TASK_IMMUTABLE_KEYS",
+        "applyTaskPatch → TASK_SYSTEM_KEYS",
+        "applyTaskPatch → TASK_UPDATABLE_KEYS"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "default-gate-seeds",
+      "count": 5,
+      "why": [
+        "addTask → withLock",
+        "archiveTasks → withLock",
+        "normalizeTaskFormat → withLock"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "description-stage-gate",
+      "count": 1,
+      "why": [
+        "updateTask → assertDescriptionGate"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "experiments",
+      "count": 4,
+      "why": [
+        "addTask → warnTaskExperiment",
+        "assertTaskParent → createsCycle",
+        "projectTaskParent → createsCycle"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "storage-helpers",
+      "count": 17,
+      "why": [
+        "addTask → assertTargetFree",
+        "archivableTaskFiles → readCollection",
+        "buildTask → assertPattern"
+      ]
+    },
+    {
+      "from": "tasks",
+      "to": "top",
+      "count": 5,
+      "why": [
+        "buildTask → TASK_ID_RE",
+        "migrationType → TASK_TYPES",
+        "validateTaskFields → REF_ID_RE"
+      ]
+    }
+  ],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:08:29+08:00"
+}

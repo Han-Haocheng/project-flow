@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "path": "skills/ai-collaborative-dev-workflow/scripts/gate.py",
+  "language": "python",
+  "hash": "sha256:05d72e386594d95e9575517627e321e7bd7fd66f93c9450e0d6645c374d9cc2b",
+  "bytes": 7849,
+  "lines": 211,
+  "semantics": "精度层门禁命令：gate commit 先做 check（任务必须 active、暂存文件在 scope.allow 内且不命中 deny、按匹配类型校验文档、执行 sync 声明的版本或命令检查）再调 git commit；push 检查只允许 dev 分支、origin/dev 是祖先、HEAD 不打标签且工作区干净；另有 doctor 环境自检与按 scope 取 build 命令。",
+  "modules": [
+    {
+      "id": "top-level",
+      "title": "精度门禁",
+      "semantics": "check 要求 GATE_TASK_ID 或 .agents/tasks/.current 指向 active 任务、暂存区非空且每个文件都在 scope.allow 内不命中 deny，并按 sync 声明跑版本一致性或同步命令；push_check 拒非 dev 分支、非快进、HEAD 带标签或工作区不干净；commit 子命令先 check 再 git commit。",
+      "members": [
+        "git",
+        "staged_files",
+        "version_check",
+        "doc_type_for",
+        "check",
+        "push_check",
+        "doctor",
+        "build",
+        "main"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "argparse",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "json",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "os",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "re",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "subprocess",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "sys",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "pathlib",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "precision_common",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "doc_check",
+      "kind": "static",
+      "target": null
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

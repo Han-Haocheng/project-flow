@@ -1,19 +1,20 @@
 {
   "type": "feat",
   "title": "feat: core 接入描述台账（契约/存储 API/阶段门/种子门禁/status）",
-  "notes": "D3。写 lib/core.mjs（唯一写者，锁内原子写）+ 三个测试文件。依赖 D2 的 lib/desc.mjs 导出；接口见计划 §5.3。deny：index.js/capture/veto/tools（其他会话域）。",
+  "notes": "D3 完成：契约 description 节（11 成员 + string[] + 回退）、storePaths/init、14 个 core API、三档阶段门（插在 updateTask 的 warnTaskExperiment 与 writeJsonAtomic 之间，from 用 projectTaskStage 投影）、veto.mjs delete 分支 source:'internal' 豁免、种子门禁 precommit/release 加 description 步。commit 5f6402f。测试 181/181（desc-core 34、desc-gate 15、core 122、cli-task-archive 10）+ veto 16 + module-boundaries 5。D4 注意：D3 种了 check description 但 bin 未路由——D3/D4 必须同批；返回形状 {ok,mode,counts,failed[{kind,path,module?,detail,hint,level}],warnings}；renderDescription 无描述返回 null；未初始化 root 抛 usage。未决：project.semantics 无写入口（D4 加 setDescriptionProject + CLI --project-semantics）。",
   "scope": {
     "allow": [
       "lib/core.mjs",
+      "lib/veto.mjs",
       "test/t-20261108-desc-core.test.mjs",
       "test/t-20261108-desc-gate.test.mjs",
-      "test/core.test.mjs"
+      "test/core.test.mjs",
+      "test/cli-task-archive.test.mjs"
     ],
     "deny": [
       ".git/",
       "index.js",
       "lib/capture.mjs",
-      "lib/veto.mjs",
       "lib/tools/",
       "lib/desc.mjs",
       "bin/"
@@ -27,13 +28,17 @@
     "更新 test/core.test.mjs 种子门禁用例；新增 test/t-20261108-desc-core.test.mjs 与 desc-gate.test.mjs；全绿"
   ],
   "parent": "T-20261108112830",
-  "stage": "queued-analysis",
+  "stage": "done",
   "schema": 1,
   "id": "T-20261108112920",
-  "status": "active",
-  "owner": "",
+  "status": "done",
+  "owner": "lead",
   "checkpoints": [],
-  "commits": [],
+  "commits": [
+    "5f6402f"
+  ],
   "created_at": "2026-11-08T11:29:20+08:00",
-  "updated_at": "2026-11-08T11:29:20+08:00"
+  "updated_at": "2026-11-08T12:47:20+08:00",
+  "done_at": "2026-11-08T12:47:15+08:00",
+  "archived_at": null
 }

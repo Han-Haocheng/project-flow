@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "path": "skills/ai-collaborative-dev-workflow/scripts/precision_common.py",
+  "language": "python",
+  "hash": "sha256:74277645a49a6a92160e7b4778779428b9c6875c143b0e1a899483dfec664724",
+  "bytes": 7276,
+  "lines": 209,
+  "semantics": "精度层共享工具：仓库根与当前时间（TASK_ROOT/TASK_NOW 可覆盖，便于测试可复现）、JSON 读写、路径 under/overlap、gate-config 加载、任务定位与 task_errors 校验、envelope/print_errors 输出契约。doc_check.py 与 gate.py 都依赖它，因此这些校验规则只能有一份。",
+  "modules": [
+    {
+      "id": "top-level",
+      "title": "精度层共享",
+      "semantics": "repo_root 优先 TASK_ROOT 再回退 git rev-parse，now 优先 TASK_NOW；task_errors 校验必填字段、id 形如 T-YYYYMMDD-NN、scope 路径相对且无 ..、acceptance 的 exit 0/empty/>=N、invariants 不超过 5 条、done 必须有提交与 pass 检查点，并检出同项目两个 active 任务的 scope 重叠。",
+      "members": [
+        "repo_root",
+        "now",
+        "iso",
+        "load_json",
+        "write_json",
+        "norm",
+        "under",
+        "overlap",
+        "load_config",
+        "task_dir",
+        "task_path",
+        "load_task",
+        "all_tasks",
+        "task_id_from_env",
+        "task_errors",
+        "envelope",
+        "print_errors"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "json",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "os",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "re",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "subprocess",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "sys",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "tempfile",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "datetime",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "pathlib",
+      "kind": "static",
+      "target": null
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

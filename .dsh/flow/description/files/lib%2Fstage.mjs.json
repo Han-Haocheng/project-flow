@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "path": "lib/stage.mjs",
+  "language": "js",
+  "hash": "sha256:32a8ed783b12f9366941956f518ee291ea4deb93be226a89fc9c6de4b19c2140",
+  "bytes": 9479,
+  "lines": 256,
+  "semantics": "任务九阶段状态机，纯数据：阶段 id、中文名、合法边与每条边的期望推进者（plugin / session / reviewer）、stage 到 status 的派生与 legacy status 到 stage 的投影。core 从这里取阶段表，仓库内不得有第二份；analyzing 由会话推进，reviewing 的通过或打回都由审查者推进。",
+  "modules": [
+    {
+      "id": "stage",
+      "title": "阶段状态机",
+      "semantics": "STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。",
+      "members": [
+        "DEFAULT_STAGE",
+        "STAGE_IDS",
+        "STAGE_ZH",
+        "STAGE_MACHINE",
+        "nextStages",
+        "edgeOf",
+        "actorForEdge",
+        "STATUS_BY_STAGE",
+        "stageToStatus",
+        "legacyStageFromStatus",
+        "canTransition",
+        "assertTransition"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "./util.mjs",
+      "kind": "static",
+      "target": "lib/util.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

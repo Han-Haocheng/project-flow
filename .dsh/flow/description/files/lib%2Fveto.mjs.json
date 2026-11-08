@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "path": "lib/veto.mjs",
+  "language": "js",
+  "hash": "sha256:6394b103aa37a3edbcadb035974e955f9c4c849aa8be36d448a2293f2389682c",
+  "bytes": 8120,
+  "lines": 181,
+  "semantics": "分析期否决的本地台账实现：子任务否决由会话自决（子任务 done + notes [removed] + veto，父任务 notes 记一行，不建决策），主任务否决必须建 modify/delete 二选一的决策并把任务停在 analyzing。veto 是永久历史、decision 是答完即清的待办指针；delete 分支的 stage=done 走 source:'internal' 以免自证门禁。",
+  "modules": [
+    {
+      "id": "veto",
+      "title": "分析期否决",
+      "semantics": "vetoTask 只允许 stage=analyzing 的主任务，建 choice 决策后把 decision 指向它；vetoSubtask 要求有 parent，收口子任务到 done 并向父任务 notes 追加一行；applyVetoAnswer 幂等，已清空 decision 的任务返回 applied:false，delete 分支的 updateTask 带 source:'internal'。",
+      "members": [
+        "VETO_CHOICES",
+        "VETO_OPTIONS",
+        "stamp",
+        "requireText",
+        "appendNote",
+        "taskOf",
+        "vetoSubtask",
+        "vetoTask",
+        "applyVetoPatch",
+        "applyVetoAnswer",
+        "applyVetoForDecision",
+        "answerDecisionAndApply"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "./core.mjs",
+      "kind": "static",
+      "target": "lib/core.mjs"
+    },
+    {
+      "specifier": "./util.mjs",
+      "kind": "static",
+      "target": "lib/util.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "path": "lib/util.mjs",
+  "language": "js",
+  "hash": "sha256:7cb66648e46d3769d9de11ea6bdbd99caa3f7652c180d23649ffc7e742fe141f",
+  "bytes": 3820,
+  "lines": 125,
+  "semantics": "flow store 的低层原语：稳定的 FlowError 错误类型、普通对象与深拷贝、本地时间戳格式化、按上限收集的警告通道、每进程单调的临时名后缀。core 重导出全部公开名，本模块不读写文件也不联网；pad 与 bin/flow.mjs 的同名函数契约不同，不能合并。",
+  "modules": [
+    {
+      "id": "top",
+      "title": "错误类型",
+      "semantics": "FlowError 的 code 只取 invalid/not-found/conflict/io/usage；invalid(message) 是构造 code=invalid 的便捷入口，错误文本原样透传（调用方按消息匹配），因此这里不改写也不包装消息。",
+      "members": [
+        "FlowError",
+        "invalid"
+      ]
+    },
+    {
+      "id": "tiny-helpers",
+      "title": "通用小工具",
+      "semantics": "isPlainObject/deepClone/pad/formatIso/dateStamp/timeStamp/timeValue/toPosix 都是无副作用纯函数（formatIso 手工算时区偏移，不依赖 Intl）；警告通道最多存 WARNING_CAP=200 条并由 drainWarnings 取空；nextTempSuffix 用进程级单调计数器保证临时名唯一。",
+      "members": [
+        "isPlainObject",
+        "deepClone",
+        "pad",
+        "formatIso",
+        "dateStamp",
+        "timeStamp",
+        "timeValue",
+        "toPosix",
+        "warningLog",
+        "WARNING_CAP",
+        "noteWarningEntry",
+        "noteWarning",
+        "drainWarnings",
+        "tempSeq",
+        "nextTempSuffix"
+      ]
+    }
+  ],
+  "imports": [],
+  "moduleEdges": [
+    {
+      "from": "tiny-helpers",
+      "to": "top",
+      "count": 1,
+      "why": [
+        "nextTempSuffix → invalid"
+      ]
+    }
+  ],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

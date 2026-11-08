@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "path": "lib/plugin/shared.mjs",
+  "language": "js",
+  "hash": "sha256:7103cee3c806da60db3fc7bdf1e6e05963ad562bbd44f05bfdc6ab33de0509aa",
+  "bytes": 8056,
+  "lines": 254,
+  "semantics": "flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每个 action 的字段白名单、列表上限 200 与 30s 写超时，以及「已知字段被用在错误 action 上」的守卫。共享 plugin 与三个子插件都从这里取规则，挂载逻辑在兄弟模块 mount.mjs。",
+  "modules": [
+    {
+      "id": "shared",
+      "title": "工具共享规则",
+      "semantics": "makeToolRoot 的优先级为显式 root 大于 workingDirectory 服务、再大于 session.cwd，三者皆无才报错；hasStore 只认 .dsh/flow/flow.json 这一份判据；assertOnlyFields 在调用 core 之前拒绝结构字段以外的已知字段，避免字段放错 action 被静默丢弃。",
+      "members": [
+        "ROOT_PROPERTY",
+        "ID_PROPERTY",
+        "EMPTY_STORE_NOTE",
+        "MAX_TOOL_ITEMS",
+        "WRITE_TIMEOUT_MS",
+        "toolOutput",
+        "requireDirectory",
+        "requireId",
+        "normalizeTaskParent",
+        "pickFields",
+        "makeToolRoot",
+        "makeRequireStore",
+        "hasStore",
+        "requireStore",
+        "EXP_ADD_FIELDS",
+        "EXP_UPDATE_FIELDS",
+        "TASK_ADD_FIELDS",
+        "TASK_UPDATE_FIELDS",
+        "GATE_ADD_FIELDS",
+        "GATE_UPDATE_FIELDS",
+        "STRUCTURAL_FIELDS",
+        "assertOnlyFields",
+        "EXP_ACTION_FIELDS",
+        "TASK_ACTION_FIELDS",
+        "GATE_ACTION_FIELDS"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "node:fs",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "node:path",
+      "kind": "static",
+      "target": null
+    },
+    {
+      "specifier": "../state-snapshot.mjs",
+      "kind": "static",
+      "target": "lib/state-snapshot.mjs"
+    },
+    {
+      "specifier": "../util.mjs",
+      "kind": "static",
+      "target": "lib/util.mjs"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:11:01+08:00"
+}

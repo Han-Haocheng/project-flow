@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "path": "tui-host.js",
+  "language": "js",
+  "hash": "sha256:451cee8c4889d1dd25c7a7d3e1326f8146dab791aa21dcbc839e85af63ab2fff",
+  "bytes": 1804,
+  "lines": 57,
+  "semantics": "TUI 宿主装配入口：作为独立 Cordis 行（`inject = ['tuiPanels']`）只服务终端宿主，把 index.js 的 `panelStateReader` 与 tui-panel.js 的 `registerProjectFlowPanel` 按 3000ms 刷新间隔接起来，并把 disposer 挂到 `ctx.effect` 上。web/desktop 宿主没有会出现的 `tuiPanels`，这一行在那里永久 pending、不污染共享插件；注册、日志与释放全部各自兜底，任何失败都不会抛进宿主。",
+  "modules": [
+    {
+      "id": "tui-host",
+      "title": "tui-host",
+      "semantics": "整文件只有一个 `apply` 加两个常量：`apply` 至多注册一次面板，并把 `dispose()` 交给 `ctx.effect`（无 effect 设施时立即调用）；注册、日志、释放各自 try/catch，失败只 warn，因此面板问题永不阻断插件卸载，也不会拖延宿主启动。",
+      "members": [
+        "inject",
+        "PANEL_REFRESH_MS",
+        "apply"
+      ]
+    }
+  ],
+  "imports": [
+    {
+      "specifier": "./index.js",
+      "kind": "static",
+      "target": "index.js"
+    },
+    {
+      "specifier": "./tui-panel.js",
+      "kind": "static",
+      "target": "tui-panel.js"
+    }
+  ],
+  "moduleEdges": [],
+  "created_at": "2026-11-08T13:04:59+08:00",
+  "updated_at": "2026-11-08T13:12:25+08:00"
+}

@@ -9,9 +9,15 @@
       "run": "\"./bin/flow.mjs\" check release-baseline --marker RELEASE",
       "expect": "exit 0",
       "timeoutSeconds": 600
+    },
+    {
+      "id": "description-strict",
+      "run": "\"./bin/flow.mjs\" check description --strict",
+      "expect": "exit 0",
+      "timeoutSeconds": 600
     }
   ],
   "schema": 1,
   "created_at": "2026-10-29T11:46:55+08:00",
-  "updated_at": "2026-10-29T11:46:55+08:00"
+  "updated_at": "2026-11-08T13:14:40+08:00"
 }
