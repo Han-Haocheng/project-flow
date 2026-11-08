@@ -161,7 +161,8 @@
       },
       "tests": [
         "test/t-20261107-veto.test.mjs",
-        "test/t-20261108-control-word.test.mjs"
+        "test/t-20261108-control-word.test.mjs",
+        "test/t-20261108-decision-cli-option.test.mjs"
       ]
     },
     "heartbeats": {
