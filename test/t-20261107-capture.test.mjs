@@ -248,7 +248,9 @@ test('排除 ②：以 【project-flow】 / <system-reminder> / [WIP] 开头的 
   const plain = '前缀规则之外的真实请求'
 
   await preStep(harness, agent, [
-    userMessage('【project-flow】本轮还没有 working 心跳。先调用 flow_heartbeat start。', at),
+    // 只验「【project-flow】前缀被排除」这一条；不抄心跳模块的引导语——它归另一个模块，
+    // 抄进来就会在那边改文案时变成一条悄悄过期的副本（旧口径残留）。
+    userMessage('【project-flow】本轮还没有 working 心跳。', at),
     userMessage('<system-reminder>Read the rules before acting.</system-reminder>', at),
     userMessage('[WIP] 上一条任务的草稿提示', at),
     userMessage(plain, at),
