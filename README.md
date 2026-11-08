@@ -10,6 +10,9 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `l
 |---|---|
 | 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳（只读；未初始化时可一键初始化） |
 | 会话头小图标 / 指南卡 | 打开同一面板 |
+
+面板按**项目主工作区**读台账：会话在 linked git worktree 里时也看同一份台账，头部同时显示
+「台账分支」与「当前分支」，心跳行标注该会话所在分支（`branch`/`worktree` 字段）。
 | `node bin/flow.mjs …` | 人改台账、跑门禁 |
 | agent 工具 `flow_*` | 模型改台账、跑门禁 |
 | 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及中心-贡献者协作（谁提交、谁判定、谁合并）、Agent Teams 四类角色（中心/分析者/实现者/审查者）与状态机、项目任务映射、发布纪律 |

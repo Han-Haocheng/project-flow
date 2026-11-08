@@ -663,7 +663,10 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   "host": "my-laptop|linux",            // machine_id = hostname|platform
   "boot_id": "f0e1…",                   // /proc/sys/kernel/random/boot_id
   "pid": 48213,                         // 宿主进程 pid
-  "pid_start": 9943211                  // /proc/<pid>/stat 第 22 字段（pid 复用判定）
+  "pid_start": 9943211,                 // /proc/<pid>/stat 第 22 字段（pid 复用判定）
+  // 分支溯源（2026-11-08，可选）：台账由项目所有 worktree 共享，心跳记录会话实际所在分支
+  "branch": "main",                     // 会话 cwd 的分支；detached/非 git 时缺省
+  "worktree": ".agents/worktrees/abc"   // linked worktree 相对主工作区的路径；主工作区时缺省
 }
 ```
 
@@ -1957,6 +1960,12 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 | POST | `/api/project-flow/gate` | 门禁开关（`{root, id, enabled}`），走 core |
 
 `root` 缺省取宿主 cwd；它必须是已注册工作区、其子目录，或自带 `.agents/flow` store 的目录。
+读取的**台账根是项目主工作区**（`git worktree list` 的第一条）：请求 `root` 指向一个 linked git
+worktree 时，面板读主工作区的 `.agents/` 台账，payload 带 `root`（请求工作区）、`ledgerRoot`
+（实际台账根）、`worktree`（是否 linked worktree）与 `currentHead`（请求工作区的 git 头），
+头部据此同时显示「台账分支」与「当前分支」。**普通子目录不重定向**——只有真正的工作树根才归一到
+主工作区，避免子目录静默继承父仓库的台账。
+
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。

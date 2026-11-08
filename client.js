@@ -145,6 +145,7 @@ window.__ModuleLoader__.load({
       'page.readonly': '只读',
       'top.head': 'HEAD',
       'top.branch': '分支',
+      'top.currentBranch': '当前分支',
       'top.dirty': '{n} 个未提交改动',
       'top.live': '实时',
       'top.liveStale': '已断开',
@@ -281,6 +282,7 @@ window.__ModuleLoader__.load({
       'hb.counts': '活跃 {active} · 已结束 {dead} / 共 {total}',
       'hb.current': '本会话',
       'hb.task': '任务',
+      'hb.branch': '分支',
       'hb.goal': '目标',
       'hb.claims': '文件域',
       'hb.claimsHint': '独占文件域，其他会话不应修改',
@@ -316,6 +318,7 @@ window.__ModuleLoader__.load({
       'page.readonly': 'Read-only',
       'top.head': 'HEAD',
       'top.branch': 'Branch',
+      'top.currentBranch': 'Current branch',
       'top.dirty': '{n} uncommitted',
       'top.live': 'live',
       'top.liveStale': 'disconnected',
@@ -452,6 +455,7 @@ window.__ModuleLoader__.load({
       'hb.counts': '{active} active · {dead} dead / {total}',
       'hb.current': 'current',
       'hb.task': 'Task',
+      'hb.branch': 'Branch',
       'hb.goal': 'Goal',
       'hb.claims': 'Claims',
       'hb.claimsHint': 'Exclusive file scope; other sessions should not modify these',
@@ -724,6 +728,8 @@ window.__ModuleLoader__.load({
         agent: asText(entry.agent),
         goal: asText(entry.goal),
         task: asText(entry.task),
+        branch: asText(entry.branch),
+        worktree: asText(entry.worktree),
         claims: asArray(entry.claims)
           .map((claim) => asText(claim).trim())
           .filter(Boolean),
@@ -980,6 +986,7 @@ window.__ModuleLoader__.load({
     function normalize(payload) {
       const src = asObject(payload);
       const headSrc = asObject(src.head);
+      const chSrc = asObject(src.currentHead);
       const expSrc = asObject(src.experiments);
       const tasksSrc = asObject(src.tasks);
       /* `contract` is optional; when absent the footer line is hidden entirely. */
@@ -1029,6 +1036,16 @@ window.__ModuleLoader__.load({
             }
           : null,
         root: asText(src.root),
+        /* The ledger may live in the project's main worktree while this panel was
+           asked for a linked worktree; keep both roots so the header can say so. */
+        ledgerRoot: asText(src.ledgerRoot),
+        worktree: src.worktree === true,
+        currentHead: {
+          sha: asText(chSrc.sha),
+          subject: asText(chSrc.subject),
+          branch: asText(chSrc.branch),
+          dirty: asNumber(chSrc.dirty, 0),
+        },
         roots: asArray(src.roots)
           .filter((entry) => asText(asObject(entry).path))
           .map((entry) => {
@@ -2811,6 +2828,20 @@ window.__ModuleLoader__.load({
                       beat.task
                         ? React.createElement('span', { className: 'project-flow-beatTask', title: t('hb.task') }, beat.task)
                         : null,
+                      beat.branch
+                        ? React.createElement(
+                            'span',
+                            {
+                              className: 'project-flow-beatBranch',
+                              title: joinParts([
+                                t('hb.branch'),
+                                beat.branch,
+                                beat.worktree ? beat.worktree : '',
+                              ]),
+                            },
+                            beat.branch
+                          )
+                        : null,
                       currentChip,
                       timeText ? React.createElement('span', { className: 'project-flow-beatTime' }, timeText) : null,
                       staleChip
@@ -2885,7 +2916,10 @@ window.__ModuleLoader__.load({
             React.createElement('h1', { className: 'project-flow-title' }, t('page.title')),
             React.createElement(
               'p',
-              { className: 'project-flow-subtitle', title: view.root || undefined },
+              {
+                className: 'project-flow-subtitle',
+                title: view.worktree && view.ledgerRoot ? `${view.root} → ${view.ledgerRoot}` : view.root || undefined,
+              },
               view.root || t('misc.dash')
             )
           )
@@ -2907,6 +2941,14 @@ window.__ModuleLoader__.load({
                 { className: 'project-flow-pill' },
                 React.createElement('span', { className: 'project-flow-muted' }, t('top.branch')),
                 React.createElement('span', { className: 'project-flow-mono' }, head.branch)
+              )
+            : null,
+          view.worktree && view.currentHead.branch
+            ? React.createElement(
+                'span',
+                { className: 'project-flow-pill', title: view.ledgerRoot || undefined },
+                React.createElement('span', { className: 'project-flow-muted' }, t('top.currentBranch')),
+                React.createElement('span', { className: 'project-flow-mono' }, view.currentHead.branch)
               )
             : null,
           dirty > 0
@@ -4067,6 +4109,7 @@ window.__ModuleLoader__.load({
 .project-flow-beat--current{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary);}
 .project-flow-beatSession{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
 .project-flow-beatTask{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-beatBranch{flex:none;font-family:${MONO};font-size:10px;color:var(--dsw-alias-brand-primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;opacity:.85;}
 .project-flow-beatGoal{margin:0;padding-left:2px;color:var(--dsw-alias-label-primary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;}
 .project-flow-beatGoalLabel{margin-right:4px;color:var(--dsw-alias-label-secondary);font-size:10px;}
 .project-flow-beatClaims{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-top:1px;padding-left:2px;min-width:0;}
