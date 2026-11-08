@@ -1,11 +1,11 @@
 {
   "title": "feat: 项目描述台账（文件图/模块图/模块语义）+ 分析-执行-审查三阶段强制更新 — 让结构可查、语义明确、漂移可拦",
   "type": "feat",
-  "stage": "implementing",
+  "stage": "done",
   "owner": "lead",
   "schema": 1,
   "id": "T-20261108112830",
-  "status": "active",
+  "status": "done",
   "parent": null,
   "scope": {
     "allow": [
@@ -53,11 +53,14 @@
     "5f6402f",
     "e276189",
     "92e2dbc",
-    "ef024db"
+    "ef024db",
+    "ae1ed2a",
+    "1f036fa",
+    "71e7f67"
   ],
-  "notes": "父卡（协调/验收）：D1-D6 全部完成并各自提交（cdbf14c/334ad34/e0e4118/5f6402f/e276189/92e2dbc/ef024db/ae1ed2a）。验证：干净 worktree（detach ae1ed2a）node --test test/ 700/700、flow check description --strict exit 0、六项 selftest 全绿、flow gate run precommit 7 步全绿（含 description）。父卡停在 implementing：done 门被真实并发状态拦下——description gate: unplanned-change scripts/module-domain.mjs（框架会话未提交，include 范围内）。⚠ 新发现缺口：计划 apply 后冻结，flow desc plan --rebase 也被拒（invalid「已 implemented」），收口前需先补「implemented 计划允许 base-only 刷新」+ 回归测试（推荐），或手工移走计划记录重建（兜底）。之后：desc build/set 覆盖 scripts/module-domain.mjs（5 模块）→ render → README 实测数字对齐 → gate run tests → 重放 implementing→queued-review→reviewing→done。完整 runbook + 现成补丁 + 验证清单见 .dsh-ops/desc-handoff.md。",
+  "notes": "父卡（协调/验收）：D1-D6 全部完成并各自提交（cdbf14c/334ad34/e0e4118/5f6402f/e276189/92e2dbc/ef024db/ae1ed2a）。验证：干净 worktree（detach ae1ed2a）node --test test/ 700/700、flow check description --strict exit 0、六项 selftest 全绿、flow gate run precommit 7 步全绿（含 description）。父卡停在 implementing：done 门被真实并发状态拦下——description gate: unplanned-change scripts/module-domain.mjs（框架会话未提交，include 范围内）。⚠ 新发现缺口：计划 apply 后冻结，flow desc plan --rebase 也被拒（invalid「已 implemented」），收口前需先补「implemented 计划允许 base-only 刷新」+ 回归测试（推荐），或手工移走计划记录重建（兜底）。之后：desc build/set 覆盖 scripts/module-domain.mjs（5 模块）→ render → README 实测数字对齐 → gate run tests → 重放 implementing→queued-review→reviewing→done。完整 runbook + 现成补丁 + 验证清单见 .dsh-ops/desc-handoff.md。\n\n【收口 2026-11-08 14:36｜与 main 对齐后（rebase 到 6e1c86c，台账布局迁 .agents/）】rebase 缺口已由 T-20261108133236 修复（代码提交 1f036fa：core.setDescriptionPlan options.rebase + CLI desc plan --rebase + core/CLI 3 条回归；README 707→710；CONTRACT §3.7/§7 记入冻结例外）。本卡在新布局上收口：flow desc plan --rebase 把 base 92e2dbc→71e7f67（implemented_at 仍 13:15:17），implementing→queued-review→reviewing→done 三档真实门禁全绿（diff base..HEAD 零未计划改动；tests 绿记录 14:35:57）。验证：node --test test/ 710/710；六个 .selftest 全绿；flow check description --strict exit 0；flow desc render --check exit 0；precommit 8 步（含 module-domain）全绿。提交：1f036fa（修复+文档）、71e7f67（描述台账/本卡计划重建）；本卡收口账本提交紧随其后。旧分支（备份 backup/dsh-8e974661-pre-align）的提交 SHA 已因 rebase 失效，以本分支为准。framework 的 scripts/module-domain.mjs 已随 73ca54b/41ebee8 入库并有描述记录（43 文件/117 模块），§5.3 的遗留已消除。",
   "created_at": "2026-11-08T11:28:30+08:00",
-  "updated_at": "2026-11-08T13:24:52+08:00",
-  "done_at": null,
+  "updated_at": "2026-11-08T14:37:01+08:00",
+  "done_at": "2026-11-08T14:36:52+08:00",
   "archived_at": null
 }
