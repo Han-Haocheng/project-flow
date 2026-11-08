@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/state-snapshot.mjs",
   "language": "js",
-  "hash": "sha256:c842f6268bfacf9a0ee952dbe652a5a113047c6f62f63f4214d13656b119b8e9",
-  "bytes": 54123,
-  "lines": 1372,
+  "hash": "sha256:80bc14cbb48ef9caa34e042f333fdfa7ea884dda87448ee96201709ae36435e1",
+  "bytes": 57012,
+  "lines": 1437,
   "semantics": "只读快照模块：既可作为宿主 fork 出来的隔离 worker（PF_STATE_WORKER=1）响应 snapshot/ping IPC，也可被 import 作纯函数库（buildSnapshot），把 store、契约、任务、门禁、心跳与决策投影成有界、可序列化的面板 payload。它不做任何写操作、不 import 宿主，core 经动态 import 可选加载，realpath memo 只在单次请求内存在；宿主 index.js、lib/plugin/* 与 lib/tools/* 依赖它，边界是「只读 + 有界降级」。",
   "modules": [
     {
@@ -162,7 +162,8 @@
         "decisionRemindMax",
         "DECISION_COUNT_KEYS",
         "decisionCountsOf",
-        "emptyDecisionCounts"
+        "emptyDecisionCounts",
+        "resolveLedgerRoot"
       ]
     },
     {
@@ -323,16 +324,17 @@
     {
       "from": "payload",
       "to": "contract",
-      "count": 2,
+      "count": 3,
       "why": [
         "buildStoreState → pickInteger",
-        "emptyStoreState → readManifestName"
+        "emptyStoreState → readManifestName",
+        "resolveLedgerRoot → storeContractPath"
       ]
     },
     {
       "from": "payload",
       "to": "core-module",
-      "count": 6,
+      "count": 7,
       "why": [
         "buildState → coreAvailable",
         "buildState → coreUnavailableMessage",
@@ -369,9 +371,10 @@
     {
       "from": "payload",
       "to": "path-containment",
-      "count": 1,
+      "count": 2,
       "why": [
-        "buildStoreState → containedPath"
+        "buildStoreState → containedPath",
+        "resolveLedgerRoot → git"
       ]
     },
     {
@@ -414,11 +417,20 @@
     },
     {
       "from": "snapshot-api",
+      "to": "head",
+      "count": 1,
+      "why": [
+        "buildSnapshot → readHead"
+      ]
+    },
+    {
+      "from": "snapshot-api",
       "to": "payload",
-      "count": 2,
+      "count": 3,
       "why": [
         "buildSnapshot → buildState",
-        "buildSnapshot → capPayload"
+        "buildSnapshot → capPayload",
+        "buildSnapshot → resolveLedgerRoot"
       ]
     },
     {
@@ -523,5 +535,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T14:08:02+08:00"
+  "updated_at": "2026-11-08T14:27:53+08:00"
 }

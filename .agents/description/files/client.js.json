@@ -2,13 +2,13 @@
   "schema": 1,
   "path": "client.js",
   "language": "js",
-  "hash": "sha256:037db6a9c343af9888cf621af8b02c8796a2c86464b05ba7f8ed009144d82ec6",
-  "bytes": 195339,
-  "lines": 4277,
+  "hash": "sha256:e0810feefc911f2ff58dc4657d815358546d3d594dd9857b8a9d2aa9021b79bf",
+  "bytes": 197399,
+  "lines": 4320,
   "semantics": "web 侧的看板客户端（`@local/project-flow` 的浏览器半边）：单文件、无构建、除 `react` 外无依赖，由一个 `window.__ModuleLoader__.load` 工厂向宿主注册「项目流」右栏标签页（`sidebarRightTabs` 的类型与 guide、`sidebar.right.pane.tab` 正文、标题 chip、会话头部一键打开），并按容器宽度把实验树、任务台账、门禁、心跳、决策渲染成一列或两列。面板严格只显示所在会话的工作区：单飞轮询 `api/project-flow/state?root=`（一次请求落定后再 arm 2500ms，teardown 只中止在飞请求且不再写状态），读失败保留上次好数据并标 stale，写操作只有 `init` 与 `gate` 两个已文档化的 POST。",
   "modules": [],
   "imports": [],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T14:08:02+08:00"
+  "updated_at": "2026-11-08T14:27:42+08:00"
 }
