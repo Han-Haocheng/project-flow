@@ -1835,7 +1835,7 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 #### 9.2.1 `agent/pre-step` 钩子的宿主契约（只读遵守，本插件不改）
 
 下面的形状是**宿主声明的事件契约**，不是本项目定义的语义；本插件的 `agent/pre-step`
-监听器（`index.js` 的 `registerHeartbeatReminder`）只能**按它遵守**，无权扩展或兜底。
+监听器（`index.js` 的 `registerTurnReminder`）只能**按它遵守**，无权扩展或兜底。
 
 - **`agent/pre-step` 的 mode 是 `waterfall`**：监听器是链上的一环，**必须返回一个
   `PreStepDecision`** 才能让链继续推进，不存在"不返回也能通过"的形态。
@@ -1914,6 +1914,40 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
 > abort、(c) 同一 turn 上多个 serial 监听器的相对顺序**均未经实测**，本节不作断言。
 > 该边界不影响上面的处置：无论宿主内部如何实现，"不 steer、不久留、不抛错"都是唯一
 > 安全的写法。
+
+#### 9.2.3 每轮提醒的内容与预算（task-82）
+
+`registerTurnReminder` 在**主会话**每轮第一步（`step` 为 0 或 1）追加**一条** user 消息、
+一个 text block。内容回答两个每轮都必须答对的问题：**我在做什么**、**有什么在等用户**。
+
+- **段序固定**：命令行（仅当本 step 有 `/` 命令时；只识别、不执行、不写台账）→ A 当前任务
+  → B 待决策 / C 无待决策的提交指引。无未完成任务时 A 段换成 D（`当前无未完成任务 ｜
+  用户新说的每句话会自动成为任务`，**不写"请先建任务"**）。
+- **A 段**取状态块栈顶：`当前任务：<T-id> [<中文阶段>] <标题 clip 48>` +
+  `未完成 N 条 ｜ 栈顶 1 条`；`N>1` 时追加 `（另有 N-1 条待处理）`。阶段中文**只**
+  来自 `buildStatusBlock().stack[].stageZh`（`lib/capture.mjs` → `lib/stage.mjs` 的
+  `STAGE_ZH`），提醒里不得出现第二份阶段映射。
+- **B 段**沿用决策台账的明细行/排序/升级规则与首轮全量清单（`decisionRemindMax()`）；
+  末尾**每次**都有「回答后当轮调用 `flow_decision answer <id> --choice <选项 id>；
+  不要按推荐自行决定。」首轮再加「新会话第一步：运行 `flow decision list --open`」。
+- **C 段**（无 open 决策时**必须**出现，用户明确要求）：
+  `无待决策。需要用户裁决时：先 flow_decision ask（kind=choice|approval|input，问题里带
+  [D-xxx] 编号），用户答后再 flow_decision answer <id> --choice <选项>；不要在对话里直接问。`
+- **心跳提示段已删除**：task-81 把生命周期收归插件（`agent/created` 自动开、
+  `agent/disposed` 自动关），会话不再需要被催 `flow_heartbeat start`。
+- **预算 = 800 字符/整条消息**，**预留再分配、绝不整体尾巴截断**：先预留不可牺牲部分
+  （命令回显，其中正文 `clip` 到 200；「怎么答」句；无决策时的整个 C 段；以及可能需要的
+  「另有 N 条决策」指针），剩余预算按 A 标题 → A 的「另有」→ B 明细的顺序花。压力下
+  **整行丢弃** B 明细并从末尾开始，被丢弃的条数并入指针；再依次舍弃 A 的「另有」、
+  首轮提示、整个 A 段。任何情况下「怎么答」句与 C 段逐字完整。
+- **整条只出现一次 `【project-flow】` 前缀**；命令行在最前时复用它，A 段不再重复前缀。
+- 提醒以 `【project-flow】` 开头，capture 的 `SYSTEM_MESSAGE_PREFIXES` 结构排除
+  （`excludedBy='prefix'`），**不会**落成任务。
+- 失败方向：台账读不出来（无 store / core 不可用）时**不注入**提醒——静默比编一个
+  「当前无未完成任务」安全。
+
+回归：`test/t-20261108-reminder.test.mjs`（10 条）+ `.selftest/host2-tools.mjs` 的
+H7/H8/H10/H11 新口径。
 
 ### 9.3 与工具的关系
 
