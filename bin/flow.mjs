@@ -12,7 +12,7 @@
 import path from 'node:path'
 import process from 'node:process'
 import os from 'node:os'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import * as zlib from 'node:zlib'
 
 // A closed downstream pipe (`flow status | head`) must end quietly, not throw.
@@ -91,15 +91,32 @@ const USAGE = `project-flow CLI（schema 2）
   decision withdraw <id> --reason R [--by user|agent]
   decision gc [--days N] [--dry-run]
 
+  desc status [--json]          描述台账计数与 enforce/enabled（未建立时只提示）
+  desc build [--dry-run]        按源码同步结构（hash/import/模块边），不碰已写语义
+  desc show [--path <src>] [--graph tree|mermaid] [--json]
+                                无 --path：文件树；有 --path：该文件的模块表与模块边；
+                                --graph mermaid：直接打印完整渲染文档
+  desc set --input <json>       写文件/模块语义（对象=单文件补丁，数组=多文件补丁）
+  desc set --project-semantics <text>   写项目语义（project.json 必须已由 build 建立）
+  desc plan <T-id> --template <src>     打印计划骨架（当前记录；无记录则扫源码）
+  desc plan <T-id> --input <json>       建/改语义变更计划（已存在 = 修订）
+  desc plan <T-id> --show               打印当前计划（没有则提示「无计划」）
+  desc plan <T-id> --no-semantic-change --reason <text>
+  desc plan <T-id> --rebase             按当前 HEAD/工作树重算计划的 base 后重提交
+  desc apply <T-id> [--dry-run]         把计划语义落进记录并冻结计划（幂等）
+  desc render [--out <path>] [--check]  打印/写出确定性 Markdown；--check 与现算比对
+
   check list
   check staged --allow <path> [--allow <path> ...]
   check release-baseline --marker <text> [--threshold <N>]
   check decisions | check experiments
   check tasks [--type-map <file.json>]
+  check description [--task <T-id>] [--strict]
   check state [--file <path>]
   check doc --file <path> --type task|design|incident|release
   check decisions                内置检查：阻塞决策命中暂存文件时失败（core 实现）
   check tasks                    内置检查：旧任务记录未归一（残留 goal 键 / 缺 type）时失败
+  check description              内置检查：描述台账漂移（缺记录/陈旧 hash/成员/模块边/语义）时失败
 
   心跳只面向主会话（同一项目的多个主会话互相避让）：子会话不登记心跳，
   在子会话里运行 heartbeat start/update/end 会被明确拒绝；list/status 只读，
@@ -107,12 +124,19 @@ const USAGE = `project-flow CLI（schema 2）
 
   机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
   scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
-  check decisions / check experiments / check tasks 是内置检查：bin 特判路由到
-  core.checkDecisions / core.checkExperiments / core.normalizeTaskFormat（只读），
-  不跑 scripts/；lib/checks.mjs 仍不 import core、不读写 store。
+  check decisions / check experiments / check tasks / check description 是内置检查：
+  bin 特判路由到 core.checkDecisions / core.checkExperiments / core.normalizeTaskFormat /
+  core.checkDescription（只读），不跑 scripts/；lib/checks.mjs 仍不 import core、
+  不读写 store。
   check tasks 的 --type-map <file.json> 是 { "<T-id>": "<type>" } 草稿文件，只用来
   判断 missing-type 是否可消；值必须是十个 type 之一，否则按用法错误退 2。
   check tasks 永远不会替你猜 type，也不能写盘；归一由 flow task normalize 执行。
+
+  描述台账（desc）：台账在 .dsh/flow/description/（project.json + files/ + tasks/）。
+  status/build/show/render 只读（--out 是唯一的文件写出），set 写语义，plan 写分析阶段
+  的语义变更计划，apply 把计划落进记录并冻结；check description 失败 exit 1。
+  desc render --check 与 description.render 现算比对，不一致 exit 1；--out 与
+  description.render 都必须落在项目根内（越界按用法错误退 1）。
 
   决策只面向主会话：需要用户拍板的问题先 ask 建记录再提问，用户回答当轮 answer；
   open 同题复用、已关闭同题必须 --supersedes；阻塞决策（blocks 非空）影响暂存文件时
@@ -133,7 +157,9 @@ const USAGE = `project-flow CLI（schema 2）
   check experiments 失败 → 1（warnings 不阻断）。`
 
 const EXIT = { usage: 1, invalid: 2, notFound: 3, io: 4 }
-const EXIT_BY_CODE = { usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4 }
+// `check-failed` 只由检查族抛出：`flow check` 走下面的 `CHECK_EXIT_BY_CODE`，
+// `flow desc render --check` 走这张表（同样按「检查失败 → 1」归一）。
+const EXIT_BY_CODE = { usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4, 'check-failed': 1 }
 
 // `flow check` 的退出码词汇（数字与插件一致，语义按检查归一，见 CONTRACT §6）。
 const CHECK_EXIT_BY_CODE = {
@@ -148,7 +174,11 @@ const CHECK_EXIT_BY_CODE = {
 // status 只逐条展示最近的心跳，其余用总数提示。
 const STATUS_HEARTBEAT_ROWS = 5
 
-const BOOL_FLAGS = new Set(['json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all'])
+const BOOL_FLAGS = new Set([
+  'json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all',
+  // T-20261108 D4：`desc plan/show/rebase`、`desc render --check`、`check description --strict`
+  'strict', 'show', 'rebase', 'no-semantic-change', 'check',
+])
 const VALUE_FLAGS = new Set([
   'root', 'name',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
@@ -163,6 +193,8 @@ const VALUE_FLAGS = new Set([
   // T-12 B2（schema2 七字段 / 分流 / 关联）
   'direction', 'primary-metric', 'guardrail', 'falsify', 'window-days', 'stop-loss',
   'learned', 'experiment', 'gate', 'flag', 'code', 'data',
+  // T-20261108 D4：描述台账的取值参数
+  'path', 'graph', 'input', 'template', 'out', 'project-semantics',
 ])
 const REPEAT_FLAGS = new Set([
   'step', 'allow', 'claim', 'option', 'blocks', 'affects',
@@ -243,6 +275,17 @@ export const SPEC = Object.freeze({
     withdraw: { flags: ['id', 'reason', 'by'] },
     gc: { flags: ['days', 'dry-run'] },
   }),
+  // T-20261108 D4：描述台账命令面（spec §9）。每个 handler 真正读的 flag 都在这张
+  // 表里；`id` 声明在 plan/apply 上，是因为位置参数 `<T-id>` 由 main 归一到 flags.id。
+  desc: Object.freeze({
+    status: { flags: [] },
+    build: { flags: ['dry-run'] },
+    show: { flags: ['path', 'graph'] },
+    set: { flags: ['input', 'project-semantics'] },
+    plan: { flags: ['id', 'input', 'template', 'show', 'no-semantic-change', 'reason', 'rebase'] },
+    apply: { flags: ['id', 'dry-run'] },
+    render: { flags: ['out', 'check'] },
+  }),
   check: Object.freeze({
     list: { flags: [] },
     staged: { flags: ['timeout'], repeat: ['allow'] },
@@ -252,6 +295,7 @@ export const SPEC = Object.freeze({
     decisions: { flags: [] },
     experiments: { flags: [] },
     tasks: { flags: ['type-map'] },
+    description: { flags: ['task', 'strict'] },
   }),
 })
 
@@ -681,6 +725,21 @@ function readJsonObject(flags, name) {
   return parsed
 }
 
+/**
+ * `--input` 的 JSON 解析（对象**或数组**：`desc set` 的单/多文件补丁）。
+ * 与 `readJsonObject` 分开是因为「对象数组」在这条通道上是合法形状，而
+ * `readJsonObject` 的契约（exp --metrics、decision 输入）明确拒绝数组。
+ */
+function readJsonValue(flags, name) {
+  const raw = readString(flags, name)
+  if (raw === undefined) return undefined
+  try {
+    return JSON.parse(raw)
+  } catch {
+    throw new CliError('usage', `--${name} 需要合法 JSON（对象或对象数组）`)
+  }
+}
+
 function readList(flags, name) {
   const raw = readString(flags, name)
   if (raw === undefined) return undefined
@@ -821,6 +880,26 @@ async function cmdStatus(ctx) {
     }
   }
 
+  // 描述计数是**展示层**的读（spec §9）：不进 `data.status`（面板数据模型不动），
+  // 只在 store 已初始化时读；读不到给 null 而不是零值（"读不到"必须与"很干净"可分）。
+  let description = null
+  if (initialized) {
+    try {
+      const project = core.readDescriptionProject(ctx.root, contract)
+      const counts = core.descriptionStatus(ctx.root, contract)
+      description = {
+        established: project !== null || counts.files > 0,
+        files: counts.files,
+        modules: counts.modules,
+        missingSemantics: counts.missingSemantics,
+        plans: counts.plans,
+        described: counts.described,
+      }
+    } catch (error) {
+      collectWarnings([`description-status-unavailable: ${error?.message ?? String(error)}`])
+    }
+  }
+
   const expCounts = countsOf(experiments, ['open', 'confirmed', 'refuted', 'abandoned', 'inconclusive', 'pivoted'])
   const taskCounts = countsOf(tasks, ['draft', 'active', 'done', 'archived'])
   const gateEnabled = gates.filter((gate) => gate.enabled !== false).length
@@ -847,6 +926,18 @@ async function cmdStatus(ctx) {
       experiments: { total: experiments.length, ...expCounts, unreadable: unreadable.experiments.length },
       tasks: { total: tasks.length, ...taskCounts, unreadable: unreadable.tasks.length },
       gates: { total: gates.length, enabled: gateEnabled, unreadable: unreadable.gates.length },
+      // 只在 store 存在时给（未初始化时不给零值：与 data.status 同一条纪律）。
+      ...(description === null
+        ? {}
+        : {
+            description: {
+              files: description.files,
+              modules: description.modules,
+              missingSemantics: description.missingSemantics,
+              plans: description.plans,
+              described: description.described,
+            },
+          }),
     },
     heartbeats,
     decisions,
@@ -881,6 +972,14 @@ async function cmdStatus(ctx) {
       lines.push([
         '门禁',
         `${gates.length}（启用 ${gateEnabled}${unreadableTail(unreadable.gates)}）`,
+      ])
+      lines.push([
+        '描述',
+        description === null
+          ? '读取失败（见警告）'
+          : description.established
+            ? `${description.files} 文件 · ${description.modules} 模块 · 缺语义 ${description.missingSemantics} · 计划 ${description.plans}`
+            : '未建立（flow desc build）',
       ])
       lines.push(['待决策', `${decisions.counts.open}（阻塞 ${decisions.counts.blocking}）`])
       const hiddenBeats = Number(heartbeats.counts.hidden) || 0
@@ -1305,6 +1404,465 @@ async function cmdTask(ctx, sub) {
   }
 
   throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|normalize|rm）`)
+}
+
+// ---------------------------------------------------------------- flow desc
+
+/**
+ * `description.enforce`/`enabled` 的展示值。契约层把 `enforce` 定为 `string`
+ * （spec §1），未知值由 core 静默降级为 `auto`；这里用同一份
+ * `DESCRIPTION_ENFORCE_MODES` 归一，避免 status 展示一个 core 根本不认的模式。
+ */
+function descModeOf(core, contract) {
+  const config =
+    contract !== null && contract !== undefined && typeof contract.description === 'object' && contract.description !== null
+      ? contract.description
+      : {}
+  const raw = typeof config.enforce === 'string' ? config.enforce.trim() : ''
+  return {
+    enabled: config.enabled !== false,
+    enforce: Array.isArray(core.DESCRIPTION_ENFORCE_MODES) && core.DESCRIPTION_ENFORCE_MODES.includes(raw) ? raw : 'auto',
+  }
+}
+
+/** `--out` / `description.render` 的 containment：路径必须落在项目根内。 */
+function descInsideRoot(root, value) {
+  const base = path.resolve(root)
+  const absolute = path.resolve(base, value)
+  return { absolute, inside: absolute === base || absolute.startsWith(base + path.sep) }
+}
+
+/** 人类输出里的根相对 POSIX 路径（Windows 反斜杠也归一成 `/`）。 */
+function descRelativeLabel(root, absolute) {
+  return path.relative(path.resolve(root), absolute).split(path.sep).join('/')
+}
+
+/** 描述文件树（`flow desc show` 无 --path）：目录 → 文件（模块数）。 */
+function descTreeLines(records) {
+  const groups = new Map()
+  for (const record of records) {
+    const file = typeof record.path === 'string' ? record.path : ''
+    const cut = file.lastIndexOf('/')
+    const dir = cut < 0 ? '.' : file.slice(0, cut)
+    const name = cut < 0 ? file : file.slice(cut + 1)
+    if (!groups.has(dir)) groups.set(dir, [])
+    groups.get(dir).push({ name, modules: Array.isArray(record.modules) ? record.modules.length : 0 })
+  }
+  const lines = []
+  for (const dir of [...groups.keys()].sort()) {
+    if (dir !== '.') lines.push(`${dir}/`)
+    const entries = groups.get(dir).sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+    const width = Math.max(...entries.map((entry) => textWidth(entry.name)))
+    for (const entry of entries) {
+      lines.push(`${dir === '.' ? '' : '  '}${pad(entry.name, width)}  ${entry.modules} 模块`)
+    }
+  }
+  return lines
+}
+
+/** 计划的一句话形状（人类输出用）。 */
+function descPlanShape(plan) {
+  if (plan.noSemanticChange === true) return `noSemanticChange · ${plan.reason}`
+  const files = Array.isArray(plan.files) ? plan.files : []
+  const modules = files.reduce((sum, file) => sum + (Array.isArray(file.modules) ? file.modules.length : 0), 0)
+  return `${files.length} 文件 · ${modules} 模块`
+}
+
+/** 计划的人类可读展开（`flow desc plan --show`）。 */
+function printDescPlan(plan) {
+  const base = plan.base !== null && typeof plan.base === 'object' ? plan.base : {}
+  out(`计划 ${plan.task}  ${plan.status}  base ${base.commit ?? 'null'}${base.clean === false ? '（工作树不干净）' : ''}`)
+  out(
+    `更新 ${fmtTime(plan.updated_at)} · history ${Array.isArray(plan.history) ? plan.history.length : 0} 条` +
+      `${typeof plan.implemented_at === 'string' && plan.implemented_at !== '' ? ` · applied ${fmtTime(plan.implemented_at)}` : ''}`,
+  )
+  if (plan.noSemanticChange === true) {
+    out(`无语义变更：${plan.reason}`)
+    return
+  }
+  const files = Array.isArray(plan.files) ? plan.files : []
+  if (files.length === 0) out('（计划没有文件）')
+  for (const file of files) {
+    out(`  ${file.op}  ${file.path}${typeof file.semantics === 'string' && file.semantics !== '' ? `  ${clip(file.semantics, 60)}` : ''}`)
+    for (const module of Array.isArray(file.modules) ? file.modules : []) {
+      const members = Array.isArray(module.members) ? `  [${module.members.join('、')}]` : ''
+      out(
+        `    ${module.op ?? 'change'}  ${module.id}${typeof module.semantics === 'string' && module.semantics !== '' ? `  ${clip(module.semantics, 50)}` : ''}${members}`,
+      )
+    }
+  }
+}
+
+/**
+ * `lib/desc.mjs` 的懒加载：**只给 `desc plan --template` 的源码扫描用**。
+ * 台账的读/写/校验仍全部经 core；模板是分析阶段的脚手架，扫描是纯读。
+ */
+async function loadDescModel() {
+  try {
+    return await import(new URL('../lib/desc.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载描述模型（lib/desc.mjs）：${error?.message || String(error)}`)
+  }
+}
+
+/**
+ * `flow desc plan --template <src>` 的骨架：有记录时用记录里的文件/模块（语义预填
+ * 当前值，便于只改该改的）；没有记录时扫源码，按 build 的种子模块给**空语义**骨架。
+ * 只打印，不写盘。
+ */
+async function descPlanTemplate(core, root, contract, src) {
+  let record = null
+  try {
+    record = core.getDescriptionFile(root, contract, src)
+  } catch (error) {
+    if (error?.code !== 'not-found') throw error
+  }
+  if (record !== null) {
+    return {
+      files: [
+        {
+          path: record.path,
+          op: 'change',
+          semantics: typeof record.semantics === 'string' ? record.semantics : '',
+          modules: (Array.isArray(record.modules) ? record.modules : []).map((module) => ({
+            id: module.id,
+            op: 'change',
+            semantics: typeof module.semantics === 'string' ? module.semantics : '',
+          })),
+        },
+      ],
+    }
+  }
+  const desc = await loadDescModel()
+  const maxScanBytes = Number(contract?.description?.maxScanBytes)
+  const scanned = desc.scanSourceAt(root, src, {
+    ...(Number.isInteger(maxScanBytes) && maxScanBytes > 0 ? { maxScanBytes } : {}),
+  })
+  if (typeof scanned.skipped === 'string') {
+    throw new CliError('usage', `无法扫描 ${src}（${scanned.skipped}）；--template 只接受项目内的源文件`)
+  }
+  const created = desc.createRecord(scanned)
+  return {
+    files: [
+      {
+        path: created.path,
+        op: 'add',
+        semantics: '',
+        modules: (Array.isArray(created.modules) ? created.modules : []).map((module) => ({
+          id: module.id,
+          op: 'add',
+          semantics: '',
+          members: Array.isArray(module.members) ? [...module.members] : [],
+        })),
+      },
+    ],
+  }
+}
+
+async function cmdDesc(ctx, sub) {
+  const { core, flags } = ctx
+  if (!sub) {
+    throw new CliError('usage', '用法: flow desc <status|build|show|set|plan|apply|render>')
+  }
+  const contract = loadContractFor(ctx, ctx.root)
+
+  if (sub === 'status') {
+    core.assertInitialized(ctx.root)
+    const project = core.readDescriptionProject(ctx.root, contract)
+    const counts = core.descriptionStatus(ctx.root, contract)
+    const mode = descModeOf(core, contract)
+    const established = project !== null || counts.files > 0
+    const data = {
+      established,
+      name: project !== null && typeof project.name === 'string' ? project.name : null,
+      semantics: project !== null && typeof project.semantics === 'string' ? project.semantics : '',
+      files: counts.files,
+      modules: counts.modules,
+      missingSemantics: counts.missingSemantics,
+      plans: counts.plans,
+      described: counts.described,
+      enabled: mode.enabled,
+      enforce: mode.enforce,
+    }
+    if (!ctx.json) {
+      if (!established) {
+        out('描述台账  未建立描述（先跑 flow desc build）')
+      } else {
+        out(`描述台账  ${data.files} 文件 · ${data.modules} 模块 · 缺语义 ${data.missingSemantics} · 计划 ${data.plans}`)
+        out(`覆盖  ${data.described}/${data.files} 个文件已写语义`)
+        out(`模式  enabled=${data.enabled ? 'true' : 'false'} · enforce=${data.enforce}`)
+      }
+    }
+    return data
+  }
+
+  if (sub === 'build') {
+    const dryRun = flags['dry-run'] === true
+    const result = core.buildDescription(ctx.root, contract, { dryRun })
+    collectWarnings(result.warnings)
+    if (!ctx.json) {
+      out(
+        `${dryRun ? '描述预演（--dry-run，未写盘）' : '描述已同步'}：新建 ${result.created} · 更新 ${result.updated} · 未变 ${result.unchanged} · 剪枝 ${result.pruned}`,
+      )
+    }
+    return result
+  }
+
+  if (sub === 'show') {
+    core.assertInitialized(ctx.root)
+    const source = readString(flags, 'path')
+    const graph = readString(flags, 'graph')
+    if (graph !== undefined && graph !== 'tree' && graph !== 'mermaid') {
+      throw new CliError('usage', '--graph 只支持 tree | mermaid')
+    }
+    if (graph === 'mermaid') {
+      const markdown = core.renderDescription(ctx.root, contract)
+      if (markdown === null) {
+        if (!ctx.json) out('（还没有描述台账；先跑 flow desc build）')
+        return { graph: null }
+      }
+      if (!ctx.json) out(markdown)
+      return { graph: markdown }
+    }
+    if (source !== undefined) {
+      let record = null
+      try {
+        record = core.getDescriptionFile(ctx.root, contract, source)
+      } catch (error) {
+        if (error?.code !== 'not-found') throw error
+      }
+      if (record === null) {
+        if (!ctx.json) out(`（没有 ${source} 的描述记录；先跑 flow desc build）`)
+        return { path: source, record: null }
+      }
+      if (!ctx.json) {
+        out(`${record.path}  ${record.language ?? 'unknown'}  ${record.lines ?? 0} 行  ${record.hash ?? ''}`)
+        out(`语义  ${typeof record.semantics === 'string' && record.semantics !== '' ? record.semantics : '（未填写）'}`)
+        const modules = Array.isArray(record.modules) ? record.modules : []
+        out('')
+        out(`模块（${modules.length}）`)
+        if (modules.length > 0) {
+          out(
+            table(
+              ['模块', '标题', '语义', '成员'],
+              modules.map((module) => [
+                module.id,
+                clip(module.title ?? '-', 24),
+                clip(typeof module.semantics === 'string' && module.semantics !== '' ? module.semantics : '（未填写）', 48),
+                clip(Array.isArray(module.members) ? module.members.join('、') : '-', 48),
+              ]),
+            ),
+          )
+        } else {
+          out('（没有模块）')
+        }
+        const edges = Array.isArray(record.moduleEdges) ? record.moduleEdges : []
+        out('')
+        out(`模块边（${edges.length}）`)
+        if (edges.length > 0) {
+          out(
+            table(
+              ['从', '到', '次数', '依据'],
+              edges.map((edge) => [
+                edge.from,
+                edge.to,
+                String(edge.count ?? 0),
+                Array.isArray(edge.why) ? edge.why.join('；') : '',
+              ]),
+            ),
+          )
+        } else {
+          out('（没有模块边）')
+        }
+      }
+      return record
+    }
+    const records = core.listDescriptionFiles(ctx.root, contract)
+    const counts = core.descriptionStatus(ctx.root, contract)
+    if (!ctx.json) {
+      if (records.length === 0) {
+        out('（没有描述记录；先跑 flow desc build）')
+      } else {
+        out(`描述台账  ${counts.files} 文件 · ${counts.modules} 模块`)
+        out('')
+        for (const line of descTreeLines(records)) out(line)
+      }
+    }
+    return {
+      counts: { files: counts.files, modules: counts.modules },
+      files: records.map((record) => ({
+        path: record.path,
+        modules: Array.isArray(record.modules) ? record.modules.length : 0,
+      })),
+    }
+  }
+
+  if (sub === 'set') {
+    const inputRaw = readString(flags, 'input')
+    const projectSemantics = readString(flags, 'project-semantics')
+    if (inputRaw === undefined && projectSemantics === undefined) {
+      throw new CliError('usage', '用法: flow desc set --input <json> | --project-semantics <text>')
+    }
+    if (inputRaw !== undefined && projectSemantics !== undefined) {
+      throw new CliError('usage', '--input 与 --project-semantics 不能同时使用（一次只写一类语义）')
+    }
+    if (projectSemantics !== undefined) {
+      const project = core.setDescriptionProject(ctx.root, contract, { semantics: projectSemantics })
+      if (!ctx.json) out(`已更新项目语义（${project.name ?? 'project'}）`)
+      return project
+    }
+    const patch = readJsonValue(flags, 'input')
+    if (patch === null || typeof patch !== 'object') {
+      throw new CliError('usage', '--input 需要 JSON 对象（单文件补丁）或对象数组（多文件补丁）')
+    }
+    const result = core.setDescriptionFile(ctx.root, contract, patch)
+    if (!ctx.json) out(result.changed ? `已更新 ${result.records.length} 个文件记录` : '（没有变化）')
+    return result
+  }
+
+  if (sub === 'plan') {
+    core.assertInitialized(ctx.root)
+    const id = requireString(
+      flags,
+      'id',
+      '用法: flow desc plan <T-id> --template <src> | --input <json> | --show | --rebase | --no-semantic-change --reason R',
+    )
+    const template = readString(flags, 'template')
+    const inputRaw = readString(flags, 'input')
+    const show = flags['show'] === true
+    const rebase = flags['rebase'] === true
+    const noChange = flags['no-semantic-change'] === true
+    const modes = [
+      ...(template === undefined ? [] : ['--template']),
+      ...(inputRaw === undefined ? [] : ['--input']),
+      ...(show ? ['--show'] : []),
+      ...(rebase ? ['--rebase'] : []),
+      ...(noChange ? ['--no-semantic-change'] : []),
+    ]
+    if (modes.length === 0) {
+      throw new CliError(
+        'usage',
+        'flow desc plan 需要一种模式：--template <src> | --input <json> | --show | --rebase | --no-semantic-change --reason R',
+      )
+    }
+    if (modes.length > 1) {
+      throw new CliError('usage', `flow desc plan 一次只能用一种模式（收到 ${modes.join('、')}）`)
+    }
+    if (show) {
+      const plan = core.getDescriptionPlan(ctx.root, contract, id)
+      if (!ctx.json) {
+        if (plan === null) out('无计划（flow desc plan <T-id> --template <src>）')
+        else printDescPlan(plan)
+      }
+      return { plan, amended: false }
+    }
+    if (template !== undefined) {
+      const skeleton = await descPlanTemplate(core, ctx.root, contract, template)
+      if (!ctx.json) out(JSON.stringify(skeleton, null, 2))
+      return skeleton
+    }
+    if (rebase) {
+      const plan = core.getDescriptionPlan(ctx.root, contract, id)
+      if (plan === null) {
+        throw new CliError('usage', `任务 ${id} 还没有计划；先 flow desc plan ${id} --input <json>`)
+      }
+      // `setDescriptionPlan` 每次提交都会经 `planBaseOf` 按当前 HEAD/工作树重算 base，
+      // 所以 --rebase 不需要第二个 core API：把当前计划原样再提交一次即可。
+      const input =
+        plan.noSemanticChange === true
+          ? { noSemanticChange: true, reason: plan.reason }
+          : { files: plan.files }
+      const result = core.setDescriptionPlan(ctx.root, contract, id, input)
+      const note = 'setDescriptionPlan 每次提交都会重算 base；本次提交已按当前 HEAD/工作树刷新'
+      if (!ctx.json) out(note)
+      return { ...result, rebased: true, note }
+    }
+    if (noChange) {
+      const reason = readString(flags, 'reason')
+      if (reason === undefined || reason.trim() === '') {
+        throw new CliError('usage', '--no-semantic-change 需要 --reason <text>（说明为什么没有语义变更）')
+      }
+      const result = core.setDescriptionPlan(ctx.root, contract, id, { noSemanticChange: true, reason })
+      if (!ctx.json) out(`已${result.amended ? '修订' : '创建'}计划 ${id}：无语义变更（${result.plan.reason}）`)
+      return result
+    }
+    const input = readJsonValue(flags, 'input')
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+      throw new CliError('usage', '--input 需要一个 JSON 对象（计划输入，含 files 或 noSemanticChange）')
+    }
+    const result = core.setDescriptionPlan(ctx.root, contract, id, input)
+    if (!ctx.json) out(`已${result.amended ? '修订' : '创建'}计划 ${id}（${result.plan.status} · ${descPlanShape(result.plan)}）`)
+    return result
+  }
+
+  if (sub === 'apply') {
+    core.assertInitialized(ctx.root)
+    const id = requireString(flags, 'id', '用法: flow desc apply <T-id> [--dry-run]')
+    const dryRun = flags['dry-run'] === true
+    const result = core.applyDescriptionPlan(ctx.root, contract, id, { dryRun })
+    collectWarnings(result.warnings)
+    if (!ctx.json) {
+      if (result.applied === false) out(`计划 ${id} 已是 implemented（幂等，未重复应用）`)
+      else out(`${dryRun ? '将应用' : '已应用'}计划 ${id}（${descPlanShape(result.plan)}）`)
+    }
+    return result
+  }
+
+  if (sub === 'render') {
+    core.assertInitialized(ctx.root)
+    const markdown = core.renderDescription(ctx.root, contract)
+    if (markdown === null) {
+      throw new CliError('usage', '还没有描述台账（先跑 flow desc build），再 flow desc render')
+    }
+    const data = { checked: null }
+    if (flags['check'] === true) {
+      const configured = typeof contract?.description?.render === 'string' ? contract.description.render.trim() : ''
+      if (configured === '') {
+        if (!ctx.json) out('（description.render 未配置，--check 跳过）')
+      } else {
+        const target = descInsideRoot(ctx.root, configured)
+        if (!target.inside) {
+          throw new CliError('usage', `description.render 逃出项目根：${configured}`)
+        }
+        let actual = null
+        try {
+          actual = readFileSync(target.absolute, 'utf8')
+        } catch (error) {
+          if (error.code !== 'ENOENT') {
+            throw new CliError('io', `读取渲染文件失败：${configured}（${error.code ?? error.message}）`)
+          }
+        }
+        if (actual === null) {
+          const error = new Error(`渲染文件不存在：${configured}（先跑 flow desc render --out ${configured}）`)
+          error.code = 'check-failed'
+          throw error
+        }
+        if (actual.replace(/\r\n/g, '\n') !== markdown) {
+          const error = new Error(`渲染文件与现算内容不一致：${configured}`)
+          error.code = 'check-failed'
+          throw error
+        }
+        if (!ctx.json) out(`✓ 渲染文件与现算内容一致：${configured}`)
+        data.checked = true
+      }
+    }
+    const outPath = readString(flags, 'out')
+    if (outPath !== undefined) {
+      const target = descInsideRoot(ctx.root, outPath)
+      if (!target.inside) {
+        throw new CliError('usage', `--out 必须落在项目根内：${outPath}`)
+      }
+      mkdirSync(path.dirname(target.absolute), { recursive: true })
+      writeFileSync(target.absolute, markdown)
+      const label = descRelativeLabel(ctx.root, target.absolute)
+      if (!ctx.json) out(`已写入 ${label}`)
+      return { ...data, path: label, bytes: Buffer.byteLength(markdown, 'utf8') }
+    }
+    if (!ctx.json) out(markdown)
+    return { ...data, markdown }
+  }
+
+  throw new CliError('usage', `未知子命令 desc ${sub}（可用 status|build|show|set|plan|apply|render）`)
 }
 
 async function cmdGate(ctx, sub) {
@@ -1753,14 +2311,22 @@ const BUILTIN_CHECKS = Object.freeze([
     description: '旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）',
     args: '[--type-map <file.json>]',
   }),
+  Object.freeze({
+    name: 'description',
+    interpreter: 'core',
+    script: 'lib/core.mjs#checkDescription',
+    description: '描述台账漂移（缺记录/陈旧 hash/未归属声明/模块图不一致/缺语义）时失败（内置检查：bin 特判路由 core，只读）',
+    args: '[--task <T-id>] [--strict]',
+  }),
 ])
 
 async function cmdCheck(ctx, sub) {
   // 内置检查（bin 特判路由到 core，不经过 scripts/ 目录）：
-  // `decisions`、T-12 的 `experiments`，以及任务格式门禁 `tasks`。
+  // `decisions`、T-12 的 `experiments`、任务格式门禁 `tasks`，以及描述台账 `description`。
   if (sub === 'decisions') return runCheckDecisions(ctx)
   if (sub === 'experiments') return runCheckExperiments(ctx)
   if (sub === 'tasks') return runCheckTasks(ctx)
+  if (sub === 'description') return runCheckDescription(ctx)
   const checks = await loadChecks()
   const names = checks.CHECKS.map((entry) => entry.name)
   // usage 与未知检查提示共用完整目录（脚本检查 + 内置检查），不再漏列内置项。
@@ -2234,6 +2800,75 @@ function runCheckTasks(ctx) {
   throw error
 }
 
+/**
+ * `flow check description`：描述台账漂移检查（spec §6/§9）。只读；`enforce=auto`
+ * 且台账还没建立时通过（并把「未建立描述，跳过」写进 stdout 与 warnings）。
+ * 失败逐行给 `kind path[:module] — detail`，末行是汇总后的修复命令。
+ */
+function runCheckDescription(ctx) {
+  const { core } = ctx
+  const loaded = core.loadContract(ctx.root)
+  collectWarnings(loaded.warnings)
+  // 未初始化的 root 必须走 usage（check 族映射为 exit 2），不能把「没有台账」
+  // 报告成「台账很干净」——与 runCheckTasks 同一条防假绿纪律。
+  core.assertInitialized(ctx.root)
+  const taskId = readString(ctx.flags, 'task')
+  const strict = ctx.flags['strict'] === true
+  const started = Date.now()
+  const result = core.checkDescription(ctx.root, loaded.contract, {
+    ...(taskId === undefined ? {} : { taskId }),
+    strict,
+  })
+  const durationMs = Date.now() - started
+  // core 侧 warning（如 git 不可用、扫描跳过）也要进信封。
+  drainCoreWarnings()
+  const counts = result.counts
+  const lines = []
+  const skip = result.warnings.find(
+    (item) => item.kind === 'description-skipped' || item.kind === 'description-disabled',
+  )
+  if (result.ok) {
+    if (skip !== undefined) {
+      lines.push(`✓ description：${skip.detail}（mode ${result.mode}${skip.hint === '' ? '' : `；先跑 ${skip.hint}`}）`)
+    } else {
+      lines.push(
+        `✓ description：文件 ${counts.files} · 模块 ${counts.modules} · 缺语义 ${counts.missingSemantics} · 计划 ${counts.plans}（mode ${result.mode}${strict ? ' · --strict' : ''}）`,
+      )
+    }
+    for (const warning of result.warnings) {
+      if (warning === skip) continue
+      lines.push(`! ${warning.kind} ${warning.path} — ${warning.detail}`)
+    }
+  } else {
+    for (const item of result.failed) {
+      lines.push(`✗ ${item.kind} ${item.path}${item.module === undefined ? '' : `:${item.module}`} — ${item.detail}`)
+    }
+    const hints = [...new Set(result.failed.map((item) => item.hint).filter((hint) => hint !== ''))]
+    lines.push(`修复：${hints.join('；')}`)
+  }
+  const stdout = lines.join('\n')
+  if (!ctx.json) {
+    for (const line of lines) out(line)
+  }
+  const payload = {
+    check: 'description',
+    exitCode: result.ok ? 0 : 1,
+    stdout,
+    stderr: '',
+    durationMs,
+    mode: result.mode,
+    counts,
+    failed: result.failed,
+    warnings: result.warnings,
+  }
+  if (result.ok) return payload
+  const error = new Error('检查未通过：description（描述台账漂移）')
+  error.code = 'check-failed'
+  error.silent = true
+  error.payload = payload
+  throw error
+}
+
 // ---------------------------------------------------------------- 任务格式归一
 
 /** 合并后的 title 超过这个宽度就提示复查（面板首行是 `type: title`，§9.1.4）。 */
@@ -2526,10 +3161,12 @@ async function dispatch(ctx, parsed) {
       return cmdHeartbeat(ctx, sub)
     case 'decision':
       return cmdDecision(ctx, sub)
+    case 'desc':
+      return cmdDesc(ctx, sub)
     case 'check':
       return cmdCheck(ctx, sub)
     default:
-      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|decision|check；-h 查看帮助）`)
+      throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|decision|desc|check；-h 查看帮助）`)
   }
 }
 
@@ -2578,16 +3215,19 @@ async function main() {
     throw new CliError('usage', `多余的参数：${extra.slice(1).join(' ')}`)
   }
   if (
-    ['exp', 'task', 'gate', 'decision'].includes(command) &&
+    ['exp', 'task', 'gate', 'decision', 'desc'].includes(command) &&
     [
       'show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw',
       // task-83 P3b：`flow task link T-xxx --team B-yyy` / `flow task unlink T-xxx`
       'link', 'unlink',
       // T-12 B2：exp 的三个新子命令同样允许 `flow exp review E-xxx`
       'review', 'productize', 'cleanup',
+      // T-20261108 D4：`flow desc plan T-xxx …` / `flow desc apply T-xxx`
+      'plan', 'apply',
     ].includes(action) &&
-    // `gate run --phase X` takes no id.
-    !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined)
+    // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
+    !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&
+    !(command === 'desc' && action === 'show')
   ) {
     if (extra.length === 0 && parsed.flags.id === undefined) {
       throw new CliError('usage', `用法: flow ${command} ${action} <id> [options]`)

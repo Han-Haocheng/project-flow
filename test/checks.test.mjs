@@ -121,7 +121,7 @@ const STATE_VALID = [
 
 // -------------------------------------------------------------------- list
 
-test('check list --json 暴露七项检查：四项脚本检查 + 内置 decisions/experiments/tasks', () => {
+test('check list --json 暴露八项检查：四项脚本检查 + 内置 decisions/experiments/tasks/description', () => {
   const root = tempRoot('list')
   const result = runCli(root, ['check', 'list', '--json'])
   assert.equal(result.code, 0)
@@ -129,7 +129,7 @@ test('check list --json 暴露七项检查：四项脚本检查 + 内置 decisio
   const checks = result.json.data.checks
   assert.deepEqual(
     checks.map((item) => item.name),
-    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks'],
+    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks', 'description'],
   )
   // 第 1-4 项是随包脚本检查：断言一条不减，解释器只允许 bash/python3、脚本必须带 skills/ 前缀。
   const scriptChecks = checks.slice(0, 4)
@@ -139,7 +139,7 @@ test('check list --json 暴露七项检查：四项脚本检查 + 内置 decisio
     assert.ok(item.description.length > 0)
     assert.ok(item.args.length > 0)
   }
-  // 第 5-7 项是内置检查：core 实现，脚本是包根相对路径（不是 skills/ 前缀），
+  // 第 5-8 项是内置检查：core 实现，脚本是包根相对路径（不是 skills/ 前缀），
   // 逐项整体断言，不改成 includes、不放宽正则。
   const builtins = checks.slice(4)
   for (const item of builtins) {
@@ -167,6 +167,13 @@ test('check list --json 暴露七项检查：四项脚本检查 + 内置 decisio
       description: '旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）',
       args: '[--type-map <file.json>]',
     },
+    {
+      name: 'description',
+      interpreter: 'core',
+      script: 'lib/core.mjs#checkDescription',
+      description: '描述台账漂移（缺记录/陈旧 hash/未归属声明/模块图不一致/缺语义）时失败（内置检查：bin 特判路由 core，只读）',
+      args: '[--task <T-id>] [--strict]',
+    },
   ])
   // 防假绿：前四项不许混入 core，内置项也不许被当成 scripts/ 脚本。
   for (const item of scriptChecks) assert.notEqual(item.interpreter, 'core')
@@ -184,6 +191,8 @@ test('check list 纯文本列出用法（不 spawn 脚本）', () => {
     'check doc --file',
     'check decisions',
     'decisions  [core]',
+    'description  [core]',
+    'check description',
   ]) {
     assert.ok(result.stdout.includes(needle), `缺少：${needle}\n${result.stdout}`)
   }

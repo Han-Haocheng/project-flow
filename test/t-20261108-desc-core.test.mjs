@@ -43,6 +43,7 @@ import {
   saveContract,
   setDescriptionFile,
   setDescriptionPlan,
+  setDescriptionProject,
   storePaths,
   updateTask,
 } from '../lib/core.mjs'
@@ -601,6 +602,47 @@ test('setDescriptionFile：更新 project 计数缓存与 revision', () => {
   assert.equal(after.counts.described, 1)
   assert.equal(after.counts.missingSemantics, 2, '缺文件语义 b（1）+ 缺模块语义 b（1）')
   assert.notEqual(after.revision, before.revision, '说出的话变了，revision 必须变')
+})
+
+test('setDescriptionProject：project.json 必须先由 build 建立；语义必须是非空字符串', () => {
+  const { root, contract } = projectWith('set-project-missing', { 'lib/a.mjs': 'export function alpha() {}\n' })
+
+  // 台账还没 build：set 不替 build 建 project.json（与 setDescriptionFile 同一条纪律）。
+  expectFlowError(
+    () => setDescriptionProject(root, contract, { semantics: PROJECT_SEMANTICS }),
+    'invalid',
+    /flow desc build/
+  )
+
+  assert.equal(buildDescription(root, contract).created, 1)
+  for (const semantics of ['', '   \n  ', 42, null]) {
+    expectFlowError(
+      () => setDescriptionProject(root, contract, { semantics }),
+      'invalid',
+      /不能为空/
+    )
+  }
+})
+
+test('setDescriptionProject：只写 semantics+updated_at，其它字段（含未知字段）原样保留', () => {
+  const { root, contract } = projectWith('set-project-write', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescription(root, contract, { now: NOW })
+  const before = readDescriptionProject(root, contract)
+
+  // 未知字段也要留下：set 是「改一个字段」，不是重建 project.json。
+  const onDisk = JSON.parse(fs.readFileSync(projectFile(root), 'utf8'))
+  onDisk.extra = { keep: true }
+  fs.writeFileSync(projectFile(root), `${JSON.stringify(onDisk, null, 2)}\n`)
+
+  const next = setDescriptionProject(root, contract, { semantics: `  ${PROJECT_SEMANTICS}  `, now: LATER })
+  assert.equal(next.semantics, PROJECT_SEMANTICS, '语义要 trim 后落盘')
+  assert.equal(next.updated_at, LATER, 'updated_at 必须重算')
+  assert.equal(next.generated_at, before.generated_at, 'generated_at 是 build 的事实，不改')
+  assert.equal(next.revision, before.revision, '语义不是记录内容，revision 不动')
+  assert.equal(next.name, before.name)
+  assert.deepEqual(next.counts, before.counts)
+  assert.deepEqual(next.extra, { keep: true })
+  assert.deepEqual(readDescriptionProject(root, contract), next, '返回值必须与盘上一致')
 })
 
 // ====================================================================== plan

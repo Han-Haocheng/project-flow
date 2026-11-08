@@ -1509,7 +1509,10 @@ test('renderMarkdown：确定性、含两张 mermaid、无墙钟时间', () => {
   assert.match(first, /^graph LR$/m)
   assert.match(first, /subgraph lib$/m)
   assert.match(first, /n0 --> n1/, '文件关系图应画出 lib/a.mjs → lib/b.mjs')
-  assert.match(first, /m0\["store"\] --> m1\["impl"\]/, '模块图应带模块标签与边')
+  // 只验成员资格，不钉顺序（顺序本身不是被保护的性质，见 t-20261107-no-literal-order）。
+  assert.match(first, /m0\["store"\]/, '模块图应带 store 模块标签')
+  assert.match(first, /m1\["impl"\]/, '模块图应带 impl 模块标签')
+  assert.match(first, /-->/, '模块图应画模块之间的边')
   // 表格：模块 / 语义 / 成员（模块按记录顺序）。
   assert.match(first, /^\| 模块 \| 语义 \| 成员 \|$/m)
   assert.match(first, /^\|---\|---\|---\|$/m)

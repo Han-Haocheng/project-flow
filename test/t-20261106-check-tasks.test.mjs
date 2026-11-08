@@ -303,13 +303,13 @@ test('A8b：真实台账只读复核（不写盘，数字取自 --json，不硬�
 
 // -------------------------------------------------------------------- A9
 
-test('A9：check list 收录第 7 项 tasks（精确列表 + 五键）', () => {
+test('A9：check list 收录第 8 项 description（精确列表 + 五键；tasks 仍是第 7 项）', () => {
   const root = freshProject('a9')
   const result = runCli(root, ['--root', root, 'check', 'list', '--json'])
   assert.equal(result.code, 0)
   assert.deepEqual(
     result.json.data.checks.map((item) => item.name),
-    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks'],
+    ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks', 'description'],
   )
   const tasks = result.json.data.checks[6]
   assert.deepEqual(tasks, {
@@ -319,9 +319,19 @@ test('A9：check list 收录第 7 项 tasks（精确列表 + 五键）', () => {
     description: '旧任务记录未归一（残留 goal 键 / 缺 type）时失败（内置检查：bin 特判路由 core，只读）',
     args: '[--type-map <file.json>]',
   })
+  const description = result.json.data.checks[7]
+  assert.deepEqual(description, {
+    name: 'description',
+    interpreter: 'core',
+    script: 'lib/core.mjs#checkDescription',
+    description: '描述台账漂移（缺记录/陈旧 hash/未归属声明/模块图不一致/缺语义）时失败（内置检查：bin 特判路由 core，只读）',
+    args: '[--task <T-id>] [--strict]',
+  })
   const plain = runCli(root, ['--root', root, 'check', 'list'])
   assert.ok(plain.stdout.includes('tasks  [core]'), plain.stdout)
   assert.ok(plain.stdout.includes('check tasks [--type-map <file.json>]'), plain.stdout)
+  assert.ok(plain.stdout.includes('description  [core]'), plain.stdout)
+  assert.ok(plain.stdout.includes('check description [--task <T-id>] [--strict]'), plain.stdout)
 })
 
 // -------------------------------------------------------------------- A10

@@ -169,6 +169,13 @@ test('零任务台账：未完成 0、九个键全 0、不崩不报错', () => {
   assert.equal(human.code, 0, human.stdout + human.stderr)
   assert.match(human.stdout, /项目状态 {2}未完成 0/)
   assert.match(human.stdout, /栈 {2}空（没有未完成的任务）/)
+  // T-20261108 D4：描述计数是 CLI 展示层的一行（未建描述时给可操作的下一步）。
+  assert.match(human.stdout, /描述\s+未建立（flow desc build）/)
+  assert.deepEqual(
+    result.json.data.counts.description,
+    { files: 0, modules: 0, missingSemantics: 0, plans: 0, described: 0 },
+    '--json 的 counts.description 必须与 desc status 同口径',
+  )
 })
 
 // ------------------------------------------------------------- 未初始化：不给零值块

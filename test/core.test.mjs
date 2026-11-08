@@ -2458,19 +2458,22 @@ test('readStoreState 决策投影：与 summarizeDecisions 逐字同形、items 
   assert.deepEqual(frozen(() => summarizeDecisions(root, contract).counts), state.decisions.counts)
 })
 
-test('契约与设计文档文本同步：七项检查 / approval 省略 / 6 个工具 / D19', () => {
+test('契约与设计文档文本同步：八项检查 / approval 省略 / 6 个工具 / D19', () => {
   const repo = path.resolve(HERE, '..')
   const contractText = fs.readFileSync(path.join(repo, 'CONTRACT.md'), 'utf8')
-  assert.ok(contractText.includes('七项'), 'CONTRACT §6 写明 check list 七项')
-  // 名单与 bin 的 BUILTIN_CHECKS + scripts 清单一致：四项脚本 + decisions + experiments + tasks。
-  for (const name of ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks']) {
+  assert.ok(contractText.includes('八项'), 'CONTRACT §6 写明 check list 八项')
+  // 名单与 bin 的 BUILTIN_CHECKS + scripts 清单一致：四项脚本 + decisions + experiments + tasks + description。
+  for (const name of ['staged', 'release-baseline', 'state', 'doc', 'decisions', 'experiments', 'tasks', 'description']) {
     assert.ok(contractText.includes(`| \`${name}\` |`), `CONTRACT §6.1 表缺检查名 ${name}`)
   }
   assert.ok(contractText.includes('### 6.1.2 `check experiments`'), 'CONTRACT §6.1.2 说明内置 experiments')
   assert.ok(contractText.includes('### 6.1.3 `check tasks`'), 'CONTRACT §6.1.3 说明内置 tasks')
-  // 防回退：文档不许再自称六项/两个内置项。
+  assert.ok(contractText.includes('### 6.1.4 `check description`'), 'CONTRACT §6.1.4 说明内置 description')
+  // 防回退：文档不许再自称六项/七项、两个/三个内置项。
   assert.ok(!contractText.includes('`check list` 共六项'), 'CONTRACT 不许残留 check list 共六项')
+  assert.ok(!contractText.includes('`check list` 共七项'), 'CONTRACT 不许残留 check list 共七项')
   assert.ok(!contractText.includes('内置例外（两个）'), 'CONTRACT 不许残留内置例外（两个）')
+  assert.ok(!contractText.includes('内置例外（三个）'), 'CONTRACT 不许残留内置例外（三个）')
   assert.ok(contractText.includes('approval 省略'), 'CONTRACT 写明 approval 省略 recommendation = approve')
   assert.ok(contractText.includes('6 个工具'), 'CONTRACT §9.3 工具数 5 → 6')
   assert.ok(contractText.includes('flow_decision'), 'CONTRACT §9.3 列出 flow_decision')
