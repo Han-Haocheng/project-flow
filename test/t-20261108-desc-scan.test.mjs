@@ -8,12 +8,15 @@
 // 覆盖的坑（都是词法近似扫描器的经典陷阱）：
 //   - 注释里的假 import、字符串里的假 import、转义字符串；
 //   - 模板串（含 `${}` 插值里的花括号与假 import）；
-//   - 多行 import 子句、`export { x } from`、`export * as ns from`；
-//   - `import('./x')` 与 `import.meta` 的区分；
+//   - 多行 / 超长（> 4000 字符）导入子句、TS `import type`、`export { x } from`、
+//     `export * as ns from`；
+//   - `import('./x')` 与 `import.meta`、`obj.import(…)` 的区分；
+//   - 本地 export 列表（`export { a, b as c }`）对 exported 的标记；
+//   - CRLF 行号、非字符串 text 抛 FlowError；
 //   - 顶层判定（嵌套函数、`for (const …)`、函数表达式里的名字都不算声明）；
 //   - 声明区间（到下一个顶层声明为止）与 identifiers（剔除属性访问与自身名）；
 //   - Python 的 def / async def / class / 顶层赋值与三种 import 语句；
-//   - 其它语言落成 `unknown`；叶子模块零 import。
+//   - 其它语言落成 `unknown`；唯一 lib 依赖是 `./util.mjs` 的 FlowError。
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -95,6 +98,21 @@ test('JS import：多行 import 子句也能解析出 specifier', () => {
   assert.deepEqual(scan.imports.map((entry) => entry.kind), ['static', 'static'])
 })
 
+test('JS import：超长具名导入子句（> 4000 字符）不丢边，也不吃掉后续语句', () => {
+  const names = []
+  for (let index = 0; index < 500; index += 1) names.push(`member${index}`)
+  const clause = `import { ${names.join(', ')} } from './big.mjs'`
+  assert.ok(clause.length > 4000, `用例本身必须超过旧的 4000 字符上限：${clause.length}`)
+
+  const src = [clause, "import tail from './tail.mjs'", 'const after = 1'].join('\n')
+  const scan = scanSource('lib/fixture.mjs', src)
+
+  // 正例：长列表本身必须成边（旧实现的 4000 字符栅栏在这里静默返回 null）。
+  assert.deepEqual(specsOf(scan), ['./big.mjs', './tail.mjs'], '超长导入子句被静默丢弃')
+  assert.deepEqual(scan.imports.map((entry) => entry.kind), ['static', 'static'])
+  assert.deepEqual(namesOf(scan), ['after'], '长 import 子句之后的声明没被继续扫描')
+})
+
 test('JS import：export { x } from / export * as ns / export * 记成 reexport', () => {
   const src = [
     "export { a } from './reexport.mjs'",
@@ -117,6 +135,31 @@ test('JS import：export { x } from / export * as ns / export * 记成 reexport'
   assert.equal(scan.declarations[0].exported, true)
 })
 
+test('TS：import type / import type from / export type { … } from 仍然算边', () => {
+  const src = [
+    "import type { Alpha, Beta as Gamma } from './types.mjs'",
+    "import type Delta from './delta.mjs'",
+    "import type from './shadow.mjs'",
+    "export type { Epsilon } from './epsilon.mjs'",
+    'export type { Local }',
+    'interface Local {}',
+  ].join('\n')
+  const scan = scanSource('lib/fixture.ts', src)
+
+  assert.equal(scan.language, 'js', 'TS 家族统一归 js')
+  // 正例：四条 import 语句都必须解析出来（否则否定断言是空集合假绿）。
+  assert.ok(scan.imports.length >= 4, `TS import 一条都没解析出来：${scan.imports.length}`)
+  assert.deepEqual(specsOf(scan), ['./types.mjs', './delta.mjs', './shadow.mjs', './epsilon.mjs'])
+  assert.deepEqual(
+    scan.imports.map((entry) => entry.kind),
+    ['static', 'static', 'static', 'reexport'],
+    '`import type from` 是默认导入（static）；export … from 才是 reexport'
+  )
+  // `export type { Epsilon } from` 是 reexport：远端名字不该变成本地声明。
+  assert.ok(!namesOf(scan).includes('Epsilon'), 'reexport 的远端名字被当成声明')
+  assert.ok(!namesOf(scan).includes('Local'), 'export type / interface 不是 JS 声明')
+})
+
 test('JS import：动态 import 与 import.meta 区分开', () => {
   const src = [
     "const lazy = import('./dynamic.mjs')",
@@ -134,6 +177,30 @@ test('JS import：动态 import 与 import.meta 区分开', () => {
     'import()/import.meta 判定错误（非字面量与 import.meta 都不算边）'
   )
   assert.ok(!specsOf(scan).some((specifier) => specifier.includes('meta')), 'import.meta 被当成模块边')
+})
+
+test('JS import：obj.import() / 方法名 import 不产生 dynamic 边（真 import() 仍收）', () => {
+  const src = [
+    "const direct = import('./direct.mjs')",
+    "const viaMember = registry.import('./member.mjs')",
+    "const viaOptional = registry?.import('./optional.mjs')",
+    'class Loader { import(target) { return target } }',
+    "const asProperty = { import: './property.mjs' }",
+    'const bare = registry.import',
+  ].join('\n')
+  const scan = scanSource('lib/fixture.mjs', src)
+
+  // 正例：语句/表达式位置的动态 import 必须还在（否则否定断言是空集合假绿）。
+  assert.ok(scan.imports.length >= 1, '动态 import 一条都没解析出来')
+  assert.deepEqual(
+    scan.imports.map((entry) => [entry.kind, entry.specifier]),
+    [['dynamic', './direct.mjs']],
+    '属性名/方法名 import 被当成了模块边'
+  )
+  for (const fake of ['./member.mjs', './optional.mjs', './property.mjs']) {
+    assert.ok(!specsOf(scan).includes(fake), `属性名 import 被当成边：${fake}`)
+  }
+  assert.ok(namesOf(scan).includes('Loader'), 'class Loader 应被解析出来')
 })
 
 test('JS import：模板串与转义不误伤，且不遮挡后续真 import', () => {
@@ -247,6 +314,37 @@ test('JS 声明：identifiers 剔除属性访问、自身名字、注释与字�
   assert.deepEqual([...declaration.identifiers].sort(), declaration.identifiers, 'identifiers 未排序')
 })
 
+test('JS 声明：本地 export 列表（export { a, b as c }）把本地声明标成 exported', () => {
+  const src = [
+    'function alpha() {}',
+    'const beta = 1',
+    'class Gamma {}',
+    'function internal() {}',
+    'export { alpha, beta as renamed }',
+    'export { Gamma }',
+    "export { remote as imported } from './remote.mjs'",
+    "export * as namespace from './ns.mjs'",
+  ].join('\n')
+  const scan = scanSource('lib/fixture.mjs', src)
+
+  assert.ok(scan.declarations.length >= 4, `声明没解析出来：${scan.declarations.length}`)
+  assert.deepEqual(namesOf(scan), ['alpha', 'beta', 'Gamma', 'internal'])
+  assert.deepEqual(
+    scan.declarations.map((entry) => entry.exported),
+    [true, true, true, false],
+    '`b as c` 标记本地名 b；`export … from` 是 reexport，不改本地标志'
+  )
+  // reexport 仍是模块边，但不产生本地声明、也不标记远端名/别名。
+  assert.deepEqual(specsOf(scan), ['./remote.mjs', './ns.mjs'])
+  assert.ok(!namesOf(scan).includes('remote'), 'reexport 的远端名字被当成声明')
+  assert.ok(!namesOf(scan).includes('renamed'), 'export 别名不是本地声明')
+
+  // 顺序无关：export 列表写在声明之前也要能标记。
+  const forward = scanSource('lib/forward.mjs', ['export { later }', 'const later = 2'].join('\n'))
+  assert.deepEqual(namesOf(forward), ['later'])
+  assert.equal(forward.declarations[0].exported, true, '本地 export 列表应顺序无关')
+})
+
 test('JS：正则字面量里的引号/花括号不破坏后续扫描', () => {
   const src = [
     'const UNSAFE_RE = /[<>:"|?*]/g',
@@ -258,6 +356,39 @@ test('JS：正则字面量里的引号/花括号不破坏后续扫描', () => {
   // 正例：正则之后的声明必须还在（正则里的引号曾把后面整个文件吞掉）。
   assert.deepEqual(namesOf(scan), ['UNSAFE_RE', 'PAIR_RE', 'after'])
   assert.deepEqual(scan.imports, [], '正则字面量里不该产生 import')
+})
+
+test('CRLF：行号只按 \\n 计数（\\r 不额外换行），offset 是原始字符偏移', () => {
+  const src = [
+    'const first = 1', // 1
+    'function second() {', // 2
+    '  return first', // 3
+    '}', // 4
+    'export function third() {}', // 5
+  ].join('\r\n')
+  const scan = scanSource('lib/crlf.mjs', src)
+
+  assert.ok(scan.declarations.length >= 3, `CRLF 声明没解析出来：${scan.declarations.length}`)
+  assert.deepEqual(
+    scan.declarations.map((entry) => [entry.name, entry.startLine, entry.endLine]),
+    [
+      ['first', 1, 1],
+      ['second', 2, 4],
+      ['third', 5, 5],
+    ],
+    'CRLF 下的行号/区间判定错误'
+  )
+  assert.equal(scan.declarations[2].exported, true)
+
+  const firstLine = "import a from './a.mjs'"
+  const secondLine = "import b from './b.mjs'"
+  const imports = scanSource('lib/crlf-imports.mjs', [firstLine, secondLine].join('\r\n'))
+  assert.deepEqual(specsOf(imports), ['./a.mjs', './b.mjs'])
+  assert.deepEqual(
+    imports.imports.map((entry) => entry.offset),
+    [0, firstLine.length + 2],
+    'offset 不该把 \\r 当换行而漂移'
+  )
 })
 
 // ------------------------------------------------------------------ Python
@@ -372,6 +503,26 @@ test('未知语言：language 为 unknown，imports/declarations 为空数组', 
   assert.deepEqual(scanSource('lib/empty.mjs', ''), { language: 'js', imports: [], declarations: [] })
 })
 
+test('scanSource：非字符串 text 抛 FlowError(invalid)，不静默降级为空串', () => {
+  const isInvalidStringError = (error) =>
+    error.name === 'FlowError' &&
+    error.code === 'invalid' &&
+    /scanSource expects a string/.test(error.message)
+
+  for (const bad of [null, undefined, 42, {}, [], Buffer.from('x')]) {
+    assert.throws(
+      () => scanSource('lib/fixture.mjs', bad),
+      isInvalidStringError,
+      `非字符串 text 未抛 FlowError：${String(bad)}`
+    )
+  }
+  // 语言判定之前就拒绝：未知语言同样不许静默返回空结果。
+  assert.throws(() => scanSource('docs/notes.md', null), isInvalidStringError)
+  assert.throws(() => scanSource('scripts/fixture.py', 123), isInvalidStringError)
+  // 空串仍是合法输入——「没内容」与「类型错」必须分开。
+  assert.deepEqual(scanSource('lib/empty.mjs', ''), { language: 'js', imports: [], declarations: [] })
+})
+
 test('残缺源码不抛错（未闭合字符串 / 括号 / 注释）', () => {
   const broken = [
     'const x = "unterminated',
@@ -388,7 +539,7 @@ test('残缺源码不抛错（未闭合字符串 / 括号 / 注释）', () => {
   }
 })
 
-test('叶子模块：lib/source-scan.mjs 零 import，且自扫描能认出公开接口', () => {
+test('依赖：只 import ./util.mjs 的 FlowError，自扫描能认出公开接口', () => {
   const text = fs.readFileSync(SELF, 'utf8')
   const scan = scanSource('lib/source-scan.mjs', text)
 
@@ -401,8 +552,13 @@ test('叶子模块：lib/source-scan.mjs 零 import，且自扫描能认出公�
     assert.equal(declaration.exported, true, `${name} 应标记为 exported`)
   }
 
-  // 叶子约束：不 import 任何模块（含 node: 内置），也不 re-export。
-  assert.deepEqual(scan.imports, [], 'source-scan 必须零 import')
-  assert.doesNotMatch(text, /^\s*import\s/m, '出现 import 语句')
+  // 唯一依赖：`./util.mjs` 的 FlowError。util 是零依赖叶子且不反向 import，
+  // 依赖图 `util ← source-scan ← desc` 仍无环；node: 内置与 re-export 都不许有。
+  assert.deepEqual(
+    scan.imports.map((entry) => [entry.kind, entry.specifier]),
+    [['static', './util.mjs']],
+    'source-scan 只应 import ./util.mjs'
+  )
+  assert.doesNotMatch(text, /^\s*import\s+[^;\n]*\bfrom\s+['"]node:/m, '不应依赖 node: 内置')
   assert.doesNotMatch(text, /^\s*export\s+[^;\n]*\bfrom\b/m, '出现 export … from 语句')
 })
