@@ -12,7 +12,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { apply } from '../index.js'
-import { addTask, listTasks, loadContract, initProject, startHeartbeat } from '../lib/core.mjs'
+import { buildDefinition as buildTaskTool } from '../lib/tools/tasks.mjs'
+import {
+  addTask,
+  endHeartbeat,
+  getTask,
+  listTasks,
+  loadContract,
+  initProject,
+  releaseDeadSessionTasks,
+  startHeartbeat,
+  updateTask,
+} from '../lib/core.mjs'
 import {
   PEER_MESSAGE_PREFIXES,
   SOURCE_TEXT_MAX,
@@ -196,6 +207,7 @@ test('捕获正例：一条用户消息 → 恰好 1 条任务，source/stage �
   assert.equal(task.stage, 'queued-analysis', 'created is advanced to queued-analysis immediately')
   assert.equal(task.status, 'active', 'status is the compatibility view of queued-analysis')
   assert.equal(task.type, 'chore', 'P1 does not infer a conventional type')
+  assert.equal(task.owner, agent.id, 'capture attributes the task to its session (D-20261108-05)')
 })
 
 // ------------------------------------------------------- 2 幂等（最重要）
@@ -854,4 +866,97 @@ test('捕获保真⑧：core 拒绝非法的 source.attachments（不静默写�
   assert.deepEqual(listTasks(root, contract).find((row) => row.id === task.id).source.attachments, [
     { kind: 'file', attachmentId: 'sha256:f1', name: 'notes.txt', bytes: 7 },
   ])
+})
+
+
+// ------------------------- 9 会话归属：owner 是任务的会话字段（D-20261108-05 extend-owner）
+//
+// 语义：捕获自动写 owner=会话 id；活跃会话的任务不能被其他会话改写/释放；
+// 会话结束后 owner 自动释放为 ''（未指定），其他会话可再领取。
+
+test('会话归属②：活跃会话的任务不能被其他会话领取或释放；本人释放后可被领取', async () => {
+  const { root, contract } = freshProject('owner-guard')
+  const harness = makeHarness(root)
+  const agentA = harness.addAgent('session-owner-a')
+  const agentB = harness.addAgent('session-owner-b')
+
+  await preStep(harness, agentA, [userMessage('归属测试的一句话', recentStamp(-1000))])
+  await turnStopping(harness, agentA)
+  const task = tasksOf(root, contract)[0]
+  assert.equal(task.owner, agentA.id, 'capture auto-fills owner with the capturing session')
+
+  // The task tool is mounted by the `tasks` sub-plugin, not by `apply`; build it
+  // against the same scoped ctx so the guard wiring (actor + agents probe) is
+  // exercised here.
+  const tool = buildTaskTool({ ctx: harness.ctx, toolRoot: () => root })
+  await assert.rejects(
+    () => tool.execute({ action: 'update', id: task.id, owner: agentB.id }, { agent: agentB }),
+    /owned by active session/,
+    'a live session\'s task must not be acquired by another session',
+  )
+  await assert.rejects(
+    () => tool.execute({ action: 'update', id: task.id, owner: 'none' }, { agent: agentB }),
+    /owned by active session/,
+    'a live session\'s task must not be released by another session',
+  )
+
+  const released = await tool.execute({ action: 'update', id: task.id, owner: 'none' }, { agent: agentA })
+  assert.equal(released.task.owner, '', 'the owner session can release its own task to "unassigned"')
+
+  const acquired = await tool.execute({ action: 'update', id: task.id, owner: agentB.id }, { agent: agentB })
+  assert.equal(acquired.task.owner, agentB.id, 'an unassigned task can be acquired by another session')
+})
+
+test('会话归属③：失效会话的 owner 自动释放为未指定；活跃会话/角色名/外主机保留', () => {
+  const { root, contract } = freshProject('owner-sweep')
+  const liveTask = addTask(root, contract, { type: 'chore', title: '活跃会话的任务', owner: 'live-session' })
+  const endedTask = addTask(root, contract, { type: 'chore', title: '已结束会话的任务', owner: 'ended-session' })
+  const roleTask = addTask(root, contract, { type: 'chore', title: '角色名不是会话', owner: 'lead' })
+
+  startHeartbeat(root, contract, { session: 'live-session', goal: '还在工作', createTask: false })
+  startHeartbeat(root, contract, { session: 'ended-session', goal: '已经结束', createTask: false })
+  endHeartbeat(root, contract, { session: 'ended-session', status: 'done', note: '会话结束' })
+
+  const result = releaseDeadSessionTasks(root, contract, {
+    isSessionLive: (session) => session === 'live-session',
+  })
+  assert.deepEqual(result.released.map((row) => row.id), [endedTask.id], 'only the ended session is released')
+  assert.equal(getTask(root, contract, endedTask.id).owner, '', 'the ended task becomes unassigned')
+  assert.equal(getTask(root, contract, liveTask.id).owner, 'live-session', 'a live session keeps its task')
+  assert.equal(getTask(root, contract, roleTask.id).owner, 'lead', 'a role name is not a session and is kept')
+
+  // dryRun 只报告不写盘
+  const again = releaseDeadSessionTasks(root, contract, { dryRun: true })
+  assert.deepEqual(again.released, [], 'nothing left to release after the first sweep')
+})
+
+test('会话归属④：owner 可更新为未指定（none/null），领取只能落到调用会话', () => {
+  const { root, contract } = freshProject('owner-update')
+  const task = addTask(root, contract, { type: 'chore', title: '待领取' })
+
+  assert.throws(
+    () => updateTask(root, contract, task.id, { owner: 'other-session' }, { actorSession: 'my-session' }),
+    /owner can only be the calling session/,
+  )
+  const acquired = updateTask(root, contract, task.id, { owner: 'my-session' }, { actorSession: 'my-session' })
+  assert.equal(acquired.owner, 'my-session')
+
+  const releasedNone = updateTask(root, contract, task.id, { owner: 'none' }, { actorSession: 'my-session' })
+  assert.equal(releasedNone.owner, '', '"none" releases to unassigned')
+  const acquiredAgain = updateTask(root, contract, task.id, { owner: 'my-session' }, { actorSession: 'my-session' })
+  assert.equal(acquiredAgain.owner, 'my-session')
+  const releasedNull = updateTask(root, contract, task.id, { owner: null }, {})
+  assert.equal(releasedNull.owner, '', '"null" releases to unassigned')
+
+  // 活跃会话保护：证明 live 后别人改不动
+  const claimed = updateTask(root, contract, task.id, { owner: 'live-session' }, {})
+  assert.equal(claimed.owner, 'live-session')
+  assert.throws(
+    () =>
+      updateTask(root, contract, task.id, { owner: 'my-session' }, {
+        actorSession: 'my-session',
+        isSessionLive: (session) => session === 'live-session',
+      }),
+    /owned by active session/,
+  )
 })

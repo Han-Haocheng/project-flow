@@ -2329,7 +2329,7 @@ check('TasksCard: 首行是 type: title、第二行是 notes、署名是 id，�
   assert.deepEqual(signatures.map((element) => element.props.title), ['T-A9', 'T-D9'], 'signature tooltip is the id');
   assert.ok(body.includes('"key":"T-D9"'), 'draft row key is not its business id');
   assert.ok(body.includes('"key":"T-A9"'), 'active row key is not its business id');
-  assert.ok(textOf(opened).includes('负责人 alice'), 'owner meta missing');
+  assert.ok(textOf(opened).includes('会话 alice'), 'owner meta missing');
 });
 
 check('TasksCard: a row whose type is not a string degrades to the bare title', () => {
@@ -2503,7 +2503,7 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     ['活动备注', '草稿一的备注'],
     'notes must render on the second line (an empty notes row is skipped)'
   );
-  assert.ok(textOf(opened).includes('负责人 alice'), 'draft owner missing');
+  assert.ok(textOf(opened).includes('会话 alice'), 'draft owner missing');
   // 用户 ③ 决策：id 作为署名常驻，不再是「默认隐藏」。
   assert.deepEqual(
     collect(opened, 'project-flow-taskSignature').map((element) => element.children[0]),
@@ -2520,7 +2520,7 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     .split('draft two').join('')
     .split('active one').join('');
   assert.ok(englishText.includes('Todo'), 'en todo group header missing');
-  assert.ok(englishText.includes('owner alice'), 'en owner meta missing');
+  assert.ok(englishText.includes('session alice'), 'en owner meta missing');
   assert.ok(!/[\u4e00-\u9fff]/.test(englishText), 'en draft group still contains Chinese');
 });
 

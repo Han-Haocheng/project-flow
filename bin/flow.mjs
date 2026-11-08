@@ -54,6 +54,8 @@ const USAGE = `project-flow CLI（schema 2）
           stage（可选）：created|queued-analysis|analyzing|queued-implementation|implementing|
            queued-review|reviewing|done|archived；写 stage 时 status 自动派生（见 CONTRACT §3.2.1）
           标题即目标（goal 已并入 title）；title/type 不可改（update），旧记录由格式门禁迁移
+          owner 是任务的会话归属：--owner <会话 id> 领取；--owner none|null 释放为未指定会话；
+          活跃会话的任务不能被其他会话改写/释放（见 CONTRACT §3.2.1）
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
   task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账，零外部写入）
   task unlink <TASK-ID>                   # 解除挂载（team=null；同样零外部写入）
@@ -1344,7 +1346,26 @@ async function cmdTask(ctx, sub) {
     if (Object.keys(patch).length === 0) {
       throw new CliError('usage', 'task update 至少需要一个字段参数（如 --status）')
     }
-    const record = await core.updateTask(ctx.root, contract, id, patch)
+    if (Object.hasOwn(patch, 'owner')) patch.owner = core.normalizeOwnerInput(patch.owner)
+    /* Session ownership (D-20261108-05 = extend-owner): the CLI is an operator
+       entry, so it does not impersonate a session; but it must not let anyone
+       rewrite a task held by a **live** session. Liveness comes from the
+       heartbeat ledger (pid/boot evidence), the same rule the panel uses. */
+    const ownerOptions = {}
+    if (Object.hasOwn(patch, 'owner')) {
+      ownerOptions.isSessionLive = (session) => {
+        try {
+          const status = core.heartbeatStatus(ctx.root, contract, session)
+          // A closed heartbeat (`endHeartbeat` → status done) is not an active
+          // session even while its pid is still the host process.
+          if (status.record !== null && status.record !== undefined && status.record.status === 'done') return false
+          return status.liveness === 'live'
+        } catch {
+          return undefined
+        }
+      }
+    }
+    const record = await core.updateTask(ctx.root, contract, id, patch, ownerOptions)
     if (!ctx.json) out(`已更新任务 ${record.id}  ${record.status || '-'}  ${record.title}`)
     return record
   }
