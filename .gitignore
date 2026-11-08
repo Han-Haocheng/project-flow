@@ -19,5 +19,8 @@ test/.tmp/
 *.tmp-*
 .agents/flow/.lock.takeover-*
 
+# dsh-ops 插件的面板运行数据（不是 project-flow 的工作目录；本地）
+.dsh-ops/
+
 # 桌面端运行日志（本地）
 dsh-desktop.log
