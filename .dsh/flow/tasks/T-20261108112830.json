@@ -55,9 +55,9 @@
     "92e2dbc",
     "ef024db"
   ],
-  "notes": "父卡（协调/验收）：D1-D6 全部完成并各自提交（cdbf14c/334ad34/e0e4118/5f6402f/e276189/92e2dbc/ef024db）。验证：干净 worktree（detach ef024db）node --test test/ 700/700、flow check description --strict exit 0、六项 selftest 全绿。父卡自身停在 implementing：done 门被真实并发状态拦下——description gate: unplanned-change scripts/module-domain.mjs（另一会话未提交的新文件在 include 范围）。解锁步骤：该会话提交后 ①flow desc plan T-20261108112830 --rebase 刷新 base ②grep README 用例数按新实测更新（其新增测试文件会改变计数）③flow gate run tests ④重放 implementing→queued-review→reviewing→done。",
+  "notes": "父卡（协调/验收）：D1-D6 全部完成并各自提交（cdbf14c/334ad34/e0e4118/5f6402f/e276189/92e2dbc/ef024db/ae1ed2a）。验证：干净 worktree（detach ae1ed2a）node --test test/ 700/700、flow check description --strict exit 0、六项 selftest 全绿、flow gate run precommit 7 步全绿（含 description）。父卡停在 implementing：done 门被真实并发状态拦下——description gate: unplanned-change scripts/module-domain.mjs（框架会话未提交，include 范围内）。⚠ 新发现缺口：计划 apply 后冻结，flow desc plan --rebase 也被拒（invalid「已 implemented」），收口前需先补「implemented 计划允许 base-only 刷新」+ 回归测试（推荐），或手工移走计划记录重建（兜底）。之后：desc build/set 覆盖 scripts/module-domain.mjs（5 模块）→ render → README 实测数字对齐 → gate run tests → 重放 implementing→queued-review→reviewing→done。完整 runbook + 现成补丁 + 验证清单见 .dsh-ops/desc-handoff.md。",
   "created_at": "2026-11-08T11:28:30+08:00",
-  "updated_at": "2026-11-08T13:18:15+08:00",
+  "updated_at": "2026-11-08T13:24:52+08:00",
   "done_at": null,
   "archived_at": null
 }
