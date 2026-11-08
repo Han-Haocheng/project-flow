@@ -2,7 +2,7 @@
   "ok": true,
   "generatedAt": "2026-10-28T15:01:15+08:00",
   "contract": {
-    "source": ".dsh/flow/flow.json",
+    "source": ".agents/flow/flow.json",
     "schema": 2,
     "name": "TmpProj"
   },

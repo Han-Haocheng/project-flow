@@ -1,7 +1,7 @@
 // T-20261030-15：CLI 每命令参数白名单（SPEC）+ 未声明 flag 拒绝 + id 对齐。
 //
 // 只使用 os.tmpdir() 下的一次性项目；用真实 CLI（spawnSync bin/flow.mjs）验证
-// 退出码、错误消息与「失败发生在任何 core 写之前」（未初始化 root 不产生 .dsh）。
+// 退出码、错误消息与「失败发生在任何 core 写之前」（未初始化 root 不产生 .agents）。
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -98,7 +98,7 @@ const UNDECLARED = [
   ['check list', ['check', 'list', '--marker', 'm'], '--marker'],
 ]
 
-test('未声明 flag：每命令 exit 1、点名 flag、且在任何 core 写之前失败（root 无 .dsh）', () => {
+test('未声明 flag：每命令 exit 1、点名 flag、且在任何 core 写之前失败（root 无 .agents）', () => {
   for (const [label, args, flag] of UNDECLARED) {
     const root = tempRoot('reject')
     const result = runCli(root, [...args])
@@ -107,22 +107,22 @@ test('未声明 flag：每命令 exit 1、点名 flag、且在任何 core 写之
     assert.equal(result.code, expected, `${label} ${flag}: 应 exit ${expected}，实际 ${result.code}\n${result.stderr}`)
     assert.match(result.stderr, new RegExp(`不支持 ${flag}`), `${label}: 错误消息应点名 ${flag}\n${result.stderr}`)
     assert.match(result.stderr, /可用：/, `${label}: 错误消息应列出可用 flag`)
-    assert.equal(fs.existsSync(path.join(root, '.dsh')), false, `${label}: 失败前不得创建 store`)
+    assert.equal(fs.existsSync(path.join(root, '.agents')), false, `${label}: 失败前不得创建 store`)
   }
 })
 
 test('未声明 flag（通过 = 提供的值）同样被拒；已初始化项目也不写盘', () => {
   const root = freshProject('reject-init')
-  const before = fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')
+  const before = fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8')
   const result = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'x', '--allow', 'src'])
   assert.equal(result.code, 1)
   assert.match(result.stderr, /task add 不支持 --allow/)
-  assert.equal(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'), before, 'conflict/usage 前不得改写 manifest')
+  assert.equal(fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8'), before, 'conflict/usage 前不得改写 manifest')
 })
 
 test('task add/update 不再声明 --goal：usage 失败（exit 1）且不写盘', () => {
   const root = freshProject('task-no-goal')
-  const before = fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')
+  const before = fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8')
   const add = runCli(root, ['task', 'add', '--type', 'feat', '--title', '甲', '--goal', '乙'])
   assert.equal(add.code, 1, add.stdout + add.stderr)
   assert.match(add.stderr, /task add 不支持 --goal/)
@@ -131,8 +131,8 @@ test('task add/update 不再声明 --goal：usage 失败（exit 1）且不写盘
   assert.equal(update.code, 1, update.stdout + update.stderr)
   assert.match(update.stderr, /task update 不支持 --goal/)
   // usage 失败早于任何 core 读写：manifest 与任务目录都不得变化。
-  assert.equal(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'), before)
-  assert.deepEqual(fs.readdirSync(path.join(root, '.dsh/flow/tasks')), [])
+  assert.equal(fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8'), before)
+  assert.deepEqual(fs.readdirSync(path.join(root, '.agents/tasks')), [])
 })
 
 // ------------------------------------------------------------ 已声明组合回归

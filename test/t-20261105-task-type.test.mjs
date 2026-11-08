@@ -194,7 +194,7 @@ test('type：旧记录（无 type）读投影为 null、不迁移；update 其�
     created_at: '2026-11-05T10:00:00+08:00',
     updated_at: '2026-11-05T10:00:00+08:00',
   }
-  const file = path.join(root, '.dsh/flow/tasks', 'T-20261105-01.json')
+  const file = path.join(root, '.agents/tasks', 'T-20261105-01.json')
   fs.writeFileSync(file, JSON.stringify(legacy, null, 2) + '\n')
 
   assert.equal(getTask(root, contract, legacy.id).type, null)
@@ -234,7 +234,7 @@ test('type：旧记录带手写 null / \'\' 时，update 其它字段同样可�
       updated_at: '2026-11-05T10:00:00+08:00',
       ...(type === undefined ? {} : { type }),
     }
-    const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
+    const file = path.join(root, '.agents/tasks', `${id}.json`)
     fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')
     return file
   }

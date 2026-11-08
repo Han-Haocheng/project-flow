@@ -72,7 +72,7 @@ def overlap(a, b):
 
 def load_config(root):
     cfg = load_json(Path(root) / ".agents" / "gate-config.json", {}) or {}
-    cfg.setdefault("task_dir", ".agents/tasks")
+    cfg.setdefault("task_dir", ".agents/taskbook")
     cfg.setdefault("doc_standard", ".agents/doc-standard.json")
     cfg.setdefault("sync", {})
     cfg.setdefault("version_checks", [])

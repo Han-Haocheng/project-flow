@@ -274,7 +274,7 @@ test('异常不冒泡：锁冲突只留一条警告、不重试、不改文件�
   const warnCount = harness.warns.length
 
   // Hold the store lock with this live pid: `withLock` conflicts immediately.
-  const lockPath = path.join(root, '.dsh', 'flow', '.lock')
+  const lockPath = path.join(root, '.agents', 'flow', '.lock')
   fs.writeFileSync(lockPath, JSON.stringify({ schema: 1, pid: process.pid, at: new Date().toISOString() }))
   try {
     await dispatch(harness, { agent, turn: 5, signal: { aborted: false } })

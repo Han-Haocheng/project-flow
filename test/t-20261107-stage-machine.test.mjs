@@ -57,7 +57,7 @@ function freshProject(label) {
 }
 
 function taskFile(root, id) {
-  return path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`)
+  return path.join(root, '.agents', 'tasks', `${id}.json`)
 }
 
 function readTaskFile(root, id) {
@@ -66,7 +66,7 @@ function readTaskFile(root, id) {
 
 /** byte+size+mtime fingerprint of the task store — proves a read path wrote nothing. */
 function storeFingerprint(root) {
-  const dir = path.join(root, '.dsh', 'flow', 'tasks')
+  const dir = path.join(root, '.agents', 'tasks')
   const out = {}
   for (const name of fs.readdirSync(dir).sort()) {
     const file = path.join(dir, name)

@@ -153,7 +153,7 @@ test('payload: tasks.trend is optional, bounded and never writes to the store', 
   addTask(root, contract, { title: 'chore: two', status: 'done', created_at: at(11, 1), updated_at: at(11, 2) })
   addTask(root, contract, { title: 'chore: three', status: 'done', created_at: at(11, 2), updated_at: at(11, 4) })
 
-  const storeDir = path.join(root, '.dsh', 'flow')
+  const storeDir = path.join(root, '.agents', 'flow')
   const snapshotStore = () => {
     const out = {}
     for (const relative of fs.readdirSync(storeDir, { recursive: true })) {

@@ -21,7 +21,7 @@ function fixture() {
   return {
     ok: true,
     generatedAt: '2026-10-31T18:28:26+08:00',
-    contract: { source: '.dsh/flow/flow.json', schema: 2, name: 'project-flow' },
+    contract: { source: '.agents/flow/flow.json', schema: 2, name: 'project-flow' },
     root: '/proj/project-flow',
     head: { sha: '7bb0fe0', branch: 'main', dirty: 0 },
     experiments: {

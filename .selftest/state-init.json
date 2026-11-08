@@ -4,7 +4,7 @@
   "name": "InitWorkspace",
   "alreadyInitialized": false,
   "created": [
-    ".dsh/flow/flow.json"
+    ".agents/flow/flow.json"
   ],
   "imported": {
     "trailers": 0,

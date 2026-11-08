@@ -80,7 +80,7 @@ function freshProject(label) {
   initProject(root)
   const { contract } = loadContract(root)
   drainWarnings()
-  return { root, contract, lockPath: path.join(root, '.dsh/flow/.lock') }
+  return { root, contract, lockPath: path.join(root, '.agents/flow/.lock') }
 }
 
 function readLock(lockPath) {
@@ -501,7 +501,7 @@ test('原子写：坏文件仍会 warning，成功写入后锁与 tmp 都不残�
 test('.gitignore 覆盖锁与内部临时文件', () => {
   const text = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8')
   const lines = text.split('\n').map((line) => line.trim())
-  for (const expected of ['.dsh/flow/.lock', '*.tmp-*', '.dsh/flow/.lock.takeover-*']) {
+  for (const expected of ['.agents/flow/.lock', '*.tmp-*', '.agents/flow/.lock.takeover-*']) {
     assert.ok(lines.includes(expected), `.gitignore 缺少 ${expected}`)
   }
 })

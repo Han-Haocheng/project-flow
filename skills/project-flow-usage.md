@@ -5,7 +5,7 @@ metadata:
 ---
 # project-flow-usage
 
-技能名：`project-flow-usage`。用 `flow` CLI 维护 `.dsh/flow/` 里的实验、任务与门禁；
+技能名：`project-flow-usage`。用 `flow` CLI 维护 `.agents/flow/` 里的实验、任务与门禁；
 面板读同一份 store（唯一写动作是未初始化空态上的「初始化」按钮，同样走 core）。
 所有命令都接受全局 `--root <dir>` 与 `--json`，**位置不限**（`parseArgv` 全位置扫描，
 `flow --root P task list` 与 `flow task list --root P` 等价）。
@@ -83,7 +83,7 @@ flow task rm T-20261028-01 --yes
 
 ## 项目任务 ↔ Team 任务（Agent Teams 执行视图）
 
-项目台账（`.dsh/flow/`）是 **durable 真源**；Agent Teams 的共享任务板（`team_task_*`）只是本次
+项目台账（`.agents/flow/`）是 **durable 真源**；Agent Teams 的共享任务板（`team_task_*`）只是本次
 Lead 会话的执行视图，随会话消失。两者用文本字段对接（用户已确认，写死）：
 
 | 方向 | 位置 | 写法 | 谁写 |
@@ -141,7 +141,7 @@ flow gate run precommit --json | node -e "let s='';process.stdin.on('data',d=>s+
 
 ## 项目描述：文件图 / 模块图 / 模块语义
 
-`.dsh/flow/description/` 把「有哪些文件」升级成「每个文件/模块干什么」：结构由命令自动同步，
+`.agents/description/` 把「有哪些文件」升级成「每个文件/模块干什么」：结构由命令自动同步，
 语义由你写。**不要手改 JSON**——锁与原子写都在 core，手改只会被 check 判成漂移。
 
 | 命令 | 作用 |
@@ -198,10 +198,10 @@ flow --json status     # 同上 + data.store 绝对路径
 
 ## 与 git 的关系
 
-- `.dsh/flow/` 是真相源：可以提交，实验的 `commits` 字段负责回指提交；
+- `.agents/flow/` 是真相源：可以提交，实验的 `commits` 字段负责回指提交；
 - 提交信息里的 `Exp-Id`/`Verdict` trailer **不再被读取或迁移**；实验与提交的关联改用
   `flow exp update <id> --commits <sha>` 维护。
-- 写锁 `.dsh/flow/.lock` 不要提交；并发写会得到 `conflict`（退出码 2），重试即可；
+- 写锁 `.agents/flow/.lock` 不要提交；并发写会得到 `conflict`（退出码 2），重试即可；
 - 需要给面板/他人看时不用导出：面板直接读同一份 store。
 
 ## 分支/工作树与台账
@@ -209,11 +209,11 @@ flow --json status     # 同上 + data.store 绝对路径
 中心-贡献者模型下（贡献者在自己分支提交、中心唯一合并与写台账；协议见
 `ai-collaborative-dev-workflow/references/contribution-flow.md`）：
 
-- **台账真源在主工作区**：`.dsh/flow/` 只在主工作区初始化与提交；工作树继承已提交的
+- **台账真源在主工作区**：`.agents/flow/` 只在主工作区初始化与提交；工作树继承已提交的
   台账，**不要**在工作树里 `flow init` 或另建 store，否则会出现两份互不相认的卡片。
 - **中心唯一写台账**：贡献者不 init、不建卡；需要更新状态时经中心，或用 `--root` 显式
   指向主工作区（且需中心同意）。
-- **子会话写卡必须 `--root` 主工作区**：面板只按**当前工作区**查找 `.dsh/flow/`，而且
+- **子会话写卡必须 `--root` 主工作区**：面板只按**当前工作区**查找 `.agents/flow/`，而且
   **看不到某会话在哪条分支**。在子 worktree 里直接 `flow task add` 会把卡写进工作树，
   主面板看不到，合并时才变成"多出来的文件"。正确写法：
 

@@ -67,7 +67,7 @@ function makeProject(label, options = {}) {
   core.initProject(root, { name: label, noGates: true })
   const { contract } = core.loadContract(root)
   if (options.fifoTask === true) {
-    execFileSync('mkfifo', [path.join(root, '.dsh/flow/tasks', 'T-20260101-01.json')])
+    execFileSync('mkfifo', [path.join(root, '.agents/tasks', 'T-20260101-01.json')])
   } else {
     core.addTask(root, contract, { type: 'feat', title: `${label} task`, status: 'active' })
   }
@@ -553,7 +553,7 @@ test('崩溃自愈：忙子进程被 SIGKILL → state-worker-crashed；下一�
   assert.equal(crashed.error.code, 'state-worker-crashed', JSON.stringify(crashed))
 
   // The pool rebuilds on demand: remove the FIFO, then the next request succeeds.
-  fs.rmSync(path.join(root, '.dsh/flow/tasks', 'T-20260101-01.json'), { force: true })
+  fs.rmSync(path.join(root, '.agents/tasks', 'T-20260101-01.json'), { force: true })
   const rebuilt = await waitUntil(() => workerPids().length > 0, 5000)
   assert.equal(rebuilt, true, '崩溃后应自动重建 worker')
   const recovered = json(await startState(routes, root).done)

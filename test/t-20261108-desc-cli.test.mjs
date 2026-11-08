@@ -82,7 +82,7 @@ function setStage(root, id, stage) {
 }
 
 function descDir(root) {
-  return path.join(root, '.dsh', 'flow', 'description')
+  return path.join(root, '.agents', 'description')
 }
 
 function readDescRecords(root) {
@@ -123,7 +123,7 @@ function snapshotTree(dir) {
 
 /** 改 `flow.json` 的 `description` 成员（只用于 --check 的 render 路径夹具）。 */
 function patchDescriptionConfig(root, patch) {
-  const file = path.join(root, '.dsh', 'flow', 'flow.json')
+  const file = path.join(root, '.agents', 'flow', 'flow.json')
   const contract = JSON.parse(fs.readFileSync(file, 'utf8'))
   contract.description = { ...(contract.description ?? {}), ...patch }
   fs.writeFileSync(file, `${JSON.stringify(contract, null, 2)}\n`)
@@ -182,7 +182,7 @@ test('desc status：未建立只提示，--json 给五计数 + enforce/enabled�
   const uninit = runCli(empty, ['desc', 'status', '--json'])
   assert.equal(uninit.code, 1, uninit.stdout + uninit.stderr)
   assert.equal(uninit.json.error.code, 'usage')
-  assert.equal(fs.existsSync(path.join(empty, '.dsh')), false, '只读命令不得建 .dsh')
+  assert.equal(fs.existsSync(path.join(empty, '.agents')), false, '只读命令不得建 .agents')
 })
 
 // -------------------------------------------------------------------- build

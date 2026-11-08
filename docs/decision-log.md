@@ -6,7 +6,7 @@
 
 ## 1 问题与目标
 
-用户多次遇到同一类事故：需要拍板的问题被后续问题、工具输出或子代理消息冲掉，用户与当前会话都忘了自己还在等一个答案。目标是把"需要用户拍板的事"做成 `.dsh/flow` 里的持久记录（`D-`），带选项、推荐、阻塞对象与影响路径，在四个表面持续可见。可见性只有一个终点：用户显式 `answer`，或显式 `withdraw`。
+用户多次遇到同一类事故：需要拍板的问题被后续问题、工具输出或子代理消息冲掉，用户与当前会话都忘了自己还在等一个答案。目标是把"需要用户拍板的事"做成 `.agents/flow` 里的持久记录（`D-`），带选项、推荐、阻塞对象与影响路径，在四个表面持续可见。可见性只有一个终点：用户显式 `answer`，或显式 `withdraw`。
 
 ## 2 非目标
 
@@ -18,10 +18,10 @@
 
 ## 3 现状与约束
 
-- 存储根 `<root>/.dsh/flow/`，单一写者 `lib/core.mjs`，CLI 只做参数解析与输出；原子写 + `.lock`（`CONTRACT.md` §4）。
+- 存储根 `<root>/.agents/flow/`，单一写者 `lib/core.mjs`，CLI 只做参数解析与输出；原子写 + `.lock`（`CONTRACT.md` §4）。
 - 记录族惯例：`<PREFIX>-YYYYMMDD-NN.json`、`schema: 1`、`created_at`/`updated_at`、未知字段保留、坏文件只记 `unreadable:` warning（`CONTRACT.md` §3.1、§3.2）。
 - 提醒面：`agent/pre-step` 已有主会话心跳提醒（`index.js` 的 `registerHeartbeatReminder`），只对根会话生效（`CONTRACT.md` §9.2）；子会话不提醒、不拒绝写入。
-- 门禁面：`flow check` 只读，脚本目录在 `lib/checks.mjs`，该模块不 import core、不读写 `.dsh/flow`（`CONTRACT.md` §6）；`flow gate` 步骤按退出码判定。
+- 门禁面：`flow check` 只读，脚本目录在 `lib/checks.mjs`，该模块不 import core、不读写 `.agents/flow`（`CONTRACT.md` §6）；`flow gate` 步骤按退出码判定。
 - 面板面：只读投影 `readStoreState`（`lib/core.mjs`），HTTP 只有 GET state 一个读端点，写入只有 init/gate 两个点（`CONTRACT.md` §9）。
 
 ## 4 方案
@@ -37,13 +37,13 @@
 ### 4.2 存储位置与配置
 
 ```
-<root>/.dsh/flow/decisions/D-YYYYMMDD-NN.json
+<root>/.agents/decisions/D-YYYYMMDD-NN.json
 ```
 
 `flow.json` 新增一个配置节，合并规则与其它节一致（缺键补默认、未知键保留、containment 相同）：
 
 ```json
-{"decisions": {"dir": ".dsh/flow/decisions"}}
+{"decisions": {"dir": ".agents/decisions"}}
 ```
 
 - `storePaths` 增加 `decisions` 绝对路径；配置值逃出项目根时按该节默认值降级并记 `manifest-path-rejected` warning（复用 §2.1 规则）。
@@ -285,7 +285,7 @@ D-20261031-02   choice    open  -                   2 小时 面板回答串是�
 
 ## 8 与语义台账（T-12）、进度树（T-13）的关系
 
-- 同族：`E-`（实验）、`T-`（任务）、`S-`（语义台账，T-12）、`D-`（决策）都是 `.dsh/flow` 下的记录族：独立目录、`schema: 1`、`PREFIX-YYYYMMDD-NN`、`created_at`/`updated_at`、未知字段保留、同一把锁与原子写、同一 CLI 风格与 `{ok,...}` JSON 信封。
+- 同族：`E-`（实验）、`T-`（任务）、`S-`（语义台账，T-12）、`D-`（决策）都是 `.agents/flow` 下的记录族：独立目录、`schema: 1`、`PREFIX-YYYYMMDD-NN`、`created_at`/`updated_at`、未知字段保留、同一把锁与原子写、同一 CLI 风格与 `{ok,...}` JSON 信封。
 - 独立：`D-` 记录"需要用户拍板的事"；`S-` 记录语义事实与漂移基线；`T-` 记录进度。跨族只存 **id 引用**（`blocks: [T-id]`），不嵌入内容、不双写字段，避免同一事实两处维护。
 - schema 3 预留（T-13）：本设计的 `flow.json` `decisions` 配置节与独立目录在 schema 3 中原样保留，进度树只增加投影；届时 `list --open`、门禁匹配、提醒逻辑不变。本期不改 schema 2。
 - 顺序：T-22（本设计）→ T-23（实现）；T-12/T-13 定稿时引用本文 §8 作为决策记录的格式依据，不另立一套。
@@ -326,7 +326,7 @@ D-20261031-02   choice    open  -                   2 小时 面板回答串是�
   {
     "schema": 1,
     "id": "D-20261030-02",
-    "question": "项目台账 .dsh/flow 是否随代码一起提交进 git？",
+    "question": "项目台账 .agents/flow 是否随代码一起提交进 git？",
     "kind": "approval",
     "options": [
       {"id": "approve", "label": "同意", "impact": "台账成为 durable 真源，跨会话/跨工作树可恢复"},
@@ -337,7 +337,7 @@ D-20261031-02   choice    open  -                   2 小时 面板回答串是�
     "rationale": "台账是项目状态的真源，提交后与代码同历史、可评审、可回退。",
     "status": "answered",
     "blocks": ["T-20261030-25"],
-    "affects": [".dsh/flow/", ".gitignore"],
+    "affects": [".agents/flow/", ".gitignore"],
     "answer": {"choice": "approve", "note": "用户 2026-10-30 确认：台账随代码提交。", "at": "2026-10-30T21:10:00+08:00", "by": "user"},
     "asked_at": "2026-10-30T21:00:00+08:00",
     "answered_at": "2026-10-30T21:10:00+08:00",
@@ -466,7 +466,7 @@ D-20261031-02   choice    open  -                   2 小时 面板回答串是�
 ```
 ID              类型      状态      阻塞                挂起   问题
 D-20261030-01   choice    answered  T-20261030-21       3 天   T-20 与 T-21 的改动怎么合并到主分支？
-D-20261030-02   approval  answered  T-20261030-25       3 天   项目台账 .dsh/flow 是否随代码一起提交进 git？
+D-20261030-02   approval  answered  T-20261030-25       3 天   项目台账 .agents/flow 是否随代码一起提交进 git？
 D-20261030-03   approval  answered  T-20261030-21       3 天   Team 任务与项目任务的映射是否按约定执行？
 D-20261030-04   approval  answered  T-20261030-24       3 天   三个内嵌技能的元数据是否统一改为中文？
 D-20261030-05   approval  answered  -                   3 天   是否删除仓库里旧同名技能包 zip？

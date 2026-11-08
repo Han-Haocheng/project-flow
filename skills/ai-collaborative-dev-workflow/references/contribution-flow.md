@@ -213,14 +213,16 @@ git branch -d <branch>        # 未合并会被拒绝；-D 仅在确认丢弃时
 
 ## 8 台账、心跳与分支可见性
 
-- **台账真源在主工作区**：`.dsh/flow/` 只在主工作区初始化与提交；工作树继承**已提交**的台账，**不要**在每个 worktree 重复 `flow init` 或另建 store。
+- **台账真源在主工作区**：`.agents/flow/` 只在主工作区初始化与提交；工作树继承**已提交**的台账，**不要**在每个 worktree 重复 `flow init` 或另建 store。
 - **中心是唯一台账写者**：贡献者不 init、不建卡；确需更新状态时经中心，或显式 `flow --root <主工作区> ...`（且需中心同意）。
 - 心跳是运行态，可留在自己工作树；不得因心跳自动建卡，也不登记文件锁。
 - **分支不可见**：面板与工具面都看不到某会话在哪条分支 ⇒ 心跳 `last_action`、任务 `notes`、评审申请三处都写 `branch` + `worktree path` + `commit`。
 
 ### 8.1 项目任务 ↔ Team 任务映射（项目台账是 durable 真源）
 
-Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随会话消失；项目台账（`.dsh/flow/tasks/`）跨会话、跨工作树持久。两者只靠文本字段对接：
+Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随会话消失；项目台账（`.agents/tasks/`，由 flow 插件写入）跨会话、跨工作树持久。两者只靠文本字段对接：
+
+协作技能自带的任务书另存 `.agents/taskbook/`，flow 插件不读它——不要把两者混用。
 
 | 方向 | 位置 | 写法 | 谁写 |
 |---|---|---|---|
@@ -272,7 +274,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 | 实现者仍在主工作区改文件 | 中心代建了工作树（被切走 cwd 的是中心） | 让实现者自己 `create_worktree`；中心只给 name/base |
 | 申请里没有 branch/commit | 以为"面板能看到" | 面板看不到分支；按模板补齐 branch + path + commit |
 | 合并时发现改动没进分支 | 忘记 commit，改动只在工作树工作区 | 回分支 `git add` + commit 后重新申请；不得在主工作区补提 |
-| 贡献者分支里冒出第二个 `.dsh/flow/` | 在分支里跑了 `flow init` | 确认无独有卡片后删掉该 store，改用 `--root <主工作区>` |
+| 贡献者分支里冒出第二个 `.agents/flow/` | 在分支里跑了 `flow init` | 确认无独有卡片后删掉该 store，改用 `--root <主工作区>` |
 | 工作树建在工作树里 | 贡献者继承了中心的工作树 cwd | 申请里写清绝对 path；下次从主工作区起步 |
 | 贡献者自己合并/推送了 | 把"申请"当成了"交付" | 停止后续操作、保留现场并上报；由中心评估是否回退 |
 | 申请被 request-rebase 后只回一句"好了" | 没重填 base/commits | 重新提交完整申请，baseCommit 与 commits 必须是 rebase 后的 |

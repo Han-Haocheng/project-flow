@@ -19,7 +19,7 @@
 // 不在真实树里 mv/删 lib/core.mjs（那是中间态残留，也会和并发队员打架）。
 //
 // 正例先行：健康参考 payload 必须来自**真正的 buildStoreState**（临时 root 里
-// 写一个 `.dsh/flow/flow.json`），不能落到 `emptyStoreState` 兜底——否则两边同源，
+// 写一个 `.agents/flow/flow.json`），不能落到 `emptyStoreState` 兜底——否则两边同源，
 // 形状对比会完美假绿。
 
 import { after, test } from 'node:test'
@@ -79,12 +79,12 @@ function stageSnapshotCopy(label) {
   return { dir, lib, copy, project }
 }
 
-/** 一个**初始化过**的 store：有 `.dsh/flow/flow.json`，所以 buildStoreState 不会走兜底。 */
+/** 一个**初始化过**的 store：有 `.agents/flow/flow.json`，所以 buildStoreState 不会走兜底。 */
 function healthyStoreRoot(label) {
   const root = tempDir(`healthy-${label}`)
-  fs.mkdirSync(path.join(root, '.dsh', 'flow'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.agents', 'flow'), { recursive: true })
   fs.writeFileSync(
-    path.join(root, '.dsh', 'flow', 'flow.json'),
+    path.join(root, '.agents', 'flow', 'flow.json'),
     `${JSON.stringify({ schema: 2, name: `degradation-${label}` })}\n`,
     'utf8'
   )

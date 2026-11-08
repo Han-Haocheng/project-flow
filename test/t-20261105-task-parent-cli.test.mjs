@@ -48,7 +48,7 @@ function runCli(cwd, args) {
 }
 
 function taskFile(root, id) {
-  return path.join(root, '.dsh/flow/tasks', `${id}.json`)
+  return path.join(root, '.agents/tasks', `${id}.json`)
 }
 
 // ------------------------------------------------------------------ CLI

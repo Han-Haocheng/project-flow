@@ -60,7 +60,7 @@ function writeLegacyTask(root, id, fields) {
     ...fields,
   }
   fs.writeFileSync(
-    path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`),
+    path.join(root, '.agents', 'tasks', `${id}.json`),
     `${JSON.stringify(record, null, 2)}\n`,
   )
   return record
@@ -150,7 +150,7 @@ test('CLI 端到端：2 条 done + 1 条 active（无 stage）→ unfinished 1 /
 test('真值回归：本仓库真实台账的未完成数远小于总数，done/archived 才是大头', (t) => {
   // 本会话 2026-11-07 的真值快照：unfinished 6（created 4 · queued-implementation 2），
   // counts: done 36 · archived 18。台账在动，所以**只守不等式与比例**，不写死 6。
-  const tasksDir = path.join(REPO, '.dsh', 'flow', 'tasks')
+  const tasksDir = path.join(REPO, '.agents', 'tasks')
   if (fs.existsSync(tasksDir) === false) {
     t.skip('真实台账不存在（干净 checkout）')
     return

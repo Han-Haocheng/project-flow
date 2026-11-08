@@ -182,7 +182,7 @@ test('零任务台账：未完成 0、九个键全 0、不崩不报错', () => {
 
 test('未初始化：既有行为照旧（exit 0 + init 提示），且**不给零值状态块**', () => {
   const root = emptyRoot('uninitialized')
-  assert.equal(fs.existsSync(path.join(root, '.dsh')), false)
+  assert.equal(fs.existsSync(path.join(root, '.agents')), false)
 
   const result = runCli(root, ['status', '--json'])
   assert.equal(result.code, 0, '未初始化的 status 照旧 exit 0（行为不变）')

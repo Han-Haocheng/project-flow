@@ -1,18 +1,18 @@
 ---
-description: 给一个项目建立 `.dsh/flow/` 流程台账（schema 2，实验 / 任务 / 门禁），并查看生成的目录结构。
+description: 给一个项目建立 `.agents/flow/` 流程台账（schema 2，实验 / 任务 / 门禁），并查看生成的目录结构。
 metadata:
-  when-to-use: 当项目还没有 `.dsh/flow/flow.json`、用户要求搭建 project flow、项目从别处拷来但已带 `.dsh/flow/`（先跑 `flow status` 确认，不要重新 init）、或 flow 工具报缺少台账 / 存在尚未迁移的旧 `.agents/tasks/` 与 `Exp-Id` trailer 历史时使用。
+  when-to-use: 当项目还没有 `.agents/flow/flow.json`、用户要求搭建 project flow、项目从别处拷来但已带 `.agents/flow/`（先跑 `flow status` 确认，不要重新 init）、或 flow 工具报缺少台账 / 存在尚未迁移的旧 `.agents/tasks/` 与 `Exp-Id` trailer 历史时使用。
 ---
 # project-flow-init
 
-技能名：`project-flow-init`。给一个项目建立 `.dsh/flow/` 流程台账（实验 / 任务 / 门禁），
+技能名：`project-flow-init`。给一个项目建立 `.agents/flow/` 流程台账（实验 / 任务 / 门禁），
 之后用 `project-flow-usage` 维护。写入只走 `flow` CLI 或 `lib/core.mjs`，不要手改 JSON。
 
 ## 何时用
 
 - 项目第一次需要记录可证伪实验、任务状态或可执行门禁时；
-- 项目从别处拷来、已有 `.dsh/flow/`：**不要**重新 init，先 `flow status` 确认。
-- 旧台账（`.agents/tasks/*.json`、git `Exp-Id` trailer）**不再自动迁移**；如需保留历史，
+- 项目从别处拷来、已有 `.agents/flow/`：**不要**重新 init，先 `flow status` 确认。
+- 旧的非 store 台账（仓库根的 `tasks/*.json`、git `Exp-Id` trailer）**不再自动迁移**；如需保留历史，
   请手动整理成 store 记录（`flow task add` / `flow exp add`）。
 
 ## 初始化
@@ -24,38 +24,38 @@ flow init
 flow init --name MyProject
 ```
 
-- 只在 `<root>/.dsh/flow/flow.json` 不存在时写契约；重复执行是幂等的，只给
+- 只在 `<root>/.agents/flow/flow.json` 不存在时写契约；重复执行是幂等的，只给
   `already-initialized` 警告，不覆盖。
 - `--force` 才会用当前参数重写 `flow.json`（记录文件不受影响）。
 - `--name X` 设置契约里的项目名，缺省为目录名。
-- **台账真源在主工作区，中心是唯一写者**：工作树（worktree）继承**已提交**的 `.dsh/flow/`，
+- **台账真源在主工作区，中心是唯一写者**：工作树（worktree）继承**已提交**的 `.agents/flow/`，
   不要在每棵 worktree 里重复 `flow init`。**贡献者不 init、不建卡**；需要更新状态时经中心，
   或显式 `flow --root <主工作区> ...`（见 `project-flow-usage` 的「分支/工作树与台账」）。
 
 产物：
 
 ```
-<root>/.dsh/flow/
+<root>/.agents/flow/
   flow.json
   experiments/  tasks/  gates/  logs/
 ```
 
-写锁 `.dsh/flow/.lock` 是运行时临时文件，建议加进 `.gitignore`：
+写锁 `.agents/flow/.lock` 是运行时临时文件，建议加进 `.gitignore`：
 
 ```gitignore
-.dsh/flow/.lock
+.agents/flow/.lock
 ```
 
 ## 旧台账（不再自动迁移）
 
 - `flow init` 只创建空 store；`--migrate` 与旧 `git Exp-Id` trailer 读取已在 v0.2 移除。
 - 旧 `.agents/tasks/`、`.agents/heartbeat/` 等文件会原样保留，但**不再被读取**；需要历史时
-  用 `flow task add` / `flow exp add` 手工补录，或按 `.dsh/flow/` 的 JSON 格式自行导入。
+  用 `flow task add` / `flow exp add` 手工补录，或按 `.agents/flow/` 的 JSON 格式自行导入。
 
 ## 初始化后验收
 
 ```bash
-flow status                 # 应显示契约源 .dsh/flow/flow.json 与三个计数
+flow status                 # 应显示契约源 .agents/flow/flow.json 与三个计数
 flow exp list               # 空项目输出「（没有实验记录）」
 flow task list
 flow gate list
@@ -73,7 +73,7 @@ flow gate run smoke                  # 结果为「通过」
 
 ## 协作注意
 
-- **单一写者（中心）**：同一时刻只让中心写 store；贡献者不直接写，并发写会被 `.dsh/flow/.lock`
+- **单一写者（中心）**：同一时刻只让中心写 store；贡献者不直接写，并发写会被 `.agents/flow/.lock`
   拒绝（报 `conflict`，稍后重试即可），30 秒未释放的锁会被下一个写者接管并记 warning。
 - **不要手改 id**：id 是文件名与引用（`parent`、`commits`）的一部分，改 id 等于制造坏引用。
   需要改内容就用 `flow exp update` / `flow task update`。

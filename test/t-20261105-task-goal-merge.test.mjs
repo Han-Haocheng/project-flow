@@ -54,7 +54,7 @@ function freshProject(label) {
 }
 
 function tasksDir(root) {
-  return path.join(root, '.dsh', 'flow', 'tasks')
+  return path.join(root, '.agents', 'tasks')
 }
 
 function taskFile(root, id) {
@@ -211,7 +211,7 @@ test('A2：goal 不是 add 入参 —— flow_task 工具侧 assertOnlyFields �
 
 test('A2：goal 不是 add 入参 —— CLI 是未声明参数（exit 1 usage），早于任何读写', () => {
   const { root } = freshProject('a2-cli')
-  const manifest = path.join(root, '.dsh', 'flow', 'flow.json')
+  const manifest = path.join(root, '.agents', 'flow', 'flow.json')
   const before = fs.readFileSync(manifest, 'utf8')
   const result = runCli(root, ['task', 'add', '--type', 'feat', '--title', 't', '--goal', 'x', '--json'])
   assert.equal(result.code, 1, result.stdout + result.stderr)
@@ -309,7 +309,7 @@ test('A9：normalizeTaskFormat 只读零写盘；fix 合并 goal 并幂等', () 
   assert.equal(goalIssue?.goal, '旧目标')
   assert.match(goalIssue?.suggestion ?? '', /旧标题 — 旧目标/)
   assert.deepEqual(snapshotStore(root), before, 'fix:false 必须零写盘（bytes/mtime 不变）')
-  assert.deepEqual(fs.readdirSync(path.join(root, '.dsh', 'flow')).filter((name) => name.endsWith('.lock')), [])
+  assert.deepEqual(fs.readdirSync(path.join(root, '.agents', 'flow')).filter((name) => name.endsWith('.lock')), [])
 
   // fix:true —— 合并成一行，删 goal 键，且不刷新 updated_at。
   const fixed = normalizeTaskFormat(root, contract, { fix: true })

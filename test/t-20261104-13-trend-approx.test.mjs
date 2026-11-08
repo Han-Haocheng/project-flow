@@ -62,7 +62,7 @@ function legacyTask(id, status, extra = {}) {
 }
 
 function writeTask(root, record) {
-  const file = path.join(root, '.dsh', 'flow', 'tasks', `${record.id}.json`)
+  const file = path.join(root, '.agents', 'tasks', `${record.id}.json`)
   fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`, 'utf8')
   return file
 }

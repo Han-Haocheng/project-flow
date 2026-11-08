@@ -86,7 +86,7 @@ function bareProject(label, files = SOURCES) {
 }
 
 function setProjectSemantics(root, text = PROJECT_SEMANTICS) {
-  const file = path.join(root, '.dsh', 'flow', 'description', 'project.json')
+  const file = path.join(root, '.agents', 'description', 'project.json')
   const project = JSON.parse(fs.readFileSync(file, 'utf8'))
   project.semantics = text
   fs.writeFileSync(file, `${JSON.stringify(project, null, 2)}\n`)
@@ -133,7 +133,7 @@ function stageOf(root, contract, id) {
 }
 
 function writeGateLog(root, gateId, finishedAt, ok) {
-  const dir = path.join(root, '.dsh/flow/logs', gateId)
+  const dir = path.join(root, '.agents/flow/logs', gateId)
   fs.mkdirSync(dir, { recursive: true })
   const record = {
     gate: gateId,
@@ -148,7 +148,7 @@ function writeGateLog(root, gateId, finishedAt, ok) {
 }
 
 function clearGateLogs(root, gateId) {
-  fs.rmSync(path.join(root, '.dsh/flow/logs', gateId), { recursive: true, force: true })
+  fs.rmSync(path.join(root, '.agents/flow/logs', gateId), { recursive: true, force: true })
 }
 
 /** 存量任务记录：盘上**没有** `stage`（`from` 必须靠读投影算出来）。 */
@@ -169,14 +169,14 @@ function writeLegacyTask(root, id, status = 'active') {
     created_at: NOW,
     updated_at: NOW,
   }
-  const dir = path.join(root, '.dsh', 'flow', 'tasks')
+  const dir = path.join(root, '.agents', 'tasks')
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`)
   return record
 }
 
 function writePlanFile(root, taskId, plan) {
-  const dir = path.join(root, '.dsh', 'flow', 'description', 'tasks')
+  const dir = path.join(root, '.agents', 'description', 'tasks')
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, `${taskId}.json`), `${JSON.stringify(plan, null, 2)}\n`)
 }
@@ -211,7 +211,7 @@ test('auto + 无记录：三条目标边全部放行（守住现有大量 update
     assert.equal(updateTask(root, contract, task.id, { stage }).stage, stage)
   }
   // 没建描述 → 一次 build 都不该被门禁读到。
-  assert.equal(fs.existsSync(path.join(root, '.dsh/flow/description/files')), false)
+  assert.equal(fs.existsSync(path.join(root, '.agents/description/files')), false)
 })
 
 // ================================================= 目标边：queued-implementation
@@ -452,7 +452,7 @@ test('豁免：只写 status/notes 的补丁不触发门禁（即使台账里有
   assert.equal(stageOf(root, contract, task.id), 'analyzing')
 
   // 极端证明：门禁根本没读描述目录（整棵删掉也不报）。
-  fs.rmSync(path.join(root, '.dsh/flow/description'), { recursive: true, force: true })
+  fs.rmSync(path.join(root, '.agents/description'), { recursive: true, force: true })
   const again = updateTask(root, contract, task.id, { notes: '描述目录都没了' })
   assert.equal(again.notes, '描述目录都没了')
 })

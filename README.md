@@ -1,7 +1,7 @@
 # project-flow
 
 项目流程台账 + 只读面板：实验（含 `parent` 谱系）、任务、门禁定义与运行记录都写在
-**项目自己的 `.dsh/flow/`** 下；面板是它的只读视图，写入口只有 `bin/flow.mjs`（CLI）与
+**项目自己的 `.agents/flow/`** 下；面板是它的只读视图，写入口只有 `bin/flow.mjs`（CLI）与
 agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `lib/core.mjs`）；面板自身
 有两个写例外：未初始化空态的「初始化」`POST /api/project-flow/init`，与门禁开关
 `POST /api/project-flow/gate`（均经 core 校验与原子写，见 `CONTRACT.md` §9.1 三端点表）。
@@ -28,17 +28,20 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `l
 node bin/flow.mjs --root <项目根> init [--name 名称]
 ```
 
-会在 `<项目根>/.dsh/flow/` 下创建：
+会在 `<项目根>/.agents/` 下创建：
 
 ```
-.dsh/flow/
-  flow.json                 契约（schema 2）
+.agents/
+  flow/
+    flow.json               契约（schema 2）
+    logs/<gateId>/<时间>.json 门禁运行记录
   experiments/<id>.json     实验（E-YYYYMMDD-NN，parent 指向父实验）
   tasks/<id>.json           任务（T-YYYYMMDD-NN）
   gates/<id>.json           门禁定义（步骤 + 期望 + 超时）
-  logs/<gateId>/<时间>.json 门禁运行记录
   description/              项目描述台账（project.json / files/ / tasks/，见「项目描述」）
 ```
+
+`flow/` 只放契约与门禁日志；其余记录目录与它平级。
 
 ## 常用 CLI
 
@@ -73,13 +76,13 @@ flow check description --task T-… [--strict]  # 审查阶段：计划对齐 + 
 
 实验是任务的**外围**，默认关闭：`flow.json` 的 `experiments` 节 `enabled` 缺省为 `false`
 （`flow init` 写入 `false`）。关闭时 web/TUI 面板不渲染实验区、任务区单列；`flow exp …` 与
-`flow_exp` 工具照常可用——数据始终在 `.dsh/flow/experiments/`，只是不展示。开启后实验树在
+`flow_exp` 工具照常可用——数据始终在 `.agents/experiments/`，只是不展示。开启后实验树在
 面板里**默认折叠**，展开状态只留在当前会话。
 
-**开启**：在 `.dsh/flow/flow.json` 里把 `experiments` 写成 `{ "enabled": true, … }`（保留
+**开启**：在 `.agents/flow/flow.json` 里把 `experiments` 写成 `{ "enabled": true, … }`（保留
 `source`/`dir`），下一次面板刷新即生效，不需要重新 `flow init`。旧项目缺 `enabled` 且已有
 实验记录时**仍按关闭处理**并给一次性引导 warning（不自动开启）；本仓库当前 **0 条**，其它
-项目数量以 `ls .dsh/flow/experiments | wc -l` 实测为准。
+项目数量以 `ls .agents/experiments | wc -l` 实测为准。
 
 实验项目的七步：**识别问题** → **提出假设**（七字段：`direction` 方向、`expected` 期望、
 `primaryMetric` 主指标、`guardrails` 护栏指标、`falsify` 证伪条件、`windowDays` 观测周期、
@@ -108,7 +111,7 @@ flow exp productize <id>        # 门禁通过后写产品化；失败实验用 
 
 ## 项目描述（强制语义更新）
 
-`.dsh/flow/description/` 记的不是「有哪些文件」，而是「每个文件/模块是干什么的」。结构（哈希、
+`.agents/description/` 记的不是「有哪些文件」，而是「每个文件/模块是干什么的」。结构（哈希、
 import、模块边）由 `flow desc build` **自动**同步；语义**不能自动推断**，只能由人/模型在分析阶段
 写进计划、在实现阶段 apply 到文件记录。三族记录的 schema、编码与校验见 `CONTRACT.md` §3.7，
 检查判定见 §6.1.4。
@@ -172,7 +175,7 @@ plugin_manager install_bundle  target=<仓库根目录>
 
 ## TUI 侧栏面板
 
-在 dsh-tui 里，同一份 `.dsh/flow` 台账还会以一个只读侧栏面板呈现（面板标题「项目流程」）。
+在 dsh-tui 里，同一份 `.agents/flow` 台账还会以一个只读侧栏面板呈现（面板标题「项目流程」）。
 web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同一份 store，不存在第二份数据。
 
 - **打开**：`Ctrl+B` 展开侧栏后，标签栏会出现「项目流程」（临时面板默认启用）；也可用 `/panel` 选择器切换。
@@ -190,9 +193,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 - **面板只读（两个例外）**：面板仅有的写操作是「初始化」`POST /api/project-flow/init` 与门禁
   开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
   CLI 与 agent 工具。
-- **单一写者**：同一个 `.dsh/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
-- **描述台账可提交**：`.dsh/flow/description/` 与其它台账一样是**真相源**（语义要评审、要回溯），
-  随 `.dsh/flow/` 一起提交；只有 `.lock` 与 `*.tmp-*` 是临时文件（见 `CONTRACT.md` §8）。
+- **单一写者**：同一个 `.agents/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
+- **描述台账可提交**：`.agents/description/` 与其它台账一样是**真相源**（语义要评审、要回溯），
+  随 `.agents/flow/` 一起提交；只有 `.lock` 与 `*.tmp-*` 是临时文件（见 `CONTRACT.md` §8）。
   `description.render` 指向的生成文档同样可提交，但它由 `flow desc render` 生成、**不要手改**
   （`check description` 会比对出 `render-stale`）。
 - **任务自动归档**：`precommit` 里的 `flow task archive` 步把 `tasks.archiveAfterDays`
@@ -207,7 +210,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 - **单飞轮询**：面板对 `GET /api/project-flow/state?root=<当前工作区目录>` 任一时刻至多一个在途请求，
   下一次在上一次落定（settle，成功或失败）后 2500 ms 再排，不是固定墙钟间隔；慢于 2500 ms 的响应
   不会被后继请求取消。页面隐藏时不发请求但链保持，回到可见立即补拉；`abort` 只用于卸载、工作区切换、
-  手动刷新。面板只展示该工作区的台账，不切换或汇总其它项目；该工作区没有 `.dsh/flow` 台账时显示
+  手动刷新。面板只展示该工作区的台账，不切换或汇总其它项目；该工作区没有 `.agents/flow` 台账时显示
   「未初始化」空状态。无 watcher，每次请求现算。state 读在 fork 出的子进程里完成、有
   **1800 ms** 期限：超时 / 子进程崩溃 / 池满返回 200 `ok:false`（`state-timeout` /
   `state-worker-crashed` / `state-worker-unavailable`）；面板保留最后一次好数据并标「数据

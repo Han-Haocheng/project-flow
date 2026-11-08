@@ -31,14 +31,14 @@ const writeJson = (rel, value) => {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 const STAMP = '2026-01-01T00:00:00+08:00'
-writeJson('.dsh/flow/flow.json', {
+writeJson('.agents/flow/flow.json', {
   schema: 2,
   name: 'memo-fixture',
   // 相对但当前不存在的文件：containment 会走「最近存在祖先」的失败回溯，
   // 这正是一请求内最容易被重复 realpath 的形态。
   tasks: { current: 'notes/current.md' },
 })
-writeJson('.dsh/flow/experiments/E-20260101-01.json', {
+writeJson('.agents/experiments/E-20260101-01.json', {
   schema: 1,
   id: 'E-20260101-01',
   title: 'exp one',
@@ -50,7 +50,7 @@ writeJson('.dsh/flow/experiments/E-20260101-01.json', {
   created_at: STAMP,
   updated_at: STAMP,
 })
-writeJson('.dsh/flow/tasks/T-20260101-01.json', {
+writeJson('.agents/tasks/T-20260101-01.json', {
   schema: 1,
   id: 'T-20260101-01',
   title: 'task one',
@@ -58,8 +58,8 @@ writeJson('.dsh/flow/tasks/T-20260101-01.json', {
   created_at: STAMP,
   updated_at: STAMP,
 })
-writeJson('.dsh/flow/gates/precommit.json', { schema: 1, id: 'precommit', title: 'precommit', enabled: true, steps: [] })
-writeJson('.dsh/flow/logs/precommit/run-1.json', {
+writeJson('.agents/gates/precommit.json', { schema: 1, id: 'precommit', title: 'precommit', enabled: true, steps: [] })
+writeJson('.agents/flow/logs/precommit/run-1.json', {
   schema: 1,
   id: 'run-1',
   started_at: STAMP,
@@ -67,7 +67,7 @@ writeJson('.dsh/flow/logs/precommit/run-1.json', {
   ok: true,
   steps: [],
 })
-writeJson('.dsh/flow/decisions/D-20260101-01.json', {
+writeJson('.agents/decisions/D-20260101-01.json', {
   schema: 1,
   id: 'D-20260101-01',
   question: 'q',
@@ -243,7 +243,7 @@ test('快照函数并发隔离：两个同时在途的调用各解析一次，�
   const snapshotOf = () => buildSnapshot({ root: ROOT, realRoot: ROOT, entry: { path: ROOT, name: 'memo-fixture' }, hostWarnings: [] })
   const { counts: seen } = await measured(() => Promise.all([snapshotOf(), snapshotOf()]))
 
-  const flowDir = path.join(ROOT, '.dsh', 'flow')
+  const flowDir = path.join(ROOT, '.agents', 'flow')
   assert.equal(seen.get(flowDir), 2, `两个并发快照应各 realpath 一次 store 目录，实际 ${seen.get(flowDir) ?? 0}`)
   const overTwo = [...seen].filter(([, n]) => n > 2)
   assert.deepEqual(overTwo, [], `同一路径被解析超过 2 次，说明调用内未去重：${JSON.stringify(overTwo)}`)
@@ -255,7 +255,7 @@ test('core 对外同步 API 向后兼容：不传 memo 时仍逐次 realpath，�
   const withMemo = await measured(async () => core.readStoreState(ROOT, loaded.contract, { pathMemo: new Map() }))
 
   // 旧行为保留：CLI/工具共用路径没有 memo，仍按次 realpath（store 目录被多次校验）。
-  const flowDir = path.join(ROOT, '.dsh', 'flow')
+  const flowDir = path.join(ROOT, '.agents', 'flow')
   assert.ok(
     (withoutMemo.counts.get(flowDir) ?? 0) >= 2,
     `无 memo 时应保持旧的逐次 realpath，实际 ${withoutMemo.counts.get(flowDir) ?? 0} 次`,

@@ -530,7 +530,7 @@ test('诊断⑤：flush 抛错 → skipped "flush-failed" + error 带函数名 +
   const agent = harness.addAgent('session-diag-fail')
   await preStep(harness, agent, [userMessage('会失败的一句', recentStamp(-1000))])
   // Removing the store makes the write fail for real (not a fake stub).
-  fs.rmSync(path.join(root, '.dsh'), { recursive: true, force: true })
+  fs.rmSync(path.join(root, '.agents'), { recursive: true, force: true })
   await turnStopping(harness, agent)
   const state = createCaptureState() // unused sanity
   assert.ok(state)

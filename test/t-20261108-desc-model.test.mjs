@@ -171,7 +171,7 @@ test('normalizeSourcePath：统一分隔符 / 去 ./ / 折叠空段', () => {
   assertInvalid(() => normalizeSourcePath('../a.mjs'), /\.\./)
   assertInvalid(() => normalizeSourcePath('lib/../../a.mjs'), /\.\./)
   assertInvalid(() => normalizeSourcePath('   '), /不能为空/)
-  assertInvalid(() => normalizeSourcePath('.dsh/flow/project.json'), /flow store/)
+  assertInvalid(() => normalizeSourcePath('.agents/flow/project.json'), /flow store/)
   assertInvalid(() => normalizeSourcePath('lib/\0a.mjs'), /控制字符/)
   assertInvalid(() => normalizeSourcePath(42), /字符串/)
 })

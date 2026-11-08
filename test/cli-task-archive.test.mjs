@@ -68,7 +68,7 @@ function readJson(file) {
 }
 
 function taskFile(root, id) {
-  return path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`)
+  return path.join(root, '.agents', 'tasks', `${id}.json`)
 }
 
 /** 造一条指定状态的旧任务：`updated_at` 回填到 `days` 天前（buildTask 允许）。 */
@@ -88,7 +88,7 @@ function archiveWindow(contract) {
 }
 
 function writeContractKey(root, mutate) {
-  const file = path.join(root, '.dsh', 'flow', 'flow.json')
+  const file = path.join(root, '.agents', 'flow', 'flow.json')
   const contract = readJson(file)
   mutate(contract)
   fs.writeFileSync(file, `${JSON.stringify(contract, null, 2)}\n`, 'utf8')
@@ -274,7 +274,7 @@ test('flow init 种入的 precommit 保留原两步并追加 tasks-archive（arc
   const created = initProject(root, { name: 'seed-gates' })
   assert.ok(created.seededGates.includes('precommit'))
 
-  const gate = readJson(path.join(root, '.dsh', 'flow', 'gates', 'precommit.json'))
+  const gate = readJson(path.join(root, '.agents', 'gates', 'precommit.json'))
   // T-20261108 D3：描述漂移步再追加一条，前四步的顺序与语义都不动。
   assert.equal(gate.steps.length, 4, JSON.stringify(gate.steps))
   assert.equal(gate.steps[0].id, 'whitespace')
@@ -288,7 +288,7 @@ test('flow init 种入的 precommit 保留原两步并追加 tasks-archive（arc
   assert.match(gate.steps[3].run, /check description$/)
   assert.equal(gate.steps[3].expect, 'exit 0')
 
-  const contract = readJson(path.join(root, '.dsh', 'flow', 'flow.json'))
+  const contract = readJson(path.join(root, '.agents', 'flow', 'flow.json'))
   assert.ok(Number.isInteger(contract.tasks.archiveAfterDays), JSON.stringify(contract.tasks))
   assert.ok(contract.tasks.archiveAfterDays >= 0)
 })

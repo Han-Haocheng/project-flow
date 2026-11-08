@@ -58,7 +58,6 @@ const DEFAULT_EXCLUDE = [
   '**/build/**',
   '**/coverage/**',
   '.dsh/**',
-  '.dsh-ops/**',
   'test/**',
   '**/*.test.mjs',
   '**/*.spec.mjs',
@@ -114,7 +113,7 @@ function reload(root) {
 }
 
 function descDir(root) {
-  return path.join(root, '.dsh', 'flow', 'description')
+  return path.join(root, '.agents', 'description')
 }
 
 function recordFile(root, sourcePath) {
@@ -148,7 +147,7 @@ function setProjectSemantics(root, text = PROJECT_SEMANTICS) {
 }
 
 function writeFlowJson(root, value) {
-  writeFile(root, '.dsh/flow/flow.json', `${JSON.stringify(value, null, 2)}\n`)
+  writeFile(root, '.agents/flow/flow.json', `${JSON.stringify(value, null, 2)}\n`)
 }
 
 /** 目录树快照（相对路径 + 大小 + mtime），用来证明「零写盘」。 */
@@ -268,7 +267,7 @@ test('契约：description 节十一个成员齐备，include/exclude 是数组�
       'gitCheck',
     ].sort()
   )
-  assert.equal(contract.description.dir, '.dsh/flow/description')
+  assert.equal(contract.description.dir, '.agents/description')
   assert.equal(contract.description.enabled, true)
   assert.equal(contract.description.enforce, 'auto')
   assert.equal(contract.description.testGate, 'tests')
@@ -280,7 +279,7 @@ test('契约：description 节十一个成员齐备，include/exclude 是数组�
   assert.equal(contract.description.maxScanBytes, 1048576)
   assert.equal(contract.description.gitCheck, true)
   // 落盘的就是这十一个成员（不是只在内存里补的）。
-  const onDisk = JSON.parse(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8'))
+  const onDisk = JSON.parse(fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8'))
   assert.deepEqual(onDisk.description, contract.description)
   assert.deepEqual(DESCRIPTION_ENFORCE_MODES, ['auto', 'on', 'off'])
   assert.equal(DESCRIPTION_SCHEMA, 1)
@@ -333,23 +332,23 @@ test('契约：exclude 错型同样回退；空数组是合法的 string[]（不
 test('契约缺节：flow.json 没有 description → 静默补默认，warnings 为空', () => {
   const root = tempRoot('contract-missing-section')
   initProject(root, { name: 'contract', noGates: true })
-  writeFlowJson(root, { schema: 2, name: 'contract', tasks: { dir: '.dsh/flow/tasks' } })
+  writeFlowJson(root, { schema: 2, name: 'contract', tasks: { dir: '.agents/tasks' } })
   const { contract, warnings } = loadContract(root)
   assert.deepEqual(warnings, [], '缺节是正常的部分清单，不该报警')
   assert.deepEqual(contract.description.include, DEFAULT_INCLUDE)
   assert.equal(contract.description.enforce, 'auto')
 })
 
-test('storePaths：description 默认落在 .dsh/flow/description，custom store.root 时跟随', () => {
+test('storePaths：description 默认落在 .agents/description，custom store.root 不改变它', () => {
   const root = tempRoot('store-paths')
   initProject(root, { name: 'paths', noGates: true })
   const contract = reload(root)
-  assert.equal(storePaths(root, contract).description, path.join(root, '.dsh/flow/description'))
+  assert.equal(storePaths(root, contract).description, path.join(root, '.agents/description'))
 
-  // 自定义 store 根：默认子目录必须跟着走，而不是钉死老路径。
+  // 自定义 store 根：只改 store 自身；记录目录按契约显式路径（.agents/）不跟随。
   fs.mkdirSync(path.join(root, '.flowstore'), { recursive: true })
   const customStore = { ...contract, store: { root: '.flowstore' } }
-  assert.equal(storePaths(root, customStore).description, path.join(root, '.flowstore/description'))
+  assert.equal(storePaths(root, customStore).description, path.join(root, '.agents/description'))
 
   // 自定义 dir：直接采用（仍走 containment）。
   const customDir = { ...contract, description: { ...contract.description, dir: '.meta/desc' } }
@@ -363,7 +362,7 @@ test('storePaths containment：description.dir 逃出根 → 回退默认 + mani
   const contract = reload(root)
   drainWarnings()
   const escaped = storePaths(root, { ...contract, description: { ...contract.description, dir: '../outside' } })
-  assert.equal(escaped.description, path.join(root, '.dsh/flow/description'))
+  assert.equal(escaped.description, path.join(root, '.agents/description'))
   assert.match(drainWarnings().join('\n'), /manifest-path-rejected: description\.dir/)
 })
 
@@ -380,14 +379,14 @@ test('storePaths containment：符号链接逃逸同样回退默认', (t) => {
   const contract = reload(root)
   drainWarnings()
   const escaped = storePaths(root, { ...contract, description: { ...contract.description, dir: 'escape' } })
-  assert.equal(escaped.description, path.join(root, '.dsh/flow/description'))
+  assert.equal(escaped.description, path.join(root, '.agents/description'))
   assert.match(drainWarnings().join('\n'), /manifest-path-rejected: description\.dir/)
 })
 
 test('initProject：description 目录被创建，且不进 created 清单、warnings 仍为空', () => {
   const root = tempRoot('init-dirs')
   const result = initProject(root, { name: 'init', noGates: true })
-  assert.deepEqual(result.created, ['.dsh/flow/flow.json'])
+  assert.deepEqual(result.created, ['.agents/flow/flow.json'])
   assert.deepEqual(result.warnings, [])
   assert.ok(fs.statSync(descDir(root)).isDirectory(), 'description 目录必须建出来')
 })
@@ -1048,7 +1047,7 @@ test('checkDescription：任务路径的测试证据时间窗（requireTests）'
   assert.deepEqual(failedKinds(withEvidence), [])
 
   // 失败记录不算证据。
-  fs.rmSync(path.join(root, '.dsh/flow/logs/tests'), { recursive: true, force: true })
+  fs.rmSync(path.join(root, '.agents/flow/logs/tests'), { recursive: true, force: true })
   writeGateLog(root, 'tests', LATER, false)
   assert.deepEqual(
     failedKinds(checkDescription(root, contract, { taskId: task.id, requireTests: true })),
@@ -1077,7 +1076,7 @@ test('checkDescription：stage=reviewing 默认要求测试证据，stage=queued
 
 /** 写一条门禁运行日志（runGate 的落盘形状）。 */
 function writeGateLog(root, gateId, finishedAt, ok) {
-  const dir = path.join(root, '.dsh/flow/logs', gateId)
+  const dir = path.join(root, '.agents/flow/logs', gateId)
   fs.mkdirSync(dir, { recursive: true })
   const name = `run-${finishedAt.replace(/[:+]/g, '-')}.json`
   const record = {

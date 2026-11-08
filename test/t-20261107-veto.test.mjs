@@ -294,7 +294,7 @@ test('自动应用⑤应用失败不影响答案：决策仍 answered、结果�
   const harness = makeHarness(root)
   const { task, decisionId } = await vetoedTask(root, contract)
   // Corrupt the task record so the task patch fails validation (owner must be a string).
-  const file = path.join(root, '.dsh', 'flow', 'tasks', `${task.id}.json`)
+  const file = path.join(root, '.agents', 'tasks', `${task.id}.json`)
   const record = JSON.parse(fs.readFileSync(file, 'utf8'))
   record.owner = 42
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')

@@ -27,7 +27,7 @@ const USAGE = `project-flow CLI（schema 2）
   flow --root <dir> <command> [--json]
 
 命令
-  init      初始化 .dsh/flow（--name X --force --no-gates）
+  init      初始化 .agents/flow（--name X --force --no-gates）
   status    项目名、契约源、实验/任务/门禁/决策计数与最近记录
 
   exp list | show <id> | tree
@@ -122,7 +122,7 @@ const USAGE = `project-flow CLI（schema 2）
   在子会话里运行 heartbeat start/update/end 会被明确拒绝；list/status 只读，
   可随时调用。心跳根固定为项目主工作区（linked worktree 也写主工作区）。
 
-  机械检查（只读，不写 .dsh/flow）：运行包里 skills/ai-collaborative-dev-workflow/
+  机械检查（只读，不写 .agents/flow）：运行包里 skills/ai-collaborative-dev-workflow/
   scripts/ 下的检查脚本；超时用 --timeout <seconds>（默认 120）。
   check decisions / check experiments / check tasks / check description 是内置检查：
   bin 特判路由到 core.checkDecisions / core.checkExperiments / core.normalizeTaskFormat /
@@ -132,7 +132,7 @@ const USAGE = `project-flow CLI（schema 2）
   判断 missing-type 是否可消；值必须是十个 type 之一，否则按用法错误退 2。
   check tasks 永远不会替你猜 type，也不能写盘；归一由 flow task normalize 执行。
 
-  描述台账（desc）：台账在 .dsh/flow/description/（project.json + files/ + tasks/）。
+  描述台账（desc）：台账在 .agents/description/（project.json + files/ + tasks/）。
   status/build/show/render 只读（--out 是唯一的文件写出），set 写语义，plan 写分析阶段
   的语义变更计划，apply 把计划落进记录并冻结；check description 失败 exit 1。
   desc render --check 与 description.render 现算比对，不一致 exit 1；--out 与
@@ -956,11 +956,11 @@ async function cmdStatus(ctx) {
       ['根目录', ctx.root],
     ]
     if (!initialized) {
-      lines.push(['契约', '未初始化（未找到 .dsh/flow/flow.json）'])
+      lines.push(['契约', '未初始化（未找到 .agents/flow/flow.json）'])
       lines.push(['下一步', 'flow init'])
     } else {
       lines.push(['契约', `${loaded.source}（schema ${contract.schema ?? '?'}）`])
-      lines.push(['存储', store || contract?.store?.root || '.dsh/flow'])
+      lines.push(['存储', store || contract?.store?.root || '.agents/flow'])
       lines.push([
         '实验',
         `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned} · inconclusive ${expCounts.inconclusive} · pivoted ${expCounts.pivoted}${unreadableTail(unreadable.experiments)}）`,
@@ -1151,8 +1151,8 @@ async function cmdExp(ctx, sub) {
       if (value !== undefined) input[key] = value
     }
     // 未初始化是用法错误（退出 1），先于 schema2 字段校验；与 task archive 一致。
-    if (existsSync(path.join(ctx.root, '.dsh', 'flow', 'flow.json')) === false) {
-      throw new CliError('usage', '未初始化（未找到 .dsh/flow/flow.json）；先运行 flow init')
+    if (existsSync(path.join(ctx.root, '.agents', 'flow', 'flow.json')) === false) {
+      throw new CliError('usage', '未初始化（未找到 .agents/flow/flow.json）；先运行 flow init')
     }
     if (!input.title) throw new CliError('usage', '用法: flow exp add --title T [...]')
     Object.assign(input, experimentSeven(flags, ctx, { required: true }))
@@ -1350,10 +1350,10 @@ async function cmdTask(ctx, sub) {
   if (sub === 'archive') {
     const olderThan = readPositiveInteger(flags, 'older-than', '--older-than 需要正整数天数（例如 --older-than 30）')
     const dryRun = flags['dry-run'] === true
-    // 与 task add 同一条判定（core 的 STORE_CONTRACT 是固定的 .dsh/flow/flow.json）：
+    // 与 task add 同一条判定（core 的 STORE_CONTRACT 是固定的 .agents/flow/flow.json）：
     // 未初始化按用法错误退出 1，由命令自己给出可操作的下一步。
-    if (existsSync(path.join(ctx.root, '.dsh', 'flow', 'flow.json')) === false) {
-      throw new CliError('usage', '未初始化（未找到 .dsh/flow/flow.json）；先运行 flow init')
+    if (existsSync(path.join(ctx.root, '.agents', 'flow', 'flow.json')) === false) {
+      throw new CliError('usage', '未初始化（未找到 .agents/flow/flow.json）；先运行 flow init')
     }
     // 0=关闭与越界 clamp/warning 都由 core.archiveTasks 统一判定（含 --older-than 覆盖）；
     // CLI 只负责人类输出与 `closed` 标记，不重复一套窗口逻辑。
@@ -2340,7 +2340,7 @@ async function cmdCheck(ctx, sub) {
   if (sub === 'list') {
     const items = [...checks.listChecks(), ...BUILTIN_CHECKS]
     if (!ctx.json) {
-      out('机械检查（脚本相对包根路径；只读，不写 .dsh/flow；内置项注明 core 实现）')
+      out('机械检查（脚本相对包根路径；只读，不写 .agents/flow；内置项注明 core 实现）')
       out('')
       items.forEach((item, index) => {
         if (index > 0) out('')

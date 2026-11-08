@@ -209,13 +209,13 @@ def cmd_list(args):
             print(f"{t.get('id')} | {t.get('status')} | {t.get('title')}")
     return 0
 
-FLOW_LEDGER = Path(".dsh") / "flow" / "flow.json"
+FLOW_LEDGER = Path(".agents") / "flow" / "flow.json"
 
 def warn_if_shadow_ledger(root):
     """Warn loudly when this project already keeps its truth in the flow ledger.
 
-    `scripts/task` writes its own `.agents/tasks/` store (this skill's precision
-    layer). The project-flow plugin reads ONLY `.dsh/flow/`, so a task created
+    `scripts/task` writes its own `.agents/taskbook/` store (this skill's precision
+    layer). The project-flow plugin reads ONLY `.agents/flow/`, so a task created
     here would be invisible to `flow task list`, the panel and every gate — a
     silent write to the wrong place. We keep the tool working (it has its own
     uses) but say so before the user relies on the result.
@@ -223,8 +223,8 @@ def warn_if_shadow_ledger(root):
     if not (Path(root) / FLOW_LEDGER).exists():
         return
     print(
-        "[WARN] SHADOW_LEDGER: 本项目已有 flow 台账（.dsh/flow/flow.json）。"
-        "scripts/task 写的是协作技能自带的独立存储 .agents/tasks/，"
+        "[WARN] SHADOW_LEDGER: 本项目已有 flow 台账（.agents/flow/flow.json）。"
+        "scripts/task 写的是协作技能自带的独立存储 .agents/taskbook/，"
         "flow 插件**不读**它（flow task list / 面板 / 门禁都看不到）。"
         "本项目请用 `flow task add`；本工具仅用于协作技能自己的任务书。",
         file=sys.stderr,

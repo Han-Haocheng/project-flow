@@ -32,7 +32,7 @@ function snapshotOf(root) {
 
 /** Strip `stage` from a persisted task record: the pre-P2.5 legacy shape. */
 function stripStage(root, id) {
-  const file = path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`)
+  const file = path.join(root, '.agents', 'tasks', `${id}.json`)
   const record = JSON.parse(fs.readFileSync(file, 'utf8'))
   delete record.stage
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')

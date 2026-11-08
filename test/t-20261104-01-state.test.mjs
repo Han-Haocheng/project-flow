@@ -52,10 +52,10 @@ const PROJECT = path.join(BASE, 'project')
 const STORE_PROJECT = path.join(BASE, 'store-project')
 const SLOW = path.join(FIXTURE, 'slow-root')
 for (const dir of [BASE, OTHER, PROJECT, STORE_PROJECT, SLOW]) fs.mkdirSync(dir, { recursive: true })
-fs.mkdirSync(path.join(STORE_PROJECT, '.dsh', 'flow'), { recursive: true })
+fs.mkdirSync(path.join(STORE_PROJECT, '.agents', 'flow'), { recursive: true })
 // 最小契约：schema 2 + name；其余 section 由 lib/core.mjs 的默认值补齐。
 fs.writeFileSync(
-  path.join(STORE_PROJECT, '.dsh', 'flow', 'flow.json'),
+  path.join(STORE_PROJECT, '.agents', 'flow', 'flow.json'),
   `${JSON.stringify({ schema: 2, name: 'fixture-project' }, null, 2)}\n`,
   'utf8',
 )
@@ -377,7 +377,7 @@ test('带最小 flow.json 契约的真实 root：200 ok、注册表仍恰好枚�
   const payload = jsonOf(result.response)
   assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
   assert.equal(payload.root, STORE_PROJECT_REAL)
-  assert.equal(payload.contract.source, '.dsh/flow/flow.json')
+  assert.equal(payload.contract.source, '.agents/flow/flow.json')
   assert.equal(payload.contract.name, 'fixture-project')
   assert.equal(payload.tasks.total, 0)
   assert.equal(result.listCalls, 3, '每次请求只能枚举一次 registry（3 次请求 = 3 次 list）')

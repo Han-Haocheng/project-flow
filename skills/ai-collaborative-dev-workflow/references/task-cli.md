@@ -7,22 +7,22 @@
 >
 > 下文所有 `task new|show|check` 都指**通用技能自带的 Python 参考实现**
 > `skills/ai-collaborative-dev-workflow/scripts/task`（复制到 `.agents/scripts/task` 后的调用名）：
-> 它有自己的 `.agents/tasks/` 存储（**flow 插件不读这个目录**，见 §1），以及 `--fields`、
+> 它有自己的 `.agents/taskbook/` 存储（**flow 插件不读这个目录**，见 §1），以及 `--fields`、
 > `task check --all-active`、`SYNC_MISSING` / `PREFLIGHT_PENDING` 等能力。
 >
 > **本插件 `bin/flow.mjs` 的 `flow task` 是另一套实现**，只有
 > `list|show|add|update|archive|normalize|rm` 七个动作：没有 `--fields`，没有 `task check`
 > （`check` 属于 `flow check staged|…|tasks`），也没有 `SYNC_MISSING` / `PREFLIGHT_PENDING`
-> 这类错误码。对 `.dsh/flow/` 台账做同类动作请用 `flow check tasks`（只读体检）与
+> 这类错误码。对 `.agents/flow/` 台账做同类动作请用 `flow check tasks`（只读体检）与
 > `flow task normalize`（旧记录归一），见 `CONTRACT.md` §5.1。
 >
 > **引用本文时，不要把 `task ...` 原样敲成 `flow task ...`。**
 
 ## 1 范围
 - 写入仅 `task new`；`show/check` 必须只读，不改文件、不改 mtime。
-- 存储：`.agents/tasks/<id>.json`；锁：`.agents/tasks/.lock`（目录锁 + 5 分钟 TTL）。
+- 存储：`.agents/taskbook/<id>.json`；锁：`.agents/taskbook/.lock`（目录锁 + 5 分钟 TTL）。
   **这是协作技能自带的独立存储：flow 插件不读它**（`flow task list`、面板、门禁都看不到
-  `.agents/tasks/` 下的记录）。本项目若已有 `.dsh/flow/flow.json`，任务请用 `flow task add`；
+  `.agents/taskbook/` 下的记录）。本项目若已有 `.agents/flow/flow.json`，任务请用 `flow task add`；
   `scripts/task` 只在用协作技能自己的任务书时使用（检测到 flow 台账时它会打印
   `SHADOW_LEDGER` 警告）。
 - 旧 Markdown 任务书不动；关闭时用 `legacy_id` 转换。

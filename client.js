@@ -37,7 +37,7 @@
  *     to `api/project-flow/init` and then reloads the ledger;
  *   - `contract: { source, schema, name }` renders one footer line saying
  *     whether the ledger is inferred ("defaults") or declared by a file;
- *   - `experiments` is always the `.dsh/flow/` store: flat `items`, a `tree` of
+ *   - `experiments` is always the `.agents/flow/` store: flat `items`, a `tree` of
  *     `{id, children}`, per-status `counts` (a section without `items`/`tree`
  *     still renders its empty state);
  *   - `gates[]` are gate definitions with an optional `lastRun`; an absent
@@ -295,7 +295,7 @@ window.__ModuleLoader__.load({
       'empty.init': '初始化',
       'empty.initializing': '初始化中…',
       'error.notInitialized': '这个工作区还没有项目流台账。',
-      'error.initHint': '点「初始化」在当前工作区创建 .dsh/flow 台账，或在项目根运行 node bin/flow.mjs init。',
+      'error.initHint': '点「初始化」在当前工作区创建 .agents/flow 台账，或在项目根运行 node bin/flow.mjs init。',
       'error.initFailed': '初始化失败：{message}',
       'decisions.title': '待决策 {n}',
       'decisions.blocking': '阻塞 {n}',
@@ -466,7 +466,7 @@ window.__ModuleLoader__.load({
       'empty.init': 'Initialize',
       'empty.initializing': 'Initializing…',
       'error.notInitialized': 'This workspace has no project flow ledger yet.',
-      'error.initHint': 'Click Initialize to create the .dsh/flow ledger in this workspace, or run node bin/flow.mjs init in the project root.',
+      'error.initHint': 'Click Initialize to create the .agents/flow ledger in this workspace, or run node bin/flow.mjs init in the project root.',
       'error.initFailed': 'Initialization failed: {message}',
       'decisions.title': '{n} pending decisions',
       'decisions.blocking': '{n} blocking',

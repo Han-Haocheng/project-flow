@@ -167,7 +167,7 @@ function summary(label, res) {
 // ------------------------------------------ fixture: legacy layout (retired)
 //
 // A project that still has the old root `flow.json` + `.agents` ledger is *not*
-// a flow store any more: without `.dsh/flow/flow.json` the endpoint reports the
+// a flow store any more: without `.agents/flow/flow.json` the endpoint reports the
 // uninitialized empty state instead of reading the legacy files.
 
 const legacyRoot = join(TMP, 'legacy')
@@ -181,33 +181,33 @@ writeFileSync(join(legacyRoot, 'ledger/tasks', 'task-1.json'), JSON.stringify({ 
 // A broken store contract: schema 2 exists but its JSON is invalid, so the
 // reader falls back to defaults and reports a manifest warning.
 const brokenRoot = join(TMP, 'broken')
-mkdirSync(join(brokenRoot, '.dsh', 'flow'), { recursive: true })
-writeFileSync(join(brokenRoot, '.dsh/flow/flow.json'), '{ this is not json }')
+mkdirSync(join(brokenRoot, '.agents', 'flow'), { recursive: true })
+writeFileSync(join(brokenRoot, '.agents/flow/flow.json'), '{ this is not json }')
 
 // ------------------------------------------------- fixtures: store projects
 //
-// Store mode is a directory with `.dsh/flow/flow.json` plus the collections the
+// Store mode is a directory with `.agents/flow/flow.json` plus the collections the
 // manifest declares. Both projects below are synthesized from scratch, so the
 // harness never depends on a developer machine's real project paths.
 
 function writeStoreManifest(root, { name }) {
-  mkdirSync(join(root, '.dsh/flow/experiments'), { recursive: true })
-  mkdirSync(join(root, '.dsh/flow/tasks'), { recursive: true })
-  mkdirSync(join(root, '.dsh/flow/gates'), { recursive: true })
-  mkdirSync(join(root, '.dsh/flow/logs'), { recursive: true })
+  mkdirSync(join(root, '.agents/experiments'), { recursive: true })
+  mkdirSync(join(root, '.agents/tasks'), { recursive: true })
+  mkdirSync(join(root, '.agents/gates'), { recursive: true })
+  mkdirSync(join(root, '.agents/flow/logs'), { recursive: true })
   mkdirSync(join(root, '.agents/heartbeat'), { recursive: true })
   writeFileSync(
-    join(root, '.dsh/flow/flow.json'),
+    join(root, '.agents/flow/flow.json'),
     JSON.stringify(
       {
         schema: 2,
         name,
-        store: { root: '.dsh/flow' },
+        store: { root: '.agents/flow' },
         /* T-12 B3: the panel hides experiments by default (`enabled: false`); these
            fixtures assert experiment projections, so turn the section on explicitly. */
-        experiments: { source: 'store', dir: '.dsh/flow/experiments', enabled: true },
-        tasks: { source: 'json', dir: '.dsh/flow/tasks', current: null, recentLimit: 6 },
-        gates: { dir: '.dsh/flow/gates', logs: '.dsh/flow/logs' },
+        experiments: { source: 'store', dir: '.agents/experiments', enabled: true },
+        tasks: { source: 'json', dir: '.agents/tasks', current: null, recentLimit: 6 },
+        gates: { dir: '.agents/gates', logs: '.agents/flow/logs' },
         heartbeats: { source: 'json', dir: '.agents/heartbeat', max: 20 },
       },
       null,
@@ -217,7 +217,7 @@ function writeStoreManifest(root, { name }) {
 }
 
 function writeStoreRecord(root, collection, record) {
-  writeFileSync(join(root, '.dsh/flow', collection, `${record.id}.json`), JSON.stringify(record, null, 2))
+  writeFileSync(join(root, '.agents', collection, `${record.id}.json`), JSON.stringify(record, null, 2))
 }
 
 function storeExperiment(id, overrides = {}) {
@@ -396,7 +396,7 @@ summary('alpha', alpha)
 check('alpha: 200 + ok', alpha.status === 200 && alpha.json?.ok === true)
 check(
   'alpha: contract.source is the store contract',
-  alpha.json?.contract?.source === '.dsh/flow/flow.json',
+  alpha.json?.contract?.source === '.agents/flow/flow.json',
   alpha.json?.contract?.source,
 )
 check('alpha: contract name demo-alpha', alpha.json?.contract?.name === 'demo-alpha', alpha.json?.contract?.name)
@@ -490,7 +490,7 @@ summary('qbank', qbank)
 check('qbank: 200 + ok', qbank.status === 200 && qbank.json?.ok === true)
 check(
   'qbank: contract.source is the store contract',
-  qbank.json?.contract?.source === '.dsh/flow/flow.json',
+  qbank.json?.contract?.source === '.agents/flow/flow.json',
   qbank.json?.contract?.source,
 )
 check('qbank: contract name demo-qbank', qbank.json?.contract?.name === 'demo-qbank', qbank.json?.contract?.name)
@@ -607,8 +607,8 @@ save('init', initFirst.json)
 check('init: 200 + ok', initFirst.status === 200 && initFirst.json?.ok === true, `status=${initFirst.status}`)
 check('init: alreadyInitialized false', initFirst.json?.alreadyInitialized === false, JSON.stringify(initFirst.json?.alreadyInitialized))
 check(
-  'init: created contains .dsh/flow/flow.json',
-  Array.isArray(initFirst.json?.created) && initFirst.json.created.includes('.dsh/flow/flow.json'),
+  'init: created contains .agents/flow/flow.json',
+  Array.isArray(initFirst.json?.created) && initFirst.json.created.includes('.agents/flow/flow.json'),
   JSON.stringify(initFirst.json?.created),
 )
 check('init: name is the workspace title', initFirst.json?.name === 'InitWorkspace', initFirst.json?.name)
@@ -618,7 +618,7 @@ summary('init GET', initState)
 check('init GET: 200 + ok', initState.status === 200 && initState.json?.ok === true, `status=${initState.status}`)
 check(
   'init GET: contract source store contract',
-  initState.json?.contract?.source === '.dsh/flow/flow.json',
+  initState.json?.contract?.source === '.agents/flow/flow.json',
   initState.json?.contract?.source,
 )
 check('init GET: contract name InitWorkspace', initState.json?.contract?.name === 'InitWorkspace', initState.json?.contract?.name)

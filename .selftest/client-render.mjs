@@ -192,7 +192,7 @@ const NOW = Date.UTC(2026, 9, 28, 3, 30, 0);
 const fixture = {
   ok: true,
   generatedAt: '2026-10-28T11:30:00+08:00',
-  contract: { source: '.dsh/flow/flow.json', schema: 2, name: 'demo-alpha' },
+  contract: { source: '.agents/flow/flow.json', schema: 2, name: 'demo-alpha' },
   roots: [{ path: '/tmp/pf-demo/alpha', name: 'demo-alpha' }],
   root: '/tmp/pf-demo/alpha',
   head: { sha: 'f5f176bc1234', subject: 'feat: demo', branch: 'dev', dirty: 2 },
@@ -560,7 +560,7 @@ check('normalize: full fixture keeps counts, contract and order', () => {
   assert.equal(view.root, '/tmp/pf-demo/alpha');
   assert.equal(view.roots.length, 1);
   assert.equal(view.roots[0].name, 'demo-alpha');
-  assert.equal(view.contract.source, '.dsh/flow/flow.json');
+  assert.equal(view.contract.source, '.agents/flow/flow.json');
   assert.equal(view.contract.schema, 2);
   assert.equal(view.exp.total, 3);
   assert.equal(view.exp.items.length, 3);
@@ -1849,7 +1849,7 @@ async function makeRealTrendProject(mutate) {
     created_at: trendDay(20),
     updated_at: trendDay(28),
   });
-  const file = path.join(root, '.dsh', 'flow', 'tasks', made.id + '.json');
+  const file = path.join(root, '.agents', 'tasks', made.id + '.json');
   const record = JSON.parse(fs.readFileSync(file, 'utf8'));
   mutate(record);
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');

@@ -46,7 +46,7 @@ function freshProject(label) {
     encoding: 'utf8',
   })
   assert.equal(result.status, 0, `initProject 失败：${result.stderr || result.stdout}`)
-  fs.mkdirSync(path.join(root, '.dsh', 'flow', 'tasks'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.agents', 'tasks'), { recursive: true })
   return root
 }
 
@@ -61,7 +61,7 @@ function writeTask(root, id, body) {
     ...body,
   }
   fs.writeFileSync(
-    path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`),
+    path.join(root, '.agents', 'tasks', `${id}.json`),
     `${JSON.stringify(record, null, 2)}\n`,
   )
 }
@@ -72,9 +72,9 @@ function seedLegacyPair(root) {
   writeTask(root, 'T-20260101-02', { title: '有类型', goal: '', type: 'fix', status: 'done' })
 }
 
-/** `.dsh/flow` 全量字节 + 大小 + mtime 快照（只读，唯一能证明零写盘的手段）。 */
+/** `.agents/flow` 全量字节 + 大小 + mtime 快照（只读，唯一能证明零写盘的手段）。 */
 function snapshotStore(root) {
-  const base = path.join(root, '.dsh', 'flow')
+  const base = path.join(root, '.agents', 'flow')
   const rows = []
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -286,7 +286,7 @@ test('A8：不给 map 时 missing-type 保留（绝不自动猜 type）', () => 
 })
 
 test('A8b：真实台账只读复核（不写盘，数字取自 --json，不硬编码）', () => {
-  const before = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.dsh'], { encoding: 'utf8' })
+  const before = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.agents/flow'], { encoding: 'utf8' })
   const result = runCli(REPO, ['--root', REPO, 'check', 'tasks', '--json'])
   // 真实台账有旧记录 → 必为 exit 1；除非将来 P3 归零，那时通过也算对。
   if (result.code === 0) {
@@ -297,8 +297,8 @@ test('A8b：真实台账只读复核（不写盘，数字取自 --json，不硬�
     assert.equal(result.json.error.issues.length,
       result.json.error.counts['legacy-goal'] + result.json.error.counts['missing-type'])
   }
-  const after = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.dsh'], { encoding: 'utf8' })
-  assert.equal(after.stdout, before.stdout, '真实台账只读复核不得改动 .dsh/')
+  const after = spawnSync('git', ['-C', REPO, 'status', '--porcelain', '--', '.agents/flow'], { encoding: 'utf8' })
+  assert.equal(after.stdout, before.stdout, '真实台账只读复核不得改动 .agents/flow/')
 })
 
 // -------------------------------------------------------------------- A9
@@ -381,7 +381,7 @@ test('D6：type-map 里台账不存在的 id → type-map-unknown-id warning（�
 test('D6：type-map 覆盖已有 type 且不同 → type-map-unused warning（记录不被改）', () => {
   const root = freshProject('d6-unused')
   seedLegacyPair(root)
-  const before = fs.readFileSync(path.join(root, '.dsh/flow/tasks/T-20260101-02.json'), 'utf8')
+  const before = fs.readFileSync(path.join(root, '.agents/tasks/T-20260101-02.json'), 'utf8')
   const mapFile = writeJson(root, 'map.json', { 'T-20260101-02': 'chore' })
   const result = runCli(root, ['--root', root, 'check', 'tasks', '--type-map', mapFile, '--json'])
   assert.ok(
@@ -389,7 +389,7 @@ test('D6：type-map 覆盖已有 type 且不同 → type-map-unused warning（�
     `warnings 缺 type-map-unused：${JSON.stringify(result.json.warnings)}`
   )
   assert.equal(
-    fs.readFileSync(path.join(root, '.dsh/flow/tasks/T-20260101-02.json'), 'utf8'),
+    fs.readFileSync(path.join(root, '.agents/tasks/T-20260101-02.json'), 'utf8'),
     before,
     'check 只读：已有 type 的记录一个字节都不许变'
   )
@@ -419,5 +419,5 @@ test('P1-1：未初始化的 root 走 usage(exit 2)，不把「没有台账」�
   assert.equal(result.json.error.code, 'usage')
   assert.match(result.json.error.message, /run flow init first/)
   // 未初始化时也不得创建 store。
-  assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
+  assert.equal(fs.existsSync(path.join(bare, '.agents')), false, '失败路径不得创建 store')
 })

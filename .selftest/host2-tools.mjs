@@ -1,7 +1,7 @@
 // project-flow Host stage 2 self-test — local, no deps, /tmp fixtures only.
 //
 // Loads index.js with a mock Cordis context (webServer + tools + skills +
-// workingDirectory), builds a real `.dsh/flow` store through lib/core.mjs, and
+// workingDirectory), builds a real `.agents/flow` store through lib/core.mjs, and
 // drives the four tools plus the HTTP endpoint in store mode, and the
 // uninitialized empty state.
 
@@ -325,7 +325,7 @@ const ctx = makeCtx({
 
 applyAll(ctx)
 
-check('store fixture initialized', initResult.created.includes('.dsh/flow/flow.json'), JSON.stringify(initResult))
+check('store fixture initialized', initResult.created.includes('.agents/flow/flow.json'), JSON.stringify(initResult))
 // The three sub-plugins add tools only; every route stays on the shared entry.
 eq('routes registered', routes.length, 3)
 const route = routes.find((entry) => entry.path === '/api/project-flow/state')
@@ -445,7 +445,7 @@ if (check('flow_decision: registered', decisionTool !== undefined) === true) {
 const statusStore = await statusTool.execute({}, exec)
 eq('flow_status: store root resolved from session', statusStore.root, storeRoot)
 eq('flow_status: store true', statusStore.store, true)
-eq('flow_status: contract source', statusStore.contract.source, '.dsh/flow/flow.json')
+eq('flow_status: contract source', statusStore.contract.source, '.agents/flow/flow.json')
 eq('flow_status: contract name', statusStore.contract.name, 'Host2Test')
 eq('flow_status: experiments total 0', statusStore.experiments.total, 0)
 check('flow_status: gate list empty', Array.isArray(statusStore.gates) && statusStore.gates.length === 0)
@@ -863,14 +863,14 @@ for (const [task, stamp] of [
   [olderDraft.task, '2026-10-28T09:00:00+08:00'],
   [newerDraftDetail.task, '2026-10-28T11:00:00+08:00'],
 ]) {
-  writeFileSync(join(storeRoot, '.dsh', 'flow', 'tasks', `${task.id}.json`), JSON.stringify({ ...task, updated_at: stamp }))
+  writeFileSync(join(storeRoot, '.agents', 'tasks', `${task.id}.json`), JSON.stringify({ ...task, updated_at: stamp }))
 }
 
 const storeRes = await call(route, `${route.path}?root=${encodeURIComponent(storeRoot)}`)
 const store = storeRes.json ?? {}
 eq('store payload: 200', storeRes.status, 200)
 eq('store payload: ok', store.ok, true)
-eq('store payload: contract source', store.contract?.source, '.dsh/flow/flow.json')
+eq('store payload: contract source', store.contract?.source, '.agents/flow/flow.json')
 eq('store payload: contract schema', store.contract?.schema, 2)
 eq('store payload: contract name', store.contract?.name, 'Host2Test')
 eq('store payload: experiments source', store.experiments?.source, 'store')
@@ -1086,9 +1086,9 @@ mkdirSync(secretRunDir, { recursive: true })
 writeFileSync(join(secretRunDir, 'run.log'), `${RUN_SECRET}\n`)
 
 const evilStoreRoot = mkdtempSync(join(tmpdir(), 'project-flow-host2-evil-store-'))
-mkdirSync(join(evilStoreRoot, '.dsh', 'flow'), { recursive: true })
+mkdirSync(join(evilStoreRoot, '.agents', 'flow'), { recursive: true })
 writeFileSync(
-  join(evilStoreRoot, '.dsh', 'flow', 'flow.json'),
+  join(evilStoreRoot, '.agents', 'flow', 'flow.json'),
   JSON.stringify({
     schema: 2,
     name: 'EvilStore',
@@ -1137,7 +1137,7 @@ const decHeartbeat = {
   }),
 }
 const decTurn = decHeartbeat.heartbeat?.turn
-const decisionsDir = join(decRoot, '.dsh', 'flow', 'decisions')
+const decisionsDir = join(decRoot, '.agents', 'decisions')
 check('decision fixture: heartbeat turn recorded', Number.isInteger(decTurn), JSON.stringify(decHeartbeat))
 
 // H2: an approval asked without a recommendation recommends approve, and the

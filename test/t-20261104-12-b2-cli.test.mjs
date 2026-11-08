@@ -100,7 +100,7 @@ function addExperiment(root, extra = []) {
 }
 
 function enableExperiments(root) {
-  const file = path.join(root, '.dsh', 'flow', 'flow.json')
+  const file = path.join(root, '.agents', 'flow', 'flow.json')
   const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
   manifest.experiments = { ...(manifest.experiments ?? {}), enabled: true }
   fs.writeFileSync(file, JSON.stringify(manifest, null, 2))
@@ -130,13 +130,13 @@ test('exp add：缺七字段 → exit 2 且点名缺失键；window-days 非正�
 test('exp review：只读自查返回 verdict/branch/missing，恒 exit 0，不改记录', () => {
   const root = initRoot('review')
   const record = addExperiment(root)
-  const before = fs.readFileSync(path.join(root, '.dsh', 'flow', 'experiments', `${record.id}.json`), 'utf8')
+  const before = fs.readFileSync(path.join(root, '.agents', 'experiments', `${record.id}.json`), 'utf8')
   const review = runCli(root, ['exp', 'review', record.id, '--json'])
   assert.equal(review.code, 0)
   assert.equal(review.json.data.verdict, 'complete')
   assert.equal(review.json.data.branch, 'uncertain')
   assert.deepEqual(review.json.data.missing, [])
-  const after = fs.readFileSync(path.join(root, '.dsh', 'flow', 'experiments', `${record.id}.json`), 'utf8')
+  const after = fs.readFileSync(path.join(root, '.agents', 'experiments', `${record.id}.json`), 'utf8')
   assert.equal(after, before, 'review 不得写文件')
   // 位置参数等价于 --id
   const byFlag = runCli(root, ['exp', 'review', '--id', record.id])
@@ -187,7 +187,7 @@ test('exp cleanup：写 cleanup/cleanupAt；schema1 记录 → 2', () => {
   // schema1 旧记录只读：直接写一条 legacy 记录后 cleanup 必须 2。
   const legacyId = 'E-20260101-99'
   fs.writeFileSync(
-    path.join(root, '.dsh', 'flow', 'experiments', `${legacyId}.json`),
+    path.join(root, '.agents', 'experiments', `${legacyId}.json`),
     JSON.stringify({ schema: 1, id: legacyId, title: 'legacy', status: 'refuted', created_at: '2026-01-01T00:00:00+08:00', updated_at: '2026-01-01T00:00:00+08:00' }),
   )
   const legacy = runCli(root, ['exp', 'cleanup', legacyId, '--flag', 'x'])
@@ -277,7 +277,7 @@ test('status --json：实验计数含六态（inconclusive/pivoted）；refuted 
 // ------------------------------------------------- tool layer（task-121）
 test('flow_exp list（工具层）：counts 六态齐全（含 inconclusive/pivoted），空 store 全零', async () => {
   const root = initRoot('tool-counts')
-  const dir = path.join(root, '.dsh', 'flow', 'experiments')
+  const dir = path.join(root, '.agents', 'experiments')
   fs.mkdirSync(dir, { recursive: true })
   const record = (id, status, extra = {}) => ({
     schema: 2,

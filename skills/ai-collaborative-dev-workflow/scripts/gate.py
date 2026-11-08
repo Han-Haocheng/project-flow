@@ -63,7 +63,7 @@ def check(root, as_json=False):
     tid = pc.task_id_from_env(root, cfg)
     task = None
     if not tid:
-        e("task", "TASK_ID_MISSING", "设置 GATE_TASK_ID 或 .agents/tasks/.current")
+        e("task", "TASK_ID_MISSING", "设置 GATE_TASK_ID 或 .agents/taskbook/.current")
     else:
         task = pc.load_task(root, cfg, tid)
         if not task:

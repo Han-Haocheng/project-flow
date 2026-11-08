@@ -6,7 +6,7 @@
 // (toggle one gate's `enabled` flag). The read endpoint reports the store of
 // exactly one workspace: the directory the panel passes as `?root=<dir>` (the
 // current session workspace), or the process working directory when the
-// parameter is omitted. A workspace with no `.dsh/flow` store is reported as a
+// parameter is omitted. A workspace with no `.agents/flow` store is reported as a
 // "not initialized" empty state — the endpoint never substitutes, scans or
 // lists another project, and there is no legacy ledger mode.
 // Neither write endpoint touches the store directly: after the same root

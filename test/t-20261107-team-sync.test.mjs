@@ -338,7 +338,7 @@ test('⑥ 零写入：跑完 readTeamBoard + reconcile + teamStatusOf 后，台�
   addTask(root, contract, { type: 'feat', title: 'linked', team: { taskId: 'T-A', revision: 1, owner: null, syncedAt: '2026-11-07T18:00:00+08:00' } })
   addTask(root, contract, { type: 'feat', title: 'missing', team: { taskId: 'T-GONE', revision: 1, owner: null, syncedAt: '2026-11-07T18:00:00+08:00' } })
   addTask(root, contract, { type: 'fix', title: 'plain' })
-  const storeDir = path.join(root, '.dsh', 'flow')
+  const storeDir = path.join(root, '.agents')
   const before = fingerprint(storeDir)
   const beforeCount = before.size
   assert.ok(beforeCount >= 2, 'the fixture must contain ledger files')
@@ -464,7 +464,7 @@ test('⑧ CLI：flow task link/unlink 真实子进程跑通（--json 信封 + �
   assert.equal(linked.json.data.team.taskId, 'board-cli-1')
   assert.equal(linked.json.data.stage, 'reviewing', 'CLI 挂载也不许动 stage')
   assert.equal(linked.json.data.status, 'active')
-  const onDisk = JSON.parse(fs.readFileSync(path.join(root, '.dsh', 'flow', 'tasks', `${taskId}.json`), 'utf8'))
+  const onDisk = JSON.parse(fs.readFileSync(path.join(root, '.agents', 'tasks', `${taskId}.json`), 'utf8'))
   assert.equal(onDisk.team.taskId, 'board-cli-1')
   assert.equal(onDisk.stage, 'reviewing')
   assert.equal(onDisk.status, 'active')
@@ -472,7 +472,7 @@ test('⑧ CLI：flow task link/unlink 真实子进程跑通（--json 信封 + �
   const unlinked = runCli(root, ['task', 'unlink', taskId, '--json'])
   assert.equal(unlinked.code, 0, unlinked.stdout + unlinked.stderr)
   assert.equal(unlinked.json.data.team, null)
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.dsh', 'flow', 'tasks', `${taskId}.json`), 'utf8')).team, null)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.agents', 'tasks', `${taskId}.json`), 'utf8')).team, null)
   assert.equal(unlinked.json.data.stage, 'reviewing', 'unlink 同样不许动 stage')
 })
 

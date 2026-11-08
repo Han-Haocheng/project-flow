@@ -76,7 +76,7 @@ function record(overrides = {}) {
 test('review 与 check 一致：guardrails 含空串 + windowDays 超上限 → missing 两项且 check failed 两条', () => {
   const { root, contract } = freshProject('counterexample', { experimentsEnabled: true })
   const bad = record({ guardrails: [''], windowDays: 4001 })
-  fs.writeFileSync(path.join(root, '.dsh', 'flow', 'experiments', 'E-20261104-01.json'), JSON.stringify(bad))
+  fs.writeFileSync(path.join(root, '.agents', 'experiments', 'E-20261104-01.json'), JSON.stringify(bad))
 
   const review = reviewExperimentRecord(bad, { hasSuccessor: () => false })
   assert.equal(review.verdict, 'incomplete')

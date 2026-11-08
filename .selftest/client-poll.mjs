@@ -576,7 +576,7 @@ await check('ErrorState init: one POST to api/project-flow/init with the workspa
                 root: '/tmp/pf-demo/alpha',
                 name: 'demo-alpha',
                 alreadyInitialized: false,
-                created: ['.dsh/flow'],
+                created: ['.agents/flow'],
                 imported: 0,
                 warnings: [],
               })

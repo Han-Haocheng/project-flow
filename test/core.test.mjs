@@ -97,7 +97,7 @@ function experimentInput(extra = {}) {
 
 /** 直接落一条实验 JSON（legacy/schema2 夹具用，绕过写路径校验）。 */
 function writeExperimentFile(root, record) {
-  const dir = path.join(root, '.dsh/flow/experiments')
+  const dir = path.join(root, '.agents/experiments')
   fs.mkdirSync(dir, { recursive: true })
   const file = path.join(dir, `${record.id}.json`)
   fs.writeFileSync(file, `${JSON.stringify(record, null, 2)}\n`)
@@ -128,7 +128,7 @@ function legacyExperiment(id, extra = {}) {
 
 /** 写一条 gate run（productize 只读 gates.logs/<id>）。 */
 function writeGateRunFixture(root, gateId, run) {
-  const dir = path.join(root, '.dsh/flow/logs', gateId)
+  const dir = path.join(root, '.agents/flow/logs', gateId)
   fs.mkdirSync(dir, { recursive: true })
   const name = String(run.started_at ?? new Date().toISOString()).replace(/[:.]/g, '-')
   fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify(run, null, 2))
@@ -227,24 +227,24 @@ test('initProject 创建 schema 2 布局、契约与默认目录', () => {
   const result = initProject(root, { name: 'demo' })
 
   assert.equal(result.root, path.resolve(root))
-  assert.deepEqual(result.created, ['.dsh/flow/flow.json'])
+  assert.deepEqual(result.created, ['.agents/flow/flow.json'])
   assert.deepEqual(result.warnings, [])
 
-  const contract = readJson(path.join(root, '.dsh/flow/flow.json'))
+  const contract = readJson(path.join(root, '.agents/flow/flow.json'))
   assert.equal(contract.schema, SCHEMA_VERSION)
   assert.equal(contract.schema, 2)
   assert.equal(contract.name, 'demo')
-  assert.equal(contract.store.root, '.dsh/flow')
+  assert.equal(contract.store.root, '.agents/flow')
   assert.equal(contract.experiments.source, 'store')
   assert.equal(contract.tasks.source, 'json')
-  assert.equal(contract.gates.logs, '.dsh/flow/logs')
+  assert.equal(contract.gates.logs, '.agents/flow/logs')
 
-  for (const rel of ['.dsh/flow/experiments', '.dsh/flow/tasks', '.dsh/flow/gates', '.dsh/flow/logs']) {
+  for (const rel of ['.agents/experiments', '.agents/tasks', '.agents/gates', '.agents/flow/logs']) {
     assert.ok(fs.statSync(path.join(root, rel)).isDirectory(), `${rel} 应存在`)
   }
 
   const loaded = loadContract(root)
-  assert.equal(loaded.source, '.dsh/flow/flow.json')
+  assert.equal(loaded.source, '.agents/flow/flow.json')
   assert.deepEqual(loaded.warnings, [])
 })
 
@@ -277,29 +277,29 @@ test('saveContract 原子落盘并补齐默认值，未知字段保留', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(saved.experiments, 'groupBy'), false)
   assert.deepEqual(saved.extra, { keep: true })
   const loaded = loadContract(root)
-  assert.equal(loaded.source, '.dsh/flow/flow.json')
+  assert.equal(loaded.source, '.agents/flow/flow.json')
   assert.equal(loaded.contract.name, 'custom')
   assert.equal(loaded.contract.tasks.recentLimit, 6)
   expectFlowError(() => saveContract(root, null), 'invalid', /contract must be an object/)
 })
 
-test('storePaths 支持自定义 store 根并重定向默认子目录', () => {
+test('storePaths：自定义 store 根只改 store 本身，记录目录仍按契约显式路径', () => {
   const root = tempRoot('paths')
   initProject(root)
   const { contract } = loadContract(root)
   const defaults = storePaths(root, contract)
-  assert.equal(defaults.store, path.join(path.resolve(root), '.dsh/flow'))
-  assert.equal(defaults.experiments, path.join(path.resolve(root), '.dsh/flow/experiments'))
-  assert.equal(defaults.gates, path.join(path.resolve(root), '.dsh/flow/gates'))
-  assert.equal(defaults.logs, path.join(path.resolve(root), '.dsh/flow/logs'))
+  assert.equal(defaults.store, path.join(path.resolve(root), '.agents/flow'))
+  assert.equal(defaults.experiments, path.join(path.resolve(root), '.agents/experiments'))
+  assert.equal(defaults.gates, path.join(path.resolve(root), '.agents/gates'))
+  assert.equal(defaults.logs, path.join(path.resolve(root), '.agents/flow/logs'))
 
   const custom = storePaths(root, {
     ...contract,
     store: { root: '.flowstore' },
   })
   assert.equal(custom.store, path.join(path.resolve(root), '.flowstore'))
-  assert.equal(custom.experiments, path.join(path.resolve(root), '.flowstore/experiments'))
-  assert.equal(custom.tasks, path.join(path.resolve(root), '.flowstore/tasks'))
+  assert.equal(custom.experiments, path.join(path.resolve(root), '.agents/experiments'))
+  assert.equal(custom.tasks, path.join(path.resolve(root), '.agents/tasks'))
 })
 
 // --------------------------------------------------- manifest 路径 containment
@@ -324,7 +324,7 @@ test('manifest containment：绝对路径被拒绝、warning 带原值且不回�
   assert.equal(warnings.join('\n').includes('TOP-SECRET-GATE'), false, 'warning 不应回显文件内容')
 })
 
-test('manifest containment：根外绝对 store.root 回退 .dsh/flow 并 warning', () => {
+test('manifest containment：根外绝对 store.root 回退 .agents/flow 并 warning', () => {
   const root = tempRoot('contain-store-abs')
   initProject(root, { name: 'contain-store-abs', noGates: true })
   const outside = tempRoot('contain-store-outside')
@@ -347,7 +347,7 @@ test('manifest containment：根外绝对 store.root 回退 .dsh/flow 并 warnin
   const ghostRoot = path.join(tempRoot('contain-store-ghost'), 'missing-project')
   drainWarnings()
   const ghost = storePaths(ghostRoot, { ...contract, store: { root: outside } })
-  assert.equal(ghost.store, path.join(path.resolve(ghostRoot), '.dsh/flow'))
+  assert.equal(ghost.store, path.join(path.resolve(ghostRoot), '.agents/flow'))
   assert.ok(
     drainWarnings().some((item) => item.startsWith('manifest-path-rejected: store.root:')),
     '不存在的根也要拒绝根外绝对路径',
@@ -361,7 +361,7 @@ test('manifest containment：experiments.dir 的 .. 逃逸回退默认目录并 
 
   drainWarnings()
   const paths = storePaths(root, { ...contract, experiments: { ...contract.experiments, dir: '../x' } })
-  assert.equal(paths.experiments, path.join(path.resolve(root), '.dsh/flow/experiments'))
+  assert.equal(paths.experiments, path.join(path.resolve(root), '.agents/experiments'))
   const warnings = drainWarnings()
   assert.ok(
     warnings.some((item) => item.startsWith('manifest-path-rejected: experiments.dir: ../x:')),
@@ -394,7 +394,7 @@ test('manifest containment：根内符号链接指向根外时 tasks.dir 回退�
 
   drainWarnings()
   const paths = storePaths(root, malicious)
-  assert.equal(paths.tasks, path.join(path.resolve(root), '.dsh/flow/tasks'))
+  assert.equal(paths.tasks, path.join(path.resolve(root), '.agents/tasks'))
   const warnings = drainWarnings()
   assert.ok(
     warnings.some((item) => item.startsWith('manifest-path-rejected: tasks.dir: task-link:')),
@@ -434,15 +434,15 @@ test('manifest containment：合法相对路径与根内绝对 store.root 行为
   const { contract } = loadContract(root)
   const custom = {
     ...contract,
-    store: { root: path.join(path.resolve(root), '.dsh/flow') },
+    store: { root: path.join(path.resolve(root), '.agents/flow') },
     experiments: { ...contract.experiments, dir: 'data/experiments' },
   }
 
   drainWarnings()
   const paths = storePaths(root, custom)
-  assert.equal(paths.store, path.join(path.resolve(root), '.dsh/flow'))
+  assert.equal(paths.store, path.join(path.resolve(root), '.agents/flow'))
   assert.equal(paths.experiments, path.join(path.resolve(root), 'data/experiments'))
-  assert.equal(paths.tasks, path.join(path.resolve(root), '.dsh/flow/tasks'))
+  assert.equal(paths.tasks, path.join(path.resolve(root), '.agents/tasks'))
 
   const created = addExperiment(root, custom, experimentInput({ title: 'still works' }))
   assert.equal(created.title, 'still works')
@@ -562,7 +562,7 @@ test('experimentTree：按 parent 嵌套，未知 parent 与成环数据降级�
 test('原子写：目标为目录时抛 io 且不残留临时文件，修复后同一 id 可重试', () => {
   const { root, contract } = freshProject('atomic')
   const first = addExperiment(root, contract, experimentInput({ title: 'first' }))
-  const expDir = path.join(root, '.dsh/flow/experiments')
+  const expDir = path.join(root, '.agents/experiments')
   assert.ok(fs.existsSync(path.join(expDir, `${first.id}.json`)))
 
   const blockedId = `E-${stamp()}-02`
@@ -585,7 +585,7 @@ test('原子写：目标为目录时抛 io 且不残留临时文件，修复后�
 
 test('写锁：新鲜锁拒绝写入，过期锁经 CAS 接管并记 warning', () => {
   const { root, contract } = freshProject('lock')
-  const lockPath = path.join(root, '.dsh/flow/.lock')
+  const lockPath = path.join(root, '.agents/flow/.lock')
   const fresh = {
     schema: 1,
     pid: deadPid(),
@@ -666,7 +666,7 @@ test('task update 白名单：title/type 不可改，未列白名单的键一律
   // 白名单之外的自造键同样拒绝，而不是静默写入。
   expectFlowError(() => updateTask(root, contract, created.id, { bogus: 1 }), 'invalid', /task bogus cannot be changed/)
 
-  const file = path.join(root, '.dsh/flow/tasks', `${created.id}.json`)
+  const file = path.join(root, '.agents/tasks', `${created.id}.json`)
   assert.equal(Object.hasOwn(readJson(file), 'goal'), false, 'update 不得把 goal 写回磁盘')
   assert.equal(readJson(file).title, '原标题')
   assert.equal(readJson(file).type, 'feat')
@@ -729,7 +729,7 @@ test('archiveTasks：done 超阈值转 archived，字段保留、updated_at 刷�
   assert.equal(stored.notes, 'keep me')
   assert.notEqual(stored.updated_at, old, '归档应刷新 updated_at')
   // 归档是状态位，不是删除：记录仍在原文件里。
-  const files = fs.readdirSync(path.join(root, '.dsh/flow/tasks'))
+  const files = fs.readdirSync(path.join(root, '.agents/tasks'))
   assert.deepEqual(files, [`${created.id}.json`])
 })
 
@@ -738,7 +738,7 @@ test('archiveTasks 幂等：同 now 连跑两次，第二次不写文件', () =>
   const now = Date.now()
   const old = new Date(now - 40 * 86_400_000).toISOString()
   const task = addTask(root, contract, { title: 'done long ago', status: 'done', updated_at: old })
-  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+  const file = path.join(root, '.agents/tasks', `${task.id}.json`)
 
   const first = archiveTasks(root, contract, { now })
   assert.deepEqual(first.archived, [task.id])
@@ -760,7 +760,7 @@ test('archiveTasks 边界：6 天不动、恰 7 天归档、8 天归档、update
   const active = addTask(root, contract, { title: 'active old', status: 'active', updated_at: at(100) })
   const broken = addTask(root, contract, { title: 'broken stamp', status: 'done', updated_at: at(50) })
   // 直接改文件写非法时间戳：buildTask 只校验字符串，读侧必须自己拒绝归档。
-  const brokenFile = path.join(root, '.dsh/flow/tasks', `${broken.id}.json`)
+  const brokenFile = path.join(root, '.agents/tasks', `${broken.id}.json`)
   fs.writeFileSync(brokenFile, `${JSON.stringify({ ...readJson(brokenFile), updated_at: 'not-a-date' }, null, 2)}\n`)
 
   const result = archiveTasks(root, contract, { now })
@@ -801,7 +801,7 @@ test('archiveTasks 配置：0 关闭、负数回退、超上限 clamp，各记�
   assert.match(drainWarnings().join('\n'), /99999 exceeds 3650; clamped to 3650/)
 
   // manifest 错型：loadContract 回退默认值并给 manifest-invalid，命令仍不抛。
-  const manifest = path.join(root, '.dsh/flow/flow.json')
+  const manifest = path.join(root, '.agents/flow/flow.json')
   const raw = readJson(manifest)
   fs.writeFileSync(manifest, `${JSON.stringify({ ...raw, tasks: { ...raw.tasks, archiveAfterDays: 'abc' } }, null, 2)}\n`)
   const loaded = loadContract(root)
@@ -818,7 +818,7 @@ test('archiveTasks：dry-run 不取锁不写；锁被占用时跳过并记 archi
   const now = Date.now()
   const old = new Date(now - 60 * 86_400_000).toISOString()
   const task = addTask(root, contract, { title: 'done old', status: 'done', updated_at: old })
-  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+  const file = path.join(root, '.agents/tasks', `${task.id}.json`)
   const before = fs.readFileSync(file, 'utf8')
 
   const dry = archiveTasks(root, contract, { now, dryRun: true })
@@ -842,7 +842,7 @@ test('init 种子：precommit 第三步是 tasks-archive，契约带 archiveAfte
   initProject(root, { name: 'seeded' })
   const { contract } = loadContract(root)
   assert.equal(contract.tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
-  assert.equal(readJson(path.join(root, '.dsh/flow/flow.json')).tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
+  assert.equal(readJson(path.join(root, '.agents/flow/flow.json')).tasks.archiveAfterDays, TASK_ARCHIVE_AFTER_DAYS)
 
   const precommit = listGates(root, contract).find((gate) => gate.id === 'precommit')
   assert.ok(precommit, 'precommit 应被种子化')
@@ -926,7 +926,7 @@ test('runGate 成功：逐步执行、tail 截取、日志落盘', async () => {
   assert.ok(Number.isFinite(record.durationMs))
   assert.match(record.started_at, /^\d{4}-\d{2}-\d{2}T/)
 
-  const logFile = path.join(root, '.dsh/flow/logs/ok-gate', `${record.started_at.replace(/:/g, '-')}.json`)
+  const logFile = path.join(root, '.agents/flow/logs/ok-gate', `${record.started_at.replace(/:/g, '-')}.json`)
   assert.ok(fs.existsSync(logFile), `日志应写入 ${logFile}`)
   assert.deepEqual(readJson(logFile).steps.length, 2)
 
@@ -1000,7 +1000,7 @@ test('listGateRuns 新→旧排序并可 limit；readStoreState 附 lastRun 与�
   addGate(root, contract, { id: 'state-gate', title: 'state gate', phase: 'manual', steps: [{ id: 'ok', run: 'true' }] })
   await runGate(root, contract, 'state-gate')
 
-  const logsDir = path.join(root, '.dsh/flow/logs/state-gate')
+  const logsDir = path.join(root, '.agents/flow/logs/state-gate')
   const older = {
     gate: 'state-gate',
     title: 'state gate',
@@ -1127,7 +1127,7 @@ test('心跳坏文件：非法 JSON 与非对象只记 warning 并跳过', () =>
 test('坏记录只警告不阻塞列表读取', () => {
   const { root, contract } = freshProject('bad-record')
   addExperiment(root, contract, experimentInput({ title: 'good' }))
-  fs.writeFileSync(path.join(root, '.dsh/flow/experiments/E-20260101-01.json'), '{ broken')
+  fs.writeFileSync(path.join(root, '.agents/experiments/E-20260101-01.json'), '{ broken')
   drainWarnings()
   const items = listExperiments(root, contract)
   assert.equal(items.length, 1)
@@ -1152,7 +1152,7 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   const init = runCli(root, ['init', '--name', 'cli-proj', '--no-gates', '--json'])
   assert.equal(init.code, 0)
   assert.equal(init.json.ok, true)
-  assert.ok(init.json.data.created.includes('.dsh/flow/flow.json'))
+  assert.ok(init.json.data.created.includes('.agents/flow/flow.json'))
 
   // B1 的七必填落地后，bin 的七旗标属 B2；此处先用 core 夹具铺实验，CLI 侧继续覆盖
   // update/list/tree（B2 补旗标后会恢复 exp add 的 CLI 覆盖，断言不放松）。
@@ -1199,7 +1199,7 @@ test('CLI 主流程：init/exp/task/gate/status 与 --json 输出', () => {
   assert.equal(status.code, 0)
   assert.equal(status.json.data.initialized, true)
   assert.equal(status.json.data.name, 'cli-proj')
-  assert.equal(status.json.data.contractSource, '.dsh/flow/flow.json')
+  assert.equal(status.json.data.contractSource, '.agents/flow/flow.json')
   assert.equal(status.json.data.counts.experiments.total, 1)
   assert.equal(status.json.data.counts.tasks.total, 1)
   assert.equal(status.json.data.counts.gates.total, 1)
@@ -1992,7 +1992,7 @@ test('runGatesByPhase：单条门禁出错时汇总成失败记录，不影响�
   addGate(root, contract, { id: 'a-missing', title: '甲缺步骤', phase: 'release', steps: [{ id: 's', run: 'true' }] })
   addGate(root, contract, { id: 'b-ok', title: '乙通过', phase: 'release', steps: [{ id: 'ok', run: 'true' }] })
   // 删除 a 的门禁文件，制造「运行期读不到记录」的错误路径
-  fs.rmSync(path.join(root, '.dsh/flow/gates/a-missing.json'))
+  fs.rmSync(path.join(root, '.agents/gates/a-missing.json'))
 
   const summary = await runGatesByPhase(root, contract, 'release')
   assert.deepEqual(summary.runs.map((run) => run.gate), ['b-ok'])
@@ -2013,7 +2013,7 @@ function askDecision(root, contract, overrides = {}) {
 }
 
 function decisionFile(root, id) {
-  return path.join(root, '.dsh/flow/decisions', `${id}.json`)
+  return path.join(root, '.agents/decisions', `${id}.json`)
 }
 
 /** Rewrite one record's updated_at (gc retention fixtures). */
@@ -2026,8 +2026,8 @@ function backdateDecision(root, id, iso) {
 
 test('决策 ask：approval 固定选项、字段落盘与契约 decisions 目录', () => {
   const { root, contract } = freshProject('decision-ask')
-  assert.deepEqual(contract.decisions, { dir: '.dsh/flow/decisions' })
-  assert.equal(storePaths(root, contract).decisions, path.join(root, '.dsh/flow/decisions'))
+  assert.deepEqual(contract.decisions, { dir: '.agents/decisions' })
+  assert.equal(storePaths(root, contract).decisions, path.join(root, '.agents/decisions'))
   assert.ok(fs.statSync(storePaths(root, contract).decisions).isDirectory(), 'init 应创建 decisions 目录')
 
   const task = addTask(root, contract, { title: '被阻塞任务', status: 'active' })
@@ -2633,7 +2633,7 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   const first = initProject(root, { name: 'seed' })
   assert.deepEqual(first.seededGates, ['session-open', 'precommit', 'tests', 'staged-files', 'release'])
   assert.deepEqual(first.warnings, [])
-  assert.deepEqual(first.created, ['.dsh/flow/flow.json'], '种子门禁不混进 created 清单')
+  assert.deepEqual(first.created, ['.agents/flow/flow.json'], '种子门禁不混进 created 清单')
 
   const { contract } = loadContract(root)
   const gates = listGates(root, contract)
@@ -2703,11 +2703,11 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   // gates 目录里只要有 .json（哪怕坏的）就不算空，不再种
   const broken = tempRoot('seed-broken')
   initProject(broken, { name: 'broken', noGates: true })
-  fs.writeFileSync(path.join(broken, '.dsh/flow/gates/zz-broken.json'), '{ not json')
+  fs.writeFileSync(path.join(broken, '.agents/gates/zz-broken.json'), '{ not json')
   drainWarnings()
   const brokenAgain = initProject(broken, { name: 'broken' })
   assert.deepEqual(brokenAgain.seededGates, [])
-  assert.deepEqual(fs.readdirSync(path.join(broken, '.dsh/flow/gates')), ['zz-broken.json'])
+  assert.deepEqual(fs.readdirSync(path.join(broken, '.agents/gates')), ['zz-broken.json'])
 })
 
 test('CLI init：默认种门禁，--no-gates 不种，人类输出提示', () => {
@@ -3263,7 +3263,7 @@ test('B1 task.experiment：格式非法 invalid、不存在 warning 仍写入、
 test('B1 契约 enabled：默认 false、缺键关闭、错型回退并 manifest-invalid', () => {
   const { root, contract } = freshProject('b1-enabled')
   assert.equal(contract.experiments.enabled, false)
-  const file = path.join(root, '.dsh/flow/flow.json')
+  const file = path.join(root, '.agents/flow/flow.json')
   const raw = readJson(file)
 
   fs.writeFileSync(file, JSON.stringify({ ...raw, experiments: { source: 'store', dir: raw.experiments.dir } }))
@@ -3334,7 +3334,7 @@ test('T-09 archiveTasks：archived_at=now 且保留 10 天前的 done_at（不�
   const now = Date.now()
   const tenDaysAgo = new Date(now - 10 * 86_400_000).toISOString()
   const task = addTask(root, contract, { title: '十天前完成', status: 'done', updated_at: tenDaysAgo })
-  const file = path.join(root, '.dsh/flow/tasks', `${task.id}.json`)
+  const file = path.join(root, '.agents/tasks', `${task.id}.json`)
   // 模拟 T-09 之后落盘的记录：真实完成日 10 天前；归档判定仍按 updated_at。
   fs.writeFileSync(file, `${JSON.stringify({ ...readJson(file), done_at: tenDaysAgo, updated_at: tenDaysAgo }, null, 2)}\n`)
 
@@ -3368,7 +3368,7 @@ test('T-09 archived_at：直接归档写入、重复归档不覆盖、反向恢�
 
 test('T-09 旧记录回退：缺字段读 updated_at，且读路径不写盘（不迁移）', () => {
   const { root, contract } = freshProject('t09-legacy')
-  const dir = path.join(root, '.dsh/flow/tasks')
+  const dir = path.join(root, '.agents/tasks')
   const doneStamp = '2026-05-01T09:00:00+08:00'
   const archiveStamp = '2026-04-01T09:00:00+08:00'
   const doneFile = path.join(dir, 'T-20260101-01.json')
@@ -3421,7 +3421,7 @@ test('T-13 task parent：合法父/null/空串落盘，读路径保留父子关�
   const listed = Object.fromEntries(listTasks(root, contract).map((item) => [item.id, item]))
   assert.equal(listed[child.id].parent, parent.id)
 
-  const raw = JSON.parse(fs.readFileSync(path.join(root, '.dsh/flow/tasks', `${child.id}.json`), 'utf8'))
+  const raw = JSON.parse(fs.readFileSync(path.join(root, '.agents/tasks', `${child.id}.json`), 'utf8'))
   assert.equal(raw.parent, parent.id, 'parent 必须落盘（不是只读投影）')
 
   const cleared = updateTask(root, contract, child.id, { parent: null })
@@ -3455,7 +3455,7 @@ test('T-13 task parent：格式非法/自指/父不存在/环 → invalid', () =
 
 test('T-13 task parent：旧记录无 parent 读为根且零写入；多级链原样返回', () => {
   const { root, contract } = freshProject('t13-parent-legacy')
-  const dir = path.join(root, '.dsh/flow/tasks')
+  const dir = path.join(root, '.agents/tasks')
   fs.mkdirSync(dir, { recursive: true })
   const legacyFile = path.join(dir, 'T-20260101-01.json')
   fs.writeFileSync(legacyFile, JSON.stringify({
@@ -3480,7 +3480,7 @@ test('T-13 task parent：删父后子读为根、行仍在、文件不变（不�
   const { root, contract } = freshProject('t13-parent-delete')
   const parent = addTask(root, contract, { title: '将被删' })
   const child = addTask(root, contract, { title: '子', parent: parent.id })
-  const childFile = path.join(root, '.dsh/flow/tasks', `${child.id}.json`)
+  const childFile = path.join(root, '.agents/tasks', `${child.id}.json`)
   const bytes = fs.readFileSync(childFile, 'utf8')
 
   assert.deepEqual(removeTask(root, contract, parent.id), { id: parent.id, removed: true })
@@ -3610,9 +3610,9 @@ function runCliAsync(cwd, args) {
 
 test('init 持锁：conflict 退出且不写 flow.json / gates（不再“持锁仍成功”）', () => {
   const root = tempRoot('init-held-lock')
-  const store = path.join(root, '.dsh/flow')
+  const store = path.join(root, '.agents/flow')
   // N3/N5（文档化接受）：seed 保持在锁内（移出锁需第二轮锁与写路径风险，不做）；
-  // conflict 时允许留下空 `.dsh/flow` 目录，但**不允许任何数据文件**（flow.json/gates）。
+  // conflict 时允许留下空 `.agents/flow` 目录，但**不允许任何数据文件**（flow.json/gates）。
   withLock(root, undefined, () => {
     expectFlowError(() => initProject(root, { name: 'locked' }), 'conflict', /locked by another writer/)
     assert.equal(fs.existsSync(path.join(store, 'flow.json')), false, '冲突时不得写出 flow.json')
@@ -3628,7 +3628,7 @@ test('init 持锁：conflict 退出且不写 flow.json / gates（不再“持锁
 
 test('init 持锁（CLI）：真实子进程持锁时 flow init = exit 2 conflict，不写盘', () => {
   const root = tempRoot('init-held-lock-cli')
-  const store = path.join(root, '.dsh/flow')
+  const store = path.join(root, '.agents/flow')
   let cli = null
   withLock(root, undefined, () => {
     cli = runCli(root, ['init', '--name', 'cli-locked', '--json'])
@@ -3642,7 +3642,7 @@ test('init 持锁（CLI）：真实子进程持锁时 flow init = exit 2 conflic
 
 test('init 持锁（N4）：`init --force` 同样必须 conflict，不得绕过锁写盘', () => {
   const root = tempRoot('init-held-force')
-  const store = path.join(root, '.dsh/flow')
+  const store = path.join(root, '.agents/flow')
   withLock(root, undefined, () => {
     // API：force 也在锁内竞争，输给持锁者就是 conflict。
     expectFlowError(() => initProject(root, { force: true, name: 'forced-api' }), 'conflict', /locked by another writer/)
@@ -3658,7 +3658,7 @@ test('init 持锁（N4）：`init --force` 同样必须 conflict，不得绕过�
 
 test('init 自定义 store.root（N1）：锁按 manifest 的真实 store 取，持锁 init 必须 conflict 且不 seed', () => {
   const root = tempRoot('init-custom-store')
-  const defaultStore = path.join(root, '.dsh/flow')
+  const defaultStore = path.join(root, '.agents/flow')
   const customStore = path.join(root, 'custom-aware')
   fs.mkdirSync(defaultStore, { recursive: true })
   const manifestFile = path.join(defaultStore, 'flow.json')
@@ -3672,7 +3672,7 @@ test('init 自定义 store.root（N1）：锁按 manifest 的真实 store 取，
   const manifestBefore = fs.readFileSync(manifestFile, 'utf8')
 
   withLock(root, contract, () => {
-    // 锁在 custom store；init 若仍按默认 `.dsh/flow` 取锁，就会“成功”并 seed。
+    // 锁在 custom store；init 若仍按默认 `.agents/flow` 取锁，就会“成功”并 seed。
     expectFlowError(() => initProject(root, { force: true }), 'conflict', /locked by another writer/)
     const cli = runCli(root, ['init', '--force', '--json'])
     assert.equal(cli.code, 2, cli.stdout + cli.stderr)
@@ -3700,7 +3700,7 @@ test('init 并行 ×8：单份合法 flow.json、gates 恰 5、无半成品/临�
   // N2：只有真正写 flow.json 的那一个 init 报告 created；其余成功者必须在锁内
   // 重算 alreadyExists 后返回 created: []（变异“复用锁外 alreadyExists”→多个 created）。
   const creators = ok.filter((result) => Array.isArray(result.json?.data?.created)
-    && result.json.data.created.includes('.dsh/flow/flow.json'))
+    && result.json.data.created.includes('.agents/flow/flow.json'))
   assert.equal(creators.length, 1, `并行 init 必须恰有一个 created，实际 ${creators.length}（${ok.map((r) => JSON.stringify(r.json?.data?.created)).join(' / ')}）`)
   for (const result of ok) {
     if (result === creators[0]) continue
@@ -3710,14 +3710,16 @@ test('init 并行 ×8：单份合法 flow.json、gates 恰 5、无半成品/临�
       '非创建者应看到锁内重算的 already-initialized warning',
     )
   }
-  const store = path.join(root, '.dsh/flow')
+  const store = path.join(root, '.agents/flow')
   const contract = JSON.parse(fs.readFileSync(path.join(store, 'flow.json'), 'utf8'))
   assert.match(contract.name, /^p\d$/, 'flow.json 必须是某一个 init 写出的合法单份')
   assert.equal(contract.schema, 2)
-  for (const dir of ['experiments', 'tasks', 'gates', 'logs', 'decisions']) {
-    assert.ok(fs.statSync(path.join(store, dir)).isDirectory(), `${dir} 目录缺失`)
+  // flow/ 只放契约与门禁运行日志；记录目录与它平级在 .agents/ 下。
+  assert.ok(fs.statSync(path.join(store, 'logs')).isDirectory(), 'logs 目录缺失')
+  for (const dir of ['experiments', 'tasks', 'gates', 'decisions']) {
+    assert.ok(fs.statSync(path.join(root, '.agents', dir)).isDirectory(), `${dir} 目录缺失`)
   }
-  const gates = fs.readdirSync(path.join(store, 'gates')).filter((name) => name.endsWith('.json'))
+  const gates = fs.readdirSync(path.join(root, '.agents', 'gates')).filter((name) => name.endsWith('.json'))
   assert.equal(gates.length, 5, `gates 应恰 5 份，实际 ${gates.join(',')}`)
   const leftovers = fs.readdirSync(store).filter((name) => name.includes('.tmp-') || name.includes('.lock') || name.includes('.takeover'))
   assert.deepEqual(leftovers, [], '不得残留临时/锁文件')
@@ -3733,7 +3735,7 @@ test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不�
     assert.equal(added.code, 0, added.stderr)
     baseIds.push(added.json.data.id)
   }
-  const gateDir = path.join(root, '.dsh/flow/gates')
+  const gateDir = path.join(root, '.agents/gates')
   const gatesBefore = Object.fromEntries(
     fs.readdirSync(gateDir).filter((name) => name.endsWith('.json')).map((name) => [name, fs.readFileSync(path.join(gateDir, name), 'utf8')]),
   )
@@ -3776,20 +3778,20 @@ test('init --force 与 30 并发 task add：既有 30 条全保留、gates 不�
   for (const name of gatesAfter) {
     assert.equal(fs.readFileSync(path.join(gateDir, name), 'utf8'), gatesBefore[name], `gate ${name} 内容被改写`)
   }
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.dsh/flow/flow.json'), 'utf8')).name, 'forced')
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8')).name, 'forced')
 })
 
 test('已初始化项目再 init：不重写 gates（字节+mtime 不变），只 warning', () => {
   const root = tempRoot('init-reinit')
   const first = initProject(root, { name: 'first' })
   assert.equal(first.seededGates.length, 5)
-  const gateDir = path.join(root, '.dsh/flow/gates')
+  const gateDir = path.join(root, '.agents/gates')
   const snapshots = fs.readdirSync(gateDir).filter((name) => name.endsWith('.json')).map((name) => {
     const file = path.join(gateDir, name)
     const stats = fs.statSync(file)
     return { name, bytes: fs.readFileSync(file, 'utf8'), mtimeMs: stats.mtimeMs }
   })
-  const contractPath = path.join(root, '.dsh/flow/flow.json')
+  const contractPath = path.join(root, '.agents/flow/flow.json')
   const contractBytes = fs.readFileSync(contractPath, 'utf8')
 
   const second = initProject(root, { name: 'second' })
@@ -3807,7 +3809,7 @@ test('已初始化项目再 init：不重写 gates（字节+mtime 不变），�
 test('读路径零锁：持锁时 readStoreState/listTasks/getTask 仍成功，且不产生 .lock', () => {
   const { root, contract } = freshProject('read-no-lock')
   const task = addTask(root, contract, { title: '读锁任务' })
-  const store = path.join(root, '.dsh/flow')
+  const store = path.join(root, '.agents/flow')
 
   const before = fs.readdirSync(store).sort()
   withLock(root, contract, () => {
@@ -3939,7 +3941,7 @@ test('时间戳 id：同秒 99 张后再建 → conflict（同秒上限）', () 
 
 test('时间戳 id：生成不写 flow.json（字节不变），显式新旧 id 均合法', () => {
   const { root, contract } = freshProject('ts-id-no-manifest-write')
-  const contractFile = path.join(root, '.dsh/flow/flow.json')
+  const contractFile = path.join(root, '.agents/flow/flow.json')
   const before = fs.readFileSync(contractFile)
   addTask(root, contract, { title: '新 id' }, { now: FIXED_ID_TIME })
   addTask(root, contract, { id: 'T-20261105-01', title: '显式旧 id' })

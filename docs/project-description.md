@@ -1,6 +1,6 @@
 # 项目描述：project-flow
 
-> 生成物：由 `flow desc render` 从 `.dsh/flow/description/` 生成，不要手改。
+> 生成物：由 `flow desc render` 从 `.agents/description/` 生成，不要手改。
 > 文件 43 ｜ 模块 117 ｜ 未描述 0
 
 ## 1 项目语义
@@ -403,7 +403,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 文件头部的全局常量：store 路径、各类 id 正则、实验/任务状态与类型词表、门禁阶段，以及 store 布局说明；被各模块直接引用，改这里等于改全库的 id 与状态口径。 | SCHEMA_VERSION、STORE_REL、CONTRACT_REL、EXP_ID_RE、TASK_ID_RE、REF_ID_RE、GATE_ID_RE、EXPERIMENT_SCHEMA、EXPERIMENT_STATUS、EXPERIMENT_LEGACY_STATUS、EXPERIMENT_REQUIRED_FIELDS、EXPERIMENT_SYSTEM_FIELDS、EXPERIMENT_DIRECTION_MAX、EXPERIMENT_CLEANUP_MAX、EXPERIMENT_WINDOW_MAX_DAYS、TASK_TYPES、TASK_STATUS、GATE_PHASES |
+| top | 文件头部的全局常量：store 路径、各类 id 正则、实验/任务状态与类型词表、门禁阶段，以及 store 布局说明；被各模块直接引用，改这里等于改全库的 id 与状态口径。 | SCHEMA_VERSION、STORE_REL、CONTRACT_REL、EXP_ID_RE、TASK_ID_RE、REF_ID_RE、GATE_ID_RE、EXPERIMENT_SCHEMA、EXPERIMENT_STATUS、EXPERIMENT_LEGACY_STATUS、EXPERIMENT_REQUIRED_FIELDS、EXPERIMENT_SYSTEM_FIELDS、EXPERIMENT_DIRECTION_MAX、EXPERIMENT_CLEANUP_MAX、EXPERIMENT_WINDOW_MAX_DAYS、TASK_TYPES、TASK_STATUS、GATE_PHASES、RECORD_ROOT |
 | decisions | 决策、心跳、实验、任务共用的常量与默认值：决策状态/种类、问题与理由长度上限、固定 approve/reject 选项，心跳超时与 Windows 会话名黑名单，PLUGIN_BIN，EXPERIMENT_DEFAULTS/TASK_DEFAULTS 及可写字段白名单、DAY_MS；它们是 defaultContract 与各 build*/apply* 校验的唯一常量来源。 | DECISION_SCHEMA、DECISION_STATUS、DECISION_KINDS、DECISION_ESCALATE_TURNS、DECISION_ESCALATE_HOURS、DECISION_GC_DAYS、DECISION_REMIND_MAX、DECISION_ID_RE、DECISION_OPTION_ID_RE、DECISION_QUESTION_MAX、DECISION_RATIONALE_MAX、DECISION_BY、DECISION_APPROVAL_OPTIONS、HEARTBEAT_STALE_SECONDS、HEARTBEAT_SCHEMA、HEARTBEAT_STATUS、HEARTBEAT_ACTIVE_STATUS、HEARTBEAT_PATCH_KEYS、HEARTBEAT_SESSION_MAX、HEARTBEAT_CLAIM_MAX、WINDOWS_RESERVED_SESSION_NAMES、WINDOWS_UNSAFE_SESSION_CHARS_RE、PLUGIN_BIN、EXPERIMENT_DEFAULTS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、TASK_ARCHIVE_AFTER_DAYS、TASK_ARCHIVE_MAX_DAYS、DAY_MS |
 | contract | 契约的读写与归一：defaultContract 给全部默认值，sanitizeContract 逐字段校验非法值并回退默认同时记 manifest-invalid，loadContract/saveContract 负责 flow.json，initProject 建库并 seed 门禁；storePaths 把契约目录解析为绝对路径并强制 containment，所有读写都先经过它。 | defaultContract、valueType、contractShapes、matchesContractKind、sanitizeContract、normalizeContract、loadContract、saveContract、resolveDir、storePaths、assertInitialized、initLockContract、initProject |
 | default-gate-seeds | flow init 时种子门禁（session-open/precommit/tests/release）的定义与写入，以及全库写路径共用的 withLock；不变量：只在 gates 目录里一个 .json 都没有时 seed，withLock 的 fn 必须同步且不可重入。 | defaultGateSeeds、seedDefaultGates、withLock |

@@ -19,7 +19,7 @@
 
 ## 3 `gate commit` 流水线
 协调者用 `gate commit -m ... -- <files>` 包装 `git commit`，按顺序执行：
-1. **确定任务**：读 `GATE_TASK_ID` 环境变量；没有则读 `.agents/tasks/.current`（协作技能自己的存储，**flow 插件不读**）；都没有 → 拒绝（observe 模式只告警）。
+1. **确定任务**：读 `GATE_TASK_ID` 环境变量；没有则读 `.agents/taskbook/.current`（协作技能自己的存储，**flow 插件不读**）；都没有 → 拒绝（observe 模式只告警）。
 2. **暂存检查**：暂存区非空；文件全部命中该任务 `scope.allow`，且不命中 `deny`。
 3. **task check**：任务存在、`status=active`、preflight 已解决、baseline 非空。
 4. **doc check**：仅当 staged 含 `docs/**` 或 `*.md` 时跑，按 `--type` 识别；失败即拒。
@@ -120,7 +120,7 @@ gate doctor
 
 ### gate commit
 1. 暂存区非空；收集 `git diff --cached --name-only`。
-2. 读取任务（`GATE_TASK_ID` 或 `.agents/tasks/.current`——协作技能自己的存储，**flow 插件不读**），跑 `task check`，取 scope；无任务则拒绝（observe 模式只告警）。
+2. 读取任务（`GATE_TASK_ID` 或 `.agents/taskbook/.current`——协作技能自己的存储，**flow 插件不读**），跑 `task check`，取 scope；无任务则拒绝（observe 模式只告警）。
 3. 归属检查：越界 → 列文件 + 建议 `git restore --staged`。
 4. 提交消息检查：`type(scope): 说明`，scope 在词表内（或 `--allow-new-scope`）。
 5. trailer：`Task: T-YYYYMMDD-NN`、`Agent: <session>`；缺失 → 失败（文档类可豁免）。
@@ -143,7 +143,7 @@ gate doctor
 按 scope 调既有命令；跨域改动要求 all；检测并发（pgrep mvn/vite、产物 mtime）→ 拒绝并提示等待。
 
 ### gate check（含 task 规则）
-`task` 不是独立子命令，而是 `gate check` 的一条规则：读 `GATE_TASK_ID` 或 `.agents/tasks/.current`
+`task` 不是独立子命令，而是 `gate check` 的一条规则：读 `GATE_TASK_ID` 或 `.agents/taskbook/.current`
 （协作技能自己的存储，**flow 插件不读**），做任务书**必填字段完整性**校验。
 无任务时报 `TASK_ID_MISSING`；有任务时按 `precision_common.task_errors` 报缺字段。
 实测缺字段输出形如：

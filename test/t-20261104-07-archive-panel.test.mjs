@@ -6,7 +6,7 @@
 //   3. 行对象字段与 `client.js` 现有投影一致（`index.js:784-960` 的
 //      panelTaskRow / activeTasksOf / draftTasksOf / recentDoneOf）；
 //   4. **读路径不归档**：sweep 之后才到期的 done 任务，连续两次 `/state` 仍是 done，
-//      且 `.dsh/flow` 下文件内容与 mtime 一个字节都不变 —— 归档只由显式命令
+//      且 `.agents/flow` 下文件内容与 mtime 一个字节都不变 —— 归档只由显式命令
 //      （`flow task archive`）与门禁步触发，读端点保持只读（§9.1、brief §2 方案 A 被否）。
 //
 // fixture：`os.tmpdir()` + `core.initProject`；归档走 `core.archiveTasks`
@@ -85,11 +85,11 @@ const doneAt = (now, daysAgo) => new Date(now - daysAgo * DAY).toISOString()
 const ids = (rows) => rows.map((row) => row.id)
 
 /**
- * `.dsh/flow` 下每个文件的「内容 + mtime」快照：读路径若写盘（归档、刷新 updated_at、
+ * `.agents/flow` 下每个文件的「内容 + mtime」快照：读路径若写盘（归档、刷新 updated_at、
  * 重建流文件），内容或 mtime 必然变化，因此这组断言能证明读端点零写入。
  */
 function snapshotStore(root) {
-  const dir = path.join(root, '.dsh', 'flow')
+  const dir = path.join(root, '.agents', 'flow')
   const out = {}
   for (const relative of fs.readdirSync(dir, { recursive: true })) {
     const file = path.join(dir, relative)
@@ -277,7 +277,7 @@ test('P2-1 行 type 取值：按记录投影，两种 type 可区分，缺失/�
   assert.notEqual(featTask.type, fixTask.type, '夹具必须是两种不同 type，才能杀常量变异')
 
   // 2)/3) 手写记录：无 type 键、type 为非字符串。字段齐全以满足读路径。
-  const tasksDir = path.join(root, '.dsh', 'flow', 'tasks')
+  const tasksDir = path.join(root, '.agents', 'tasks')
   const legacy = { id: 'T-20200101-01', title: '旧记录无 type', status: 'active', created_at: stamp, updated_at: stamp, schema: 1 }
   const numeric = { id: 'T-20200101-02', title: 'type 是数字', type: 42, status: 'active', created_at: stamp, updated_at: stamp, schema: 1 }
   fs.writeFileSync(path.join(tasksDir, `${legacy.id}.json`), `${JSON.stringify(legacy, null, 2)}\n`)

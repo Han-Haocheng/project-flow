@@ -43,7 +43,7 @@ function freshProject(label) {
   `
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', code, root], { encoding: 'utf8' })
   assert.equal(result.status, 0, `initProject 失败：${result.stderr || result.stdout}`)
-  fs.mkdirSync(path.join(root, '.dsh', 'flow', 'tasks'), { recursive: true })
+  fs.mkdirSync(path.join(root, '.agents', 'tasks'), { recursive: true })
   return root
 }
 
@@ -56,12 +56,12 @@ function writeTask(root, id, body) {
     schema: 1,
     ...body,
   }
-  fs.writeFileSync(path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`), `${JSON.stringify(record, null, 2)}\n`)
+  fs.writeFileSync(path.join(root, '.agents', 'tasks', `${id}.json`), `${JSON.stringify(record, null, 2)}\n`)
   return record
 }
 
 function readTask(root, id) {
-  return JSON.parse(fs.readFileSync(path.join(root, '.dsh', 'flow', 'tasks', `${id}.json`), 'utf8'))
+  return JSON.parse(fs.readFileSync(path.join(root, '.agents', 'tasks', `${id}.json`), 'utf8'))
 }
 
 /** 任务书 §5 公共前置的两条记录。 */
@@ -70,9 +70,9 @@ function seedLegacyPair(root) {
   writeTask(root, 'T-20260101-02', { title: '有类型', goal: '', type: 'fix', status: 'done' })
 }
 
-/** `.dsh/flow` 全量 sha256 + size + mtime 快照：证明零写盘 / 幂等的唯一手段。 */
+/** `.agents/flow` 全量 sha256 + size + mtime 快照：证明零写盘 / 幂等的唯一手段。 */
 function snapshotStore(root) {
-  const base = path.join(root, '.dsh', 'flow')
+  const base = path.join(root, '.agents', 'flow')
   const rows = []
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -235,7 +235,7 @@ test('B7：type:null 记录无 map 时整条不写（不丢 goal），有 map �
 test('B8：坏 JSON 记录不阻断、不静默（warnings 含 unreadable，fixed 不含它）', () => {
   const root = freshProject('b8')
   seedLegacyPair(root)
-  fs.writeFileSync(path.join(root, '.dsh', 'flow', 'tasks', 'broken.json'), '{ bad')
+  fs.writeFileSync(path.join(root, '.agents', 'tasks', 'broken.json'), '{ bad')
   const result = runCli(root, ['--root', root, 'task', 'normalize', '--json'])
   assert.equal(result.code, 0, '一条坏记录不得卡住整个迁移')
   assert.ok(
@@ -298,14 +298,14 @@ test('空台账 --dry-run 明确说没有待迁移项；未初始化是用法错
   const failed = runCli(bare, ['--root', bare, 'task', 'normalize', '--json'])
   assert.notEqual(failed.code, 0, '未初始化必须报错，且不得静默成功')
   assert.equal(failed.json.ok, false)
-  assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
+  assert.equal(fs.existsSync(path.join(bare, '.agents')), false, '失败路径不得创建 store')
 })
 
-test('真实台账体检：--dry-run 报告可读且 .dsh/flow 零改动（环境不满足则 skip）', (t) => {
+test('真实台账体检：--dry-run 报告可读且 .agents/flow 零改动（环境不满足则 skip）', (t) => {
   // 环境耦合三连 guard（brief-test-env-coupling §3.3）：台账目录存在 → 非空 → 在 git 工作树内。
   // 不满足就 skip 并说明，**不要**断言具体条数——P3 归零后 49/42 会变成 0/0，硬编码即假红。
-  const tasksDir = path.join(REPO, '.dsh', 'flow', 'tasks')
-  if (fs.existsSync(tasksDir) === false) return t.skip('需要仓库真实台账（.dsh/flow/tasks 不存在）')
+  const tasksDir = path.join(REPO, '.agents', 'tasks')
+  if (fs.existsSync(tasksDir) === false) return t.skip('需要仓库真实台账（.agents/tasks 不存在）')
   const records = fs.readdirSync(tasksDir).filter((name) => name.endsWith('.json'))
   if (records.length === 0) return t.skip('需要仓库真实台账（tasks 目录为空）')
   const inTree = spawnSync('git', ['-C', REPO, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' })
@@ -329,7 +329,7 @@ test('真实台账体检：--dry-run 报告可读且 .dsh/flow 零改动（环�
     /--dry-run：未写盘/.test(result.stdout) || /没有待迁移的旧记录/.test(result.stdout),
     `--dry-run 报告形态异常：${result.stdout.slice(0, 200)}`
   )
-  assert.equal(fingerprint(), before, '真实台账 --dry-run 不得改动 .dsh/flow/tasks（size+mtime）')
+  assert.equal(fingerprint(), before, '真实台账 --dry-run 不得改动 .agents/tasks（size+mtime）')
 })
 
 // ------------------------------------------ P1-1：--dry-run 也必须拦截未初始化
@@ -346,5 +346,5 @@ test('P1-1：--dry-run 在未初始化 root 上走 usage(1)，不把「没有台
   assert.equal(result.json.ok, false)
   assert.equal(result.json.error.code, 'usage')
   assert.match(result.json.error.message, /run flow init first/)
-  assert.equal(fs.existsSync(path.join(bare, '.dsh')), false, '失败路径不得创建 store')
+  assert.equal(fs.existsSync(path.join(bare, '.agents')), false, '失败路径不得创建 store')
 })

@@ -2,11 +2,11 @@
 
 `project-flow` 现在是**项目的流程台账**，面板是它的只读视图（唯一例外：「初始化」按钮
 POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 parent 谱系）、
-任务、门禁定义与门禁运行记录都写在项目自己的 `.dsh/flow/` 目录里。写入只有两个入口——
+任务、门禁定义与门禁运行记录都写在项目自己的 `.agents/flow/` 目录里。写入只有两个入口——
 `lib/core.mjs`（Host 工具与 `bin/flow.mjs` 共用）——面板、脚本、代理都不要直接改 JSON。
 
-- 存储根：`<root>/.dsh/flow/`（首次 `flow init` 创建）
-- 契约文件：`<root>/.dsh/flow/flow.json`，`schema: 2`
+- 存储根：`<root>/.agents/flow/`（首次 `flow init` 创建）
+- 契约文件：`<root>/.agents/flow/flow.json`，`schema: 2`
 - 单一写者：`lib/core.mjs`；CLI 只做参数解析与输出，校验/加锁/原子写全部在 core
 - 写操作前若 `flow.json` 不存在 → `FlowError('usage', 'run flow init first ...')`
 - 只依赖 `node:fs` / `node:path` / `node:child_process`，无 npm 依赖、不联网
@@ -14,15 +14,21 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 ## 1 目录布局
 
 ```
-<root>/.dsh/flow/
-  flow.json                 契约（schema 2）
+<root>/.agents/
+  flow/
+    flow.json               契约（schema 2）
+    logs/<gateId>/<ts>.json 门禁运行记录，<ts> 为 started_at 把冒号换成连字符
+    .lock                   写锁（临时文件，含 pid/host/token；30 秒未刷新可接管；不要提交、不要展示）
   experiments/<id>.json     实验记录，如 E-20261028-01.json
   tasks/<id>.json           任务记录，如 T-20261028-57.json
   gates/<id>.json           门禁定义，如 precommit.json
   decisions/<id>.json       决策记录，如 D-20261031-01.json
-  logs/<gateId>/<ts>.json   门禁运行记录，<ts> 为 started_at 把冒号换成连字符
-  .lock                     写锁（临时文件，含 pid/host/token；30 秒未刷新可接管；不要提交、不要展示）
+  description/              项目描述台账（project.json / files/ / tasks/）
+  heartbeat/                心跳（运行时产物，不入库）
 ```
+
+`flow/` 只承载契约与门禁运行日志；五类记录目录（experiments/tasks/gates/decisions/description）
+与 `flow/` 平级，均在 `<root>/.agents/` 下。
 
 子目录可由契约覆盖（见 §2），但覆盖值必须留在项目根内；`<id>` 一律是安全路径段（不含 `/`、`\`、`.`、`..`）。
 
@@ -89,15 +95,15 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 {
   "schema": 2,
   "name": "<basename(root)>",
-  "store": { "root": ".dsh/flow" },
-  "experiments": { "source": "store", "dir": ".dsh/flow/experiments", "enabled": false },
-  "tasks": { "source": "json", "dir": ".dsh/flow/tasks", "current": null, "recentLimit": 6,
+  "store": { "root": ".agents/flow" },
+  "experiments": { "source": "store", "dir": ".agents/experiments", "enabled": false },
+  "tasks": { "source": "json", "dir": ".agents/tasks", "current": null, "recentLimit": 6,
              "archiveAfterDays": 7 },
-  "gates": { "dir": ".dsh/flow/gates", "logs": ".dsh/flow/logs" },
+  "gates": { "dir": ".agents/gates", "logs": ".agents/flow/logs" },
   "heartbeats": { "source": "json", "dir": ".agents/heartbeat", "max": 20 },
-  "decisions": { "dir": ".dsh/flow/decisions" },
+  "decisions": { "dir": ".agents/decisions" },
   "description": {
-    "dir": ".dsh/flow/description",
+    "dir": ".agents/description",
     "enabled": true,
     "enforce": "auto",          // auto | on | off（§3.7「强制语义」）
     "testGate": "tests",        // "" = 关闭测试证据要求
@@ -115,7 +121,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 ```
 
 合并规则：缺的键补默认值，对象递归补，数组整体替换；未知键**保留**（向前兼容）。
-`loadContract` 返回 `{ contract, source, warnings }`，`source` 为 `.dsh/flow/flow.json`
+`loadContract` 返回 `{ contract, source, warnings }`，`source` 为 `.agents/flow/flow.json`
 或 `defaults`（文件不存在）；文件坏掉时回退默认值并带 `manifest-invalid` warning。
 `schema` 不是 2 时只记一条 warning，仍按 schema 2 归一化。
 
@@ -128,7 +134,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 |---|---|---|
 | `name` | 非空 string | `<basename(root)>` |
 | `schema` | number | 归一化为 2（文案见上） |
-| `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.dsh/flow` |
+| `store` | object，`root` 为 string | 整节默认；`store.root` 错型 → `.agents/flow` |
 | `experiments` | object：`source` / `dir` string、`enabled` boolean | 逐字段回退 |
 | `experiments.enabled` | boolean（**默认 false**：面板隐藏实验区、`check experiments` skip） | 非 boolean → 回退 `false` 并记 `manifest-invalid: experiments.enabled: expected boolean, got <type>` |
 | `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` / `archiveAfterDays` number | 逐字段回退 |
@@ -182,7 +188,7 @@ store 里已有 ≥1 条文件记录才约束 `updateTask` 的阶段推进；`on
 `contract.heartbeats.dir` 下的 `*.json`。旧 manifest 残留的 `gate` / `runs` 等键按未知键
 保留，但不再被读取，也不再参与默认值或面板投影。
 
-`decisions.dir` 是决策记录 `D-` 的目录（默认 `.dsh/flow/decisions`，缺键自动补默认值）。
+`decisions.dir` 是决策记录 `D-` 的目录（默认 `.agents/decisions`，缺键自动补默认值）。
 
 `storePaths(root, contract)` 解析出的绝对目录（`store` / `experiments` / `tasks` /
 `gates` / `logs` / `decisions` / `description`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
@@ -198,11 +204,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   （目标已存在时看 `realpath`；目标不存在时逐级向上检查最近已存在的祖先，例如
   `link -> /etc`）一律**拒绝**；
 - 拒绝后不抛异常，也不读取根外内容，而是按该 section 的默认值降级：
-  `store.root` → `.dsh/flow`，各节目录 → 该节的默认目录，`tasks.current` → `null`；
+  `store.root` → `.agents/flow`，各节目录 → 该节的默认目录，`tasks.current` → `null`；
 - 每个被拒绝的原值记一条概括性 warning：
   `manifest-path-rejected: <key>: <原值>: <原因>`（只回显原值，不回显文件内容）。
 - 唯一例外：`store.root` 写成绝对路径时，若 `realpath` 后仍在项目根内则照常使用
-  （兼容旧 manifest）；否则回退 `.dsh/flow` 并 warning。
+  （兼容旧 manifest）；否则回退 `.agents/flow` 并 warning。
 - **面板 `tasks.current` 的派生**：manifest 声明了合法相对路径时原样作为 `current` 回显；
   未声明（`null`）时，Host 的面板投影把它派生为**队列头**——`active` 中**父不在 `active`
   集合内的根任务**（`parent` 为空或指向非 active 任务，失效即按根）里 `created_at` 最老
@@ -795,7 +801,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 
 ### 3.7 项目描述记录 `description/`
 
-`.dsh/flow/description/` 是**语义台账**：不止记「有哪些文件」，还记「每个文件/模块是干什么的」。
+`.agents/description/` 是**语义台账**：不止记「有哪些文件」，还记「每个文件/模块是干什么的」。
 为什么单开一族记录而不塞进任务：任务的 `notes` 是一次性叙事、会随任务归档沉底，而语义是**随代码
 演进的长期资产**——同一个文件的语义被 A 任务改写、被 B 任务补模块、被 C 任务删除，读者只会在
 「当前这一份」里找答案。所以**文件记录是当前真相**，任务的语义变更只在计划记录里留过程。
@@ -806,7 +812,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 这类检查收口）。
 
 ```text
-<root>/.dsh/flow/description/
+<root>/.agents/description/
   project.json                项目级：名字 + 一句话语义 + revision + 计数缓存
   files/<encoded-path>.json   文件级：哈希/行数/语义/模块/import/模块边
   tasks/<T-id>.json           任务级：语义变更计划（planned | implemented）
@@ -816,7 +822,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 再用 `%2F` 连接；段内 `*` 额外转 `%2A`（Windows 保留字符，且让 `*` 不参与后续通配）。
 编码必须**可逆**，因为解码要还原真实路径；但**记录里的 `path` 才是真值**，文件名只是键——
 两者不一致视为坏记录（`unreadable`），不按文件名猜路径。路径输入先规范化（`\` → `/`、去
-`./`），拒绝绝对路径、`..` 与 `.dsh/flow` 自身；扫描**不跟随符号链接**、只收普通文件。
+`./`），拒绝绝对路径、`..` 与 `.agents/flow` 自身；扫描**不跟随符号链接**、只收普通文件。
 
 **项目级 `project.json`**：
 
@@ -1495,7 +1501,7 @@ sender 字段，队友消息与用户原话都以 `role:'user'` 出现在同一�
 ## 6 机械检查（`flow check`）
 
 `flow check` 把 `skills/ai-collaborative-dev-workflow/scripts/` 下的机械检查脚本包成
-CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：不读写 `.dsh/flow`、不碰写锁、
+CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：不读写 `.agents/flow`、不碰写锁、
 不产生任何 store 写入；`lib/checks.mjs` 也不导入 `lib/core.mjs`。因此可以安全地放进
 `flow gate` 步骤或 CI。
 
@@ -1507,7 +1513,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 `flow check description` 不来自脚本目录，而由 `bin/flow.mjs` 特判路由到
 `core.checkDecisions()` / `core.checkExperiments()` / `core.normalizeTaskFormat({fix:false})` /
 `core.checkDescription()`（只读，复用 `loadContract`/containment/路径归一）。`lib/checks.mjs`
-保持**不 import core、不读写 `.dsh/flow`** 的纪律：内置项由 bin 侧追加，不进
+保持**不 import core、不读写 `.agents/flow`** 的纪律：内置项由 bin 侧追加，不进
 `checks.CHECKS`/`listChecks()`。所以 **`check list` 共八项** = 四项脚本检查
 （`staged`/`release-baseline`/`state`/`doc`）+ 四个内置项 `decisions` / `experiments` / `tasks` / `description`：
 
@@ -1932,10 +1938,10 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 ## 8 与 git 的关系
 
-- `.dsh/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
+- `.agents/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
 - git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
 - 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件，
-  不应提交（建议 `.gitignore` 加 `.dsh/flow/.lock`、`*.tmp-*`、`.dsh/flow/.lock.takeover-*`）。
+  不应提交（建议 `.gitignore` 加 `.agents/flow/.lock`、`*.tmp-*`、`.agents/flow/.lock.takeover-*`）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。
@@ -1950,7 +1956,7 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 | POST | `/api/project-flow/init` | 初始化台账（`{root}`），走 core |
 | POST | `/api/project-flow/gate` | 门禁开关（`{root, id, enabled}`），走 core |
 
-`root` 缺省取宿主 cwd；它必须是已注册工作区、其子目录，或自带 `.dsh/flow` store 的目录。
+`root` 缺省取宿主 cwd；它必须是已注册工作区、其子目录，或自带 `.agents/flow` store 的目录。
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
 旧布局读法、运行输出扫描或 Agent Teams 投影。读路径的设施失败（期限、读子进程崩溃/不可用）
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。

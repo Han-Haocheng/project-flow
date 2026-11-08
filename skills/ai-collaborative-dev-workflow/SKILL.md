@@ -41,7 +41,7 @@ metadata:
 
 ## 与 project-flow 插件的分工
 
-- **台账/存储归插件**：`.dsh/flow/` 由 `@local/project-flow` 拥有——写入口是 `flow` CLI 与 `flow_*` 工具，面板是只读视图；记录字段、schema 与校验以插件 `CONTRACT.md` 为准。
+- **台账/存储归插件**：`.agents/flow/` 由 `@local/project-flow` 拥有——写入口是 `flow` CLI 与 `flow_*` 工具，面板是只读视图；记录字段、schema 与校验以插件 `CONTRACT.md` 为准。
 - **本技能只管流程纪律**：角色与判定、命令契约、质量门禁、提交/发布/交接纪律。**不得重定义记录字段**；需要记实验/任务/门禁时调用插件，不要在技能或项目文档里另立一套字段。
 - **机械检查由插件提供**：`flow check staged|release-baseline|state|doc`（DSH 内首选入口）。同一批脚本随本技能分发在 `scripts/`，项目可在 CI / 非 DSH 环境把需要的脚本复制进 `.agents/scripts/` 直接运行。
 
@@ -207,7 +207,7 @@ metadata:
 
 **适用**：部署里有 Host 侧任务板（DSH 为 `@linxin666/dsh-client-ui-task-board`）时，把"派子代理"升级成**派卡片**：卡片钉住**工作区 / agent 预设 / 权限**，由 Host 调度、执行与结算，**浏览器关掉也照跑**。中心（Coordinator）仍是派单、判定、合并、写台账与汇报的唯一主体；**卡片是贡献者**——只在自己分支提交并提申请。
 
-**三块"板"别混（2026-10-30 起，按 T-26/T-21 口径）**：① **项目台账** `.dsh/flow`（`flow_task` / `flow task`）是 **durable 真源**，跨会话、跨工作树；② **Host 任务板卡片**（`task_board_*`，本节）是 Host 持久调度面，浏览器关掉照跑；③ **Agent Teams 共享任务板**（`team_task_*`，§十）只活本次 Lead 会话，是会话内执行视图。**卡片与 Team 任务都不是真源**：由项目任务派生时，Team 任务 `description` 首行写 `flow: <T-id>`、项目任务 notes 回记 `team: <taskId>`；卡片若也由项目任务派生，沿用同一写法（协调建议，非硬性字段）。状态/证据/结论最终一律回收到项目任务（字段约定见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1）；项目流面板**不做** Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。跨会话 / 无人值守 / 要钉工作区与权限仍走卡片。
+**三块"板"别混（2026-10-30 起，按 T-26/T-21 口径）**：① **项目台账** `.agents/flow`（`flow_task` / `flow task`）是 **durable 真源**，跨会话、跨工作树；② **Host 任务板卡片**（`task_board_*`，本节）是 Host 持久调度面，浏览器关掉照跑；③ **Agent Teams 共享任务板**（`team_task_*`，§十）只活本次 Lead 会话，是会话内执行视图。**卡片与 Team 任务都不是真源**：由项目任务派生时，Team 任务 `description` 首行写 `flow: <T-id>`、项目任务 notes 回记 `team: <taskId>`；卡片若也由项目任务派生，沿用同一写法（协调建议，非硬性字段）。状态/证据/结论最终一律回收到项目任务（字段约定见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1）；项目流面板**不做** Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。跨会话 / 无人值守 / 要钉工作区与权限仍走卡片。
 
 **标题统一（2026-11-04）**：三块板的标题一律 `<feat|fix|chore>: <一句话范围>`——项目任务 `title`、Team 卡 `subject`、Host 卡片 `title`；Team 卡另按 §10.4 写 `description` 三行标注。命名细则见 §10.2.1。
 
@@ -247,7 +247,7 @@ metadata:
 
 | 面 | 持久性 | 存什么 | 谁写 |
 |---|---|---|---|
-| **项目台账** `.dsh/flow/tasks/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | `title`、`type`、`status`、`owner`、`notes`、`scope`、`acceptance`、`commits`（`title` 兼目标；`goal` 已合并，旧记录由 `normalizeTaskFormat` 迁移） | 中心（Lead）；队友不写 |
+| **项目台账** `.agents/taskbook/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | `title`、`type`、`status`、`owner`、`notes`、`scope`、`acceptance`、`commits`（`title` 兼目标；`goal` 已合并，旧记录由 `normalizeTaskFormat` 迁移） | 中心（Lead）；队友不写 |
 | **Team 共享任务板**（`team_task_*`） | **随 Lead 会话消失** | 执行卡片、owner、依赖、write_scopes、完成状态 | 队友 claim/complete；Lead 建卡/回收 |
 | **原生 Agent Teams UI** | 随会话 | 实时观察成员与卡 | 只展示，不是真源；项目流面板**不做** Team 投影（T-26 已删） |
 

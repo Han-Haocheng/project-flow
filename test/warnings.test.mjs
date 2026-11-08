@@ -63,7 +63,7 @@ function freshProject(label) {
   initProject(root, { name: label, noGates: true })
   const { contract } = loadContract(root)
   drainWarnings()
-  return { root, contract, store: path.join(root, '.dsh/flow') }
+  return { root, contract, store: path.join(root, '.agents/flow') }
 }
 
 /** Local `YYYYMMDDHHMMSS` for timestamp task ids (test clock math). */
@@ -79,7 +79,7 @@ function timeStamp14(date = new Date()) {
  * conflict deterministic without depending on one exact second.
  */
 function writeBadTimestampRecords(root, radiusSeconds = 30) {
-  const dir = path.join(root, '.dsh/flow/tasks')
+  const dir = path.join(root, '.agents/tasks')
   fs.mkdirSync(dir, { recursive: true })
   const now = Date.now()
   for (let offset = -radiusSeconds; offset <= radiusSeconds; offset += 1) {
@@ -94,7 +94,7 @@ function stamp(date = new Date()) {
 }
 
 function writeFlowJson(root, payload) {
-  fs.writeFileSync(path.join(root, '.dsh/flow/flow.json'), JSON.stringify(payload))
+  fs.writeFileSync(path.join(root, '.agents/flow/flow.json'), JSON.stringify(payload))
 }
 
 function git(root, args) {
@@ -129,7 +129,7 @@ test('契约错型矩阵：section 写成错误类型时回退默认值并记 ma
     { payload: { store: 'x' }, key: 'store', check: (c) => assert.deepEqual(c.store, defaults.store) },
     { payload: { store: 5 }, key: 'store', check: (c) => assert.deepEqual(c.store, defaults.store) },
     { payload: { store: true }, key: 'store', check: (c) => assert.deepEqual(c.store, defaults.store) },
-    { payload: { store: { root: 5 } }, key: 'store.root', check: (c) => assert.equal(c.store.root, '.dsh/flow') },
+    { payload: { store: { root: 5 } }, key: 'store.root', check: (c) => assert.equal(c.store.root, '.agents/flow') },
     { payload: { experiments: 'x' }, key: 'experiments', check: (c) => assert.deepEqual(c.experiments, defaults.experiments) },
     { payload: { experiments: 5 }, key: 'experiments', check: (c) => assert.deepEqual(c.experiments, defaults.experiments) },
     { payload: { experiments: [1] }, key: 'experiments', check: (c) => assert.deepEqual(c.experiments, defaults.experiments) },
@@ -192,7 +192,7 @@ test('契约错型矩阵：错型契约下 CLI status/task list 仍退出 0 并�
 test('契约错型矩阵：saveContract 写入错型字段时静默修复而不是抛 TypeError', () => {
   const { root, contract } = freshProject('contract-save')
   const saved = saveContract(root, { ...contract, store: 'nope', tasks: 'nope' })
-  assert.deepEqual(saved.store, { root: '.dsh/flow' })
+  assert.deepEqual(saved.store, { root: '.agents/flow' })
   assert.equal(saved.tasks.current, null)
   assert.equal(saved.schema, 2)
   assert.deepEqual(drainWarnings(), [], 'saveContract 走 normalizeContract，静默修复')
@@ -204,7 +204,7 @@ test('坏记录+nextId：坏文件不被覆盖，自动 id 与显式 id 都 conf
   const { root, contract } = freshProject('bad-record-guard')
   const fixed = new Date(2026, 10, 5, 21, 21, 30)
   const id = 'T-20261105212130'
-  const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
+  const file = path.join(root, '.agents/tasks', `${id}.json`)
   fs.writeFileSync(file, '{ broken')
   drainWarnings()
 
@@ -234,7 +234,7 @@ test('坏记录+nextId：坏文件不被覆盖，自动 id 与显式 id 都 conf
 test('坏记录+nextId：unreadable 计数与 warning 一致（status 与 readStoreState）', () => {
   const { root, contract } = freshProject('bad-record-count')
   addTask(root, contract, { title: 'good' })
-  fs.writeFileSync(path.join(root, '.dsh/flow/tasks', `T-${stamp()}-99.json`), 'not json')
+  fs.writeFileSync(path.join(root, '.agents/tasks', `T-${stamp()}-99.json`), 'not json')
   drainWarnings()
 
   const state = readStoreState(root, contract)
@@ -303,7 +303,7 @@ test('expect 拼错：gate add 的 gate-expect-unknown 走 CLI 信封与 stderr'
 
 test('CLI 警告：坏记录在人类输出走 stderr，在 --json 走顶层 warnings 且 stderr 为空', () => {
   const { root } = freshProject('cli-warnings')
-  fs.writeFileSync(path.join(root, '.dsh/flow/tasks', `T-${stamp()}-01.json`), '{ broken')
+  fs.writeFileSync(path.join(root, '.agents/tasks', `T-${stamp()}-01.json`), '{ broken')
 
   const human = runCli(root, ['task', 'list'])
   assert.equal(human.code, 0)
@@ -343,7 +343,7 @@ test('CLI 警告：失败路径同样带 warnings，错误形状不变', () => {
 test('CLI 警告：check decisions 的 core warning 进入信封且 data 形状不变', () => {
   const { root } = freshProject('cli-check-warnings')
   git(root, ['init', '-q'])
-  fs.writeFileSync(path.join(root, '.dsh/flow/decisions', 'D-20260101-01.json'), '{ broken')
+  fs.writeFileSync(path.join(root, '.agents/decisions', 'D-20260101-01.json'), '{ broken')
 
   const json = runCli(root, ['check', 'decisions', '--json'])
   assert.equal(json.code, 0, json.stderr)
@@ -548,7 +548,7 @@ test('坏记录：移除坏文件后同一 id 可正常创建', () => {
   const { root, contract } = freshProject('bad-record-recover')
   const fixed = new Date(2026, 10, 5, 21, 21, 30)
   const id = 'T-20261105212130'
-  const file = path.join(root, '.dsh/flow/tasks', `${id}.json`)
+  const file = path.join(root, '.agents/tasks', `${id}.json`)
   fs.writeFileSync(file, '{ broken')
   assert.throws(() => addTask(root, contract, { title: 'blocked' }, { now: fixed }), /already occupied/)
   fs.rmSync(file)

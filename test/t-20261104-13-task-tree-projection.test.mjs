@@ -120,7 +120,7 @@ test('任务树投影：成环按根（depth 0）且不抛', async () => {
   task(root, contract, 'T-20260101-32', '环 B', 'active', AT(2), 'T-20260101-31')
 
   // 写路径拒绝成环，这里直接改盘模拟历史坏数据。
-  const dir = path.join(root, '.dsh', 'flow', 'tasks')
+  const dir = path.join(root, '.agents', 'tasks')
   const aFile = path.join(dir, 'T-20260101-31.json')
   const a = JSON.parse(fs.readFileSync(aFile, 'utf8'))
   fs.writeFileSync(aFile, JSON.stringify({ ...a, parent: 'T-20260101-32' }))

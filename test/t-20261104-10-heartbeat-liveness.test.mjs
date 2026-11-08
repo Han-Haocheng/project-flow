@@ -174,7 +174,7 @@ test('bin heartbeat status：输出存活 verdict；--require-active 对 dead �
 function tuiFixture(heartbeats) {
   return {
     ok: true,
-    contract: { source: '.dsh/flow/flow.json', schema: 2, name: 'tui' },
+    contract: { source: '.agents/flow/flow.json', schema: 2, name: 'tui' },
     tasks: { total: 0, counts: {}, active: [], draft: [], recentDone: [] },
     experiments: { total: 0, items: [] },
     gates: [],
