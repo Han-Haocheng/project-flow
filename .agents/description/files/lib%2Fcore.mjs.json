@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/core.mjs",
   "language": "js",
-  "hash": "sha256:48894a01c6656e3ea522f7146e9515aa8e359e413c880c9d8469e424540cc968",
-  "bytes": 215765,
-  "lines": 5040,
+  "hash": "sha256:12e0ac3782c1461f04a7e5e824ca77acdafafa2e7cae6b441522739e38af336d",
+  "bytes": 217259,
+  "lines": 5065,
   "semantics": "flow store 的唯一写者与核心实现：契约解析、store 锁与原子写、实验/任务/门禁/决策/心跳/描述台账的校验与 CRUD 都收敛在这里，CLI（bin/flow.mjs）、flow_* 工具与只读面板共享它的导出。它只依赖 node 内置模块和 lib/{util,paths,atomic,lock,runner,stage,proc,desc}.mjs，不依赖 lib/checks.mjs，也不允许被 lib/desc.mjs 反向引用。",
   "modules": [
     {
@@ -334,7 +334,7 @@
     {
       "id": "description",
       "title": "描述台账",
-      "semantics": "项目描述台账在 core 侧的编排：契约段归一（enforce/minSemanticsChars/maxScanBytes 等）、记录与计划的读写、build 同步结构与 moduleEdges、check 漂移校验、render 与 apply；写路径全部在 withLock 内用 writeJsonAtomic，读路径一律无锁，扫描/校验纯逻辑留在 lib/desc.mjs。",
+      "semantics": "项目描述台账在 core 侧的编排：契约段归一（enforce/minSemanticsChars/maxScanBytes 等）、记录与计划的读写、build 同步结构与 moduleEdges、check 漂移校验、render 与 apply；写路径全部在 withLock 内用 writeJsonAtomic，读路径一律无锁，扫描/校验纯逻辑留在 lib/desc.mjs。计划 apply 后冻结；唯一例外是 --rebase 只刷新 base 与 updated_at（语义、状态、implemented_at 不变）。",
       "members": [
         "DESCRIPTION_SCHEMA",
         "DESCRIPTION_ENFORCE_MODES",
@@ -1035,5 +1035,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T14:27:42+08:00"
+  "updated_at": "2026-11-08T14:35:35+08:00"
 }
