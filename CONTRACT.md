@@ -914,6 +914,9 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   「只改一个函数」不必重写整个文件的语义。
 - **写窗口**：计划可在 `stage ∈ {queued-analysis, analyzing, implementing}` 写；每次修订追加
   `history`；`apply` 后**冻结**（要改语义就改文件记录，否则「计划」与「落盘语义」各说一套）。
+  冻结的唯一例外是 `--rebase`：只刷新 `base`（与 `updated_at`）并追加一条 `history`，语义、
+  `status`、`implemented_at`、`files` 一律不变——用于「计划已 implemented、之后又补了提交」，
+  让 `unplanned-change` 的比较基准跟上来；它不提供任何改语义的通道。
   审查阶段要改计划，先按阶段机退回 `implementing`（§3.2.1）——审查者不就地改计划。
 - `base` 是 `unplanned-change` 的**比较基准**：建计划时若 `gitCheck` 且 git 可用，工作树必须干净并
   记 `base.commit`；检查时取 `git diff --name-only <base>` ∪ `git status --porcelain` 的未跟踪项，
@@ -1204,7 +1207,8 @@ flow check description [--task <T-id>] [--strict] [--json]
 - `flow desc plan` 只在 `stage ∈ {queued-analysis, analyzing, implementing}` 可写；每次 `--input`
   是一次修订，追加 `history`。`--template` 只打印骨架、**不写盘**（骨架由当前记录与扫描结果生成，
   所以先 `build` 再取模板，否则拿到的是空壳）。`--rebase` 不重写 `files`，只刷新 `base`——改了计划
-  内容却只 rebase，`unplanned-change` 会在检查时把这笔账算出来。
+  内容却只 rebase，`unplanned-change` 会在检查时把这笔账算出来。计划 `implemented` 后 `--rebase`
+  仍可用（只刷新 `base` 与 `updated_at`，语义与 `implemented_at` 不变；见 §3.7 的冻结例外）。
 - `flow desc apply` 把计划里的文件/模块语义落进文件记录，并把计划置 `implemented` + 写
   `implemented_at`；重复调用**幂等**（`applied:false`）。`--dry-run` 只报将改哪些记录、零写盘。
 - `flow desc render` 不带 `--out` 时打印到 stdout；`--check` **只比对不写**（与 `check description`

@@ -142,8 +142,9 @@ flow check description --task T-20261108113206    # 审查阶段：计划对齐 
 
 - **计划二选一**：`files` 非空 xor `noSemanticChange: true` + 非空 `reason`；确实没有语义变更
   时写明理由，不要留空（`plan-missing` 会拦）。
-- **apply 后计划冻结**：之后要改语义就改文件记录（`flow desc set`），不要回改计划；审查阶段想改计划，
-  先把任务退回 `implementing`（阶段机见 `CONTRACT.md` §3.2.1）。
+- **apply 后计划冻结**：之后要改语义就改文件记录（`flow desc set`），不要回改计划；唯一例外是
+  `flow desc plan <T> --rebase`——只刷新 `base`（比较基准），语义、`status`、`implemented_at` 不变；
+  审查阶段想改计划，先把任务退回 `implementing`（阶段机见 `CONTRACT.md` §3.2.1）。
 - **不要手写结构字段**：`hash`/`imports`/`moduleEdges` 由 `build` 推导，手写只会在下一次 build 被覆盖、
   或被 `stale-module-edges` 判红。
 
@@ -235,7 +236,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：707 用例（55 个文件）
+node --test test/                        # core + CLI + check：710 用例（55 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

@@ -716,6 +716,91 @@ test('setDescriptionPlan：apply 之后冻结（implemented 不许再改）', ()
   )
 })
 
+test('setDescriptionPlan：implemented 计划 --rebase 只刷新 base（语义/状态/implemented_at 不变）', (t) => {
+  if (!hasGit()) {
+    t.skip('未安装 git')
+    return
+  }
+  const root = gitProject('plan-rebase', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  initProject(root, { name: 'rebase', noGates: true })
+  const contract = reload(root)
+  buildDescription(root, contract)
+  describeAll(root, contract)
+  const task = addTask(root, contract, { title: 'rebase', type: 'feat', stage: 'analyzing' })
+  setDescriptionPlan(root, contract, task.id, {
+    files: [{ path: 'lib/a.mjs', op: 'change', semantics: LATER_SEMANTICS }],
+  })
+  updateTask(root, contract, task.id, { stage: 'queued-implementation' })
+  updateTask(root, contract, task.id, { stage: 'implementing' })
+  const applied = applyDescriptionPlan(root, contract, task.id)
+  const frozen = getDescriptionPlan(root, contract, task.id)
+  assert.equal(applied.plan.status, 'implemented')
+
+  // 冻结后再产生一个提交（不在描述 include 范围，记录不会因为提交而漂）。
+  writeFile(root, 'docs/note.md', '# note\n')
+  gitRun(root, ['add', '-A'])
+  gitRun(root, ['commit', '-qm', 'next'])
+  const head = gitRun(root, ['rev-parse', 'HEAD'])
+  assert.notEqual(head, frozen.base.commit, '新提交必须让旧 base 过期')
+
+  const rebased = setDescriptionPlan(root, contract, task.id, {}, { rebase: true })
+  assert.equal(rebased.rebased, true)
+  assert.equal(rebased.amended, true)
+  assert.equal(rebased.plan.status, 'implemented', 'rebase 不得把状态打回 planned')
+  assert.equal(rebased.plan.implemented_at, frozen.implemented_at, 'implemented_at 必须原样保留')
+  assert.equal(rebased.plan.created_at, frozen.created_at)
+  assert.deepEqual(rebased.plan.files, frozen.files, 'files 不得被重写')
+  assert.equal(rebased.plan.noSemanticChange, frozen.noSemanticChange)
+  assert.equal(rebased.plan.reason, frozen.reason)
+  assert.equal(rebased.plan.base.commit, head)
+  assert.equal(rebased.plan.base.clean, true)
+  assert.equal(rebased.plan.history.length, frozen.history.length + 1)
+  assert.match(rebased.plan.history.at(-1).note, /rebase/)
+  assert.match(rebased.plan.history.at(-1).note, new RegExp(head.slice(0, 7)))
+  // 只刷新比较基准：文件记录的语义仍是 apply 落下的那一版。
+  assert.equal(getDescriptionFile(root, contract, 'lib/a.mjs').semantics, LATER_SEMANTICS)
+  assert.equal(getDescriptionPlan(root, contract, task.id).base.commit, head)
+})
+
+test('setDescriptionPlan：implemented 计划 --rebase 仍要求描述范围干净；非 rebase 仍冻结', (t) => {
+  if (!hasGit()) {
+    t.skip('未安装 git')
+    return
+  }
+  const root = gitProject('plan-rebase-dirty', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  initProject(root, { name: 'rebase-dirty', noGates: true })
+  const contract = reload(root)
+  buildDescription(root, contract)
+  describeAll(root, contract)
+  const task = addTask(root, contract, { title: 'rebase dirty', type: 'feat', stage: 'analyzing' })
+  setDescriptionPlan(root, contract, task.id, {
+    files: [{ path: 'lib/a.mjs', op: 'change', semantics: LATER_SEMANTICS }],
+  })
+  updateTask(root, contract, task.id, { stage: 'queued-implementation' })
+  updateTask(root, contract, task.id, { stage: 'implementing' })
+  applyDescriptionPlan(root, contract, task.id)
+
+  // 不带 rebase：冻结错误仍在，并给出 --rebase 出口。
+  let frozen = null
+  try {
+    setDescriptionPlan(root, contract, task.id, { files: [{ path: 'lib/a.mjs', op: 'change' }] })
+  } catch (error) {
+    frozen = error
+  }
+  assert.ok(frozen instanceof FlowError, `应抛 FlowError，实际 ${frozen?.name}: ${frozen?.message}`)
+  assert.equal(frozen.code, 'invalid')
+  assert.match(frozen.message, /已 implemented/)
+  assert.match(frozen.message, /--rebase/)
+
+  // 描述范围脏 → --rebase 仍拒绝（base 不能记在一个不可归因的工作树上）。
+  writeFile(root, 'lib/a.mjs', 'export function alpha() { return 1 }\n')
+  expectFlowError(
+    () => setDescriptionPlan(root, contract, task.id, {}, { rebase: true }),
+    'invalid',
+    /未提交改动.*lib\/a\.mjs/
+  )
+})
+
 test('setDescriptionPlan：git 工作树脏 → 拒绝并提示先提交；干净时记 base.commit', (t) => {
   if (!hasGit()) {
     t.skip('未安装 git')

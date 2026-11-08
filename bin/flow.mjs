@@ -102,7 +102,7 @@ const USAGE = `project-flow CLI（schema 2）
   desc plan <T-id> --input <json>       建/改语义变更计划（已存在 = 修订）
   desc plan <T-id> --show               打印当前计划（没有则提示「无计划」）
   desc plan <T-id> --no-semantic-change --reason <text>
-  desc plan <T-id> --rebase             按当前 HEAD/工作树重算计划的 base 后重提交
+  desc plan <T-id> --rebase             按当前 HEAD/工作树重算 base（implemented 计划只刷新 base）
   desc apply <T-id> [--dry-run]         把计划语义落进记录并冻结计划（幂等）
   desc render [--out <path>] [--check]  打印/写出确定性 Markdown；--check 与现算比对
 
@@ -1766,14 +1766,17 @@ async function cmdDesc(ctx, sub) {
       if (plan === null) {
         throw new CliError('usage', `任务 ${id} 还没有计划；先 flow desc plan ${id} --input <json>`)
       }
-      // `setDescriptionPlan` 每次提交都会经 `planBaseOf` 按当前 HEAD/工作树重算 base，
-      // 所以 --rebase 不需要第二个 core API：把当前计划原样再提交一次即可。
+      // `setDescriptionPlan` 每次提交都会经 `planBaseOf` 按当前 HEAD/工作树重算 base；
+      // implemented 计划带 `rebase:true` 时只刷新 base（语义与 implemented_at 不变）。
+      const implemented = plan.status === 'implemented'
       const input =
         plan.noSemanticChange === true
           ? { noSemanticChange: true, reason: plan.reason }
           : { files: plan.files }
-      const result = core.setDescriptionPlan(ctx.root, contract, id, input)
-      const note = 'setDescriptionPlan 每次提交都会重算 base；本次提交已按当前 HEAD/工作树刷新'
+      const result = core.setDescriptionPlan(ctx.root, contract, id, input, { rebase: true })
+      const note = implemented
+        ? '计划已 implemented，--rebase 只刷新 base（语义与 implemented_at 不变）'
+        : 'setDescriptionPlan 每次提交都会重算 base；本次提交已按当前 HEAD/工作树刷新'
       if (!ctx.json) out(note)
       return { ...result, rebased: true, note }
     }
