@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "与main对齐",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "d2c4ac2a09d6e78a53aa1b3fcac7d464eb13c79dbf1e189311a794b3ec22afb0",
+    "at": "2026-11-08T06:31:28.020Z",
+    "text": "与main对齐"
+  },
+  "schema": 1,
+  "id": "T-20261108144550",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "「与 main 对齐」已处理（同一工作流 T-20261108112504）：分支 dsh-9dafa3e8-05eb 已 rebase 到 main=6e1c86c，提交 f52c1f0（fix）/a194bf0（docs）/18fbff6（描述台账）；node --test 715/715（55 文件）；六 selftest 绿；check description --task/--strict 绿；module-domain verify 绿；分支可 ff。交接与证据在 /mnt/d/Project/project-flow/.agents/tmp/handoff-tasks-capture-fidelity-20261108.md（与其它会话 desc-handoff、panel-frontend-brief 同一目录）；.dsh-ops/ 是 dsh-ops 插件运行数据（.gitignore 明示），本会话曾误放一份副本，已删除，不再写入。注意：本卡是 worktree 会话捕获落到分支台账（.agents/tasks），主台账无此卡——新布局下 capture 未归一到主工作区，属待修项。",
+  "created_at": "2026-11-08T14:45:50+08:00",
+  "updated_at": "2026-11-08T14:54:16+08:00",
+  "done_at": null,
+  "archived_at": null
+}
