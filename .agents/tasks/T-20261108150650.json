@@ -1,0 +1,28 @@
+{
+  "type": "chore",
+  "title": "你负责处理前端显示",
+  "stage": "queued-analysis",
+  "source": {
+    "kind": "utterance",
+    "key": "ade28baabe4f0b04a163f1f5aa9429934b2caf4187870098268bad113260da21",
+    "at": "2026-11-08T06:32:38.815Z",
+    "text": "你负责处理前端显示"
+  },
+  "schema": 1,
+  "id": "T-20261108150650",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [],
+  "notes": "",
+  "created_at": "2026-11-08T15:06:50+08:00",
+  "updated_at": "2026-11-08T15:06:50+08:00",
+  "done_at": null,
+  "archived_at": null
+}
