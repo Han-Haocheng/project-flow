@@ -272,25 +272,26 @@ function buildHeartbeatRows(heartbeats, hostHidden) {
      the total stays honest (T-13 A5). */
   const hostHiddenCount = Math.max(0, asNumber(hostHidden, 0))
   const hiddenCount = list.length - shown.length + hostHiddenCount
+  const activeStatus = (beat) => asText(beat.status) === 'working' || asText(beat.status) === 'idle' || asText(beat.status) === 'waiting'
   const working = shown.filter((beat) => asText(beat.status) === 'working')
   const deadCount = list.filter(dead).length
   const header =
     list.length === 0
       ? '没有心跳文件'
-      : '活跃 ' + working.length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + (list.length + hostHiddenCount)
+      : '活跃 ' + shown.filter(activeStatus).length + (deadCount > 0 ? ' · 已结束 ' + deadCount : '') + ' / 共 ' + (list.length + hostHiddenCount)
   const rows = [row(header, working.length > 0 ? 'normal' : 'dim')]
   const ordered = working.concat(shown.filter((beat) => asText(beat.status) !== 'working'))
   for (const beat of ordered.slice(0, MAX_BEAT_ROWS)) {
     const status = asText(beat.status)
-    const goal = asText(beat.goal) || asText(beat.title) || asText(beat.statusLine) || asText(beat.session)
+    const goal = asText(beat.title) || asText(beat.goal) || asText(beat.statusLine) || asText(beat.session)
     if (goal === '') continue
     const age = shortAgo(beat.ageSeconds)
     const isDead = dead(beat) === true
     /* Branch badge (2026-11-08): only records written after the field existed
        carry it; older heartbeats keep their previous single-line shape. */
     const branch = asText(beat.branch)
-    const glyph = isDead ? '×' : status === 'working' ? '▶' : status === 'done' ? '✓' : '·'
-    const tone = isDead ? 'error' : beat.stale === true ? 'warning' : status === 'working' ? 'accent' : 'dim'
+    const glyph = isDead ? '×' : status === 'working' ? '▶' : status === 'waiting' ? '⏳' : status === 'done' ? '✓' : '·'
+    const tone = isDead ? 'error' : beat.stale === true ? 'warning' : status === 'working' ? 'accent' : status === 'waiting' ? 'accent' : 'dim'
     rows.push(row(glyph + ' ' + goal + (branch === '' ? '' : ' · ' + clip(branch, 16)) + (isDead ? ' · 已结束' : '') + (age === '' ? '' : ' · ' + age), tone))
   }
   const hidden = shown.length - Math.min(shown.length, MAX_BEAT_ROWS)

@@ -276,6 +276,7 @@ window.__ModuleLoader__.load({
       'signals.heartbeat.stale': '可能已停',
       'hb.status.working': '工作中',
       'hb.status.idle': '空闲',
+      'hb.status.waiting': '等待子会话',
       'hb.status.done': '已完成',
       'hb.status.missed': '已错过',
       'hb.status.dead': '已结束',
@@ -449,6 +450,7 @@ window.__ModuleLoader__.load({
       'signals.heartbeat.stale': 'possibly stopped',
       'hb.status.working': 'working',
       'hb.status.idle': 'idle',
+      'hb.status.waiting': 'waiting on subagents',
       'hb.status.done': 'done',
       'hb.status.missed': 'missed',
       'hb.status.dead': 'dead',
@@ -761,7 +763,7 @@ window.__ModuleLoader__.load({
       /* Same active rule as core: `live` is exempt from the 6 h fallback, a dead
          session never counts, and unknown/stale still needs freshness. */
       const derivedActive = items.filter((beat) => {
-        const statusActive = beat.status === 'working' || beat.status === 'idle';
+        const statusActive = beat.status === 'working' || beat.status === 'idle' || beat.status === 'waiting';
         if (!statusActive) return false;
         if (beat.liveness === 'live') return true;
         if (beat.liveness === 'dead' || beat.liveness === 'foreign' || beat.liveness === 'stale') return false;
@@ -2455,7 +2457,7 @@ window.__ModuleLoader__.load({
     /** Status badge text; unknown values stay visible but use the neutral chip. */
     function heartbeatStatusOf(status, t) {
       const value = asText(status);
-      if (value === 'working' || value === 'idle' || value === 'done' || value === 'missed') {
+      if (value === 'working' || value === 'idle' || value === 'waiting' || value === 'done' || value === 'missed') {
         return { cls: value, text: t('hb.status.' + value) };
       }
       return value ? { cls: 'unknown', text: value } : null;
@@ -2736,7 +2738,7 @@ window.__ModuleLoader__.load({
 
       const hbActive = asNumber(
         heartbeatCounts.active,
-        heartbeats.filter((beat) => beat.status === 'working' || beat.status === 'idle').length
+        heartbeats.filter((beat) => beat.status === 'working' || beat.status === 'idle' || beat.status === 'waiting').length
       );
       const hbTotal = asNumber(heartbeatCounts.total, heartbeats.length);
       /* T-10: a provably dead session is not "active", but the count is shown. */
@@ -2793,7 +2795,7 @@ window.__ModuleLoader__.load({
                     : null;
                   const status = dead ? null : heartbeatStatusOf(beat.status, t);
                   const displayName =
-                    beat.agent || shortSession(beat.session) || beat.title || basename(beat.file) || t('misc.dash');
+                    beat.title || beat.agent || shortSession(beat.session) || basename(beat.file) || t('misc.dash');
                   const note = beat.lastAction || beat.statusLine;
                   return React.createElement(
                     'li',
@@ -4011,6 +4013,7 @@ window.__ModuleLoader__.load({
 .project-flow-chip--muted{color:var(--dsw-alias-label-secondary);}
 .project-flow-chip--hb-working{color:var(--project-flow-ok-text);}
 .project-flow-chip--hb-idle{color:var(--project-flow-warn-text);}
+.project-flow-chip--hb-waiting{color:var(--dsw-alias-brand-primary);}
 .project-flow-chip--hb-done{color:var(--dsw-alias-label-secondary);}
 .project-flow-chip--hb-missed{color:var(--project-flow-error-text);}
 .project-flow-chip--hb-dead{color:var(--dsw-alias-label-secondary);text-decoration:line-through;}

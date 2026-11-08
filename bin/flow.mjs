@@ -75,11 +75,12 @@ const USAGE = `project-flow CLI（schema 2）
 
   heartbeat start [--goal G] [--task ID] [--claim PATH]... [--agent A]
                   [--session S] [--note T]
-  heartbeat update [--status working|idle] [--note T] [--goal G] [--task ID]
+  heartbeat update [--status working|idle|waiting] [--note T] [--goal G] [--task ID]
                    [--claim PATH]... [--session S]
   heartbeat end [--note T] [--session S]
   heartbeat list
   heartbeat status [--require-active] [--session S]
+  heartbeat rm <session>        移除一条心跳记录（归档自动移除，这里是人的逃生口）
   heartbeat gc [--dry-run]      清理旧子会话心跳（agent=subagent 的历史文件）
 
   decision ask --question Q --kind choice|approval|input
@@ -262,6 +263,7 @@ export const SPEC = Object.freeze({
     end: { flags: ['status', 'note', 'session'] },
     list: { flags: ['all'] },
     status: { flags: ['require-active', 'session'] },
+    rm: { flags: ['id', 'session', 'yes'] },
     gc: { flags: ['dry-run'] },
   }),
   decision: Object.freeze({
@@ -2023,6 +2025,7 @@ function printHeartbeat(record) {
   const age = Number.isFinite(updatedAt) ? Math.max(0, Math.round((Date.now() - updatedAt) / 1000)) : null
   const rows = [
     ['session', shortSession(record.session)],
+    ['title', record.title || '-'],
     ['agent', record.agent || '-'],
     ['goal', record.goal || '-'],
     ['task', record.task || '-'],
@@ -2114,9 +2117,10 @@ function printHeartbeatList(section, showAll = false) {
   out('')
   out(
     table(
-      ['session', 'agent', 'status', '存活', '年龄', 'task', 'claims', 'goal'],
+      ['session', 'title', 'agent', 'status', '存活', '年龄', 'task', 'claims', 'goal'],
       items.map((item) => [
         shortSession(item.session),
+        clip(item.title || '-', 24),
         clip(item.agent || '-', 12),
         item.status || '-',
         item.liveness || '-',
@@ -2178,7 +2182,9 @@ async function cmdHeartbeat(ctx, sub) {
     const patch = {}
     const status = readString(flags, 'status')
     if (status !== undefined) {
-      if (status !== 'working' && status !== 'idle') throw new CliError('usage', '--status 只接受 working | idle')
+      if (status !== 'working' && status !== 'idle' && status !== 'waiting') {
+        throw new CliError('usage', '--status 只接受 working | idle | waiting')
+      }
       patch.status = status
     }
     if (note !== undefined) patch.last_action = note
@@ -2255,6 +2261,23 @@ async function cmdHeartbeat(ctx, sub) {
     return result
   }
 
+  if (sub === 'rm') {
+    if (typeof core.removeHeartbeat !== 'function') {
+      throw new CliError('io', 'heartbeat rm 需要更新的 lib/core.mjs（缺少 removeHeartbeat）')
+    }
+    const target = typeof flags.id === 'string' && flags.id !== '' ? flags.id : sessionFlag
+    if (target === undefined || target === '') throw new CliError('usage', '用法: flow heartbeat rm <session>')
+    const result = core.removeHeartbeat(root, contract, target)
+    if (!ctx.json) {
+      out(
+        result.removed
+          ? `已移除心跳 ${shortSession(result.session)}`
+          : `没有心跳记录可移除（${shortSession(result.session)}）`,
+      )
+    }
+    return result
+  }
+
   if (sub === 'gc') {
     if (typeof core.gcLegacyHeartbeats !== 'function') {
       throw new CliError('io', 'heartbeat gc 需要更新的 lib/core.mjs（缺少 gcLegacyHeartbeats）')
@@ -2272,7 +2295,7 @@ async function cmdHeartbeat(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 heartbeat ${sub}（可用 start|update|end|list|status|gc）`)
+  throw new CliError('usage', `未知子命令 heartbeat ${sub}（可用 start|update|end|list|status|rm|gc）`)
 }
 
 // ---------------------------------------------------------------- flow check
@@ -3226,19 +3249,22 @@ async function main() {
     throw new CliError('usage', `多余的参数：${extra.slice(1).join(' ')}`)
   }
   if (
-    ['exp', 'task', 'gate', 'decision', 'desc'].includes(command) &&
-    [
-      'show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw',
-      // task-83 P3b：`flow task link T-xxx --team B-yyy` / `flow task unlink T-xxx`
-      'link', 'unlink',
-      // T-12 B2：exp 的三个新子命令同样允许 `flow exp review E-xxx`
-      'review', 'productize', 'cleanup',
-      // T-20261108 D4：`flow desc plan T-xxx …` / `flow desc apply T-xxx`
-      'plan', 'apply',
-    ].includes(action) &&
-    // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
-    !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&
-    !(command === 'desc' && action === 'show')
+    (['exp', 'task', 'gate', 'decision', 'desc'].includes(command) &&
+      [
+        'show', 'update', 'rm', 'run', 'logs', 'enable', 'disable', 'answer', 'withdraw',
+        // task-83 P3b：`flow task link T-xxx --team B-yyy` / `flow task unlink T-xxx`
+        'link', 'unlink',
+        // T-12 B2：exp 的三个新子命令同样允许 `flow exp review E-xxx`
+        'review', 'productize', 'cleanup',
+        // T-20261108 D4：`flow desc plan T-xxx …` / `flow desc apply T-xxx`
+        'plan', 'apply',
+      ].includes(action) &&
+      // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
+      !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&
+      !(command === 'desc' && action === 'show')) ||
+    // 心跳只有 `rm <session>` 把会话 id 作为位置参数（start/update/end 的
+    // `--session` 是 flag，不走这条路径）。
+    (command === 'heartbeat' && action === 'rm')
   ) {
     if (extra.length === 0 && parsed.flags.id === undefined) {
       throw new CliError('usage', `用法: flow ${command} ${action} <id> [options]`)

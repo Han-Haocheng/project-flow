@@ -667,7 +667,8 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   "goal": "当前任务名或 AI 自定义的一句话目标",
   "task": "T-20261029-01",              // 所属任务 id，可为 null
   "claims": ["lib/core.mjs", "bin/flow.mjs"],
-  "status": "working",                  // working | idle | done | missed
+  "status": "working",                  // working | idle | waiting | done | missed
+  "title": "会话标题",                  // 宿主 ctx.sessionTitle 快照（可选，display-only）
   "turn": 3,
   "last_action": "本轮正在做的事",
   "started_at": "2026-10-29T11:10:37+08:00",
@@ -703,9 +704,17 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   禁止**结尾点或空格**（Windows 会静默去掉，导致 `a.` / `a ` 与 `a` 同名碰撞）；禁止
   Windows 保留设备名 `CON`/`PRN`/`AUX`/`NUL`/`COM1`-`COM9`/`LPT1`-`LPT9`——大小写不
   敏感，带扩展名同样拒绝（`con.txt`、`nul.tar.gz`），按第一个点之前的词干判定。
-- `status` 只有 `working` / `idle` 算 active；`done` / `missed` 是结束态。
-  `ageSeconds` 按 `updated_at` 计算（解析失败回退文件 mtime），`> 6h`
-  （`HEARTBEAT_STALE_SECONDS`）记 `stale`。
+- `status` 的 `working` / `idle` / `waiting` 算 active；`done` / `missed` 是结束态。
+  `waiting` 表示会话的 turn 已关、但名下仍有运行中的子会话（等待子会话），与 `idle` 同为
+  「会话存在但不在产出」的活跃态。`ageSeconds` 按 `updated_at` 计算（解析失败回退文件
+  mtime），`> 6h`（`HEARTBEAT_STALE_SECONDS`）记 `stale`。
+- **会话标题 `title`（2026-11-08，display-only）**：由 Host 写入，取 `ctx.sessionTitle` 的
+  最新快照；上限 160 字符，空串清除字段（读投影回退为空串，面板用 goal/session 兜底）。
+  CLI/工具可显式写 `title`，但常规路径只有插件同步；`session/title` 事件到达时刷新。
+- **归档移除（2026-11-08）**：会话被归档（`workspace` 域全局状态里 `archivedSessionIds`
+  新增该会话，或 `workspace/session-stop` 点名）时，插件调用 `removeHeartbeat` 删除记录；
+  删除是**幂等**的（文件不存在返回 `removed: false`，不报错）。归档是动作不是持久状态，
+  因此不存在 `status: archived` 的记录。
 - **存活证据与 `liveness`（T-10）**：`host` / `boot_id` / `pid` / `pid_start` 由**宿主进程**
   写入（`process.pid`、`/proc/<pid>/stat` 第 22 字段、boot id）。**CLI 子进程不写自己的
   pid/boot_id/pid_start**；记录里已有的 `host`/`boot_id`/`pid`/`pid_start` **一律保留**
@@ -729,7 +738,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   `ageSeconds`（及 liveness 的年龄兜底）按 `updated_at` 计算；`updated_at` 不可解析时
   回退心跳文件的 mtime，**不会**因为坏时间戳而误判 `stale`。旧记录缺字段按
   `unknown` / `stale` 兜底，不报错（向后兼容）。`heartbeatStatus` 返回
-  `{active, liveness, reason, ageSeconds, record}`；`active` = `status ∈ {working,idle}` 且
+  `{active, liveness, reason, ageSeconds, record}`；`active` = `status ∈ {working,idle,waiting}` 且
   （`liveness === "live"` → 直接 active（**pid 证活不受 6h 门槛**），否则
   `liveness ∉ {dead,foreign,stale}` 且 `ageSeconds ≤ 6h`）。
   `heartbeatStatus(root, contract, session, {live:true})` 是给宿主的正向证据入口（`agents`
@@ -747,7 +756,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - **读取只认 `*.json`**（心跳目录下的 `.md` 不再读取）：`readHeartbeats` 保留旧形状
   `{file,title,statusLine,ageSeconds,mtime}`（隐藏旧子会话记录）；`readHeartbeatSection`
   返回富形状 `{root,dir,items,counts}`，item 含
-  `{file,session,agent,legacy,hidden,goal,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime,liveness,reason}`，
+  `{file,session,agent,legacy,hidden,goal,title,task,claims,status,last_action,started_at,updated_at,ended_at,ageSeconds,stale,turn,stats,mtime,liveness,reason}`，
   计数 `{total, active, stale, dead, hidden}`（total/active/stale/dead 统计
   `heartbeats.max` 截断后的**全部行**，与 visibility 无关；
   `active` 口径见上：status active 且（live 或 fresh 且非 dead/foreign/stale）；`dead` 计
@@ -1141,11 +1150,12 @@ flow gate logs <id> [--limit N]
 
 flow heartbeat start  [--goal G] [--task ID] [--claim PATH]... [--agent A]
                       [--session S] [--note T]
-flow heartbeat update [--status working|idle] [--note T] [--goal G]
+flow heartbeat update [--status working|idle|waiting] [--note T] [--goal G]
                       [--task ID] [--claim PATH]... [--session S]
 flow heartbeat end    [--note T] [--status done|missed] [--session S]
 flow heartbeat list [--all]
 flow heartbeat status [--require-active] [--session S]
+flow heartbeat rm <session>
 flow heartbeat gc [--dry-run]
 
 flow decision ask    --question Q --kind choice|approval|input
@@ -1197,11 +1207,13 @@ flow check description [--task <T-id>] [--strict] [--json]
   重复 `start` 保留首次 `started_at`，`turn` +1（core 的 `startHeartbeat` 也接受显式 `turn`），
   `stats.turns` 递增，
   清空 `ended_at`，`status` 回 `working`。
-- `heartbeat update` 只接受 `status`/`last_action`/`goal`/`task`/`claims`/`turn`，其它键
-  → 校验失败；CLI 的 `--status` 只允许 `working|idle`（结束用 `heartbeat end`）。
+- `heartbeat update` 只接受 `status`/`last_action`/`goal`/`task`/`claims`/`turn`/`title`，其它键
+  → 校验失败；CLI 的 `--status` 允许 `working|idle|waiting`（结束时用 `heartbeat end`）。
 - `heartbeat end` 默认 `status: done`，写 `ended_at`，`--note` 并入 `last_action`；文件保留。
+- `heartbeat rm <session>` 直接删除记录（归档自动移除之外的人的逃生口）；删除幂等，
+  没有文件时退出 0 并报告「没有心跳记录可移除」。
 - `heartbeat status` 无 `--require-active` 时永远退出 0（只打印状态）；带
-  `--require-active` 且没有 active 心跳（无文件，或 status 不是 working/idle）→ 退出 **1**，
+  `--require-active` 且没有 active 心跳（无文件，或 status 不是 working/idle/waiting）→ 退出 **1**，
   供 `session-open` 这类门禁直接使用。`heartbeat status` 只打印**单会话摘要**
   （active/liveness/reason/ageSeconds），不做可见性过滤。
 - `heartbeat list` 默认只列**可见行**（`visibility:'active'`，口径见 §3.5）：`live`，或
@@ -2239,8 +2251,21 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
   这条通道**不是会话能力**——判据是：创建/关闭是**生命周期事实**（只有插件知道它何时发生），
   修改是**工作内容**（只有会话知道）。让会话能开，就能伪造一条不存在的心跳；让它能关，
   就能关掉一条还活着的。
-- **不再订阅 `subagent/start` / `subagent/end`**：已移除 registerSubagentHooks、
-  `subagentRoots` 内存表、start/end 自动开合心跳等全部逻辑，子代理运行不再产生心跳文件。
+- **不再为子代理运行建心跳**：已移除 registerSubagentHooks 里「每次子代理运行开一条心跳」
+  的逻辑；`subagent/start|end` 现在只作为**父会话状态**的信号（下一条），子代理运行本身
+  不再产生心跳文件。
+- **标题与状态跟随会话（2026-11-08）**：每条主会话心跳就是该会话的登记，不另造记录。
+  - `title` 取宿主 `ctx.sessionTitle` 的最新标题快照（display-only，上限 160；没有标题时
+    字段缺省，面板回退 goal/session），`session/title` 事件到达时刷新；会话标题变了，
+    心跳标题同帧更新。
+  - `status` 自动维护：turn 未关 = `working`；turn 已关且名下仍有运行中的子会话 =
+    `waiting`（等待子会话）；否则 `idle`。由 `agent/status`、`subagent/start|end` 推动；
+    宿主无法判定（没有 `sessions` 服务）时保持原值，绝不猜测。
+  - **归档即移除**：`workspace` 域的归档集合新增会话（`domain/changed`，table 为全局
+    singleton）或 `workspace/session-stop` 点名会话时，删除其心跳记录
+    （`removeHeartbeat`，幂等）；归档后的会话不再出现在心跳面，也就不存在「归档态」记录。
+  - **恢复刷新**：`agent/pre-step` 对**存活证据已失效**的即存心跳（例如宿主重启后记录里
+    仍是上一个进程的 pid）做一次空 patch 刷新，避免写门禁把活会话误判为「未登记」。
 - **提醒与门禁只对根会话生效**：`agent/pre-step` 的首步提醒与 `edit`/`write` 硬门禁先用
   宿主 `agents` 服务判定——`roots()` 里包含该活代理（或 id 一致）才是主会话；活代理
   `get(id)` 存在但不在 `roots()` 里即子会话。宿主不可用时回退会话 header
