@@ -578,8 +578,10 @@ test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 
   // task-88：心跳计数行由 `working N` 改为与 web 一致的 `活跃 N`（T-10 文案对齐）。
   // task-99（T-12 B3）：心跳计数行恒带「已结束 D」（与 web 的 hb.counts 对齐），
   // 其余字段未变；单参调用仍然不产出 `staleNote`。
+  // 2026-11-08 心跳会话化：心跳行标题优先（title 先于 goal），活跃数计
+  // working|idle|waiting；其余字段未变，单参调用依旧不产出 `staleNote`。
   const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
-  assert.equal(digest, 'fd33740145839eba22e47b82fb5899ec5e01ce36c6b3a2a8a78028516857aab7')
+  assert.equal(digest, '7a0e561a8123822f5e682aaf79b302989130b5d4f5200514fbcaa5da901bbc54')
   assert.equal(Object.hasOwn(single, 'staleNote'), false)
 
   const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })

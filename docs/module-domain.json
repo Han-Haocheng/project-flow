@@ -197,7 +197,8 @@
       "tests": [
         "test/t-20261104-10-heartbeat-liveness.test.mjs",
         "test/t-20261107-heartbeat-keepalive.test.mjs",
-        "test/t-20261108-heartbeat-lifecycle.test.mjs"
+        "test/t-20261108-heartbeat-lifecycle.test.mjs",
+        "test/t-20261108-heartbeat-session.test.mjs"
       ]
     },
     "gates": {

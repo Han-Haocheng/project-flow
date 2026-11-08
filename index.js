@@ -136,6 +136,7 @@ import {
   registerAgentDisposed,
   registerDisciplineSection,
   registerHeartbeatKeepalive,
+  registerHeartbeatSessionHooks,
   registerTurnReminder,
   requireSession,
   rootSessionVerdict,
@@ -318,4 +319,11 @@ export function apply(ctx, config) {
   }
   // Lifecycle close is independent of `capture`: see registerAgentDisposed.
   registerAgentDisposed(ctx)
+  // Session identity/status observers (agent status, subagent runs, title
+  // events, workspace archive set): independent of `capture` as well.
+  try {
+    registerHeartbeatSessionHooks(ctx)
+  } catch (error) {
+    warnMount(`heartbeat session hooks: registration failed: ${brief(error)}`, ctx)
+  }
 }
