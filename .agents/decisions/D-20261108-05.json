@@ -1,0 +1,48 @@
+{
+  "question": "会话归属字段：把任务现有 owner 升级为会话归属（捕获自动填写、活性保护、归档释放、更新领取/释放），还是按字面新增独立 session 键与 owner 并存？",
+  "kind": "choice",
+  "rationale": "你的五条语义（自动填写、活跃会话的任务别人不能拥有、归档后转未指定、通过更新拥有、可更新为未指定）都落在\"任务→会话\"这一个归属关系上。但任务记录里已有 owner 字段，心跳领取（pickSessionTask）已经实现了\"他人名下的任务不会被抢\"，面板也把它显示为\"负责人\"。新增同义 session 键会出现两个归属真源；沿用 owner 则无需迁移、无需面板契约变更。这是数据模型分叉，需你拍板后我再动代码。",
+  "options": [
+    {
+      "id": "extend-owner",
+      "label": "扩展现有 owner 为会话归属（推荐）",
+      "impact": "单一真源：捕获时把 owner 自动填成会话 id；活跃会话的任务别人改不动；会话失效（归档/结束）自动把 owner 清空为未指定；flow_task/CLI 支持领取与释放；面板文案改“会话”。不加新字段、不迁移旧记录。"
+    },
+    {
+      "id": "add-session",
+      "label": "按字面新增独立 session 字段",
+      "impact": "严格照你原话加 session 键，与 owner 并存；必须同时定义两者分工（谁填谁改、心跳领取看哪个）、双写与迁移规则、面板第 15 键契约变更；将来容易出现两个真源不一致。"
+    }
+  ],
+  "recommendation": "extend-owner",
+  "affects": [
+    "lib/core.mjs",
+    "lib/capture.mjs",
+    "lib/host/session.mjs",
+    "lib/tools/tasks.mjs",
+    "bin/flow.mjs",
+    "client.js",
+    "CONTRACT.md"
+  ],
+  "asked_session": "session-9dafa3e8-9725-4397-b12b-b7b29175b4bd",
+  "asked_turn": 3,
+  "schema": 1,
+  "id": "D-20261108-05",
+  "default": null,
+  "status": "answered",
+  "blocks": [],
+  "supersedes": null,
+  "answer": {
+    "choice": "extend-owner",
+    "note": "用户当轮照抄推荐：extend-owner；不新增 session 字段，扩展现有 owner 为会话归属。",
+    "at": "2026-11-08T15:53:28+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-08T15:53:28+08:00",
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "714e7f7fe3c8f4de",
+  "asked_at": "2026-11-08T15:49:17+08:00",
+  "created_at": "2026-11-08T15:49:17+08:00",
+  "updated_at": "2026-11-08T15:53:28+08:00"
+}
