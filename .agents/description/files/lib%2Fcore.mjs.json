@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/core.mjs",
   "language": "js",
-  "hash": "sha256:76f5f0a4ad1da8204465c7b8beacd8e44a476768fab8fac2e2732723dc084ffb",
-  "bytes": 220451,
-  "lines": 5110,
+  "hash": "sha256:88576087218d27dd8a8012094d06c39821300405b76c1176e91b855b8e4d622e",
+  "bytes": 224798,
+  "lines": 5209,
   "semantics": "flow store 的唯一写者与核心实现：契约解析、store 锁与原子写、实验/任务/门禁/决策/心跳/描述台账的校验与 CRUD 都收敛在这里，CLI（bin/flow.mjs）、flow_* 工具与只读面板共享它的导出。它只依赖 node 内置模块和 lib/{util,paths,atomic,lock,runner,stage,proc,desc}.mjs，不依赖 lib/checks.mjs，也不允许被 lib/desc.mjs 反向引用。",
   "modules": [
     {
@@ -217,7 +217,7 @@
     {
       "id": "decisions-2",
       "title": "决策台账与门禁运行",
-      "semantics": "决策记录与门禁执行：kind+问题文本的 sha256 指纹去重、open 才可答复、关闭后不可再改（重问需 supersede 新记录）、GC 只清关闭记录；同段还收纳 runGate/runGatesByPhase/listGateRuns，按 step 顺序执行、首个失败即停，并把合并输出写到 .dsh/flow/logs/<gateId>/<timestamp>.json。",
+      "semantics": "决策记录与门禁执行：kind+问题文本的 sha256 指纹去重、open 才可答复、关闭后不可再改（重问需 supersede 新记录）、GC 只清关闭记录；listDecisions/summarizeDecisions 在给定 session 时按 asked_session 隔离（无 session 是全局视图，asked_session 为空的旧记录对任何会话都不可见）；purgeArchivedDecisions 按 Host 的归档会话集合删除其全部记录（含终态）并清空任务 decision 指针；同段还收纳 runGate/runGatesByPhase/listGateRuns，按 step 顺序执行、首个失败即停，并把合并输出写到 .agents/flow/logs/<gateId>/<timestamp>.json。",
       "members": [
         "codePointLength",
         "decisionFingerprint",
@@ -233,6 +233,8 @@
         "decisionIds",
         "decisionSortedNewest",
         "annotateDecision",
+        "decisionOwnedBy",
+        "decisionSessionOf",
         "decisionOpenOrder",
         "listDecisions",
         "getDecision",
@@ -242,6 +244,8 @@
         "answerDecision",
         "withdrawDecision",
         "gcDecisions",
+        "clearDecisionPointers",
+        "purgeArchivedDecisions",
         "summarizeDecisions",
         "decisionAffectsMatch",
         "decisionStagedFiles",
@@ -584,7 +588,7 @@
     {
       "from": "decisions-2",
       "to": "contract",
-      "count": 24,
+      "count": 26,
       "why": [
         "addDecision → assertInitialized",
         "addDecision → normalizeContract",
@@ -604,7 +608,7 @@
     {
       "from": "decisions-2",
       "to": "default-gate-seeds",
-      "count": 5,
+      "count": 6,
       "why": [
         "addDecision → withLock",
         "answerDecision → withLock",
@@ -622,7 +626,7 @@
     {
       "from": "decisions-2",
       "to": "storage-helpers",
-      "count": 22,
+      "count": 23,
       "why": [
         "addDecision → assertTargetFree",
         "addDecision → readCollection",
@@ -632,9 +636,11 @@
     {
       "from": "decisions-2",
       "to": "tasks",
-      "count": 1,
+      "count": 3,
       "why": [
-        "addDecision → taskIds"
+        "addDecision → taskIds",
+        "clearDecisionPointers → listTasks",
+        "clearDecisionPointers → updateTask"
       ]
     },
     {
@@ -1035,5 +1041,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T15:21:54+08:00"
+  "updated_at": "2026-11-08T16:13:45+08:00"
 }

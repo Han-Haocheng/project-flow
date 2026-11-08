@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/host/session.mjs",
   "language": "js",
-  "hash": "sha256:5abf99a4205c7579048a0fc2e93b276d678602565df68c65bbdc6d059c519925",
-  "bytes": 54929,
-  "lines": 1298,
+  "hash": "sha256:345cff7ee65d509033221b7df7aba45911ec5ea642cef1bfb01b1819c7429999",
+  "bytes": 56488,
+  "lines": 1332,
   "semantics": "Host 会话面：会话 id 判定、心跳存活与可见性、per-turn 提醒组装、捕获流水线与 agent/created|disposed 钩子；与 index.js 的循环用 sessionHooks 注入打破。",
   "modules": [
     {
@@ -40,7 +40,7 @@
     {
       "id": "reminder",
       "title": "reminder",
-      "semantics": "per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息。",
+      "semantics": "per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息；待决策段只列本会话记录，拼提醒前先按 Host 归档集合清理已归档会话的决策（purgeArchivedSessionDecisions，无 workspaceRegistry 时降级为 no-op）。",
       "members": [
         "disciplineText",
         "registerDisciplineSection",
@@ -59,6 +59,7 @@
         "decisionReminderLine",
         "taskReminderSection",
         "decisionReminderSection",
+        "purgeArchivedSessionDecisions",
         "composeTurnReminder",
         "commandReminderLine",
         "registerTurnReminder",
@@ -227,5 +228,5 @@
     }
   ],
   "created_at": "2026-11-08T13:40:31+08:00",
-  "updated_at": "2026-11-08T16:03:13+08:00"
+  "updated_at": "2026-11-08T16:13:45+08:00"
 }

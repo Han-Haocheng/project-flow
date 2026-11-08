@@ -2,9 +2,9 @@
   "schema": 1,
   "path": "lib/veto.mjs",
   "language": "js",
-  "hash": "sha256:6394b103aa37a3edbcadb035974e955f9c4c849aa8be36d448a2293f2389682c",
-  "bytes": 8120,
-  "lines": 181,
+  "hash": "sha256:4053079add47207bb00be39a50fbfa324035ee14af996e5afccc01473b644bdc",
+  "bytes": 8453,
+  "lines": 185,
   "semantics": "分析期否决的本地台账实现：子任务否决由会话自决（子任务 done + notes [removed] + veto，父任务 notes 记一行，不建决策），主任务否决必须建 modify/delete 二选一的决策并把任务停在 analyzing。veto 是永久历史、decision 是答完即清的待办指针；delete 分支的 stage=done 走 source:'internal' 以免自证门禁。",
   "modules": [
     {
@@ -41,5 +41,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:11:01+08:00"
+  "updated_at": "2026-11-08T16:13:45+08:00"
 }
