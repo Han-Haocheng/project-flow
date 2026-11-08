@@ -2,8 +2,8 @@
   "schema": 1,
   "path": "lib/host/tools.mjs",
   "language": "js",
-  "hash": "sha256:11e40dca58d09befa32841b290b493a068a5837fe3df3bfd4dc9da89cfb9eb0e",
-  "bytes": 28090,
+  "hash": "sha256:c352ec0180706c0b40fd45d15e722f316a43bc7cefd15eee436f60943f06cbf3",
+  "bytes": 28099,
   "lines": 602,
   "semantics": "Host 工具面：flow_status/flow_heartbeat/flow_decision/flow_veto/flow_subtask 的 schema 与处理函数，以及统一注册（同一 core 写者、共享挂载骨架）。",
   "modules": [
@@ -127,5 +127,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:40:31+08:00",
-  "updated_at": "2026-11-08T13:43:12+08:00"
+  "updated_at": "2026-11-08T14:08:02+08:00"
 }

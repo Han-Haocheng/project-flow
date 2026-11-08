@@ -2,22 +2,22 @@
   "schema": 2,
   "name": "project-flow",
   "store": {
-    "root": ".dsh/flow"
+    "root": ".agents/flow"
   },
   "experiments": {
     "source": "store",
-    "dir": ".dsh/flow/experiments",
+    "dir": ".agents/experiments",
     "fallbackTrailers": true
   },
   "tasks": {
     "source": "json",
-    "dir": ".dsh/flow/tasks",
+    "dir": ".agents/tasks",
     "current": null,
     "recentLimit": 6
   },
   "gates": {
-    "dir": ".dsh/flow/gates",
-    "logs": ".dsh/flow/logs"
+    "dir": ".agents/gates",
+    "logs": ".agents/flow/logs"
   },
   "gate": {
     "log": null
@@ -46,7 +46,7 @@
     ]
   },
   "description": {
-    "dir": ".dsh/flow/description",
+    "dir": ".agents/description",
     "render": "docs/project-description.md"
   }
 }

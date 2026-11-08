@@ -2,8 +2,8 @@
   "schema": 1,
   "path": "lib/plugin/shared.mjs",
   "language": "js",
-  "hash": "sha256:7103cee3c806da60db3fc7bdf1e6e05963ad562bbd44f05bfdc6ab33de0509aa",
-  "bytes": 8056,
+  "hash": "sha256:cd03bd326cfb8185bf692baad1655398d3a4ec68b2ee9e3a556c1b34fe99bf08",
+  "bytes": 8059,
   "lines": 254,
   "semantics": "flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每个 action 的字段白名单、列表上限 200 与 30s 写超时，以及「已知字段被用在错误 action 上」的守卫。共享 plugin 与三个子插件都从这里取规则，挂载逻辑在兄弟模块 mount.mjs。",
   "modules": [
@@ -64,5 +64,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:11:01+08:00"
+  "updated_at": "2026-11-08T14:08:02+08:00"
 }

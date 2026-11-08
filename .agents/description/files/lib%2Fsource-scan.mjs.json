@@ -2,8 +2,8 @@
   "schema": 1,
   "path": "lib/source-scan.mjs",
   "language": "js",
-  "hash": "sha256:5419cf4f33447888da602d2ec51ca29319cb64cece37848d53a0c76b6326173a",
-  "bytes": 32586,
+  "hash": "sha256:12a4656e952f0e3af76f07597a9065cf65e955bc9e11633e20548592ee2aac66",
+  "bytes": 32589,
   "lines": 1040,
   "semantics": "零第三方依赖的启发式源码扫描器：按扩展名把源码文本解析成 import 边（static/side-effect/dynamic/reexport）与顶层声明（name/kind/exported/startLine/endLine/identifiers），供 lib/desc.mjs 经 core 的 build/check 路径做成员归属与模块边推导。它只认识文本、不认识项目，不读盘不写盘，唯一依赖是 util.mjs 的 FlowError；已知漏扫（解构、匿名默认导出等）按「漏 = 不归属、不假红」处理。",
   "modules": [
@@ -182,5 +182,5 @@
     }
   ],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:08:21+08:00"
+  "updated_at": "2026-11-08T14:09:18+08:00"
 }

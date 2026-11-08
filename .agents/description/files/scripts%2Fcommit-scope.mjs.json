@@ -2,8 +2,8 @@
   "schema": 1,
   "path": "scripts/commit-scope.mjs",
   "language": "js",
-  "hash": "sha256:fe00f07d7092a0b05eae1040a1bcb3500506372795a4e44ec9a55126f9310e2b",
-  "bytes": 5279,
+  "hash": "sha256:1b82bbfe1dbc62999ba82eb7129da2b071c2fa6e7350151cbf8f0cb57f2ab589",
+  "bytes": 5297,
   "lines": 132,
   "semantics": "提交范围哨兵：暂存区同时包含 .dsh/flow/ 台账与仓库源码/测试时以 exit 1 失败，防止台账误写随源码提交一起进历史。支持 --stdin 绕过 git 供测试；空暂存区、只有一类内容、文档与配置混提都放行，环境错误退 2。",
   "modules": [
@@ -40,5 +40,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:11:01+08:00"
+  "updated_at": "2026-11-08T14:08:02+08:00"
 }

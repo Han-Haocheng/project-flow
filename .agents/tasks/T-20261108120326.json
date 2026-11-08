@@ -1,0 +1,25 @@
+{
+  "title": "fix: decision CLI 对 kind 不适用的 --option 静默忽略",
+  "type": "fix",
+  "stage": "queued-analysis",
+  "notes": "决策模块审计发现（2026-11-08，b3819856 会话）：`flow decision ask --kind approval --option a=A>>A ...` 与 `--kind input --option ...` 均被 CLI **静默接受**——bin/flow.mjs 只在 kind=choice 时把 --option 传进 core，其它 kind 直接丢弃该 flag；而 core（buildDecisionOptions）与 flow_decision 工具对 approval/input 带 options 是**拒绝**的。结果：CLI 与工具两处口径不一致，且违反「拒绝未用参数」的 CLI 契约（T-20261030-15）。\n\n## 证（修复前）\n```\nnode bin/flow.mjs decision ask --question x --kind approval --option 'a=A>>A' --rationale r\n→ 已创建决策 D-… [approval]（--option 被吞）\n```\ncore 侧直接传 options 会报 invalid（approval decisions use the fixed options approve|reject…）。\n\n## 修法（小）\n- bin/flow.mjs 的 decision ask 解析：kind !== choice 时若给了 --option → CliError(usage) 并说明「approval 固定 approve|reject；input 不接受选项」；不要静默丢弃。相应 test（CLI 退出码 1 + 文案）。\n- 写域预判：bin/flow.mjs + 一个 CLI test。**当前 bin/flow.mjs 有 description 会话在途改动（flow desc 命令面），等其提交后再动，避免共享工作树冲突。**\n\n## 进展（2026-11-08 13:52，工作树 dsh-05ea2738-3f81，基于 e6a128f）\n已修并提交在独立分支 `dsh-05ea2738-3f81`（未合并、未推送）：\n- `f84c602` fix(cli)：cmdDecision ask 在写台账前按 usage 拒绝 kind≠choice 的 `--option`，文案点名 `--kind approval|input` 与 `approve|reject`/「不接受选项」；新增 `test/t-20261108-decision-cli-option.test.mjs` 3 条（approval/input 拒绝 + 不写台账、无 option 仍成功、choice 合法路径不受影响）；README 用例数同步 703/55。\n- `2fc2163` chore(flow)：`flow desc build` 同步 bin/flow.mjs 描述台账（hash/bytes/lines；语义与模块成员未变）。\n- 验证：`node --test test/` = **703/703/0**；`flow gate run precommit` = **7/7 通过**（含 check description、commit-scope）。\n- 修复前复现：approval/input 带 --option 均 exit 0 建记录；修复后 exit 1 且 decisions/ 与 flow.json 零变化。\n\n## 待集成（中心/框架会话）\n1. 新测试文件需登记到 `docs/module-domain.json` 的 `modules.decisions.tests`（本工作树基线无该文件，属框架在途数据，未越界去改）。\n2. 本卡 stage 仍为 queued-analysis：queued-analysis→analyzing 是 plugin 边（当前无 P3b 派工），且主工作树 description 台账因框架拆分未重建，任何阶段前进都会被 description gate 拦；建议框架/描述收口后由中心统一推进/关单。\n3. 分支未合并：中心按合并顺序 framework → … → decisions 收口；本卡 commits 引用的是分支 sha。",
+  "schema": 1,
+  "id": "T-20261108120326",
+  "status": "active",
+  "parent": null,
+  "owner": "session-05ea2738-178d-4fe4-8219-53fbc803013d",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "f84c602",
+    "2fc2163"
+  ],
+  "created_at": "2026-11-08T12:03:26+08:00",
+  "updated_at": "2026-11-08T13:51:21+08:00",
+  "done_at": null,
+  "archived_at": null
+}

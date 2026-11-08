@@ -1,0 +1,31 @@
+{
+  "type": "chore",
+  "title": "/决策 决策模块和心跳我交给其他会话处理，你专门负责处理任务模块",
+  "stage": "analyzing",
+  "source": {
+    "kind": "utterance",
+    "key": "be719c2a5eb4520b381555626e99fbb18846f110947fcd41d2b4a0f8c5d54aaa",
+    "at": "2026-11-08T03:22:11.305Z",
+    "text": "/决策 决策模块和心跳我交给其他会话处理，你专门负责处理任务模块"
+  },
+  "schema": 1,
+  "id": "T-20261108112504",
+  "status": "active",
+  "parent": null,
+  "owner": "",
+  "scope": {
+    "allow": [],
+    "deny": []
+  },
+  "acceptance": [],
+  "checkpoints": [],
+  "commits": [
+    "732a1fd",
+    "f69bfb1"
+  ],
+  "notes": "任务模块增量（独立工作树 dsh-9dafa3e8-05eb，分支同名，基于 e6a128f）：提交 732a1fd（fix：捕获保真——source.attachments 落账、UserMessage.id 稳定身份键、纯附件建卡、core 校验）+ f69bfb1（docs：CONTRACT §3.2/§5.4.1）。验证：node --test test/ 708/708 绿；六个 .selftest 全绿；e2e 真实形状消息（无 timestamp + 2 图）→ source.attachments 落盘、CLI task show / check tasks / status 通过。真实证据：主台账 T-20261108093506 的 source.key=75ec6a0c…（纯文本 key），证明宿主 UserMessage 无 timestamp、附件丢失、同文不同消息会被当 dup 吞掉。残留（未做）：① stale 守卫在真实宿主无时间戳时失效（已写入 CONTRACT §5.4.1 残留说明，需宿主消息时间或会话日志关联）；② team status 的 reason 保留（P3b 待修，会牵动 cli/panel 测试，未纳入本增量）；③ P3b autoCreate/dispatch 未实现，handoff gap 2/3 仍在。集成注意：main 工作树有他人未提交的 index.js/lib/host 重构，按 module-boundaries 顺序（framework→store→tasks）合并；README 计数已改 708，若 framework 分支同时改需解冲突。阻塞记录：本会话 spawn_teammate 被 P2 guard 拒绝（\"主会话不得直接调度团队\"），与 handoff-heartbeat 一致，故本增量由 Lead 单干完成。附注（13:52）：工作树内 .dsh/flow 是 e6a128f 旧副本，guard 用会话根判阶段而本卡写的是主台账 ⇒ 卡停在 analyzing（第二次推进被拒「queued-analysis 只能到 analyzing」）；合并后需框架会话对账。完整交接见 .dsh-ops/briefs/tasks-capture-fidelity-handoff-20261108.md。",
+  "created_at": "2026-11-08T11:25:04+08:00",
+  "updated_at": "2026-11-08T13:50:57+08:00",
+  "done_at": null,
+  "archived_at": null
+}

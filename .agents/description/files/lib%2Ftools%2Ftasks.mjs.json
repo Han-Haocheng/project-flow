@@ -2,8 +2,8 @@
   "schema": 1,
   "path": "lib/tools/tasks.mjs",
   "language": "js",
-  "hash": "sha256:4fd44c93952b12ce1e163f467d0b5d2a1de3df06c64c13faf5bb0ea4e2616ede",
-  "bytes": 6158,
+  "hash": "sha256:0b60eebe3a66c24365b37f6fb5bb860977d5fd8f039ada38a9e9220f50a74b59",
+  "bytes": 6161,
   "lines": 143,
   "semantics": "flow_task 工具定义（从 index.js 原样移出），覆盖 list/show/add/update/remove；list 在无 store 时返回空目录与 init 提示。parent 经 normalizeTaskParent 归一（空串/none/null 表示根），title/type 不可改由 core 统一拦截，工具只做字段白名单与 id 必填。",
   "modules": [
@@ -30,5 +30,5 @@
   ],
   "moduleEdges": [],
   "created_at": "2026-11-08T13:04:59+08:00",
-  "updated_at": "2026-11-08T13:11:01+08:00"
+  "updated_at": "2026-11-08T14:08:02+08:00"
 }
