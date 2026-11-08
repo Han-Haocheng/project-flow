@@ -193,6 +193,10 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 
 ## 边界
 
+- **写域强制（2026-11-08）**：`edit` / `write` 只能改本会话心跳登记的文件域（`claims`）——空域即
+  无写权限；会话用 `flow_heartbeat update --claim <path>` 声明自己的文件域，子代理由父会话负责。
+  `config.claims: false` 可回滚。面板仍只读。
+
 - **面板只读（两个例外）**：面板仅有的写操作是「初始化」`POST /api/project-flow/init` 与门禁
   开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
   CLI 与 agent 工具。
@@ -235,7 +239,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：725 用例（56 个文件）
+node --test test/                        # core + CLI + check：734 用例（57 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

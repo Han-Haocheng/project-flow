@@ -55,7 +55,8 @@
         "test/t-20261108-module-domain.test.mjs",
         "test/t-20261107-no-literal-order.test.mjs",
         "test/t-20261107-enforce.test.mjs",
-        "test/t-20261108-reminder.test.mjs"
+        "test/t-20261108-reminder.test.mjs",
+        "test/t-20261108-claims-gate.test.mjs"
       ]
     },
     "store": {

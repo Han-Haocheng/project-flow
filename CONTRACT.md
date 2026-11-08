@@ -685,8 +685,11 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 }
 ```
 
-- **`claims` 语义**：本主会话**独占写入的文件域**，对外广播「这些文件别碰」；默认取
-  所属任务的 `scope.allow`。它不改变 core 的写入权限，只是协作约定。
+- **`claims` 语义**：本主会话**独占写入的文件域**，默认取所属任务的 `scope.allow`。自
+  2026-11-08 起它既是广播约定、也是**强制写域**：`edit` / `write` 的目标必须落在本会话心跳的
+  claims 内，否则被 Host 的 guard 拒绝（空 claims = 无写权限）；子代理不做心跳、由父会话的
+  文件域负责；`config.claims: false` / `PROJECT_FLOW_CLAIMS_GATE=off` 关闭该门。core 的写 API
+  本身不受此门限制——门在工具派发面（§5.4），CLI 仍是人的逃生口。
 - **主会话判定**：Host 用 `agents` 服务——`roots()` 返回的活根代理即主会话，`list()` /
   `get(id)` 用来识别「活着但不是 root」的子会话；宿主不提供该服务时回退会话日志 header
   （`origin === "subagent"` 或 `delegationDepth > 0` 判为子会话；fork 出的新主会话仍算主
@@ -1389,6 +1392,12 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 **语义**：用户说"严禁直接调度团队"——**"调度"是派工/派生代理；维护任务板是记账，不是调度**。
 把记账也拦掉，团队板就会冻住（真实宿主里已发生：没人能建卡或标记完成）。
 `spawn_teammate` 在任何模式都拦，这条不松。
+
+**claims 写域门（2026-11-08，默认开启，`config.claims` / `PROJECT_FLOW_CLAIMS_GATE` 控制）**：
+`edit` / `write` 的目标（`file_path`，或 `write` 的 `path`）相对项目根解析后必须落在本会话心跳的
+claims 内（§3.5）；空 claims = 拒绝全部编辑，无心跳记录同样拒绝。子代理豁免（它们不做心跳，由父
+会话文件域负责）；目标逃出项目根直接拒绝。拒绝文案给出「先 `flow_heartbeat update --claim <path>`」。
+该门与 `config.enforce`、`config.heartbeatGate` 相互独立：三者任一开启就会注册 guard。
 
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|

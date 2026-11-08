@@ -128,6 +128,7 @@ import {
   applyAgentLiveness,
   applyHeartbeatVisibility,
   captureEnabled,
+  claimsGateEnabled,
   heartbeatGateEnabled,
   heartbeatGuardReason,
   heartbeatRootOf,
@@ -236,6 +237,7 @@ export function apply(ctx, config) {
   const captureEnabled = isPlainObject(config) === false || config.capture !== false
   const settings = {
     heartbeatGate: heartbeatGateEnabled(config),
+    claims: claimsGateEnabled(config),
     capture: captureEnabled,
     enforce: enforceEnabled(config),
     // `single` today (one role); P3 flips the default to `team` once the plugin
