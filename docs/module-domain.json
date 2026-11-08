@@ -1,0 +1,550 @@
+{
+  "schema": 1,
+  "note": "模块写域单一真源。scripts/module-domain.mjs 的 check/verify/matrix 与 test/t-20261108-module-domain.test.mjs 都读本文件；改模块边界先改这里，再改 docs/module-boundaries.md。",
+  "rules": [
+    "owns = 独占写域：只有该模块（或框架维护者）改这些文件",
+    "shared = 共享写域：其他模块只能改 sections 里登记的区段；越段即视为越界，需先改边界再动手",
+    "tests = 测试归属：测试跟着被测模块走，不跟着目录走",
+    "sections 的 from/to 是文件内一字不差的锚点行；verify 会检查锚点存在、唯一、顺序正确"
+  ],
+  "modules": {
+    "framework": {
+      "title": "框架 / Host 装配",
+      "owns": [
+        "index.js",
+        "tasks.js",
+        "gates.js",
+        "experiments.js",
+        "tui-host.js",
+        "lib/plugin/mount.mjs",
+        "lib/plugin/shared.mjs",
+        "dsh-plugin.json",
+        "cordis.patch.yml",
+        "package.json",
+        "scripts/module-domain.mjs",
+        "docs/",
+        "scripts/commit-scope.mjs",
+        "lib/host/"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "bin/flow.mjs",
+        "README.md",
+        "CONTRACT.md"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "contract",
+          "storage-helpers",
+          "aggregate"
+        ],
+        "bin/flow.mjs": [
+          "entry"
+        ],
+        "README.md": [
+          "selftest-count"
+        ],
+        "CONTRACT.md": [
+          "c1.1"
+        ]
+      },
+      "tests": [
+        "test/tui-register.test.mjs",
+        "test/t-20261107-module-boundaries.test.mjs",
+        "test/t-20261107-module-map-drift.test.mjs",
+        "test/t-20261108-module-domain.test.mjs",
+        "test/t-20261107-no-literal-order.test.mjs",
+        "test/t-20261107-enforce.test.mjs",
+        "test/t-20261108-reminder.test.mjs"
+      ]
+    },
+    "store": {
+      "title": "存储基础（契约骨架 / 锁 / 原子写 / 路径 / 进程）",
+      "owns": [
+        "lib/core.mjs",
+        "lib/util.mjs",
+        "lib/paths.mjs",
+        "lib/atomic.mjs",
+        "lib/lock.mjs",
+        "lib/proc.mjs"
+      ],
+      "shared": [],
+      "sections": {},
+      "tests": [
+        "test/core.test.mjs",
+        "test/lock.test.mjs",
+        "test/concurrency.test.mjs",
+        "test/t-20261104-04-realpath-memo.test.mjs",
+        "test/t-20261104-12-review-core.test.mjs",
+        "test/t-20261030-09-win-compat.test.mjs"
+      ]
+    },
+    "tasks": {
+      "title": "任务模块（任务 CRUD / 九阶段状态机 / 捕获 / 子任务 / 团队板对账）",
+      "owns": [
+        "lib/stage.mjs",
+        "lib/capture.mjs",
+        "lib/team-sync.mjs",
+        "lib/tools/tasks.mjs",
+        "lib/tools/subtasks.mjs"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "lib/state-snapshot.mjs",
+        "client.js",
+        "bin/flow.mjs",
+        "CONTRACT.md",
+        "lib/host/session.mjs",
+        "lib/host/team.mjs"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "tasks"
+        ],
+        "lib/state-snapshot.mjs": [
+          "snapshot-tasks"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.2"
+        ],
+        "lib/host/session.mjs": [
+          "capture"
+        ],
+        "lib/host/team.mjs": [
+          "team"
+        ]
+      },
+      "tests": [
+        "test/cli-task-archive.test.mjs",
+        "test/t-20261104-13-task-tree-projection.test.mjs",
+        "test/t-20261105-task-goal-merge.test.mjs",
+        "test/t-20261105-task-parent-cli.test.mjs",
+        "test/t-20261105-task-type.test.mjs",
+        "test/t-20261106-task-normalize.test.mjs",
+        "test/t-20261107-capture.test.mjs",
+        "test/t-20261107-stage-machine.test.mjs",
+        "test/t-20261107-status-accuracy.test.mjs",
+        "test/t-20261107-subtask.test.mjs",
+        "test/t-20261107-team-sync.test.mjs"
+      ]
+    },
+    "decisions": {
+      "title": "决策模块（决策台账 / 否决 / 命令解析）",
+      "owns": [
+        "lib/veto.mjs",
+        "lib/commands.mjs"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "client.js",
+        "bin/flow.mjs",
+        "CONTRACT.md",
+        "lib/host/session.mjs"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "decisions",
+          "decisions-2"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.6"
+        ],
+        "lib/host/session.mjs": [
+          "reminder"
+        ]
+      },
+      "tests": [
+        "test/t-20261107-veto.test.mjs",
+        "test/t-20261108-control-word.test.mjs"
+      ]
+    },
+    "heartbeats": {
+      "title": "心跳模块（存活判定 / 自动开关 / 面板行）",
+      "owns": [],
+      "shared": [
+        "lib/core.mjs",
+        "lib/state-snapshot.mjs",
+        "client.js",
+        "bin/flow.mjs",
+        "CONTRACT.md",
+        "lib/host/session.mjs"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "heartbeats"
+        ],
+        "lib/state-snapshot.mjs": [
+          "snapshot-heartbeats"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.5"
+        ],
+        "lib/host/session.mjs": [
+          "heartbeats"
+        ]
+      },
+      "tests": [
+        "test/t-20261104-10-heartbeat-liveness.test.mjs",
+        "test/t-20261107-heartbeat-keepalive.test.mjs",
+        "test/t-20261108-heartbeat-lifecycle.test.mjs"
+      ]
+    },
+    "gates": {
+      "title": "门禁模块（门禁定义 / 步骤执行 / flow check 检查器）",
+      "owns": [
+        "lib/runner.mjs",
+        "lib/checks.mjs",
+        "lib/tools/gates.mjs"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "bin/flow.mjs",
+        "CONTRACT.md"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "gates",
+          "default-gate-seeds"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.3",
+          "c3.4",
+          "c6"
+        ]
+      },
+      "tests": [
+        "test/checks.test.mjs",
+        "test/t-20261106-check-tasks.test.mjs",
+        "test/t-20261106-contract-check-tasks.test.mjs"
+      ]
+    },
+    "experiments": {
+      "title": "实验模块（实验树 / 七字段 / 分流）",
+      "owns": [
+        "lib/tools/experiments.mjs"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "client.js",
+        "bin/flow.mjs",
+        "CONTRACT.md"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "experiments"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.1"
+        ]
+      },
+      "tests": []
+    },
+    "description": {
+      "title": "项目描述模块（文件图 / 模块图 / 语义 / 漂移）",
+      "owns": [
+        "lib/desc.mjs",
+        "lib/source-scan.mjs"
+      ],
+      "shared": [
+        "lib/core.mjs",
+        "lib/state-snapshot.mjs",
+        "bin/flow.mjs",
+        "CONTRACT.md",
+        "README.md"
+      ],
+      "sections": {
+        "lib/core.mjs": [
+          "description"
+        ],
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "CONTRACT.md": [
+          "c3.7",
+          "c6.1.4"
+        ]
+      },
+      "tests": [
+        "test/t-20261108-desc-cli.test.mjs",
+        "test/t-20261108-desc-core.test.mjs",
+        "test/t-20261108-desc-gate.test.mjs",
+        "test/t-20261108-desc-model.test.mjs",
+        "test/t-20261108-desc-scan.test.mjs"
+      ]
+    },
+    "panel": {
+      "title": "面板模块（只读快照投影 / Web 面板 / TUI 面板）",
+      "owns": [
+        "lib/state-snapshot.mjs",
+        "client.js",
+        "tui-panel.js",
+        "locale/en.json",
+        "locale/zh.json"
+      ],
+      "shared": [
+        "CONTRACT.md",
+        "README.md",
+        "lib/host/state.mjs"
+      ],
+      "sections": {
+        "CONTRACT.md": [
+          "c9"
+        ],
+        "lib/host/state.mjs": [
+          "state"
+        ]
+      },
+      "tests": [
+        "test/tui-panel.test.mjs",
+        "test/t-20261104-01-state.test.mjs",
+        "test/t-20261104-05-state-worker.test.mjs",
+        "test/t-20261104-07-archive-panel.test.mjs",
+        "test/t-20261104-08-queue-fifo.test.mjs",
+        "test/t-20261104-09-trend.test.mjs",
+        "test/t-20261104-13-trend-approx.test.mjs",
+        "test/t-20261106-panel-row-contract.test.mjs",
+        "test/t-20261107-panel-stage.test.mjs",
+        "test/t-20261107-state-degradation.test.mjs",
+        "test/warnings.test.mjs"
+      ]
+    },
+    "cli": {
+      "title": "CLI（参数面 / 命令分发 / 输出）",
+      "owns": [
+        "bin/flow.mjs"
+      ],
+      "shared": [],
+      "sections": {},
+      "tests": [
+        "test/t-20261030-15-flag-spec.test.mjs",
+        "test/t-20261104-12-b2-cli.test.mjs",
+        "test/t-20261107-cli-status-block.test.mjs",
+        "test/t-20261107-stage-cli.test.mjs"
+      ]
+    },
+    "docs": {
+      "title": "文档与技能（契约正文 / README / 内嵌技能）",
+      "owns": [
+        "CONTRACT.md",
+        "README.md",
+        "skills/"
+      ],
+      "shared": [],
+      "sections": {},
+      "tests": [
+        "test/t-20261106-doc-drift.test.mjs",
+        "test/t-20261107-collab-skill-scope.test.mjs",
+        "test/t-20261107-skill-frontmatter.test.mjs"
+      ]
+    }
+  },
+  "sections": {
+    "lib/core.mjs": {
+      "decisions": {
+        "from": "// ---------------------------------------------------------------- decisions",
+        "to": "// ------------------------------------------------------------- contract"
+      },
+      "contract": {
+        "from": "// ------------------------------------------------------------- contract",
+        "to": "// ------------------------------------------------------ default gate seeds"
+      },
+      "default-gate-seeds": {
+        "from": "// ------------------------------------------------------ default gate seeds",
+        "to": "// ------------------------------------------------------- storage helpers"
+      },
+      "storage-helpers": {
+        "from": "// ------------------------------------------------------- storage helpers",
+        "to": "// ---------------------------------------------------------- experiments"
+      },
+      "experiments": {
+        "from": "// ---------------------------------------------------------- experiments",
+        "to": "// ---------------------------------------------------------------- tasks"
+      },
+      "tasks": {
+        "from": "// ---------------------------------------------------------------- tasks",
+        "to": "// ---------------------------------------------------------------- gates"
+      },
+      "gates": {
+        "from": "// ---------------------------------------------------------------- gates",
+        "to": "// ------------------------------------------------------------- decisions"
+      },
+      "decisions-2": {
+        "from": "// ------------------------------------------------------------- decisions",
+        "to": "// ------------------------------------------------------------- heartbeats"
+      },
+      "heartbeats": {
+        "from": "// ------------------------------------------------------------- heartbeats",
+        "to": "// ------------------------------------------------------------- aggregate"
+      },
+      "aggregate": {
+        "from": "// ------------------------------------------------------------- aggregate",
+        "to": "// ------------------------------------------------------------ description"
+      },
+      "description": {
+        "from": "// ------------------------------------------------------------ description",
+        "to": null
+      }
+    },
+    "index.js": {
+      "entry": {
+        "from": "// ------------------------------------------------------------------- tools",
+        "to": null
+      }
+    },
+    "bin/flow.mjs": {
+      "parse": {
+        "from": "// ---------------------------------------------------------------- 参数解析",
+        "to": "// ---------------------------------------------------------------- 输出工具"
+      },
+      "output": {
+        "from": "// ---------------------------------------------------------------- 输出工具",
+        "to": "// --------------------------------------------- 心跳：主会话判定与心跳根"
+      },
+      "commands": {
+        "from": "// ---------------------------------------------------------------- 命令实现",
+        "to": "// ------------------------------------------------- T-12 B2：实验字段与自查"
+      },
+      "entry": {
+        "from": "// ---------------------------------------------------------------- 入口",
+        "to": null
+      }
+    },
+    "lib/state-snapshot.mjs": {
+      "primitives": {
+        "from": "// ---------------------------------------------------------------- primitives",
+        "to": "// --------------------------------------------------------- path containment"
+      },
+      "snapshot-tasks": {
+        "from": "// ---------------------------------------------------------------------- tasks",
+        "to": "// ----------------------------------------------------------------- heartbeats"
+      },
+      "snapshot-heartbeats": {
+        "from": "// ----------------------------------------------------------------- heartbeats",
+        "to": "// ----------------------------------------------------------------- decisions"
+      },
+      "payload": {
+        "from": "// -------------------------------------------------------------------- payload",
+        "to": null
+      }
+    },
+    "CONTRACT.md": {
+      "c1.1": {
+        "from": "### 1.1 代码模块职责",
+        "to": "## 2 `flow.json`（schema 2）"
+      },
+      "c3.1": {
+        "from": "### 3.1 实验 `experiments/E-YYYYMMDD-NN.json`",
+        "to": "### 3.2 任务 `tasks/T-YYYYMMDD-NN.json`（兼容既有台账格式）"
+      },
+      "c3.2": {
+        "from": "### 3.2 任务 `tasks/T-YYYYMMDD-NN.json`（兼容既有台账格式）",
+        "to": "### 3.3 门禁 `gates/<slug>.json`"
+      },
+      "c3.3": {
+        "from": "### 3.3 门禁 `gates/<slug>.json`",
+        "to": "### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`"
+      },
+      "c3.4": {
+        "from": "### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`",
+        "to": "### 3.5 心跳 `<heartbeats.dir>/<session>.json`（schema 1）"
+      },
+      "c3.5": {
+        "from": "### 3.5 心跳 `<heartbeats.dir>/<session>.json`（schema 1）",
+        "to": "### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`"
+      },
+      "c3.6": {
+        "from": "### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`",
+        "to": "### 3.7 项目描述记录 `description/`"
+      },
+      "c3.7": {
+        "from": "### 3.7 项目描述记录 `description/`",
+        "to": "## 4 写入语义"
+      },
+      "c6": {
+        "from": "## 6 机械检查（`flow check`）",
+        "to": "## 7 core API（Host 工具与 CLI 共用）"
+      },
+      "c6.1.4": {
+        "from": "### 6.1.4 `check description`（项目描述门禁）",
+        "to": "### 6.2 退出码"
+      },
+      "c9": {
+        "from": "## 9 面板 HTTP 表面",
+        "to": "## 10 团队同步（P3a：只读对账）"
+      }
+    },
+    "README.md": {
+      "selftest-count": {
+        "from": "## 自测",
+        "to": "## 许可证"
+      }
+    },
+    "lib/host/shared.mjs": {
+      "workspace": {
+        "from": "// ------------------------------------------------------- workspace inspection",
+        "to": "// ----------------------------------------------------------------------- HTTP"
+      },
+      "http": {
+        "from": "// ----------------------------------------------------------------------- HTTP",
+        "to": null
+      }
+    },
+    "lib/host/session.mjs": {
+      "heartbeats": {
+        "from": "// --------------------------------------------------------------- heartbeats",
+        "to": "// ------------------------------------------------------------------- reminder"
+      },
+      "reminder": {
+        "from": "// ------------------------------------------------------------------- reminder",
+        "to": "// -------------------------------------------------------------------- capture"
+      },
+      "capture": {
+        "from": "// -------------------------------------------------------------------- capture",
+        "to": "// -------------------------------------------------------- session switches"
+      },
+      "switches": {
+        "from": "// -------------------------------------------------------- session switches",
+        "to": null
+      }
+    },
+    "lib/host/state.mjs": {
+      "state": {
+        "from": "// ------------------------------------------------------- state read isolation",
+        "to": null
+      }
+    },
+    "lib/host/team.mjs": {
+      "team": {
+        "from": "// ------------------------------------------------- P3a: read-only team board",
+        "to": null
+      }
+    },
+    "lib/host/enforce.mjs": {
+      "enforce": {
+        "from": "// ------------------------------------------------------- P2 permission surface",
+        "to": null
+      }
+    },
+    "lib/host/tools.mjs": {
+      "tools": {
+        "from": "// ---------------------------------------------------------------- decisions",
+        "to": null
+      }
+    }
+  }
+}

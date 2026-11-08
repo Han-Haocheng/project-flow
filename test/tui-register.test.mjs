@@ -84,17 +84,18 @@ test('package.json keeps the web client and publishes the manifest', () => {
   }
 })
 
-test('index.js exposes the shared state projection and does not mount the panel itself', () => {
+test('the host half exposes the shared state projection and does not mount the panel itself', () => {
   const source = fs.readFileSync(path.join(ROOT, 'index.js'), 'utf8')
+  const stateSource = fs.readFileSync(path.join(ROOT, 'lib', 'host', 'state.mjs'), 'utf8')
 
   // The HTTP route and the panel read path are one projection. Since
   // T-20261104-01 the caller enumerates the registry exactly once and passes
   // the rows in (`collectPanelState(ctx, root, workspaces)`), so the projection
   // never re-reads the registry inside one request.
-  assert.match(source, /async function collectPanelState\(ctx, root, workspaces\)/)
-  assert.match(source, /sendJson\(response, 200, await collectPanelState\(\w+, root, workspaces\)\)/)
-  assert.match(source, /return await collectPanelState\(ctx, root, workspaces\)/)
-  assert.match(source, /export function panelStateReader\(ctx\)/)
+  assert.match(stateSource, /async function collectPanelState\(ctx, root, workspaces\)/)
+  assert.match(stateSource, /sendJson\(response, 200, await collectPanelState\(\w+, root, workspaces\)\)/)
+  assert.match(stateSource, /return await collectPanelState\(ctx, root, workspaces\)/)
+  assert.match(stateSource, /export function panelStateReader\(ctx\)/)
   // tuiPanels is a hard dependency of the TUI row, so the host half must stay
   // free of it: web and desktop would otherwise wait forever.
   assert.equal(/tui-panel/.test(source), false)

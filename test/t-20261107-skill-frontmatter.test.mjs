@@ -82,9 +82,9 @@ test('平铺技能 A2：解析结果非空且不是占位符（防空 frontmatte
 })
 
 test('平铺技能 A3：SKILL_META 里这两个技能不再有 description/whenToUse（防双来源）', () => {
-  const src = fs.readFileSync(path.join(REPO, 'index.js'), 'utf8')
+  const src = fs.readFileSync(path.join(REPO, 'lib', 'host', 'skills.mjs'), 'utf8')
   const start = src.indexOf('const SKILL_META = [')
-  assert.ok(start > 0, 'index.js 找不到 SKILL_META')
+  assert.ok(start > 0, 'lib/host/skills.mjs 找不到 SKILL_META')
   const end = src.indexOf('\n]', start)
   const block = src.slice(start, end)
   for (const name of FLAT_SKILLS) {
@@ -96,9 +96,9 @@ test('平铺技能 A3：SKILL_META 里这两个技能不再有 description/whenT
 
 /** SN `SKILL_META` 里某个技能的条目文本（对象字面量，不嵌套）。 */
 function skillMetaEntry(name) {
-  const src = fs.readFileSync(path.join(REPO, 'index.js'), 'utf8')
+  const src = fs.readFileSync(path.join(REPO, 'lib', 'host', 'skills.mjs'), 'utf8')
   const start = src.indexOf('const SKILL_META = [')
-  assert.ok(start > 0, 'index.js 找不到 SKILL_META')
+  assert.ok(start > 0, 'lib/host/skills.mjs 找不到 SKILL_META')
   const block = src.slice(start, src.indexOf('\n]', start))
   const at = block.indexOf(`name: '${name}'`)
   assert.ok(at > 0, `SKILL_META 找不到 ${name}`)

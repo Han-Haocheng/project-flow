@@ -63,6 +63,7 @@ const DEFAULT_EXCLUDE = [
   '**/*.test.mjs',
   '**/*.spec.mjs',
   '.selftest/**',
+  '.agents/**',
   'docs/**',
 ]
 

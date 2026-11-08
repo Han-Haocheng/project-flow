@@ -316,9 +316,9 @@ test('用 ctx.effect 注册并可 dispose：卸载后监听器从宿主事件面
 })
 
 test('源码兜底：保活实现里没有 agent.steer( 调用', () => {
-  const source = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8')
+  const source = fs.readFileSync(new URL('../lib/host/session.mjs', import.meta.url), 'utf8')
   const start = source.indexOf('function heartbeatKeepalive(')
-  assert.ok(start > 0, 'heartbeatKeepalive must exist in index.js')
+  assert.ok(start > 0, 'heartbeatKeepalive must exist in lib/host/session.mjs')
   const end = source.indexOf('function registerHeartbeatKeepalive(', start)
   assert.ok(end > start, 'registerHeartbeatKeepalive must follow it')
   assert.equal(source.slice(start, end).includes('steer('), false, 'turn-stopping must never steer the agent')

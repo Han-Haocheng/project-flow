@@ -39,7 +39,9 @@
     "lib/",
     "bin/",
     "test/",
-    "skills/"
+    "skills/",
+    "docs/module-boundaries.md",
+    "docs/module-domain.json"
   ],
   "dsh": {
     "bundle": {
