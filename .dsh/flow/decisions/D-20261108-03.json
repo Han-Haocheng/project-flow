@@ -1,0 +1,43 @@
+{
+  "question": "主会话调用 ask_user_question 时，是否加一道结构闸：必须已有本会话的 open 决策才允许提问？",
+  "kind": "choice",
+  "rationale": "判据要用结构信号而不是散文猜测：ask_user_question 的参数形状（是否带 options）可机械判定——带选项的是要用户裁决的问题，纯文本多是澄清。全量硬闸会把澄清也塞进 D 台账，与「决策台账不做问答收集器」冲突；而「在聊天里直接问」没有可判信号，任何闸都覆盖不了，只能靠提醒引导（本轮已交付的 C 段）。",
+  "options": [
+    {
+      "id": "no-gate",
+      "label": "不加闸",
+      "impact": "只保留每轮 C 段提醒引导；无假阴性、无返工，但「决策不按强制流程走」仍只靠模型自觉"
+    },
+    {
+      "id": "options-only",
+      "label": "仅选择题加闸",
+      "impact": "ask_user_question 带 options 时要求本会话已有 open 决策，否则拒绝并给可执行文案；纯文本澄清放行；用参数形状当结构信号，误伤最小；聊天里直接问仍拦不住"
+    },
+    {
+      "id": "all-questions",
+      "label": "所有提问都加闸",
+      "impact": "最接近「必须落台账」；但澄清类问题也会被卷进决策台账，制造噪音与误伤，违背 D 记录「不做问答收集器」的边界"
+    }
+  ],
+  "recommendation": "options-only",
+  "blocks": [],
+  "affects": [
+    "index.js",
+    "CONTRACT.md"
+  ],
+  "asked_session": "session-b3819856-8ca7-426f-bbf6-9b8ec467c1c5",
+  "asked_turn": 2,
+  "schema": 1,
+  "id": "D-20261108-03",
+  "default": null,
+  "status": "open",
+  "supersedes": null,
+  "answer": null,
+  "answered_at": null,
+  "withdraw": null,
+  "superseded_by": null,
+  "fingerprint": "fbebb27fa68a5a8d",
+  "asked_at": "2026-11-08T12:02:40+08:00",
+  "created_at": "2026-11-08T12:02:40+08:00",
+  "updated_at": "2026-11-08T12:02:40+08:00"
+}

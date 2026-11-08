@@ -1,7 +1,7 @@
 {
   "type": "chore",
   "title": "/提问 决策事项依旧不按照强制流程走？",
-  "stage": "queued-analysis",
+  "stage": "done",
   "source": {
     "kind": "utterance",
     "key": "fdb096895a357553c37b9fdba407942ff2dec4feab4bda8ef637cc45c242002b",
@@ -10,7 +10,7 @@
   },
   "schema": 1,
   "id": "T-20261108111846",
-  "status": "active",
+  "status": "done",
   "parent": null,
   "owner": "",
   "scope": {
@@ -20,9 +20,9 @@
   "acceptance": [],
   "checkpoints": [],
   "commits": [],
-  "notes": "",
+  "notes": "已答（决策模块会话）：决策台账的「形状」已强制——lib/core.mjs 的 addDecision/answerDecision 校验 kind/options/recommendation/answer choice/终态/blocks/affects；「必须在对话里先建档」没有结构强制，且聊天里直接问无法用结构信号判定。本会话把该引导写进每轮提醒 C 段（0e71a05），并给出可强制的候选：对 ask_user_question 带 options 的调用加闸（D-20261108-03 待用户裁决）。证据：实测 ask 少选项→invalid、recommendation 不在选项→invalid。",
   "created_at": "2026-11-08T11:18:46+08:00",
-  "updated_at": "2026-11-08T11:18:46+08:00",
-  "done_at": null,
+  "updated_at": "2026-11-08T12:02:52+08:00",
+  "done_at": "2026-11-08T12:02:52+08:00",
   "archived_at": null
 }
