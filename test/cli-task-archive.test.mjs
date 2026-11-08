@@ -11,7 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { addTask as addTaskCore, initProject, loadContract } from '../lib/core.mjs'
+import { addTask as addTaskCore, endHeartbeat, initProject, loadContract, startHeartbeat } from '../lib/core.mjs'
 
 /** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
 function addTask(root, contract, input = {}, options) {
@@ -291,4 +291,39 @@ test('flow init 种入的 precommit 保留原两步并追加 tasks-archive（arc
   const contract = readJson(path.join(root, '.agents', 'flow', 'flow.json'))
   assert.ok(Number.isInteger(contract.tasks.archiveAfterDays), JSON.stringify(contract.tasks))
   assert.ok(contract.tasks.archiveAfterDays >= 0)
+})
+
+
+// --------------------------------------- 会话归属 owner（D-20261108-05 extend-owner）
+
+test('task update --owner：none 释放为未指定；活跃会话的任务不可被 CLI 改写', () => {
+  const { root, contract } = initRoot('owner-cli')
+  const live = addTask(root, contract, { title: '活跃会话任务', owner: 'live-session' })
+  const ended = addTask(root, contract, { title: '已结束会话任务', owner: 'ended-session' })
+  const free = addTask(root, contract, { title: '可领取任务' })
+
+  startHeartbeat(root, contract, { session: 'live-session', goal: '还在工作', createTask: false })
+  startHeartbeat(root, contract, { session: 'ended-session', goal: '已结束', createTask: false })
+  endHeartbeat(root, contract, { session: 'ended-session', status: 'done', note: '会话结束' })
+
+  // 未指定 → 领取到新会话
+  let result = runCli(root, ['task', 'update', free.id, '--owner', 'my-session', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.json.data.owner, 'my-session')
+
+  // 释放回未指定
+  result = runCli(root, ['task', 'update', free.id, '--owner', 'none', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.json.data.owner, '')
+
+  // 已结束会话的 owner 可被释放/接管
+  result = runCli(root, ['task', 'update', ended.id, '--owner', 'none', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.json.data.owner, '')
+
+  // 活跃会话的任务：CLI 不能释放/改写
+  result = runCli(root, ['task', 'update', live.id, '--owner', 'none', '--json'])
+  assert.notEqual(result.code, 0, 'a live session\'s task must not be released by the CLI')
+  assert.match(`${result.stdout}\n${result.stderr}`, /owned by active session/)
+  assert.equal(readJson(taskFile(root, live.id)).owner, 'live-session', 'the live owner is untouched')
 })
