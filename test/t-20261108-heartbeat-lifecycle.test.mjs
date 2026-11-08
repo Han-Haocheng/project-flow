@@ -292,13 +292,14 @@ test('⑥ 心跳文件损坏 → dispose 不抛、不 warn、不改写坏文件'
 
 // --------------------------------------- ⑦ 注册与 capture 开关无关
 
-test('⑦ dispose 钩子与 capture 开关无关：capture:false 时仍注册（否则回滚形态漏成幽灵）', () => {
+test('⑦ 开与关的钩子都与 capture 开关无关：capture:false 时仍注册（否则回滚形态漏成幽灵/死路）', () => {
   const { root } = freshProject('flag-off')
   const onHarness = makeHarness(root, {})
   assert.equal(onHarness.handler('agent/disposed').length, 1, '默认配置必须注册 dispose 钩子')
 
   const offHarness = makeHarness(root, { capture: false })
-  assert.equal(offHarness.handler('agent/created').length, 0, 'capture:false 不注册 created（既有行为）')
+  assert.equal(offHarness.handler('agent/created').length, 1,
+    'capture:false 仍注册 created——心跳生命周期不归 capture 管（捕获/权限职责在钩子内部按开关停用）')
   assert.equal(offHarness.handler('agent/disposed').length, 1,
     'capture:false 也必须关闭已存在的心跳——否则文件从未关闭，回滚形态直接漏成幽灵')
 })
@@ -410,4 +411,88 @@ test('⑬ CLI 的 heartbeat start/end 仍是人的逃生口（真实子进程，
     })(),
     ['update', 'list', 'status'],
   )
+})
+
+// ================================== task-81 ③：创建必须无条件（空台账 / capture 关闭）
+//
+// 判据：会话面收回 start 之后，「跳过一次创建」等于死路——写门禁拒绝编辑，
+// 而 update 对缺失记录抛 not-found，提醒给出的出路根本不存在。所以创建与关闭
+// 一样必须无条件、与 capture 无关；空栈用占位 goal + task:null，绝不凭空造任务。
+
+/** Placeholder goal when the ledger has no unfinished task (must match index.js). */
+const EMPTY_STACK_GOAL = '（台账暂无未完成任务）'
+
+test('⑭ 空台账：agent/created 也开心跳（占位 goal + task:null），不建任务，update 可用', async () => {
+  const { root } = freshProject('empty-stack')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-t81-empty')
+  assert.equal(listTasks(root).length, 0, '夹具前提：台账真的是空的')
+
+  await openThrougCreated(harness, agent)
+
+  const file = heartbeatFile(root, 'session-t81-empty')
+  assert.equal(fs.existsSync(file), true, '空台账也必须由插件开心跳——否则会话没有任何恢复路径')
+  const record = readBeat(root, 'session-t81-empty')
+  assert.equal(record.status, 'working')
+  assert.equal(record.task, null, '空栈不得凭空指向一条任务')
+  assert.equal(record.goal, EMPTY_STACK_GOAL)
+  assert.equal(listTasks(root).length, 0, '开心跳不得顺手造一条任务')
+  assert.equal(harness.warns.some((line) => String(line).includes('auto-start skipped')), false,
+    '空栈不再是「跳过」——它现在是正常路径')
+
+  // 死路的另一半：会话唯一的写动作必须真的可用（而不是 not-found）。
+  const tool = harness.tools.get('flow_heartbeat')
+  const updated = await tool.execute({ action: 'update', last_action: '空台账也能登记' }, { agent })
+  assert.equal(updated.heartbeat.last_action, '空台账也能登记')
+  assert.equal(updated.heartbeat.task, null, 'update 不得顺手补一条任务')
+  assert.equal(readBeat(root, 'session-t81-empty').last_action, '空台账也能登记', '必须真的落盘')
+})
+
+test('⑮ capture:false：心跳仍自动开、仍自动关（与 capture 无关），捕获职责仍全停', async () => {
+  const { root } = freshProject('lifecycle-nocap')
+  const harness = makeHarness(root, { capture: false })
+  const agent = harness.addAgent('session-t81-nocap')
+
+  await openThrougCreated(harness, agent)
+  const file = heartbeatFile(root, 'session-t81-nocap')
+  assert.equal(fs.existsSync(file), true, 'capture:false 不得连心跳生命周期一起停掉')
+  const record = readBeat(root, 'session-t81-nocap')
+  assert.equal(record.status, 'working')
+  assert.equal(record.task, null)
+  assert.equal(listTasks(root).length, 0, 'capture:false 仍然不捕获任何任务')
+
+  const disposed = eventOf(harness, 'agent/disposed')
+  disposed(agent)
+  const closed = readBeat(root, 'session-t81-nocap')
+  assert.equal(closed.status, 'done', '开与关必须对称（关的那半组已由 a5ee68e 无条件化）')
+  assert.match(String(closed.last_action), /会话结束（插件自动关闭）/)
+})
+
+test('⑯ 有栈顶：goal/task/claims 仍取栈顶（无条件化不改变正常路径）', async () => {
+  const { root, contract } = freshProject('stack-top')
+  const task = addTask(root, contract, { type: 'feat', title: '栈顶：无条件创建', scope: { allow: ['index.js'] } })
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-t81-stack')
+  await openThrougCreated(harness, agent)
+
+  const record = readBeat(root, 'session-t81-stack')
+  assert.equal(record.goal, '栈顶：无条件创建')
+  assert.equal(record.task, task.id, 'task 必须来自栈顶')
+  assert.deepEqual(record.claims, ['index.js'])
+  assert.equal(listTasks(root).length, 1, '有栈顶时不得多造任务')
+})
+
+test('⑰ 重复 agent/created（resume/clear）：不重复 start，turn 不涨、stats 不变', async () => {
+  const { root } = freshProject('resume')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-t81-resume')
+  await openThrougCreated(harness, agent)
+  const first = readBeat(root, 'session-t81-resume')
+  assert.equal(first.turn, 1)
+
+  await openThrougCreated(harness, agent)
+  const second = readBeat(root, 'session-t81-resume')
+  assert.equal(second.turn, 1, '重复 created 不得把 turn 当成又一次 start')
+  assert.equal(second.stats.turns, 1)
+  assert.equal(second.started_at, first.started_at, 'started_at 不得被重复 created 改写')
 })

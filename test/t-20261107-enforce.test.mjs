@@ -377,11 +377,12 @@ test('restrict（plugin）：主会话隐藏全部团队工具，未知名字仍
 
 // ------------------------------------------- 12 capture:false 的 restrict 兜底
 
-test('capture:false 时 created 钩子不注册，但 pre-step 仍对主会话做一次 restrict', async () => {
+test('capture:false 时 created 钩子只留心跳职责，pre-step 仍对主会话做一次 restrict', async () => {
   const { root } = freshProject('fallback')
   const harness = makeHarness(root, { capture: false })
   const main = harness.addAgent('session-main')
-  assert.equal(harness.handler('agent/created').length, 0, 'capture:false keeps the created hook unregistered')
+  assert.equal(harness.handler('agent/created').length, 1,
+    'the created hook stays registered for the heartbeat lifecycle, but its capture/enforce duties stay inert')
   const listener = harness.handler('agent/pre-step')[0]
   assert.ok(listener, 'the reminder pre-step hook must still exist')
   const payload = { agent: main, messages: [], turn: 1, step: 1, signal: { aborted: false } }

@@ -2,8 +2,9 @@
 //
 // 关键路径纪律：`agent/pre-step` 只做内存记录（过滤 → 集合差 → 队列），
 // `agent/turn-stopping`（serial，宿主 await）才落盘；`agent/created` 从栈顶任务
-// 自动开心跳（无栈顶绝不开）。三条排除规则各有一条独立用例——综合用例无法说明
-// 是哪条规则失效，而三条里的任何一条失效都会让插件自己给自己造任务。
+// 自动开心跳（task-81 ③ 起空栈也开：占位 goal + task:null，绝不凭空造任务）。
+// 三条排除规则各有一条独立用例——综合用例无法说明是哪条规则失效，而三条里的
+// 任何一条失效都会让插件自己给自己造任务。
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -347,30 +348,41 @@ test('状态块：flow_status 与 flow_heartbeat update 都带 stack/counts/team
 
 // ------------------------------------------------- 7 回滚开关 / 心跳自动开
 
-test('开关与心跳：capture:false 全停（回到 P0）；空台账绝不开空壳心跳；有栈顶才开', async () => {
-  // 7a capture:false —— pre-step/turn-stopping 不建任务，agent/created 不开心跳。
+test('开关与心跳：capture:false 只停捕获不停心跳；空台账也由插件开心跳（占位 goal、不建任务）；有栈顶取栈顶', async () => {
+  // 7a capture:false —— pre-step/turn-stopping 不建任务；心跳生命周期与开关无关（task-81 ③）。
   const off = freshProject('switch-off')
   const offHarness = makeHarness(off.root, { capture: false })
   const offAgent = offHarness.addAgent('session-capture-off')
-  // 放一条未完成任务在栈上：若自动开心跳未被开关关掉，它就会开出来。
-  addTask(off.root, off.contract, { type: 'feat', title: '栈顶任务', scope: { allow: ['lib/capture.mjs'] } })
+  // 放一条未完成任务在栈上：心跳应指向它，但捕获仍不得建任何新任务。
+  const offTask = addTask(off.root, off.contract, { type: 'feat', title: '栈顶任务', scope: { allow: ['lib/capture.mjs'] } })
+  await agentCreated(offHarness, offAgent)
   await preStep(offHarness, offAgent, [userMessage('开关关闭时不该建任务', recentStamp(-500))])
   await turnStopping(offHarness, offAgent)
-  assert.equal(offHarness.handler('agent/created').length, 0, 'capture:false must not register the created hook at all')
+  assert.equal(offHarness.handler('agent/created').length, 1, 'created 钩子仍在（心跳职责），只停捕获/权限职责')
   assert.equal(tasksOf(off.root, off.contract).length, 1, 'capture:false must not create tasks')
-  assert.equal(fs.existsSync(heartbeatFile(off.root, offAgent.id)), false, 'capture:false must not auto-start a heartbeat')
+  const offFile = heartbeatFile(off.root, offAgent.id)
+  assert.equal(fs.existsSync(offFile), true, 'capture:false must still auto-start the heartbeat (lifecycle is unconditional)')
+  const offBeat = JSON.parse(fs.readFileSync(offFile, 'utf8'))
+  assert.equal(offBeat.status, 'working')
+  assert.equal(offBeat.task, offTask.id, 'a stack top exists, so the heartbeat points at it')
   const offStatus = await flowStatus(offHarness, offAgent, off.root)
   assert.equal(Object.hasOwn(offStatus, 'stack'), false, 'capture:false keeps the P0 flow_status shape')
 
-  // 7b capture 开 + 空台账 —— 取不到栈顶，绝不开心跳，只 warn 一行。
+  // 7b capture 开 + 空台账 —— 不是死路：插件开一条占位心跳，绝不造任务。
   const empty = freshProject('switch-empty')
   const emptyHarness = makeHarness(empty.root)
   const emptyAgent = emptyHarness.addAgent('session-capture-empty')
   await agentCreated(emptyHarness, emptyAgent)
-  assert.equal(fs.existsSync(heartbeatFile(empty.root, emptyAgent.id)), false, 'an empty stack must never open an empty heartbeat')
-  assert.ok(
+  const emptyFile = heartbeatFile(empty.root, emptyAgent.id)
+  assert.equal(fs.existsSync(emptyFile), true, 'an empty stack must still open a heartbeat (otherwise the session is stuck)')
+  const emptyBeat = JSON.parse(fs.readFileSync(emptyFile, 'utf8'))
+  assert.equal(emptyBeat.task, null, 'the placeholder heartbeat must not invent a task')
+  assert.equal(emptyBeat.goal, '（台账暂无未完成任务）')
+  assert.equal(tasksOf(empty.root, empty.contract).length, 0, 'opening a heartbeat must not create a task')
+  assert.equal(
     emptyHarness.warns.some((line) => line.includes('auto-start skipped')),
-    `expected one auto-start-skipped warning, got ${JSON.stringify(emptyHarness.warns)}`,
+    false,
+    `empty stack is no longer a "skip", got ${JSON.stringify(emptyHarness.warns)}`,
   )
 
   // 7c capture 开 + 有栈顶 —— goal/task/claims 全部来自栈顶，不是空壳。

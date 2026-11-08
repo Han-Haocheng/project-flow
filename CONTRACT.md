@@ -35,6 +35,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
 | `bin/flow.mjs` | CLI：只做参数解析与输出，校验/加锁/原子写全部在 core | 人、脚本、门禁 |
 | `lib/core.mjs` | **唯一写者**：契约、记录 CRUD、门禁执行、心跳、决策 | 工具层、CLI、快照 |
+| `lib/source-scan.mjs` | 零依赖源码扫描器（叶子）：注释剥离与顶层声明（JS/TS/JSX、Python），产出 `declarations` 供模块归属推导；**不 import 任何 lib 模块** | （暂无人依赖；描述台账接入后由模型层使用） |
 | `lib/lock.mjs` | 写锁与 CAS 接管（30 秒过期、`takeover-claim`） | core |
 | `lib/atomic.mjs` | 原子写（临时文件 + fsync + 改名 + 目录 fsync + 重试） | core、lock |
 | `lib/paths.mjs` | 路径 containment（拒绝绝对路径、`..` 逃逸、真实路径越界） | core |
@@ -1112,9 +1113,9 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|
 list|get|delete`、`subagent`、`subagent_fork`（宿主没有的名字先过滤，`restrict` 对未知名字会抛；
-子代理 scope 不加限制）。`capture:false` 时 `agent/created` 钩子不注册，改由 `agent/pre-step`
-对同一会话做一次 per-agent restrict——这样插件挂载前就已存在的会话、以及关闭 capture 的项目
-也被覆盖。
+子代理 scope 不加限制）。`capture:false` 时该钩子上的**捕获/权限职责**不执行（钩子本身仍注册，
+留给心跳生命周期，见 §9.2），restrict 改由 `agent/pre-step` 对同一会话做一次 per-agent
+restrict——这样插件挂载前就已存在的会话、以及关闭 capture 的项目也被覆盖。
 
 **拦截（`tools.guard`）**：`restrict` 只隐藏、不拦截；绕过可见面的 PTC / 子调度仍会走到 guard。
 规则（拒绝文案必须让下一步可执行）：
@@ -1803,12 +1804,15 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 心跳是**主会话之间**的协作面：同一项目的多个主会话（不同窗口、不同工作树）靠它登记
 goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）**没有心跳**。
 
-- **生命周期由插件持有**：`agent/created` 自动开（栈顶任务作 goal，空栈则 warn 不建），
+- **生命周期由插件持有**：`agent/created` 自动开（栈顶任务作 goal/task/claims），
   `agent/disposed` 自动关（`status: done` + `ended_at` + 「会话结束（插件自动关闭）」）。
+  **开与关都与 `capture` 开关无关**（对称）：那个开关只停「捕获话」，不停台账维护。
+  **空栈也开**：goal 写占位 `（台账暂无未完成任务）`、`task: null`、**不凭空造任务**
+  （`createTask: false`）；第一条任务被捕获后由 `agent/turn-stopping` 把心跳改指向它。
+  判据：会话面的 `start` 收回之后，**跳过一次创建就没有恢复路径**——写门禁拒绝编辑，
+  而 `update` 对缺失记录抛 `not-found`，提醒给出的出路等于不存在；所以创建必须无条件。
   关闭是**幂等且全静默**的：心跳不存在 / 已关闭 / 根解析不出来 / 记录损坏 → 直接返回，
-  **不抛、不 warn**（dispose 走在宿主退出路径上，异常和噪音都会污染关闭流程），并且它
-  **与 `capture` 开关无关**——否则关掉 capture 的项目会把已经开着的心跳漏成幽灵
-  （`live` 状态豁免 6 h 陈旧规则，永不消失）。
+  **不抛、不 warn**（dispose 走在宿主退出路径上，异常和噪音都会污染关闭流程）。
 - **CLI `flow heartbeat start/end` 是人的逃生口**：历史会话没被自动开过、或自动关掉后要补一条，
   由人显式执行；插件只在它持有的事件上开合，不做定时恢复，所以人需要这条手动通道。
   这条通道**不是会话能力**——判据是：创建/关闭是**生命周期事实**（只有插件知道它何时发生），
