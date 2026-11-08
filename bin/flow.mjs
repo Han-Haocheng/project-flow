@@ -2450,6 +2450,14 @@ async function cmdDecision(ctx, sub) {
       kind,
       rationale: requireString(flags, 'rationale', 'flow decision ask 需要 --rationale'),
     }
+    // kind 与 --option 的组合语义在这里拒绝，不静默丢弃：approval 固定
+    // approve|reject、input 无选项，core 对这两种 kind 带 options 也是 invalid。
+    if (kind !== 'choice' && ctx.decisionOptions.length > 0) {
+      throw new CliError(
+        'usage',
+        `decision ask --kind ${kind} 不支持 --option：approval 固定 approve|reject，input 不接受选项；需要自定义选项请用 --kind choice`,
+      )
+    }
     if (kind === 'choice') {
       // 选项数量由 core 校验（invalid → 退出码 2），CLI 只做格式解析。
       input.options = ctx.decisionOptions.map(parseDecisionOption)
