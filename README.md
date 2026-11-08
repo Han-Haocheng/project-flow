@@ -201,9 +201,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
   CLI 与 agent 工具。
 - **单一写者**：同一个 `.agents/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
-- **描述台账可提交**：`.agents/description/` 与其它台账一样是**真相源**（语义要评审、要回溯），
-  随 `.agents/flow/` 一起提交；只有 `.lock` 与 `*.tmp-*` 是临时文件（见 `CONTRACT.md` §8）。
-  `description.render` 指向的生成文档同样可提交，但它由 `flow desc render` 生成、**不要手改**
+- **台账只留本地（2026-11-08）**：`.agents/` 整目录不入 git、不同步远程——描述台账、任务、决策、
+  心跳、工作树都是本机真相源（`.gitignore` 一条 `.agents/` 覆盖）。`description.render` 指向的
+  生成文档（`docs/project-description.md`）仍入库，由 `flow desc render` 生成、**不要手改**
   （`check description` 会比对出 `render-stale`）。
 - **任务自动归档**：`precommit` 里的 `flow task archive` 步把 `tasks.archiveAfterDays`
   （默认 **7** 天；`0` 关闭）**已满** N 天（按 `updated_at` 计，边界含端点）的任务改成

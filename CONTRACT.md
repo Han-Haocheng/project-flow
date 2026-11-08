@@ -1980,10 +1980,13 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 
 ## 8 与 git 的关系
 
-- `.agents/flow/` 是**真相源**，可以也建议提交进项目仓库；它不再是“git trailer 的投影”。
+- `.agents/` 下的全部内容（契约、任务/决策/门禁/实验/描述台账、心跳、临时目录、会话工作树）是
+  **本地真相源，不入 git、不同步远程**（2026-11-08 核心约定）：台账随会话与机器变化，入库只会
+  把噪音和私有上下文带进仓库。`.gitignore` 用一条 `.agents/` 覆盖整目录。
+- 生成文档 `docs/project-description.md` 仍可入库：它由 `flow desc render` 生成、**不要手改**。
 - git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
-- 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件，
-  不应提交（建议 `.gitignore` 加 `.agents/flow/.lock`、`*.tmp-*`、`.agents/flow/.lock.takeover-*`）。
+- 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件；整目录忽略
+  已覆盖它们，`.gitignore` 仍保留 `*.tmp-*` 兜底。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。
@@ -2007,9 +2010,9 @@ worktree 时，面板读主工作区的 `.agents/` 台账，payload 带 `root`�
 
 归一的判据只看「请求 root 是不是 linked worktree 根」（root 下 `.git` 是文件，且
 `git worktree list --porcelain` 的第一条与它不同），**与 root 自己有没有 store 无关**：台账
-（`.agents/`）是入库的，所以每个 linked worktree 检出都自带一份 store 副本；把「有副本」当成
-不归一的短路会让每个 worktree 会话读自己的分支私账（实测同一面板 tasks 96 vs 主台账 93），而
-心跳来自主工作区——一个面板混两个台账。归一只在**主工作区确实有 store** 时发生；主工作区没有
+（`.agents/`）自 2026-11-08 起**不入 git**，新检出不再带 store 副本；但存量 linked worktree 里
+可能残留迁移前的副本。把「有副本」当成不归一的短路会让会话读自己的分支私账（实测同一面板
+tasks 96 vs 主台账 93），而心跳来自主工作区——一个面板混两个台账。归一只在**主工作区确实有 store** 时发生；主工作区没有
 store（或 git 答不出来）时保持请求 root 自己的作用域，与心跳根的降级规则同向。
 
 没有 store 的工作区返回 `not-initialized` 空态（`ok:false`），不读取其它项目，也不再有
@@ -2017,7 +2020,7 @@ store（或 git 答不出来）时保持请求 root 自己的作用域，与心�
 同样是 **HTTP 200 + `ok:false` + 稳定错误码**，不返回半成品或旧数据（见 §9.1.1）。
 面板的**写**端点同样以台账根为准：门禁开关 POST 的 body 是
 `{root: <payload.ledgerRoot>, id, enabled}`（旧宿主 payload 没有 `ledgerRoot` 时回退请求 root）；
-否则 worktree 会话的开关会改写该工作树入库的私有副本，主台账不变、下一次轮询又「弹回」。
+否则 worktree 会话的开关会改写该工作树里残留的私有副本，主台账不变、下一次轮询又「弹回」。
 `init` 仍用请求 root——未初始化时不存在可归一的台账根。
 
 心跳行在记录带可选 `branch`/`worktree`（§3.5）时**原样透传**这两个字段；旧记录不产生该键，

@@ -501,7 +501,14 @@ test('原子写：坏文件仍会 warning，成功写入后锁与 tmp 都不残�
 test('.gitignore 覆盖锁与内部临时文件', () => {
   const text = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8')
   const lines = text.split('\n').map((line) => line.trim())
-  for (const expected of ['.agents/flow/.lock', '*.tmp-*', '.agents/flow/.lock.takeover-*']) {
-    assert.ok(lines.includes(expected), `.gitignore 缺少 ${expected}`)
+  // 2026-11-08 核心约定：整个 .agents/ 不入库——锁与 takeover 临时文件由目录级
+  // 规则覆盖；若将来收回目录级忽略，这里必须重新要求显式列出两条。
+  const coversAgents = lines.includes('.agents/') || lines.includes('.agents/*')
+  assert.ok(coversAgents, '.gitignore 缺少 .agents/ 目录级忽略')
+  assert.ok(lines.includes('*.tmp-*'), '.gitignore 缺少 *.tmp-*')
+  if (coversAgents === false) {
+    for (const expected of ['.agents/flow/.lock', '.agents/flow/.lock.takeover-*']) {
+      assert.ok(lines.includes(expected), `.gitignore 缺少 ${expected}`)
+    }
   }
 })
