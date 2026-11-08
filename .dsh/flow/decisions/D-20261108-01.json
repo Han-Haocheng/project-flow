@@ -25,16 +25,21 @@
   "schema": 1,
   "id": "D-20261108-01",
   "default": null,
-  "status": "open",
+  "status": "answered",
   "blocks": [],
   "affects": [],
   "supersedes": null,
-  "answer": null,
-  "answered_at": null,
+  "answer": {
+    "choice": "degrade",
+    "note": "用户：flow decision answer D-20261108-01 --choice degrade",
+    "at": "2026-11-08T10:47:58+08:00",
+    "by": "user"
+  },
+  "answered_at": "2026-11-08T10:47:58+08:00",
   "withdraw": null,
   "superseded_by": null,
   "fingerprint": "e27a1cb83d857147",
   "asked_at": "2026-11-08T01:11:22+08:00",
   "created_at": "2026-11-08T01:11:22+08:00",
-  "updated_at": "2026-11-08T01:11:22+08:00"
+  "updated_at": "2026-11-08T10:47:58+08:00"
 }
