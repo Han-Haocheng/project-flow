@@ -275,7 +275,8 @@ test('flow init 种入的 precommit 保留原两步并追加 tasks-archive（arc
   assert.ok(created.seededGates.includes('precommit'))
 
   const gate = readJson(path.join(root, '.dsh', 'flow', 'gates', 'precommit.json'))
-  assert.equal(gate.steps.length, 3, JSON.stringify(gate.steps))
+  // T-20261108 D3：描述漂移步再追加一条，前四步的顺序与语义都不动。
+  assert.equal(gate.steps.length, 4, JSON.stringify(gate.steps))
   assert.equal(gate.steps[0].id, 'whitespace')
   assert.equal(gate.steps[0].run, 'git diff --cached --check')
   assert.equal(gate.steps[1].id, 'decisions')
@@ -283,6 +284,9 @@ test('flow init 种入的 precommit 保留原两步并追加 tasks-archive（arc
   assert.equal(gate.steps[2].id, 'tasks-archive')
   assert.match(gate.steps[2].run, /task archive$/)
   assert.equal(gate.steps[2].expect, 'exit 0')
+  assert.equal(gate.steps[3].id, 'description')
+  assert.match(gate.steps[3].run, /check description$/)
+  assert.equal(gate.steps[3].expect, 'exit 0')
 
   const contract = readJson(path.join(root, '.dsh', 'flow', 'flow.json'))
   assert.ok(Number.isInteger(contract.tasks.archiveAfterDays), JSON.stringify(contract.tasks))

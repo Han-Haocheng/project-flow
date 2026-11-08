@@ -846,9 +846,12 @@ test('init 种子：precommit 第三步是 tasks-archive，契约带 archiveAfte
 
   const precommit = listGates(root, contract).find((gate) => gate.id === 'precommit')
   assert.ok(precommit, 'precommit 应被种子化')
-  assert.deepEqual(precommit.steps.map((step) => step.id), ['whitespace', 'decisions', 'tasks-archive'])
+  // 描述漂移步追加在末尾（T-20261108 D3）：前两步的索引与语义不变。
+  assert.deepEqual(precommit.steps.map((step) => step.id), ['whitespace', 'decisions', 'tasks-archive', 'description'])
   assert.match(precommit.steps[2].run, /task archive\s*$/)
   assert.equal(precommit.steps[2].expect, 'exit 0')
+  assert.match(precommit.steps[3].run, /check description\s*$/)
+  assert.equal(precommit.steps[3].expect, 'exit 0')
   assert.equal(precommit.enabled, true)
 })
 
@@ -2659,7 +2662,7 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   assert.match(byId['staged-files'].steps[0].run, /check staged --allow src/)
   assert.match(byId.release.steps[0].run, /check release-baseline --marker RELEASE/)
   assert.equal(byId.precommit.steps[0].run, 'git diff --cached --check')
-  assert.equal(byId.precommit.steps.length, 3, 'precommit：空白检查 → 决策门禁 → 任务归档')
+  assert.equal(byId.precommit.steps.length, 4, 'precommit：空白检查 → 决策门禁 → 任务归档 → 描述检查')
   assert.equal(byId.precommit.steps[1].id, 'decisions')
   assert.ok(byId.precommit.steps[1].run.includes(expectedBin), byId.precommit.steps[1].run)
   assert.match(byId.precommit.steps[1].run, /check decisions$/)
@@ -2668,6 +2671,10 @@ test('initProject 种子门禁：5 条默认清单、幂等、已有门禁不种
   assert.ok(byId.precommit.steps[2].run.includes(expectedBin), byId.precommit.steps[2].run)
   assert.match(byId.precommit.steps[2].run, /task archive$/)
   assert.equal(byId.precommit.steps[2].expect, 'exit 0')
+  assert.equal(byId.precommit.steps[3].id, 'description')
+  assert.ok(byId.precommit.steps[3].run.includes(expectedBin), byId.precommit.steps[3].run)
+  assert.match(byId.precommit.steps[3].run, /check description$/)
+  assert.equal(byId.precommit.steps[3].expect, 'exit 0')
   assert.equal(byId.tests.steps[0].run, 'node --test test/')
 
   // 幂等：再 init 一条都不加
@@ -3275,8 +3282,11 @@ test('B1 release 种子含 check experiments；readStoreState 实验 counts 六�
   initProject(root, { name: 'b1-seed' })
   const { contract } = loadContract(root)
   const release = listGates(root, contract).find((gate) => gate.id === 'release')
-  assert.deepEqual(release.steps.map((step) => step.id), ['baseline', 'experiments'])
+  assert.deepEqual(release.steps.map((step) => step.id), ['baseline', 'experiments', 'description-strict'])
   assert.match(release.steps[1].run, /check experiments/)
+  // 发布用 strict：undescribed-file 从 warning 升级成 failure。
+  assert.match(release.steps[2].run, /check description --strict$/)
+  assert.equal(release.steps[2].expect, 'exit 0')
   assert.equal(release.enabled, false, '只加步，不默认开启')
 
   addExperiment(root, contract, experimentInput({ title: 'c1' }))
