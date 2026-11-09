@@ -943,7 +943,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   fail：两个模块都声称拥有 `loadContract`，读者无法判断该看哪个。
   **build 自动兜底归属（2026-11-09）**：`flow desc build` 对账时，把「已经落在某个段里、却不在
   任何模块成员表」的顶层声明自动补进该段对应的模块——有段锚点按锚点区间（第一个锚点之前归
-  `top`），无锚点的单模块文件归唯一模块，模块表为空时按文件名 stem 建一个（与 `createRecord`
+  `top`），单模块文件（无论有没有装饰性锚点）归唯一模块，模块表为空时按文件名 stem 建一个（与 `createRecord`
   播种同形）。只追加、不删人工成员、不重排；手工拆成多模块的无锚点文件不动（归属不可推断）；
   目标模块不存在时不复活被删模块（留给 `unassigned-member` 报）。所以「新增声明」不再要求先
   手工 `flow desc set`——语义（文件/模块的 `semantics`）仍然要人写，归属不必。
@@ -2568,5 +2568,20 @@ H7/H8/H10/H11 新口径。
 - **配置（完整）**：`config.dispatch.enabled`（默认 `true`；`false` 连显式 dispatch 都关）、
   `config.dispatch.auto`（默认 `true`；`false` 只关阶段入口自动派工，保留显式 dispatch）、
   `config.dispatch.provider`（默认 `spawn`）。
-- **仍未做**：团队板自动挂载（`linkTask` 触发）、`TeamTaskView.status` ↔ 九阶段映射、
-  `actorMode`/`boardMode` 默认值翻到 `team`/`plugin`。在这些落地前，`single`/`lead` 默认值不变。
+- **团队板自动挂载（第二批，默认 off，`config.team.mount === true` 才开）**：计划 §16 的
+  「默认 off、dispatch 模式、建一次 + 终态一次」。
+  - 派工成功、插件走完 queued→working 后，`mountTaskOnBoard` 调 `agentTeams.createTask`
+    建一次板卡（`subject` = 任务标题 ≤200、`description` = notes 摘要 ≤16384、
+    `writeScopes` = `scope.allow`），再 `updateTask action:'claim'` 领取一次
+    （板卡 `pending → in_progress`，派工即开工），最后 `linkTask` 把
+    `{taskId, revision, syncedAt}` 写回台账 `team`。已有链接的任务不重复建卡。
+  - 台账任务到 `stage: done` 时 `completeBoardTask` 把板卡 `in_progress → completed` 一次；
+    已 completed 幂等返回 `already:true`，其它状态（pending/completed 之外的）不动。
+  - 状态映射是显式的、不做启发式：`queued-*`/working → `in_progress`，`done` → `completed`；
+    回退/重开不会自动 reopen 板卡（那要人判断）。
+  - 全程旁路：无 `agentTeams` 服务、调用方不是 Team 成员、建板/领取/完成失败都只回报
+    `{mounted:false|completed:false, reason}`，**绝不拖垮派工或阶段推进**；结果里
+    `dispatch.team` / `team` 给出结果。
+- **仍未做**：`actorMode`/`boardMode` 默认值翻到 `team`/`plugin`——翻 `boardMode` 之前必须
+  先开 `team.mount`，否则主会话的 `team_task_*` 记账面被藏起来而插件又没接管，团队板会冻住。
+  在那之前 `single`/`lead` 默认值保持不变。

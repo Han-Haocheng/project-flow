@@ -590,6 +590,23 @@ test('reconcileRecord：单模块文件自动补成员，手工拆分的多模�
   const untouched = reconcileRecord(split, scanned, { now: NOW })
   assert.equal(untouched.changed, false)
   assert.deepEqual(untouched.record.modules.map((module) => module.members), [['one'], ['two']])
+
+  // 单模块文件里出现「装饰性」段锚点（文件中间一行 `// ---- 标题`）：全文件仍只有一个
+  // 模块，新声明照样补给它，不能因为锚点被判成"归不到的段"。
+  const root2 = tempRoot({
+    'lib/deco.mjs': [
+      'export function first() { return 1 }',
+      '// ---------------------------------------- 第二部分',
+      'export function second() { return 2 }',
+      '',
+    ].join('\n'),
+  })
+  const scanned2 = scanSourceAt(root2, 'lib/deco.mjs')
+  const record2 = createRecord(scanned2, { now: NOW })
+  const pruned2 = { ...record2, modules: [{ ...record2.modules[0], members: ['first'] }] }
+  const repaired2 = reconcileRecord(pruned2, scanned2, { now: LATER })
+  assert.equal(repaired2.changed, true)
+  assert.deepEqual(repaired2.record.modules.map((module) => module.members), [['first', 'second']])
 })
 
 // ------------------------------------------------------------ 模块边

@@ -47,7 +47,7 @@ function fakeSubagents(fail = false) {
 }
 
 /** 最小宿主：tools 注册面 + workingDirectory + 可选 subagents。 */
-function makeHost(root, { subagents, config } = {}) {
+function makeHost(root, { subagents, team, config } = {}) {
   const registered = new Map()
   const tools = {
     register(definition) {
@@ -65,6 +65,7 @@ function makeHost(root, { subagents, config } = {}) {
     get(name) {
       if (name === 'tools') return tools
       if (name === 'subagents') return subagents
+      if (name === 'agentTeams') return team
       if (name === 'workingDirectory') return { get: () => root }
       return undefined
     },
@@ -246,4 +247,96 @@ test('阶段入口自动派工：queued-review 起 reviewer，派工成功才写
   assert.equal(result.dispatch.role, 'reviewer')
   assert.equal(result.task.stage, 'reviewing')
   assert.equal(result.task.checkpoints.length, 1)
+})
+
+// ------------------------------------------ P3b 第二批：团队板自动挂载（默认 off）
+
+function fakeTeam({ failCreate = false } = {}) {
+  const calls = { create: [], update: [] }
+  const rows = new Map()
+  let seq = 0
+  return {
+    calls,
+    rows,
+    listMembers: () => [{ id: 'm1', name: 'lead', role: 'lead', status: 'idle' }],
+    listTasks: () =>
+      [...rows.values()].map((row) => ({ ...row, subject: 'x', blockedBy: [], writeScopes: [], ownerName: 'lead' })),
+    async createTask(caller, request) {
+      calls.create.push({ caller, request })
+      if (failCreate) throw new Error('team create exploded')
+      const id = `task-${++seq}`
+      const row = { id, revision: 1, status: 'pending' }
+      rows.set(id, row)
+      return { ...row, subject: request.subject }
+    },
+    async updateTask(caller, request) {
+      calls.update.push({ caller, request })
+      const row = rows.get(request.taskId)
+      if (row === undefined) throw new Error('team task not found')
+      if (row.revision !== request.expectedRevision) throw new Error('stale revision')
+      if (request.action === 'claim') row.status = 'in_progress'
+      else if (request.action === 'complete') row.status = 'completed'
+      row.revision += 1
+      return { ...row }
+    },
+  }
+}
+
+test('团队板挂载：派工时建一次 + 领取一次，链接写回台账（config.team.mount=true）', async () => {
+  const { root, contract } = freshProject('team-mount')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '挂到团队板',
+    stage: 'created',
+    scope: { allow: ['lib/x.mjs'], deny: [] },
+  })
+  const subagents = fakeSubagents()
+  const team = fakeTeam()
+  const { tool, exec } = makeHost(root, { subagents, team, config: { team: { mount: true } } })
+  const result = await tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, exec)
+  assert.equal(team.calls.create.length, 1, '建且只建一次板卡')
+  assert.equal(team.calls.create[0].request.subject, '挂到团队板')
+  assert.deepEqual(team.calls.create[0].request.writeScopes, ['lib/x.mjs'])
+  assert.equal(team.calls.update.length, 1, '建后领取一次')
+  assert.equal(team.calls.update[0].request.action, 'claim')
+  assert.equal(result.dispatch.team.mounted, true)
+  assert.equal(result.dispatch.team.taskId, 'task-1')
+  assert.equal(result.task.team.taskId, 'task-1', '链接写回台账 team 字段')
+  assert.equal(result.task.team.revision, 2, 'claim 后的 revision 落账')
+})
+
+test('团队板挂载：默认 off 不碰服务；create 失败不拖垮派工', async () => {
+  const { root, contract } = freshProject('team-off')
+  const task = addTask(root, contract, { type: 'fix', title: '不挂板', stage: 'created' })
+  const off = makeHost(root, { subagents: fakeSubagents(), team: fakeTeam() })
+  const result = await off.tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, off.exec)
+  assert.equal(off.tool && result.task.stage, 'analyzing', '派工照常')
+  assert.equal(result.dispatch.team, undefined, '默认 off 不回报团队字段')
+
+  const { root: root2, contract: contract2 } = freshProject('team-fail')
+  const task2 = addTask(root2, contract2, { type: 'fix', title: '建板失败', stage: 'created' })
+  const failing = makeHost(root2, { subagents: fakeSubagents(), team: fakeTeam({ failCreate: true }), config: { team: { mount: true } } })
+  const failed = await failing.tool.execute({ action: 'update', id: task2.id, stage: 'queued-analysis', root: root2 }, failing.exec)
+  assert.equal(failed.task.stage, 'analyzing', '建板失败不影响派工与阶段推进')
+  assert.equal(failed.dispatch.team.mounted, false)
+  assert.equal(failed.dispatch.team.reason, 'create-failed')
+  assert.equal(getTask(root2, contract2, task2.id).team, undefined, '失败时不写链接')
+})
+
+test('团队板终态同步：任务到 done 时 complete 一次，未挂载/非 in_progress 不动', async () => {
+  const { root, contract } = freshProject('team-complete')
+  const task = addTask(root, contract, { type: 'docs', title: '完成后结板', stage: 'created' })
+  const team = fakeTeam()
+  const { tool, exec } = makeHost(root, { subagents: fakeSubagents(), team, config: { team: { mount: true } } })
+  await tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, exec)
+  const done = await tool.execute({ action: 'update', id: task.id, stage: 'done', root }, exec)
+  const completes = team.calls.update.filter((call) => call.request.action === 'complete')
+  assert.equal(completes.length, 1, 'done 时 complete 一次')
+  assert.equal(done.team.completed, true)
+  assert.equal(team.rows.get('task-1').status, 'completed')
+  // 幂等：再来一次不会重复 complete（板上已是 completed）
+  const again = await tool.execute({ action: 'update', id: task.id, stage: 'done', root }, exec)
+  assert.equal(again.team.completed, true)
+  assert.equal(again.team.already, true)
+  assert.equal(team.calls.update.filter((call) => call.request.action === 'complete').length, 1)
 })
