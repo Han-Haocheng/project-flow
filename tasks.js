@@ -14,5 +14,5 @@ import { mountModule } from './lib/plugin/mount.mjs'
 import { buildDefinition } from './lib/tools/tasks.mjs'
 
 export function apply(ctx, config) {
-  mountModule(ctx, { label: 'tasks', buildDefinition })
+  mountModule(ctx, { label: 'tasks', buildDefinition, config })
 }

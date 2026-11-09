@@ -51,7 +51,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
 | `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |
-| `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；P0 只有数据，不捕获不派工 | core |
+| `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；只有数据，不捕获不派工（派工在 `lib/dispatch.mjs`） | core |
+| `lib/dispatch.mjs` | P3b 派工核心：`queued-* → 角色` 映射（analyzer/implementer/reviewer）、角色提示词、派工回执（写 `checkpoints`）、`subagents` 服务取用。**不 import core**（core 由工具层注入），纯函数可单测 | `lib/tools/tasks.mjs` |
 | `lib/capture.mjs` | P1 捕获流水线：`agent/pre-step` 只做内存的排除/集合差去重，`agent/turn-stopping` 才落盘（`source.key` 跨进程去重、创建即推进 `queued-analysis`）；同时产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入，宿主无 core 时捕获自然降级） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
@@ -2508,3 +2509,32 @@ H7/H8/H10/H11 新口径。
 - **面板**：任务卡底行 `团队 N 成员 · M 张共享任务 · K 条未关联`（`linked/missing/orphaned` 来自
   `reconcile`）；`available:false` 时**整行不渲染**（不是显示 0）。不新增任务行键（14 键契约不动）。
 
+
+### 10.1 P3b 派工（第一批：显式派工，2026-11-09）
+
+用户裁决 `D-20261109-01 = implement-p3b`：**主会话继续不得直接调度**（§5.4 规则 1 不放松），
+改为让插件派工。第一批只做「显式请求 → 插件起角色子代理」，不做队列自动扫描。
+
+- **入口**：`flow_task` 的 `dispatch` 动作（`{action:'dispatch', id}`），工具白名单
+  `TASK_ACTION_FIELDS.dispatch = ['id']`。普通任务 CRUD 不触发派工。
+- **阶段 → 角色**（真源 `lib/dispatch.mjs`，不抄阶段规则）：
+  `queued-analysis → analyzer`、`queued-implementation → implementer`、`queued-review → reviewer`；
+  其它阶段拒绝，文案点名「只有待分析/待实现/待审查可以派工」。子任务跟随父任务，不单独派。
+- **执行顺序**：先 `ctx.get('subagents').startActivation({provider, label, request, delivery:'parent'})`
+  拿 `childId`，再 `updateTask` 写回执并走 plugin 边到 working 阶段
+  （`analyzing`/`implementing`/`reviewing`，三条边都不在描述门阶段表里）。
+  `request = { cwd: 项目根, prompt: [{type:'text', text: 角色提示词}], parent: exec.agent }`。
+- **回执**：任务 `checkpoints` 追加
+  `{kind:'dispatch', role, childId, provider, from, to, at}`（`checkpoints` 是 core 系统键，
+  面板/CLI 直接可读，不另设登记处）。
+- **配置**：`config.dispatch.enabled`（默认 `true`；`false` 时 `dispatch` 动作报错并提示人工处理）、
+  `config.dispatch.provider`（默认 `spawn`，`subagent-spawn-in-process` 注册的名字）。
+- **失败语义**：宿主没有 `subagents` 服务 → `usage` 错误并要求人工处理；`startActivation` 抛错 →
+  `conflict` 错误 `派工失败（provider=…）`，**台账不动**（阶段/回执都不写）；子代理已起、台账写失败 →
+  错误文案带 `childId` 与补救步骤（`update` 补 stage）。
+- **提示词**：零上下文交接书——仓库根、任务 id/标题/类型/阶段、验收、写域/禁区、notes 摘要、
+  角色职责（分析出任务书/实现按任务书+跑门禁/审查五条清单）、纪律（`flow_task update` 推阶段、
+  不 push、阻塞写 notes 并 `send_message` 报告）。
+- **本批未做**（下一批）：队列自动扫描（capture 建卡后自动派）、团队板自动挂载（`linkTask` 触发）、
+  `TeamTaskView.status` ↔ 九阶段映射、`actorMode`/`boardMode` 默认值翻到 `team`/`plugin`。
+  在这些落地前，`single`/`lead` 默认值不变，主会话仍可用 `flow_task dispatch` 请求派工。

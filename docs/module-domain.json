@@ -88,7 +88,8 @@
         "lib/capture.mjs",
         "lib/team-sync.mjs",
         "lib/tools/tasks.mjs",
-        "lib/tools/subtasks.mjs"
+        "lib/tools/subtasks.mjs",
+        "lib/dispatch.mjs"
       ],
       "shared": [
         "lib/core.mjs",
@@ -130,7 +131,8 @@
         "test/t-20261107-stage-machine.test.mjs",
         "test/t-20261107-status-accuracy.test.mjs",
         "test/t-20261107-subtask.test.mjs",
-        "test/t-20261107-team-sync.test.mjs"
+        "test/t-20261107-team-sync.test.mjs",
+        "test/t-20261109-dispatch.test.mjs"
       ]
     },
     "decisions": {
