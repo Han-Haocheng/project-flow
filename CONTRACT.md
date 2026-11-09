@@ -941,6 +941,12 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   恰好属于一个模块**（`unassigned-member` 抓漏、`duplicate-member` 抓重）；已登记的成员必须仍在
   当前声明里（`unknown-member` 抓改名/删除——这正是「该更新语义了」的信号）。成员跨模块重复同样
   fail：两个模块都声称拥有 `loadContract`，读者无法判断该看哪个。
+  **build 自动兜底归属（2026-11-09）**：`flow desc build` 对账时，把「已经落在某个段里、却不在
+  任何模块成员表」的顶层声明自动补进该段对应的模块——有段锚点按锚点区间（第一个锚点之前归
+  `top`），无锚点的单模块文件归唯一模块，模块表为空时按文件名 stem 建一个（与 `createRecord`
+  播种同形）。只追加、不删人工成员、不重排；手工拆成多模块的无锚点文件不动（归属不可推断）；
+  目标模块不存在时不复活被删模块（留给 `unassigned-member` 报）。所以「新增声明」不再要求先
+  手工 `flow desc set`——语义（文件/模块的 `semantics`）仍然要人写，归属不必。
 - `moduleEdges` **由 build 推导，不手写**：模块 A 的任一成员在代码里引用模块 B 的成员 ⇒ `A→B`；
   `count` 是引用对数，`why` 取前 3 对 `"a → b"`；按 `(from,to)` 排序。手写边 100% 会过期，所以
   记录里的边必须等于现算（`stale-module-edges`）；指向未知模块或自环是 `invalid-edge`。

@@ -537,6 +537,61 @@ test('reconcileRecord：保留语义/模块、只同步结构、无变化不写�
   assertInvalid(() => reconcileRecord(patched, { path: 'lib/a.mjs', skipped: 'too-large' }, { now: LATER }), /跳过/)
 })
 
+test('reconcileRecord：新增声明按段锚点自动兜底归属（build 不再要求手工 desc set）', () => {
+  const root = tempRoot({
+    'lib/sec.mjs': [
+      '// ---- alpha',
+      'export function alphaOne() { return 1 }',
+      '// ---- beta',
+      'export function betaOne() { return 2 }',
+      '',
+    ].join('\n'),
+  })
+  const scanned = scanSourceAt(root, 'lib/sec.mjs')
+  const record = createRecord(scanned, { now: NOW })
+  // 模拟旧记录/合并后漂移：beta 段的新声明没进成员表（其余结构字段不变）。
+  const pruned = {
+    ...record,
+    modules: record.modules.map((module) =>
+      module.id === 'beta' ? { ...module, members: module.members.filter((name) => name !== 'betaOne') } : module,
+    ),
+  }
+  const repaired = reconcileRecord(pruned, scanned, { now: LATER })
+  assert.equal(repaired.changed, true, '成员归属变了也算变化（否则 build 不写盘）')
+  const beta = repaired.record.modules.find((module) => module.id === 'beta')
+  assert.deepEqual(beta.members, ['betaOne'], 'beta 段的声明应归 beta 模块')
+  assert.equal(beta.semantics, pruned.modules.find((module) => module.id === 'beta').semantics, '自动归属不动语义')
+  // 幂等：再对账一次没有变化。
+  assert.equal(reconcileRecord(repaired.record, scanned, { now: LATER }).changed, false)
+})
+
+test('reconcileRecord：单模块文件自动补成员，手工拆分的多模块文件不动', () => {
+  const root = tempRoot({
+    'lib/single.mjs': 'export function one() { return 1 }\nexport function two() { return 2 }\n',
+  })
+  const scanned = scanSourceAt(root, 'lib/single.mjs')
+  const record = createRecord(scanned, { now: NOW })
+  assert.deepEqual(record.modules[0].members, ['one', 'two'])
+
+  // 单模块：漏掉的声明按文件（无锚点）补回唯一模块。
+  const pruned = { ...record, modules: [{ ...record.modules[0], members: ['one'] }] }
+  const repaired = reconcileRecord(pruned, scanned, { now: LATER })
+  assert.equal(repaired.changed, true)
+  assert.deepEqual(repaired.record.modules[0].members, ['one', 'two'])
+
+  // 多模块（人工拆分、无锚点）：归属不可推断，build 不得挪动。
+  const split = {
+    ...record,
+    modules: [
+      { id: 'one', title: 'one', semantics: '模块 one 的语义描述。', members: ['one'] },
+      { id: 'two', title: 'two', semantics: '模块 two 的语义描述。', members: ['two'] },
+    ],
+  }
+  const untouched = reconcileRecord(split, scanned, { now: NOW })
+  assert.equal(untouched.changed, false)
+  assert.deepEqual(untouched.record.modules.map((module) => module.members), [['one'], ['two']])
+})
+
 // ------------------------------------------------------------ 模块边
 
 test('deriveModuleEdges：按 (from,to) 排序、count 去重、why 截断到 3、自环排除', () => {
