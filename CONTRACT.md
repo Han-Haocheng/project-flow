@@ -2534,10 +2534,10 @@ H7/H8/H10/H11 新口径。
   `reconcile`）；`available:false` 时**整行不渲染**（不是显示 0）。不新增任务行键（14 键契约不动）。
 
 
-### 10.1 P3b 派工（第一批：显式派工，2026-11-09）
+### 10.1 P3b 派工（2026-11-09）
 
 用户裁决 `D-20261109-01 = implement-p3b`：**主会话继续不得直接调度**（§5.4 规则 1 不放松），
-改为让插件派工。第一批只做「显式请求 → 插件起角色子代理」，不做队列自动扫描。
+改为让插件派工。第一批做「显式请求 → 插件起角色子代理」，第二批加「阶段入口自动派工」。
 
 - **入口**：`flow_task` 的 `dispatch` 动作（`{action:'dispatch', id}`），工具白名单
   `TASK_ACTION_FIELDS.dispatch = ['id']`。普通任务 CRUD 不触发派工。
@@ -2559,6 +2559,14 @@ H7/H8/H10/H11 新口径。
 - **提示词**：零上下文交接书——仓库根、任务 id/标题/类型/阶段、验收、写域/禁区、notes 摘要、
   角色职责（分析出任务书/实现按任务书+跑门禁/审查五条清单）、纪律（`flow_task update` 推阶段、
   不 push、阻塞写 notes 并 `send_message` 报告）。
-- **本批未做**（下一批）：队列自动扫描（capture 建卡后自动派）、团队板自动挂载（`linkTask` 触发）、
-  `TeamTaskView.status` ↔ 九阶段映射、`actorMode`/`boardMode` 默认值翻到 `team`/`plugin`。
-  在这些落地前，`single`/`lead` 默认值不变，主会话仍可用 `flow_task dispatch` 请求派工。
+- **第二批：阶段入口自动派工**（2026-11-09）：`flow_task update` 把任务推进到 `queued-*` 之后，
+  插件直接起该阶段的角色子代理（复用同一 `dispatchOnce`），并立刻走 plugin 边到 working 阶段；
+  结果里 `dispatch.auto: true`。触发条件刻意只有「经工具显式推进阶段」：捕获建卡走 core、不经过
+  这个工具，所以聊天消息不会触发派工——**只有会话把任务排进队列才派**，避免每句话生一个子代理。
+  自动派工失败不拖垮 update（台账已写成功）：结果带 `dispatch: {auto:true, ok:false, error}`，
+  阶段停在 queued，调用方可用显式 `dispatch` 重试。
+- **配置（完整）**：`config.dispatch.enabled`（默认 `true`；`false` 连显式 dispatch 都关）、
+  `config.dispatch.auto`（默认 `true`；`false` 只关阶段入口自动派工，保留显式 dispatch）、
+  `config.dispatch.provider`（默认 `spawn`）。
+- **仍未做**：团队板自动挂载（`linkTask` 触发）、`TeamTaskView.status` ↔ 九阶段映射、
+  `actorMode`/`boardMode` 默认值翻到 `team`/`plugin`。在这些落地前，`single`/`lead` 默认值不变。
