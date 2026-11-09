@@ -643,6 +643,8 @@ test('诊断 excludedBy：五类原因各自可取到（表驱动：sentinel/pre
   // 前三类由纯函数分类（消息本身决定）
   assert.equal(exclusionReasonOf('<flow-context>ctx</flow-context>'), 'sentinel')
   assert.equal(exclusionReasonOf('【project-flow】注入'), 'prefix')
+  // 后台任务完成通知不是用户请求（真实台账里 5 张这种噪声卡）：按前缀排除。
+  assert.equal(exclusionReasonOf('background job workflow-abc finished [status: completed]'), 'prefix')
   assert.equal(exclusionReasonOf('Team message from teammate: hi'), 'peer')
   assert.equal(exclusionReasonOf('普通用户消息'), null)
   assert.deepEqual([...PEER_MESSAGE_PREFIXES], ['Team message from '])
@@ -959,4 +961,41 @@ test('会话归属④：owner 可更新为未指定（none/null），领取只�
       }),
     /owned by active session/,
   )
+})
+
+test('消息卡收口：turn-stopping 捕获新卡时，自动完成过期且未领取的旧捕获卡', async () => {
+  const { root, contract } = freshProject('utterance-sweep')
+  const oldAt = new Date(Date.now() - 30 * 3_600_000).toISOString()
+  const old = addTask(root, contract, {
+    type: 'chore',
+    title: '30 小时前的消息卡',
+    stage: 'queued-analysis',
+    source: { kind: 'utterance', key: 'old-utterance-key', at: oldAt, text: '30 小时前的消息卡' },
+  })
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-utterance-sweep')
+  await preStep(harness, agent, [userMessage('新的一句话', recentStamp(-1000))])
+  await turnStopping(harness, agent)
+
+  const oldStored = getTask(root, contract, old.id)
+  assert.equal(oldStored.stage, 'done', '过期未领取的旧卡应被自动收口')
+  assert.match(String(oldStored.notes), /\[auto-close\]/)
+  const created = tasksOf(root, contract).filter((task) => task.stage === 'queued-analysis')
+  assert.equal(created.length, 1, '新捕获的卡留在待分析（本轮自己的卡不收）')
+})
+
+test('消息卡收口：config.tasks.autoSweepHours=0 关闭自动收口', async () => {
+  const { root, contract } = freshProject('utterance-sweep-off')
+  const oldAt = new Date(Date.now() - 30 * 3_600_000).toISOString()
+  const old = addTask(root, contract, {
+    type: 'chore',
+    title: '旧消息卡（关闭开关）',
+    stage: 'queued-analysis',
+    source: { kind: 'utterance', key: 'old-utterance-key-off', at: oldAt, text: '旧消息卡（关闭开关）' },
+  })
+  const harness = makeHarness(root, { tasks: { autoSweepHours: 0 } })
+  const agent = harness.addAgent('session-utterance-sweep-off')
+  await preStep(harness, agent, [userMessage('另一句话', recentStamp(-1000))])
+  await turnStopping(harness, agent)
+  assert.equal(getTask(root, contract, old.id).stage, 'queued-analysis', '关闭后不得动旧卡')
 })

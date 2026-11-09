@@ -64,6 +64,9 @@ const USAGE = `project-flow CLI（schema 2）
   task unlink <TASK-ID>                   # 解除挂载（team=null；同样零外部写入）
   task archive [--older-than N] [--dry-run]
           归档已完成的旧任务（阈值取 tasks.archiveAfterDays，默认 7，0=关闭；--dry-run 只预览不写盘）
+  task sweep [--older-than-hours N] [--dry-run]
+          消息卡收口：把「从没被领取」的捕获卡（stage=待分析、无 notes/commits/回执、未指定会话）
+          自动完成；默认 24 小时，--dry-run 只报告不写盘
   task normalize [--type-map <file.json>] [--dry-run]
           归一旧记录：goal 并入 title、按 map 补 type（--dry-run 只报告不改盘；不会猜 type）
   task rm <id> [--yes]
@@ -195,7 +198,7 @@ const VALUE_FLAGS = new Set([
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
-  'older-than',
+  'older-than', 'older-than-hours',
   // T-12 B2（schema2 七字段 / 分流 / 关联）
   'direction', 'primary-metric', 'guardrail', 'falsify', 'window-days', 'stop-loss',
   'learned', 'experiment', 'gate', 'flag', 'code', 'data',
@@ -248,6 +251,7 @@ export const SPEC = Object.freeze({
     add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
     update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
     archive: { flags: ['older-than', 'dry-run'] },
+    sweep: { flags: ['older-than-hours', 'dry-run'] },
     normalize: { flags: ['type-map', 'dry-run'] },
     link: { flags: ['id', 'team'] },
     unlink: { flags: ['id'] },
@@ -1291,7 +1295,7 @@ function readParentFlag(flags, core) {
 
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|normalize|link|unlink|rm>')
+  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|sweep|normalize|link|unlink|rm>')
   const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
@@ -1405,6 +1409,33 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
+  if (sub === 'sweep') {
+    const hours = readPositiveInteger(
+      flags,
+      'older-than-hours',
+      '--older-than-hours 需要正整数小时（例如 --older-than-hours 24）',
+    )
+    const dryRun = flags['dry-run'] === true
+    if (existsSync(path.join(ctx.root, '.agents', 'flow', 'flow.json')) === false) {
+      throw new CliError('usage', '未初始化（未找到 .agents/flow/flow.json）；先运行 flow init')
+    }
+    const result = await core.sweepUtteranceTasks(ctx.root, contract, {
+      ...(hours === undefined ? {} : { olderThanHours: hours }),
+      dryRun,
+    })
+    if (!ctx.json) {
+      const closed = Array.isArray(result.closed) ? result.closed : []
+      if (closed.length === 0) {
+        out(`没有需要收口的消息卡（阈值 ${result.olderThanHours} 小时）`)
+      } else {
+        out(`${dryRun ? '将收口' : '已收口'} ${closed.length} 张消息卡（阈值 ${result.olderThanHours} 小时）：`)
+        for (const row of closed) out(`  ${row.id}  ${row.ageHours}h  ${clip(row.title, 56)}`)
+        if (dryRun) out('（--dry-run：没有写盘）')
+      }
+    }
+    return result
+  }
+
   if (sub === 'normalize') {
     // 写盘通道与只读门禁（check tasks）分开：--dry-run 只报告，真跑在 core 写锁内迁移。
     return runTaskNormalize(ctx)
@@ -1435,7 +1466,7 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|normalize|rm）`)
+  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|sweep|normalize|link|unlink|rm）`)
 }
 
 // ---------------------------------------------------------------- flow desc

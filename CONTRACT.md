@@ -320,6 +320,14 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 }
 ```
 
+- **消息卡收口（2026-11-09，任务模块）**：`flow task sweep [--older-than-hours N]`（默认 24 小时，
+  `--dry-run` 只报告）把「只是某句话」的捕获卡收口——严格同时满足才动：`source.kind === 'utterance'`、
+  `stage === 'queued-analysis'`、`notes`/`commits`/`acceptance`/`checkpoints` 全空、不是子任务也没有
+  子任务、`owner === ''`（活会话的待办不动）、年龄超过阈值。收口 = `stage: 'done'`（status 派生 done，
+  写 `done_at`）+ `notes` 追加 `[auto-close] …` 说明；`source: 'internal'`，不走描述门（这不是语义变更
+  完成）。之后由 `tasks.archiveAfterDays` 的归档 sweep 接手。宿主在每次捕获落盘后自动跑一遍，
+  窗口由 `config.tasks.autoSweepHours` 控制（默认 24；`0`/`false` 关闭，非法值回落默认）。
+  另有结构性排除：`background job …` 开头的后台任务完成通知在捕获阶段就按 `prefix` 丢弃，不建卡。
 - **id 分配（T-08 / D-20261105-05 timestamp）**：新任务 id = `T-<YYYYMMDDHHMMSS>`
   （**本地时间 14 位**，如 `T-20261105212130`）。同一秒创建第二张起追加 `-NN`（两位，从
   `02` 起，例 `T-20261105212130-02`）；同秒上限 **99**，超出抛
@@ -1153,6 +1161,9 @@ flow task rm <id> [--yes]
 flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账）
 flow task unlink <TASK-ID>                   # 解除挂载（team=null）
 flow task archive [--older-than N] [--dry-run]
+flow task sweep [--older-than-hours N] [--dry-run]
+                 # 消息卡收口（见 §3.2）：把过期且从没被领取的捕获卡标完成；
+                 # 默认 24 小时，--dry-run 只报告不写盘
 flow task normalize [--type-map <file.json>] [--dry-run]
                  # 归一旧记录：goal 并入 title、按 map 补 type；--dry-run 只报告不改盘，
                  # 恒 exit 0（报告不是门禁）。写盘成功 → exit 0，残留见 data.ok:false。

@@ -134,6 +134,7 @@ import {
   heartbeatGuardReason,
   heartbeatRootOf,
   registerAgentCreated,
+  autoSweepHoursOf,
   registerAgentDisposed,
   registerDisciplineSection,
   registerHeartbeatKeepalive,
@@ -241,6 +242,8 @@ export function apply(ctx, config) {
     heartbeatGate: heartbeatGateEnabled(config),
     claims: claimsGateEnabled(config),
     backupReminder: backupReminderEnabled(config),
+    // 消息卡自动收口窗口（小时；0=关闭）：config.tasks.autoSweepHours
+    autoSweepHours: autoSweepHoursOf(config),
     capture: captureEnabled,
     enforce: enforceEnabled(config),
     // `single` today (one role); P3 flips the default to `team` once the plugin
@@ -310,7 +313,7 @@ export function apply(ctx, config) {
     warnMount(`turn reminder: registration failed: ${brief(error)}`, ctx)
   }
   try {
-    registerHeartbeatKeepalive(ctx, captureState)
+    registerHeartbeatKeepalive(ctx, captureState, settings)
   } catch (error) {
     warnMount(`heartbeat keepalive: registration failed: ${brief(error)}`, ctx)
   }

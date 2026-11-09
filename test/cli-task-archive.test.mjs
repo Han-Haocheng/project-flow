@@ -327,3 +327,55 @@ test('task update --owner：none 释放为未指定；活跃会话的任务不�
   assert.match(`${result.stdout}\n${result.stderr}`, /owned by active session/)
   assert.equal(readJson(taskFile(root, live.id)).owner, 'live-session', 'the live owner is untouched')
 })
+
+// ------------------------------------------------- 消息卡收口（2026-11-09）
+
+/** 一张「捕获卡」：`source.at` 决定年龄；其余字段与 capture 建卡同形。 */
+function seedUtterance(root, contract, { title, ageHours = 1, owner = '', extra = {} }) {
+  const at = new Date(Date.now() - ageHours * 3_600_000).toISOString()
+  return addTask(root, contract, {
+    title,
+    stage: 'queued-analysis',
+    owner,
+    source: { kind: 'utterance', key: `key-${title}-${ageHours}`, at, text: title },
+    ...extra,
+  })
+}
+
+test('task sweep --dry-run：只列「过期+未领取+无进展」的捕获卡，且不写盘', () => {
+  const { root, contract } = initRoot('sweep-dry')
+  const old = seedUtterance(root, contract, { title: '旧消息', ageHours: 30 })
+  const owned = seedUtterance(root, contract, { title: '别人的待办', ageHours: 30, owner: 'session-x' })
+  const noted = seedUtterance(root, contract, { title: '有进展', ageHours: 30, extra: { notes: '已经处理过' } })
+  const young = seedUtterance(root, contract, { title: '刚说的', ageHours: 2 })
+  const manual = addTask(root, contract, { title: '手写任务', stage: 'queued-analysis' })
+
+  const result = runCli(root, ['task', 'sweep', '--older-than-hours', '24', '--dry-run', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.equal(result.json.ok, true, result.stdout)
+  const closed = result.json.data.closed.map((row) => row.id)
+  assert.deepEqual(closed, [old.id], `只该收口 ${old.id}，实际 ${closed.join(',')}`)
+  assert.equal(result.json.data.dryRun, true)
+  assert.equal(readJson(taskFile(root, old.id)).stage, 'queued-analysis', '--dry-run 不写盘')
+  for (const id of [owned.id, noted.id, young.id, manual.id]) {
+    assert.equal(readJson(taskFile(root, id)).stage, 'queued-analysis', `${id} 不该被收口`)
+  }
+})
+
+test('task sweep：真跑把旧捕获卡标完成并留 auto-close 说明，其它卡不动', () => {
+  const { root, contract } = initRoot('sweep-run')
+  const old = seedUtterance(root, contract, { title: '旧消息', ageHours: 30 })
+  const fresh = seedUtterance(root, contract, { title: '刚说的', ageHours: 1 })
+
+  const result = runCli(root, ['task', 'sweep', '--older-than-hours', '24', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(result.json.data.closed.map((row) => row.id), [old.id])
+
+  const stored = readJson(taskFile(root, old.id))
+  assert.equal(stored.stage, 'done', '收口 = 阶段到 done（status 由 stage 派生）')
+  assert.equal(stored.status, 'done')
+  assert.match(stored.notes, /\[auto-close\]/)
+  assert.match(stored.notes, /24 小时/)
+  assert.match(stored.done_at, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(readJson(taskFile(root, fresh.id)).stage, 'queued-analysis', '年轻卡不动')
+})
