@@ -478,6 +478,27 @@ test('插件：工具成功结果附加 core warnings，失败时 logger.warn �
   assert.ok(listed.warnings.some((item) => item.startsWith('unreadable:')), JSON.stringify(listed.warnings))
   assert.deepEqual(listed.items, [])
 
+  // lossless JSON 回归：一条 T-09 之前的 done 记录（磁盘上没有 done_at /
+  // archived_at 两个键）曾让 flow_task list 整包被宿主拒绝 —— 读投影写出了
+  // own `undefined`，JSON.stringify 会丢键，宿主 snapshotJsonValue 判非法。
+  fs.writeFileSync(path.join(root, '.agents/tasks/T-20260101-09.json'), JSON.stringify({
+    schema: 1,
+    id: 'T-20260101-09',
+    title: '旧 done 记录',
+    status: 'done',
+    created_at: '2026-04-20T09:00:00+08:00',
+    updated_at: '2026-05-01T09:00:00+08:00',
+  }, null, 2))
+  const listedLegacy = await taskTool.execute({ action: 'list', root }, { agent: { session: { cwd: root } } })
+  const legacy = listedLegacy.items.find((item) => item.id === 'T-20260101-09')
+  assert.ok(legacy, '旧 done 记录应出现在 list 里')
+  assert.equal(legacy.archived_at, null, 'archived_at 投影为 null 而不是 own undefined')
+  assert.deepEqual(
+    Object.keys(legacy).filter((key) => legacy[key] === undefined),
+    [],
+    'flow_task list 的每条记录都不得带 own undefined 字段',
+  )
+
   let thrown = null
   try {
     await taskTool.execute({ action: 'add', type: 'feat', title: 'blocked', root }, { agent: { session: { cwd: root } } })

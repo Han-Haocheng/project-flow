@@ -3394,7 +3394,14 @@ test('T-09 旧记录回退：缺字段读 updated_at，且读路径不写盘（�
 
   const done = getTask(root, contract, 'T-20260101-01')
   assert.equal(done.done_at, doneStamp, '缺 done_at 回退 updated_at')
-  assert.equal(done.archived_at, undefined)
+  // 回归（flow_task list 失效）：投影必须是 lossless JSON。own `undefined` 会被
+  // JSON.stringify 丢掉，宿主 tool 层 snapshotJsonValue 直接判为非法整包拒绝。
+  assert.equal(done.archived_at, null, '旧 done 记录的 archived_at 投影为 null，不是 own undefined')
+  assert.deepEqual(
+    Object.keys(done).filter((key) => done[key] === undefined),
+    [],
+    '旧 done 记录不得带 own undefined 字段（CLI 与工具输出必须同形）',
+  )
   const archived = getTask(root, contract, 'T-20260101-02')
   assert.equal(archived.archived_at, archiveStamp, '缺 archived_at 回退 updated_at')
   assert.equal(archived.done_at, archiveStamp, '归档旧记录无法还原真实完成日，按 updated_at 近似')
