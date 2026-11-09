@@ -340,3 +340,18 @@ test('团队板终态同步：任务到 done 时 complete 一次，未挂载/非
   assert.equal(again.team.already, true)
   assert.equal(team.calls.update.filter((call) => call.request.action === 'complete').length, 1)
 })
+
+test('阶段入口自动派工：任务已停在 queued-analysis 时改 notes/owner 不再派第二个 worker', async () => {
+  const { root, contract } = freshProject('auto-retry')
+  const task = addTask(root, contract, { type: 'fix', title: '重试不派工', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, { subagents })
+  const notes = await tool.execute({ action: 'update', id: task.id, notes: '补一条备注', root }, exec)
+  assert.equal(subagents.calls.length, 0, '同一阶段的 notes 更新不得触发派工')
+  assert.equal(notes.dispatch, undefined)
+  assert.equal(notes.task.notes, '补一条备注')
+  // 显式 dispatch 仍然可用（人工重试入口）
+  const explicit = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(subagents.calls.length, 1)
+  assert.equal(explicit.task.stage, 'analyzing')
+})
