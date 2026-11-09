@@ -6,6 +6,8 @@ test/.tmp/
 # 整个 .agents/ 只留本地：台账（flow/tasks/decisions/gates/experiments/description）、
 # 心跳、临时目录与会话工作树都不入 git、不同步远程（2026-11-08 核心约定）。
 .agents/
+# 台账本地快照（flow backup 的输出；同样不入库）
+.agents-backups/
 # 原子写/接管中间产物：进程在任何阶段崩溃都不该把它们带进仓库
 *.tmp-*
 

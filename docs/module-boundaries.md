@@ -29,6 +29,7 @@
 | `experiments` | 实验树、七字段、分流 | `lib/tools/experiments.mjs` | `lib/core.mjs`（experiments）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.1） | 0 |
 | `description` | 文件图/模块图/语义/漂移 | `lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
 | `panel` | 只读快照投影、Web 面板、TUI 面板 | `lib/state-snapshot.mjs`、`client.js`、`tui-panel.js`、`locale/*` | `index.js`（state-read-isolation）、`CONTRACT.md`（c9） | 11 |
+| `backup` | 台账本地快照、`flow doctor` 完整性报告、过期快照提醒 | `lib/backup.mjs` | `bin/flow.mjs`（命令）、`lib/host/session.mjs`（挂载提醒）、`CONTRACT.md`（c8） | 1 |
 | `cli` | 参数面、命令分发、输出 | `bin/flow.mjs` | — | 4 |
 | `docs` | 契约正文、README、内嵌技能 | `CONTRACT.md`、`README.md`、`skills/` | — | 3 |
 

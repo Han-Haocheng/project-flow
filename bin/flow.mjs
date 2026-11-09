@@ -14,6 +14,7 @@ import process from 'node:process'
 import os from 'node:os'
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import * as zlib from 'node:zlib'
+import { createBackup, doctorReport } from '../lib/backup.mjs'
 
 // A closed downstream pipe (`flow status | head`) must end quietly, not throw.
 process.stdout.on('error', (error) => {
@@ -29,6 +30,8 @@ const USAGE = `project-flow CLI（schema 2）
 命令
   init      初始化 .agents/flow（--name X --force --no-gates）
   status    项目名、契约源、实验/任务/门禁/决策计数与最近记录
+  backup [--keep N]          给 .agents 台账拍本地快照（默认保留 5 份，存到 .agents-backups/）
+  doctor [--stale-hours N]   台账体检：契约/记录目录/git 忽略/快照新鲜度（error 时退出 1）
 
   exp list | show <id> | tree
   exp add [--id E-YYYYMMDD-NN] --title T --hypothesis H --direction TEXT --expected E
@@ -217,6 +220,8 @@ const REPEAT_FLAGS = new Set([
 export const SPEC = Object.freeze({
   init: Object.freeze({ flags: ['name', 'force', 'no-gates'] }),
   status: Object.freeze({ flags: [] }),
+  backup: Object.freeze({ flags: ['keep'] }),
+  doctor: Object.freeze({ flags: ['stale-hours'] }),
   exp: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
@@ -3194,6 +3199,64 @@ async function loadCore() {
   }
 }
 
+/** Human-readable byte size for the backup report. */
+function byteText(value) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let size = value
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit += 1
+  }
+  return `${unit === 0 ? String(size) : size.toFixed(1)} ${units[unit]}`
+}
+
+async function cmdBackup(ctx) {
+  const raw = ctx.flags['keep']
+  let keep
+  if (raw !== undefined) {
+    keep = Number.parseInt(String(raw), 10)
+    if (!Number.isInteger(keep) || keep < 1) throw new CliError('usage', '--keep 需要正整数')
+  }
+  let result
+  try {
+    result = createBackup(ctx.root, keep === undefined ? {} : { keep })
+  } catch (error) {
+    throw new CliError('io', error.message)
+  }
+  if (jsonMode === false) {
+    out(`已创建快照 ${result.name}（${result.files} 个文件，${byteText(result.bytes)}）`)
+    out(`位置 ${path.relative(ctx.root, result.path) || result.path}`)
+    if (result.pruned.length > 0) out(`已剪枝 ${result.pruned.length} 份旧快照：${result.pruned.join('、')}`)
+  }
+  return { name: result.name, path: result.path, files: result.files, bytes: result.bytes, pruned: result.pruned }
+}
+
+async function cmdDoctor(ctx) {
+  const raw = ctx.flags['stale-hours']
+  let staleHours
+  if (raw !== undefined) {
+    staleHours = Number.parseFloat(String(raw))
+    if (!Number.isFinite(staleHours) || staleHours <= 0) throw new CliError('usage', '--stale-hours 需要正数')
+  }
+  const report = doctorReport(ctx.root, staleHours === undefined ? {} : { staleHours })
+  if (jsonMode === false) {
+    for (const finding of report.findings) {
+      const mark = finding.level === 'ok' ? '✓' : finding.level === 'warn' ? '!' : '✗'
+      out(`${mark} ${finding.id}：${finding.message}${finding.hint === undefined ? '' : `（建议：${finding.hint}）`}`)
+    }
+    const errors = report.findings.filter((item) => item.level === 'error').length
+    const warns = report.findings.filter((item) => item.level === 'warn').length
+    out(`结果 ${report.ok ? '可用' : '不可用'}（error ${errors} · warn ${warns}）`)
+  }
+  if (report.ok === false) {
+    const errors = report.findings.filter((item) => item.level === 'error').map((item) => item.message)
+    throw new CliError('check-failed', `台账不可用：${errors.join('；')}`)
+  }
+  return report
+}
+
 function exitCodeOf(code) {
   return EXIT_BY_CODE[code] ?? EXIT.io
 }
@@ -3206,6 +3269,10 @@ async function dispatch(ctx, parsed) {
       return cmdInit(ctx)
     case 'status':
       return cmdStatus(ctx)
+    case 'backup':
+      return cmdBackup(ctx)
+    case 'doctor':
+      return cmdDoctor(ctx)
     case 'exp':
       return cmdExp(ctx, sub)
     case 'task':

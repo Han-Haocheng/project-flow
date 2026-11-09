@@ -331,6 +331,22 @@
         "test/warnings.test.mjs"
       ]
     },
+    "backup": {
+      "title": "台账备份与体检（本地快照 / flow doctor 完整性报告）",
+      "owns": [
+        "lib/backup.mjs"
+      ],
+      "shared": [
+        "bin/flow.mjs",
+        "lib/host/session.mjs",
+        "CONTRACT.md",
+        "README.md"
+      ],
+      "sections": {},
+      "tests": [
+        "test/t-20261109-backup-doctor.test.mjs"
+      ]
+    },
     "cli": {
       "title": "CLI（参数面 / 命令分发 / 输出）",
       "owns": [
