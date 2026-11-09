@@ -195,6 +195,13 @@ store 里已有 ≥1 条文件记录才约束 `updateTask` 的阶段推进；`on
 `gates` / `logs` / `decisions` / `description`）。`store.root` 改成别的相对路径时，未自定义的各子目录跟随新 store 根。
 解析结果永远落在项目根内；不安全的值按下述规则降级并产生 warning。
 
+**台账根 = 项目主工作区**（2026-11-09）：`loadContract` / `storePaths` / `assertInitialized` /
+`initProject` 在解析前先把 `root` 归一到 `git worktree list` 的第一条——worktree 会话与 CLI
+读写同一份台账，不再各自长出一份会漂移的副本（此前实测四个 worktree 分别有 100 / 96 / 99 / 2
+条任务，心跳却都在主工作区）。判据是「root 本身是不是工作树根」：普通子目录（含仓库里的嵌套目录）
+保持自己的作用域，不会静默继承父仓库的台账；非 git 目录就是它自己。`flow status` 在两者不同时
+多打印一行 `台账根`。
+
 ### 2.1 manifest 路径 containment
 
 manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`、`gates.dir`、

@@ -204,6 +204,9 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
   开关 `POST /api/project-flow/gate`，两者都经 `lib/core.mjs` 的校验与原子写；其余写入口只有
   CLI 与 agent 工具。
 - **单一写者**：同一个 `.agents/flow/` 不要再用其它脚本写；旧的 `task`/`exp.py` 在 store 项目里应停用。
+- **台账是项目级的（2026-11-09）**：worktree 会话与 CLI 一律读写项目主工作区的 `.agents/`，
+  普通子目录保持自己的作用域；`flow status` 会在两者不同时多打印一行 `台账根`。
+
 - **台账只留本地（2026-11-08）**：`.agents/` 整目录不入 git、不同步远程——描述台账、任务、决策、
   心跳、工作树都是本机真相源（`.gitignore` 一条 `.agents/` 覆盖）。`description.render` 指向的
   生成文档（`docs/project-description.md`）仍入库，由 `flow desc render` 生成、**不要手改**
@@ -242,7 +245,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：763 用例（60 个文件）
+node --test test/                        # core + CLI + check：768 用例（61 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
