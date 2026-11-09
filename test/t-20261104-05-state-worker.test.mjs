@@ -677,9 +677,17 @@ test('worktree 侧栏：台账归一主工作区，即使 worktree 自带已入�
   const checkout = path.join(tempRoot('wt-ledger-dir'), 'checkout')
   gitFixture(main, ['worktree', 'add', '-q', checkout, '-b', 'panel-wt'])
 
-  /* 让两侧台账真的不同：在 worktree 自己那份副本里再建一条任务。 */
-  const wtContract = core.loadContract(checkout).contract
-  core.addTask(checkout, wtContract, { type: 'feat', title: 'worktree only', status: 'active' })
+  /* 让两侧台账真的不同：造一份“worktree 自带台账副本”的历史现场。
+     2026-11-09 起 core 的 loadContract/storePaths 一律归一到主工作区，所以副本
+     必须用文件操作伪造（迁移前遗留的检出副本），不能再经 core 写出来。 */
+  fs.cpSync(path.join(main, '.agents'), path.join(checkout, '.agents'), { recursive: true })
+  const wtTaskDir = path.join(checkout, '.agents', 'tasks')
+  const wtFirst = fs.readdirSync(wtTaskDir)[0]
+  const wtStash = JSON.parse(fs.readFileSync(path.join(wtTaskDir, wtFirst), 'utf8'))
+  fs.writeFileSync(
+    path.join(wtTaskDir, 'T-20991231-99.json'),
+    `${JSON.stringify({ ...wtStash, id: 'T-20991231-99', title: 'worktree only' }, null, 2)}\n`,
+  )
 
   const { routes, ctx } = await mount([main])
   const res = await startState(routes, checkout).done

@@ -77,7 +77,8 @@
         "test/concurrency.test.mjs",
         "test/t-20261104-04-realpath-memo.test.mjs",
         "test/t-20261104-12-review-core.test.mjs",
-        "test/t-20261030-09-win-compat.test.mjs"
+        "test/t-20261030-09-win-compat.test.mjs",
+        "test/t-20261109-worktree-store.test.mjs"
       ]
     },
     "tasks": {

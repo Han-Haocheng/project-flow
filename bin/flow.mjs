@@ -959,10 +959,14 @@ async function cmdStatus(ctx) {
     ...(statusBlock === null ? {} : { status: statusBlock }),
   }
 
+  // 台账根可能与请求根不同（worktree 会话共享主工作区台账）：显式给出，避免误解。
+  const ledgerRoot = core.resolveProjectRoot(ctx.root)
+  if (ledgerRoot !== path.resolve(ctx.root)) data.ledgerRoot = ledgerRoot
   if (!ctx.json) {
     const lines = [
       ['项目', data.name],
       ['根目录', ctx.root],
+      ...(ledgerRoot === path.resolve(ctx.root) ? [] : [['台账根', ledgerRoot]]),
     ]
     if (!initialized) {
       lines.push(['契约', '未初始化（未找到 .agents/flow/flow.json）'])
