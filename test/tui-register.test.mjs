@@ -99,7 +99,10 @@ test('the host half exposes the shared state projection and does not mount the p
   // tuiPanels is a hard dependency of the TUI row, so the host half must stay
   // free of it: web and desktop would otherwise wait forever.
   assert.equal(/tui-panel/.test(source), false)
-  assert.match(source, /export const inject = \['webServer'\]/)
+  // 入口不得硬依赖 webServer（TUI 宿主没有该服务，硬 inject 会让整个条目 apply 不了）：
+  // HTTP 路由经 provide(ctx, 'webServer', …) 可选装配，工具/技能/守卫照常注册。
+  assert.equal(/export const inject = \['webServer'\]/.test(source), false)
+  assert.match(source, /provide\(ctx, 'webServer', label,/)
 
   // The split: the module tools are defined/registered by their own entries, so
   // the shared host half must not define or mount them itself.

@@ -60,7 +60,8 @@ import {
   timeValue,
   toPosix,
 } from './lib/state-snapshot.mjs'
-export const inject = ['webServer']
+// 入口不再声明静态 `inject`：所有服务都经 `provide` / `ctx.inject` 可选装配，
+// 没有 `webServer` 的宿主（TUI/headless）同样能注册工具/技能/守卫（2026-11-09）。
 
 import {
   EMPTY_STORE_NOTE,
@@ -211,22 +212,24 @@ function mountJsonRoute(ctx, path, label, handler) {
     },
   }
 
-  try {
-    ctx.effect(() => {
-      const webServer = service(ctx, 'webServer')
-      if (webServer === undefined || typeof webServer.register !== 'function') return () => {}
-      const dispose = webServer.register(route)
-      return () => {
-        try {
-          if (typeof dispose === 'function') dispose()
-        } catch {
-          // Disposal must never throw into the host.
-        }
+  /* Routes mount through the optional-service plumbing, not a static entry
+     dependency: the web/desktop host provides `webServer`, the TUI host never
+     does. Before 2026-11-09 this file declared `inject = ['webServer']`, so the
+     whole entry (tools, skills, guards, capture, heartbeat) was dead in the
+     TUI. `provide` defers until the service appears and stays a no-op when it
+     never does — the two hosts now share one entry with one behaviour. */
+  provide(ctx, 'webServer', label, (scoped) => {
+    const webServer = service(scoped, 'webServer')
+    if (webServer === undefined || typeof webServer.register !== 'function') return () => {}
+    const dispose = webServer.register(route)
+    return () => {
+      try {
+        if (typeof dispose === 'function') dispose()
+      } catch {
+        // Disposal must never throw into the host.
       }
-    }, `project-flow: ${label}`)
-  } catch (error) {
-    warnMount(`${label}: registration failed: ${brief(error)}`, ctx)
-  }
+    }
+  })
 }
 
 export function apply(ctx, config) {

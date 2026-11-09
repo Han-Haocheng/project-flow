@@ -1415,6 +1415,13 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 恢复「已结束（dead）/可能已停」清单。`flow status` 的心跳明细同样只含可见行，摘要按全量
 `counts` 报（见 §5.3 上文）。
 
+
+**入口注入（2026-11-09）：** 插件入口不再声明静态 `inject`。所有宿主服务（`webServer` /
+`tools` / `skills` / `systemPrompt` / `agents`）都经 `provide` → `ctx.inject([...])` 可选装配：
+服务在就装（HTTP 路由随后出现也照样挂上），不在就静默跳过。这样同一个 `index.js` 在
+**没有 `webServer` 的宿主**（dsh-tui / headless）里也会注册工具、技能、提醒、捕获与全部守卫，
+而不是整条 apply 被 Cordis 判为缺依赖而跳过。唯一的静态 inject 是 `tui-host.js` 的
+`tuiPanels`（那是 TUI 面板行的真实依赖）。
 ### 5.4 会话工具面（P2 权限面，`config.enforce` 控制）
 
 默认开启；`config.enforce === false` 是回滚开关——`restrict` 与全部 guard 都不注册，行为回到 P1。

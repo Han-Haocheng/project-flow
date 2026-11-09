@@ -461,6 +461,66 @@ test('插件：apply 两次后上一次失败诊断消失，本次真实失败�
   )
 })
 
+test('插件：没有 webServer 的宿主（TUI/headless）仍装配工具/技能，路由静默跳过', async () => {
+  const { root } = freshProject('plugin-no-web')
+  const registeredTools = new Map()
+  const skills = []
+  const services = {
+    tools: {
+      register(definition) {
+        registeredTools.set(definition.name, definition)
+        return () => registeredTools.delete(definition.name)
+      },
+      guard() {
+        return () => {}
+      },
+      get(name) {
+        return registeredTools.has(name) ? { name } : undefined
+      },
+    },
+    skills: {
+      register(skill) {
+        skills.push(skill)
+        return () => {}
+      },
+    },
+    workingDirectory: { get: () => root },
+  }
+  const ctx = {
+    get(name) {
+      return services[name]
+    },
+    // 真实 Cordis：缺少依赖时 fiber 挂起、回调永不执行（webServer 在 TUI 里就是这种）。
+    inject(deps, callback) {
+      if (deps.some((dep) => services[dep] === undefined)) return { dispose() {} }
+      const dispose = callback(ctx)
+      return { dispose: () => { if (typeof dispose === 'function') dispose() } }
+    },
+    effect(fn) {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+    on() {
+      return () => {}
+    },
+    logger: { warn() {} },
+  }
+  apply(ctx, {})
+  assert.ok(registeredTools.has('flow_status'), 'flow_status 必须在无 webServer 宿主里注册')
+  assert.ok(registeredTools.has('flow_heartbeat'), 'flow_heartbeat 必须注册')
+  assert.ok(registeredTools.has('flow_decision'), 'flow_decision 必须注册')
+  assert.ok(registeredTools.has('flow_task') === false, 'flow_task 由 tasks.js 子插件挂载')
+  assert.ok(skills.length > 0, '技能应在无 webServer 宿主里注册')
+  const state = await panelStateReader(ctx)(root)
+  assert.equal(
+    (state.warnings ?? []).some((item) => /registration failed/.test(String(item))),
+    false,
+    JSON.stringify(state.warnings),
+  )
+})
+
 test('插件：工具成功结果附加 core warnings，失败时 logger.warn 且 message 不变', async () => {
   const { root } = freshProject('plugin-tools')
   writeBadTimestampRecords(root)
