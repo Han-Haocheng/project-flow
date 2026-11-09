@@ -37,6 +37,7 @@ import {
   getExperiment,
   getGate,
   getTask,
+  gitBranchOf,
   gcDecisions,
   gcLegacyHeartbeats,
   getDecision,
@@ -1622,6 +1623,34 @@ test('旧子会话心跳：hidden/legacy、不进面板与 readHeartbeats，gc �
   assert.deepEqual(pruned.removed.map((item) => item.file), [`${deadSession}.json`])
   assert.ok(!fs.existsSync(deadFile), '判死且够旧的记录被回收')
   assert.ok(fs.existsSync(heartbeatPath(root, 'session-main')), '活着的会话心跳保留')
+})
+
+test('source.branch：捕获来源记录 git 分支；非法形状 invalid；非 git 目录不写该键', () => {
+  const { root, contract } = freshProject('source-branch')
+  assert.equal(gitBranchOf(root), null, '非 git 目录返回 null')
+  const plain = addTask(root, contract, {
+    title: '无分支卡片',
+    source: { kind: 'utterance', key: 'k-plain', at: '2026-11-09T10:00:00+08:00', text: 'x' },
+  })
+  assert.equal(Object.hasOwn(getTask(root, contract, plain.id).source, 'branch'), false, '非 git 不写 branch 键')
+
+  git(root, ['init', '-b', 'feat/branch-source'])
+  assert.equal(gitBranchOf(root), 'feat/branch-source')
+  const tagged = addTask(root, contract, {
+    title: '带分支卡片',
+    source: { kind: 'utterance', key: 'k-tagged', at: '2026-11-09T10:00:00+08:00', text: 'y', branch: '  feat/branch-source  ' },
+  })
+  assert.equal(getTask(root, contract, tagged.id).source.branch, 'feat/branch-source', 'branch 去空白后落盘')
+  expectFlowError(
+    () => addTask(root, contract, { title: '坏 branch', source: { kind: 'utterance', key: 'k-bad', at: '2026-11-09T10:00:00+08:00', text: 'z', branch: 42 } }),
+    'invalid',
+    /source\.branch must be a string/,
+  )
+  expectFlowError(
+    () => addTask(root, contract, { title: '空 branch', source: { kind: 'utterance', key: 'k-empty', at: '2026-11-09T10:00:00+08:00', text: 'w', branch: '   ' } }),
+    'invalid',
+    /source\.branch must be a non-empty string/,
+  )
 })
 
 test('心跳 session 安全校验：空、过长、路径穿越、控制字符都拒绝；缺省回落 DSH_SESSION_ID', () => {

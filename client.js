@@ -283,6 +283,7 @@ window.__ModuleLoader__.load({
       'hb.counts': '活跃 {active} · 已结束 {dead} / 共 {total}',
       'hb.current': '本会话',
       'hb.task': '任务',
+      'tasks.branch': '分支',
       'hb.branch': '分支',
       'hb.goal': '目标',
       'hb.claims': '文件域',
@@ -457,6 +458,7 @@ window.__ModuleLoader__.load({
       'hb.counts': '{active} active · {dead} dead / {total}',
       'hb.current': 'current',
       'hb.task': 'Task',
+      'tasks.branch': 'Branch',
       'hb.branch': 'Branch',
       'hb.goal': 'Goal',
       'hb.claims': 'Claims',
@@ -896,6 +898,8 @@ window.__ModuleLoader__.load({
         /* T-13 A2 tree fields: absent on an older payload → null / 0 (flat). */
         parent: asText(task.parent) || null,
         depth: asNumber(task.depth, 0),
+        /* 2026-11-09（审计项 11）：15th row key——捕获分支来源；缺失/空串 → null（不出徽标）。 */
+        branch: asText(task.branch) || null,
       };
     }
 
@@ -1312,6 +1316,7 @@ window.__ModuleLoader__.load({
           )
         : null;
       const badge = asText(tree.badge);
+      const branch = asText(task && task.branch);
       return React.createElement(
         'li',
         {
@@ -1362,6 +1367,15 @@ window.__ModuleLoader__.load({
                 },
                 stageLabel
               ),
+          /* 2026-11-09（审计项 11）：任务卡的分支来源徽标。只有捕获建卡才有
+             `source.branch`；手写/旧记录为 null，不渲染（不占位）。 */
+          branch
+            ? React.createElement(
+                'span',
+                { className: 'project-flow-taskBranch', title: joinParts([t('tasks.branch'), branch]) },
+                branch
+              )
+            : null,
           badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
           meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
           React.createElement('span', { className: 'project-flow-taskSignature', title: signature || undefined }, signature),
@@ -4187,6 +4201,7 @@ window.__ModuleLoader__.load({
 .project-flow-taskMark{font-size:11px;}
 .project-flow-taskMeta{font-size:11px;}
 .project-flow-taskStage{font-size:10.5px;}
+.project-flow-taskBranch{flex:none;font-family:${MONO};font-size:9.5px;color:var(--dsw-alias-brand-primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;opacity:.85;}
 .project-flow-taskSignature{font-size:11px;}
 .project-flow-taskNotes{font-size:11.5px;}
 .project-flow-taskDetail{margin-left:42px;}

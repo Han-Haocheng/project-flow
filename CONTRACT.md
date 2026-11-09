@@ -353,7 +353,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
     插件在 `agent/created` 扫描把该会话的任务 `owner` 清空为 `''`，供其他会话领取。外主机心跳
     （`liveness:'foreign'`）与没有心跳记录的 owner（角色名/手写值）**不释放**——"无法证明死了"不是"死了"。
   - `owner` 仍是可更新白名单字段，但改写要过上述会话守卫；`owner` 不参与阶段机，改它不触发描述门禁。
-- **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?}`。
+- **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?, branch?}`。
   由捕获流水线写入；`control` 只是遗留只读值（不再写出）。`key` 是跨进程去重主料；`at` 是消息时间戳
   （payload 带 `timestamp` 时），否则是 pre-step 捕获时刻；`text` 保留整句（超过 4000 字符显式标截断）。
   - **`attachments`**（可选，仅非空时写）：消息携带的耐久附件引用，**只存引用、不存字节**：
@@ -362,6 +362,9 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
     sha256）；`offloaded:true` 表示该图在模型侧已由占位文本替代（引用仍保留）。畸形引用在捕获侧
     跳过（不造 0 值假数据），core 对越过校验的非法形状抛 `invalid: source.attachments[i].…`。
     `source` 整键不可更新，附件与 `key` 一样是**创建时事实**。
+  - **`branch`**（可选，2026-11-09 审计项 11）：捕获时工作区所在 git 分支
+    （`git branch --show-current`，一次 flush 只探一次）。非 git 仓库/分离 HEAD/git 不可用时不写该键；
+    面板任务行读它渲染分支徽标，手写/旧记录为 `null`。非法（非字符串/空串）抛 `invalid: source.branch`。
   - **无文字消息**：image/file 块存在而纯文本为空时仍建任务，`source.text` 为 `''`，`title` 兜底为
     `[附件] 图片 ×N` / `[附件] 文件 ×N` / `[附件] 图片 ×N、文件 ×M`。
   - **去重身份**：宿主 `UserMessage` 是 `{id, role, content, source}`，**有稳定 `id`、无 `timestamp`**；
@@ -1530,7 +1533,8 @@ capture: {
   实现"执行"属于发明语义，本版不做。
 - **`control` 是遗留值**：`source.kind` 仍接受 `'control'`（旧记录要过校验），但**不再写入**；
   `isUnfinished` 仍排除它、阶段桶仍跳过它、面板折叠行改为「历史控制词 N 条（遗留，不再新增）」，
-  `tasks.control = {count, ids}` 只读兼容。任务行仍是 14 键（不加第 15 键）。
+  `tasks.control = {count, ids}` 只读兼容。任务行 15 键：第 15 键 `branch`（2026-11-09）是捕获分支来源，
+  与 `stage`/`type` 一样是投影值，`null` 表示不可知。
 - 纯聊天（含「继续」「好」这类词）**一律是任务**（`source.kind='utterance'`）——词表方案已删除，
   因为"猜词"会漏词或过宽，而 `/` 是用户显式声明的意图。
 
@@ -2244,10 +2248,12 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 
 #### 9.1.4 面板任务区：行形状、视觉树与趋势
 
-- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 14 键
+- **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 15 键
   `id, type, title, status, owner, notes, scope, acceptance, commits, created_at, updated_at,
-  parent, depth, stage`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
-  `.selftest/host2-tools.mjs` 与本节三处逐字一致。第 14 键 `stage`（task-71）是**投影值**：
+  parent, depth, stage, branch`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
+  `.selftest/host2-tools.mjs` 与本节三处逐字一致。第 15 键 `branch`（2026-11-09，审计项 11）
+  是捕获建卡时的工作分支（`source.branch`）；手写/旧记录与分离 HEAD 一律 `null`，客户端不渲染
+  徽标（不占位）。`stages` 的九个桶里也是同一 15 键行。第 14 键 `stage`（task-71）是**投影值**：
   记录带合法 `stage` 就用它，旧记录用 `lib/stage.mjs` 的 `legacyStageFromStatus(status)` 推导
   （唯一真源；客户端与快照都不另写第二套 status→stage 映射），恒为九个 id 之一。行里
   **没有 `goal`**（§3.2：已合并进 `title`）。`type` 取记录字段的裁剪值：缺失或非字符串一律投影为
@@ -2259,7 +2265,7 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   只由行上的 `parent`/`depth` 表达，**不改数组顺序、不新增 `children` 数组**，前端据此嵌套渲染。
 - **九阶段视图（task-71）**：`tasks` 另带两个字段。`stageCounts` = 九个阶段 id 的计数
   （**由 `STAGE_IDS` 生成，不手写九个键**；全部任务按有效阶段计数，旧记录用
-  `legacyStageFromStatus` 推导）。`stages` = 九键 → 行数组（同一 14 键行；管线阶段按
+  `legacyStageFromStatus` 推导）。`stages` = 九键 → 行数组（同一 15 键行；管线阶段按
   `created_at` FIFO、`done`/`archived` 按 `updated_at` 倒序，每桶上限 50 行，真实总数看
   `stageCounts`）。四态 `counts` **保留不动**：`done`/`archived` 与阶段 id 同名，阶段计数
   因此必须单独成字段，不能并进 `counts`。面板任务卡按**六个阶段桶**分组：待办

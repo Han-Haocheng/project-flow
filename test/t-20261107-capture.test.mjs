@@ -8,6 +8,7 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -998,4 +999,25 @@ test('消息卡收口：config.tasks.autoSweepHours=0 关闭自动收口', async
   await preStep(harness, agent, [userMessage('另一句话', recentStamp(-1000))])
   await turnStopping(harness, agent)
   assert.equal(getTask(root, contract, old.id).stage, 'queued-analysis', '关闭后不得动旧卡')
+})
+
+test('捕获来源记分支：git 仓库里 source.branch = 当前分支，非 git 目录不写该键', async () => {
+  const { root: gitRoot, contract: gitContract } = freshProject('branch-source')
+  spawnSync('git', ['-C', gitRoot, 'init', '-b', 'capture-branch'], { encoding: 'utf8' })
+  const gitHarness = makeHarness(gitRoot)
+  const gitAgent = gitHarness.addAgent('session-branch-source')
+  await preStep(gitHarness, gitAgent, [userMessage('在分支上说的话', recentStamp(-1000))])
+  await turnStopping(gitHarness, gitAgent)
+  const captured = tasksOf(gitRoot, gitContract).find((task) => task.source && task.source.kind === 'utterance')
+  assert.ok(captured, '应捕获一张卡')
+  assert.equal(captured.source.branch, 'capture-branch', 'source.branch 记录捕获时所在分支')
+
+  const { root, contract } = freshProject('branch-source-plain')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-branch-source-plain')
+  await preStep(harness, agent, [userMessage('不在 git 仓库里', recentStamp(-1000))])
+  await turnStopping(harness, agent)
+  const plain = tasksOf(root, contract).find((task) => task.source && task.source.kind === 'utterance')
+  assert.ok(plain)
+  assert.equal(Object.hasOwn(plain.source, 'branch'), false, '非 git 目录不写 branch 键')
 })

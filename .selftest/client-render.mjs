@@ -1354,6 +1354,35 @@ check('TasksCard tree: an older payload without parent renders flat (no caret, n
   }
 });
 
+// ---------------------- task branch badge (2026-11-09, 审计项 11)
+check('TasksCard: 任务行按 branch 渲染分支徽标；null/缺失不占位', () => {
+  const tasks = probe.normalize({
+    tasks: {
+      total: 3,
+      counts: { active: 3, draft: 0, done: 0 },
+      current: null,
+      active: [
+        { id: 'T-1', title: '带分支的任务', status: 'active', stage: 'queued-analysis', branch: 'feat/branch-badge' },
+        { id: 'T-2', title: '无分支的任务', status: 'active', stage: 'queued-analysis', branch: null },
+        { id: 'T-3', title: '旧记录任务', status: 'active' },
+      ],
+      draft: [],
+      recentDone: [],
+    },
+  }).tasks;
+  const card = mountTasks(tasks);
+  const badges = collect(card, 'project-flow-taskBranch');
+  assert.equal(badges.length, 1, '只有带 branch 的行渲染徽标');
+  assert.equal(textOf(badges[0]), 'feat/branch-badge');
+  const plain = rowOf(card, '无分支的任务');
+  assert.ok(plain, '未分组任务行应存在');
+  assert.equal(collect(plain, 'project-flow-taskBranch').length, 0, 'null 分支不占位');
+  const legacy = rowOf(card, '旧记录任务');
+  assert.ok(legacy && collect(legacy, 'project-flow-taskBranch').length === 0, '旧记录（缺键）不占位');
+  assert.ok(source.includes('.project-flow-taskBranch{'), '分支徽标 CSS 缺失');
+  assert.ok(source.includes("'tasks.branch'"), '分支徽标 i18n 键缺失');
+});
+
 // ------------------------------------- PanelView: switches, folds, no writes
 //
 // `PanelView` is the data-state body of the panel, split out of `Panel` so it can

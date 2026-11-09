@@ -154,6 +154,13 @@ function buildTaskRows(tasks) {
     rows.push(row('当前 · ' + (asText(current.title) || asText(current.id) || '未命名'), 'accent'))
   }
 
+  /* 2026-11-09（审计项 11）：任务行的分支徽标（与心跳行同一写法：' · ' + 截断分支）。
+     只有捕获建卡带 `task.branch`；手写/旧记录为空 → 不加后缀、不占宽度。 */
+  const branchSuffix = (task) => {
+    const branch = asText(task.branch)
+    return branch === '' ? '' : ' · ' + clip(branch, 16)
+  }
+
   const active = asArray(tasks.active)
   const drafts = asArray(tasks.draft)
   const done = asArray(tasks.recentDone)
@@ -165,7 +172,7 @@ function buildTaskRows(tasks) {
     const title = taskTitle(task)
     if (title === '') continue
     const decor = taskTreeDecor(task, 'active', groups)
-    activeRows.push(row('▶ ' + decor.prefix + title + taskMark(task) + decor.suffix, 'accent'))
+    activeRows.push(row('▶ ' + decor.prefix + title + branchSuffix(task) + taskMark(task) + decor.suffix, 'accent'))
   }
   rows.push(...activeRows.slice(0, MAX_ACTIVE_ROWS))
 
@@ -174,7 +181,7 @@ function buildTaskRows(tasks) {
     const title = taskTitle(task)
     if (title === '') continue
     const decor = taskTreeDecor(task, 'draft', groups)
-    draftRows.push(row('· ' + decor.prefix + title + decor.suffix, 'normal'))
+    draftRows.push(row('· ' + decor.prefix + title + branchSuffix(task) + decor.suffix, 'normal'))
   }
   rows.push(...draftRows.slice(0, MAX_DRAFT_ROWS))
 
@@ -183,7 +190,7 @@ function buildTaskRows(tasks) {
     if (title === '') continue
     /* The checkpoint mark replaces the glyph instead of repeating it. */
     const failed = asText(task.gate) === 'fail'
-    rows.push(row((failed ? '× ' : '✓ ') + title, failed ? 'error' : 'success'))
+    rows.push(row((failed ? '× ' : '✓ ') + title + branchSuffix(task), failed ? 'error' : 'success'))
   }
 
   const hiddenActive = activeRows.length - MAX_ACTIVE_ROWS

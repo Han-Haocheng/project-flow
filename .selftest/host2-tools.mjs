@@ -90,6 +90,7 @@ function taskRowOk(row, { gate = false } = {}) {
     'parent',
     'depth',
     'stage',
+    'branch',
   ]
   if (gate) keys.push('gate')
   if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false

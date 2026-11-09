@@ -14,7 +14,7 @@ import { STAGE_IDS, legacyStageFromStatus } from '../lib/stage.mjs'
 
 const ROW_KEYS = [
   'id', 'type', 'title', 'status', 'owner', 'notes', 'scope',
-  'acceptance', 'commits', 'created_at', 'updated_at', 'parent', 'depth', 'stage',
+  'acceptance', 'commits', 'created_at', 'updated_at', 'parent', 'depth', 'stage', 'branch',
 ]
 
 const TEMP_ROOTS = []
@@ -38,14 +38,15 @@ function stripStage(root, id) {
   fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')
 }
 
-test('行形状：第 14 键是 stage，现代记录原样保留', async () => {
+test('行形状：stage 与 branch 是两个投影键，现代记录原样保留', async () => {
   const { root, contract } = freshProject('row')
   const task = addTask(root, contract, { type: 'feat', title: '实现中', stage: 'implementing' })
   const { tasks } = await snapshotOf(root)
   const row = tasks.stages.implementing.find((entry) => entry.id === task.id)
   assert.ok(row, 'the implementing bucket must hold the row')
-  assert.deepEqual(Object.keys(row), ROW_KEYS, 'the panel row is the 14-key contract, order included')
+  assert.deepEqual(Object.keys(row), ROW_KEYS, 'the panel row is the 15-key contract, order included')
   assert.equal(row.stage, 'implementing')
+  assert.equal(row.branch, null, '手写任务没有捕获分支 → null（面板不渲染徽标）')
   assert.equal(row.status, 'active')
   // 四态 counts 保留，阶段计数单独成字段（done/archived 与阶段 id 同名）。
   for (const key of ['draft', 'active', 'done', 'archived', 'other']) {
@@ -111,4 +112,28 @@ test('零任务：九个桶为空、九键为 0，不崩', async () => {
     assert.deepEqual(tasks.stages[stage], [])
   }
   assert.equal(0, Object.values(tasks.stageCounts).reduce((total, value) => total + value, 0))
+})
+
+test('行形状：捕获卡的 source.branch 投影到第 15 键，非法/缺失一律 null', async () => {
+  const { root, contract } = freshProject('row-branch')
+  const tagged = addTask(root, contract, {
+    type: 'chore',
+    title: '分支上的卡片',
+    stage: 'queued-analysis',
+    source: { kind: 'utterance', key: 'k-branch', at: '2026-11-09T10:00:00+08:00', text: 'x', branch: 'feat/panel-badge' },
+  })
+  const { tasks } = await snapshotOf(root)
+  const row = tasks.stages['queued-analysis'].find((entry) => entry.id === tagged.id)
+  assert.ok(row)
+  assert.equal(row.branch, 'feat/panel-badge')
+  assert.equal(Object.keys(row).at(-1), 'branch', 'branch 是第 15 键')
+
+  // 手工把记录里的 branch 改成非字符串：投影仍须是 null，不能把对象丢给面板。
+  const file = path.join(root, '.agents', 'tasks', `${tagged.id}.json`)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.source.branch = 42
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')
+  const again = await snapshotOf(root)
+  const broken = again.tasks.stages['queued-analysis'].find((entry) => entry.id === tagged.id)
+  assert.equal(broken.branch, null, '非字符串 branch 投影为 null')
 })

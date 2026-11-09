@@ -36,7 +36,7 @@ function fixture() {
       total: 3,
       counts: { draft: 1, active: 1, done: 1, archived: 0, other: 0 },
       current: null,
-      active: [{ id: 'T-20261030-23', title: '实现：决策台账核心', status: 'active' }],
+      active: [{ id: 'T-20261030-23', title: '实现：决策台账核心', status: 'active', branch: 'feat/tui-badge' }],
       recentDone: [{ id: 'T-20261030-22', title: '冻结决策契约', status: 'done', gate: 'pass' }],
       draft: [{ id: 'T-20261030-15', title: '实现侧栏面板的视图层与宽度截断边界', status: 'draft' }],
     },
@@ -113,6 +113,9 @@ test('ready payload counters, section order and task rows follow the web panel',
 
   const taskRows = model.sections[0].rows
   assert.ok(taskRows.some((entry) => entry.text.includes('实现：决策台账核心')))
+  const branchRow = taskRows.find((entry) => entry.text.includes('实现：决策台账核心'))
+  assert.ok(branchRow.text.includes('· feat/tui-badge'), '任务行应带分支后缀：' + branchRow.text)
+  assert.ok(!taskRows.find((entry) => entry.text.includes('冻结决策契约')).text.includes('· feat/'), '无分支的行不加后缀')
   assert.ok(taskRows.some((entry) => entry.text.includes('冻结决策契约')))
   assert.equal(taskRows.find((entry) => entry.text.includes('冻结决策契约')).text, '✓ 冻结决策契约')
   for (const entry of taskRows) {
@@ -580,8 +583,10 @@ test('panelModel 可选 staleNote：单参逐字节不变，只追加 staleNote 
   // 其余字段未变；单参调用仍然不产出 `staleNote`。
   // 2026-11-08 心跳会话化：心跳行标题优先（title 先于 goal），活跃数计
   // working|idle|waiting；其余字段未变，单参调用依旧不产出 `staleNote`。
+  // 2026-11-09 任务行分支徽标：fixture 的 active 行加了 `branch: 'feat/tui-badge'`，
+  // 行文本随之带 ` · feat/tui-badge` 后缀；除此之外输出逐字节不变。
   const digest = createHash('sha256').update(JSON.stringify(single)).digest('hex')
-  assert.equal(digest, '7a0e561a8123822f5e682aaf79b302989130b5d4f5200514fbcaa5da901bbc54')
+  assert.equal(digest, '0006a0f40884dcbd713c45aaf9df7434c6d421ad40643dc2d7a4b25958a5005d')
   assert.equal(Object.hasOwn(single, 'staleNote'), false)
 
   const plain = panelModel(fixture(), { width: 60, height: 40, now: NOW })
