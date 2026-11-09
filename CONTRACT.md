@@ -50,6 +50,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/proc.mjs` | **进程树杀灭的唯一实现**（POSIX 进程组 / win32 `taskkill /T /F` + grace 兜底） | core、checks |
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
+| `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |
 | `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；P0 只有数据，不捕获不派工 | core |
 | `lib/capture.mjs` | P1 捕获流水线：`agent/pre-step` 只做内存的排除/集合差去重，`agent/turn-stopping` 才落盘（`source.key` 跨进程去重、创建即推进 `queued-analysis`）；同时产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入，宿主无 core 时捕获自然降级） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
@@ -2024,6 +2025,10 @@ linked worktree 里的会话读写同一份心跳；解析降级时记 `heartbea
 - git 仍是历史与发布单位：实验记录的 `commits` 字段回填短 sha。
 - 写锁 `.lock` 与原子写/接管的中间产物（`*.tmp-*`、`.lock.takeover-*`）都是临时文件；整目录忽略
   已覆盖它们，`.gitignore` 仍保留 `*.tmp-*` 兜底。
+- **本地快照是唯一恢复源**：`flow backup` 把 `.agents/` 复制到 `<root>/.agents-backups/<stamp>/`
+  （跳过 `worktrees/` 与 `tmp/`，按 `--keep` 剪枝，默认 5 份，同样不入库）；`flow doctor` 检查
+  契约可读、记录目录齐全、`.agents` 是否仍被 git 跟踪/忽略、最近快照是否超过 24h，宿主在
+  `agent/created` 时对过期快照提示一次（`lib/backup.mjs`，不 import core）。
 - 面板只读 store，不跑 git、不写文件（唯一例外：「初始化」按钮 POST `/api/project-flow/init`，
   由 core 校验并原子写，以及门禁开关 POST `/api/project-flow/gate`）；不要用脚本直接编辑
   JSON 绕过 core 的校验与锁。

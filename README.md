@@ -72,6 +72,9 @@ flow desc render [--out p]      # 生成 description.render 指向的文档（�
 flow check description --task T-… [--strict]  # 审查阶段：计划对齐 + 漂移检查
 ```
 
+flow backup [--keep N]         # 给 .agents 拍本地快照（默认保留 5 份，存 .agents-backups/，不入库）
+flow doctor [--stale-hours N]  # 台账体检：契约/记录目录/git 忽略/快照新鲜度（error 退出 1）
+
 所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法 /
 2 校验 / 3 未找到 / 4 IO。
 
@@ -239,7 +242,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：754 用例（59 个文件）
+node --test test/                        # core + CLI + check：763 用例（60 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
