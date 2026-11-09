@@ -37,28 +37,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+// 真值推导与 README 改写是同一份实现（`node scripts/doc-counts.mjs --fix` 同步），
+// 测试不再维护第二套计数口径。
+import { countTests, syncReadmeCounts } from '../scripts/doc-counts.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
 
 // ------------------------------------------------------------------ 真值推导
-
-/** 顶层 `test(...)` / `it(...)` 调用占一行行首的文件才计入（与 `node --test` 的用例数一致）。 */
-const TEST_CALL = /^(?:test|it)\s*\(/m
-
-/**
- * `test/` 下所有测试文件，按文件名排序。
- * @returns {string[]} 绝对路径
- */
-function testFiles() {
-  return fs
-    .readdirSync(path.join(REPO, 'test'))
-    .filter((name) => name.endsWith('.test.mjs'))
-    .sort()
-    .map((name) => path.join(REPO, 'test', name))
-}
 
 /**
  * 实际用例数：静态数每个文件里**顶层**的 `test(` / `it(` 调用。
@@ -69,20 +58,12 @@ function testFiles() {
  * @returns {number}
  */
 function actualTests() {
-  let total = 0
-  for (const file of testFiles()) {
-    const source = fs.readFileSync(file, 'utf8')
-    // 逐行计数：只认行首（无缩进）的 test( / it(，避免把 helper 里的 `await test(` 算进来。
-    for (const line of source.split('\n')) {
-      if (TEST_CALL.test(line)) total += 1
-    }
-  }
-  return total
+  return countTests(REPO).tests
 }
 
 /** 实际测试文件数。 */
 function actualTestFiles() {
-  return testFiles().length
+  return countTests(REPO).files
 }
 
 /**
@@ -255,4 +236,30 @@ test('README：check 清单 = flow check list 的全部项', (t) => {
     [...listed].sort(),
     `README 列了 ${declared.length} 项 check（${declared.join('|')}），实际 ${listed.length} 项（${listed.join('|')}）`,
   )
+})
+
+// ------------------------------------------------- 文档数字同步（审计项 7）
+
+test('scripts/doc-counts：过期时只读比对失败，--fix 就地改写且幂等', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-doc-counts-'))
+  fs.mkdirSync(path.join(root, 'test'))
+  fs.writeFileSync(
+    path.join(root, 'test', 'a.test.mjs'),
+    ['test("x", () => {})', 'test("y", () => {})', ''].join('\n'),
+  )
+  fs.writeFileSync(path.join(root, 'test', 'b.test.mjs'), 'it("z", () => {})\n')
+  fs.writeFileSync(path.join(root, 'README.md'), '# demo\n\nnode --test test/  # 1 用例（1 个文件）\n')
+
+  const stale = syncReadmeCounts(root)
+  assert.equal(stale.ok, false, '数字过期必须报错')
+  assert.equal(stale.reason, 'stale')
+  assert.equal(stale.actual.tests, 3)
+  assert.equal(stale.actual.files, 2)
+
+  const fixed = syncReadmeCounts(root, { fix: true })
+  assert.equal(fixed.ok, true)
+  assert.equal(fixed.changed, true)
+  assert.match(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), /3 用例（2 个文件）/)
+  assert.equal(syncReadmeCounts(root).ok, true, '修完再比对必须一致')
+  assert.equal(syncReadmeCounts(root, { fix: true }).changed, false, '--fix 幂等')
 })

@@ -89,7 +89,8 @@ const USAGE = `project-flow CLI（schema 2）
   heartbeat list
   heartbeat status [--require-active] [--session S]
   heartbeat rm <session>        移除一条心跳记录（归档自动移除，这里是人的逃生口）
-  heartbeat gc [--dry-run]      清理旧子会话心跳（agent=subagent 的历史文件）
+  heartbeat gc [--dry-run] [--older-than-hours N]
+          清理旧心跳：agent=subagent 的历史文件 + 已结束超过 N 小时（默认只清 subagent）
 
   decision ask --question Q --kind choice|approval|input
                [--option 'id=label>>impact']... [--default ID] [--recommendation ID]
@@ -275,7 +276,7 @@ export const SPEC = Object.freeze({
     list: { flags: ['all'] },
     status: { flags: ['require-active', 'session'] },
     rm: { flags: ['id', 'session', 'yes'] },
-    gc: { flags: ['dry-run'] },
+    gc: { flags: ['dry-run', 'older-than-hours'] },
   }),
   decision: Object.freeze({
     ask: {
@@ -977,7 +978,11 @@ async function cmdStatus(ctx) {
       lines.push(['下一步', 'flow init'])
     } else {
       lines.push(['契约', `${loaded.source}（schema ${contract.schema ?? '?'}）`])
-      lines.push(['存储', store || contract?.store?.root || '.agents/flow'])
+      // 「存储」只指契约目录会误导：五类记录在 .agents/ 的兄弟目录里（T-20261109095142 审计项）。
+      const storeText = store || contract?.store?.root || '.agents/flow'
+      const storeAbs = path.isAbsolute(storeText) ? storeText : path.resolve(ctx.root, storeText)
+      const recordsRel = path.relative(ctx.root, path.dirname(storeAbs)) || '.'
+      lines.push(['记录根', `${recordsRel}（tasks/ decisions/ gates/ experiments/ description/ 与 flow/ 平级）`])
       lines.push([
         '实验',
         `${experiments.length}（open ${expCounts.open} · confirmed ${expCounts.confirmed} · refuted ${expCounts.refuted} · abandoned ${expCounts.abandoned} · inconclusive ${expCounts.inconclusive} · pivoted ${expCounts.pivoted}${unreadableTail(unreadable.experiments)}）`,
@@ -2344,14 +2349,29 @@ async function cmdHeartbeat(ctx, sub) {
       throw new CliError('io', 'heartbeat gc 需要更新的 lib/core.mjs（缺少 gcLegacyHeartbeats）')
     }
     const dryRun = flags['dry-run'] === true
-    const result = core.gcLegacyHeartbeats(root, contract, { dryRun })
+    const hours = readPositiveInteger(
+      flags,
+      'older-than-hours',
+      '--older-than-hours 需要正整数小时（例如 --older-than-hours 24）',
+    )
+    const result = core.gcLegacyHeartbeats(root, contract, {
+      dryRun,
+      ...(hours === undefined ? {} : { olderThanHours: hours }),
+    })
     if (!ctx.json) {
       const removed = Array.isArray(result.removed) ? result.removed : []
+      const legacyCount = removed.filter((item) => item.reason === 'subagent').length
+      const deadCount = removed.filter((item) => item.reason === 'dead').length
+      const endedCount = removed.filter((item) => item.reason === 'ended').length
       out(
-        `${dryRun ? '将清理' : '已清理'}旧子会话心跳 ${removed.length} 条（保留 ${result.kept} 条）  目录 ${result.dir}`,
+        `${dryRun ? '将清理' : '已清理'}旧心跳 ${removed.length} 条（子会话 ${legacyCount} · 判死 ${deadCount} · 已结束 ${endedCount}；保留 ${result.kept} 条）  目录 ${result.dir}`,
       )
-      for (const item of removed) out(`  - ${item.file}  ${item.status || '-'}`)
-      if (removed.length === 0) out('（没有 agent=subagent 的旧心跳）')
+      for (const item of removed) {
+        const label = item.reason === 'subagent' ? 'subagent' : item.reason === 'dead' ? '判死' : '已结束'
+        out(`  - ${item.file}  ${item.status || '-'}  ${label}`)
+      }
+      if (removed.length === 0) out('（没有可清理的旧心跳）')
+      if (hours === undefined) out('提示：加 --older-than-hours N 可同时回收「已结束超过 N 小时」的记录')
     }
     return result
   }

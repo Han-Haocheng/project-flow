@@ -1603,6 +1603,25 @@ test('旧子会话心跳：hidden/legacy、不进面板与 readHeartbeats，gc �
   assert.ok(!fs.existsSync(legacyFile), 'gc 删除旧子会话心跳')
   assert.ok(fs.existsSync(heartbeatPath(root, 'session-main')), '普通心跳保留')
   assert.equal(readHeartbeatSection(root, contract).counts.hidden, 0)
+
+  // 2026-11-09：`--older-than-hours` 回收「判死且够旧」的记录；默认（不给阈值）不动它们。
+  const deadSession = 'session-dead-old'
+  startHeartbeat(root, contract, { session: deadSession, goal: '已经死掉的会话', createTask: false })
+  const deadFile = heartbeatPath(root, deadSession)
+  const dead = JSON.parse(fs.readFileSync(deadFile, 'utf8'))
+  dead.pid = 999999 // 不存在的 pid → liveness=dead
+  dead.pid_start = 1
+  dead.updated_at = new Date(Date.now() - 30 * 3_600_000).toISOString()
+  fs.writeFileSync(deadFile, `${JSON.stringify(dead, null, 2)}\n`)
+  assert.equal(gcLegacyHeartbeats(root, contract).removed.length, 0, '不给阈值时不按年龄回收')
+  const aged = gcLegacyHeartbeats(root, contract, { olderThanHours: 24, dryRun: true })
+  assert.deepEqual(aged.removed.map((item) => item.file), [`${deadSession}.json`])
+  assert.equal(aged.removed[0].reason, 'dead')
+  assert.ok(fs.existsSync(deadFile), 'dry-run 不删除')
+  const pruned = gcLegacyHeartbeats(root, contract, { olderThanHours: 24 })
+  assert.deepEqual(pruned.removed.map((item) => item.file), [`${deadSession}.json`])
+  assert.ok(!fs.existsSync(deadFile), '判死且够旧的记录被回收')
+  assert.ok(fs.existsSync(heartbeatPath(root, 'session-main')), '活着的会话心跳保留')
 })
 
 test('心跳 session 安全校验：空、过长、路径穿越、控制字符都拒绝；缺省回落 DSH_SESSION_ID', () => {
@@ -2898,7 +2917,7 @@ test('CLI heartbeat：子会话拒绝写心跳，主会话放行；旧子会话�
   assert.ok(!fs.existsSync(path.join(root, '.agents/heartbeat', 'session-old-sub.json')))
   const humanGc = runCli(root, ['heartbeat', 'gc'], cleanEnv)
   assert.equal(humanGc.code, 0)
-  assert.ok(humanGc.stdout.includes('已清理旧子会话心跳 0 条'), humanGc.stdout)
+  assert.ok(humanGc.stdout.includes('已清理旧心跳 0 条'), humanGc.stdout)
 })
 
 test('CLI gate：disabled 拒绝、--force 可跑、enable/disable 糖、run --phase 汇总', () => {

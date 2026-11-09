@@ -20,7 +20,7 @@
 
 | 模块 | 职责 | 独占文件（owns） | 共享文件（shared） | 测试 |
 |---|---|---|---|---|
-| `framework` | Host 装配：`apply`、路由、工具/技能/提示注册、权限面、子插件入口、清单；装配层已拆到 `lib/host/*` | `index.js`、`lib/host/*`、`tasks.js`/`gates.js`/`experiments.js`、`tui-host.js`、`lib/plugin/*`、`dsh-plugin.json`、`cordis.patch.yml`、`package.json`、`docs/`、`scripts/module-domain.mjs` | `lib/core.mjs`（contract/storage-helpers/aggregate）、`bin/flow.mjs`（entry）、`README.md`（selftest-count）、`CONTRACT.md`（c1.1） | 7 |
+| `framework` | Host 装配：`apply`、路由、工具/技能/提示注册、权限面、子插件入口、清单；装配层已拆到 `lib/host/*` | `index.js`、`lib/host/*`、`tasks.js`/`gates.js`/`experiments.js`、`tui-host.js`、`lib/plugin/*`、`dsh-plugin.json`、`cordis.patch.yml`、`package.json`、`docs/`、`scripts/module-domain.mjs`、`scripts/doc-counts.mjs` | `lib/core.mjs`（contract/storage-helpers/aggregate）、`bin/flow.mjs`（entry）、`README.md`（selftest-count）、`CONTRACT.md`（c1.1） | 7 |
 | `store` | 存储基础：契约骨架、锁、原子写、路径 containment、进程树 | `lib/core.mjs`、`lib/util.mjs`、`lib/paths.mjs`、`lib/atomic.mjs`、`lib/lock.mjs`、`lib/proc.mjs` | — | 6 |
 | `tasks` | 任务 CRUD、九阶段状态机、捕获流水线、子任务、P3b 派工、团队板对账 | `lib/stage.mjs`、`lib/capture.mjs`、`lib/team-sync.mjs`、`lib/dispatch.mjs`、`lib/tools/tasks.mjs`、`lib/tools/subtasks.mjs` | `lib/core.mjs`（tasks）、`lib/state-snapshot.mjs`（snapshot-tasks）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.2） | 12 |
 | `decisions` | 决策台账、否决、命令解析、会话隔离 | `lib/veto.mjs`、`lib/commands.mjs` | `lib/core.mjs`（decisions×2）、`lib/host/session.mjs`（reminder）、`lib/host/tools.mjs`（tools）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.6） | 4 |

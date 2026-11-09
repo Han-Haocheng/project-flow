@@ -24,7 +24,8 @@
         "scripts/module-domain.mjs",
         "docs/",
         "scripts/commit-scope.mjs",
-        "lib/host/"
+        "lib/host/",
+        "scripts/doc-counts.mjs"
       ],
       "shared": [
         "lib/core.mjs",

@@ -781,7 +781,10 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 - `endHeartbeat` 只写 `ended_at` 并保留文件（面板仍要列出），不删除。
 - **旧子会话心跳**：已移除的「子代理自动开合心跳」留下的 `agent: "subagent"` 记录是历史
   数据。读侧把它投影为 `legacy: true` / `hidden: true`，**不进入面板与 CLI list**，只计入
-  `counts.hidden`；`flow heartbeat gc [--dry-run]` 清理这些文件（其余心跳保留）。
+  `counts.hidden`；`flow heartbeat gc [--dry-run] [--older-than-hours N] [--older-than-hours N]` 清理这些文件。
+  2026-11-09 起再加一条回收口径：**判死（boot 变了 / pid 没了）或自己声明结束（status=done
+  且有 ended_at）且年龄超过 N 小时**的记录也清理；`idle`/`working` 且 pid 还活着、或 `foreign`
+  （另一台机器可能在跑）一律保留。不给 `--older-than-hours` 时只清 subagent 遗留，行为不变。
 - **读取只认 `*.json`**（心跳目录下的 `.md` 不再读取）：`readHeartbeats` 保留旧形状
   `{file,title,statusLine,ageSeconds,mtime}`（隐藏旧子会话记录）；`readHeartbeatSection`
   返回富形状 `{root,dir,items,counts}`，item 含
@@ -1194,7 +1197,7 @@ flow heartbeat end    [--note T] [--status done|missed] [--session S]
 flow heartbeat list [--all]
 flow heartbeat status [--require-active] [--session S]
 flow heartbeat rm <session>
-flow heartbeat gc [--dry-run]
+flow heartbeat gc [--dry-run] [--older-than-hours N]
 
 flow decision ask    --question Q --kind choice|approval|input
                      [--option 'id=label>>impact']... [--default ID]
@@ -2333,7 +2336,7 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
 - **心跳根 = 项目主工作区**：worktree 会话也写主工作区的 `.agents/heartbeat`，
   见 §3.5 的解析与降级规则。这样「面板默认看主工作区」与「worktree 会话的心跳」不再分裂。
 - **旧数据**：`agent: "subagent"` 的历史心跳读侧隐藏（`counts.hidden`），
-  `flow heartbeat gc [--dry-run]` 清理。
+  `flow heartbeat gc [--dry-run] [--older-than-hours N]` 清理。
 - 子代理的进度通过**最终报告**回到主会话，由主会话统一登记/收尾心跳；这与 Agent Teams
   的任务板 + 最终报告模型一致。
 
