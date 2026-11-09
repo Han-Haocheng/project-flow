@@ -163,24 +163,27 @@ test('真值回归：本仓库真实台账的未完成数远小于总数，done/
   const { contract } = loadContract(REPO)
   const block = buildStatusBlock({ listTasks }, REPO, contract)
 
-  // 台账天天在长（2026-11-08 已到 74 条），所以守**比例**而不是绝对值：
-  // 绝对上界第一次写 10，两天后就被真实增长顶红——那不是回归，是断言会腐。
-  assert.ok(
-    block.unfinished < files.length / 2,
-    `未完成应远小于总数（实际 ${block.unfinished} / ${files.length} 条）`,
-  )
-  assert.ok(block.counts.done > 30, `done 应是大头（实际 ${block.counts.done}）`)
-  assert.ok(block.counts.archived > 10, `archived 应是大头（实际 ${block.counts.archived}）`)
-  // 2× 是稳健下限：capture 会把最近一轮会话消息集中堆成"未完成"，短期把 3× 顶红
-  // （2026-11-08 实测 75 vs 26）。这条断言只防"倒挂"——完成/归档量被未完成反超。
-  assert.ok(
-    block.counts.done + block.counts.archived > block.unfinished * 2,
-    `已完成/已归档应远多于未完成（done ${block.counts.done} + archived ${block.counts.archived} vs 未完成 ${block.unfinished}）`,
-  )
-  // 九键齐全，且总数守恒（每条的 stage 都必须落进某一个键）
+  /* 2026-11-09（审计项 8）：这里原来还断言「done > 30 / archived > 10 /
+     done+archived > 2×unfinished」——那是拿**真实台账的增长**当回归信号，比例会被
+     捕获噪音推翻（2026-11-08 实测 75 vs 26，3× 先被放宽到 2× 再被顶红）。台账在动，
+     比例断言只会腐。改为三条结构性真值，任何台账规模都成立：
+       ① 九键齐全、总数守恒（每条的 stage 必须落进某一个键）；
+       ② unfinished = total − done − archived（口径自洽，不依赖数量）；
+       ③ 栈里不许出现 done/archived 的行（task-68 的真 bug：完成任务被判成未完成）。 */
   assert.deepEqual(Object.keys(block.counts), [...STAGE_IDS])
   const total = Object.values(block.counts).reduce((sum, count) => sum + count, 0)
   assert.equal(total, files.length, 'counts 总和必须等于台账条数（不许有被丢弃的记录）')
+  assert.equal(
+    block.unfinished,
+    total - block.counts.done - block.counts.archived,
+    '未完成 = 总数 − done − archived（口径必须自洽）',
+  )
+  for (const row of block.stack) {
+    assert.ok(
+      row.stage !== 'done' && row.stage !== 'archived',
+      `栈里出现已完成任务 ${row.id}（stage=${row.stage}）——正是 task-68 那个 bug`,
+    )
+  }
 })
 
 // --------------------------- 5. 反向：显式 stage 优先于 status 反推
