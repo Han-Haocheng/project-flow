@@ -29,6 +29,14 @@ import { TASK_ADD_FIELDS, TASK_UPDATE_FIELDS } from '../lib/plugin/shared.mjs'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
 const BIN_SOURCE = fs.readFileSync(BIN, 'utf8')
+const ROOT = path.resolve(HERE, '..')
+
+/** CLI 实现源码：bin 入口 +（拆分后）lib/cli 命令模块；缺失目录时只扫 bin。 */
+function cliImplementationSource() {
+  const dir = path.join(ROOT, 'lib', 'cli')
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.mjs')).sort() : []
+  return [BIN_SOURCE, ...files.map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))].join('\n')
+}
 const TEMP_ROOTS = []
 
 /**
@@ -329,7 +337,7 @@ test('type：flow_task schema enum/必填 + SPEC↔handler 白名单含 type', a
     // 更强：原来只验前 3 个，现在验的是 SPEC 里声明的**全体**都必须在 handler 白名单里可读。
     assert.ok(flags.includes('id') && flags.includes('title'), `SPEC.task.${command}.flags 缺 id/title`)
   }
-  assert.match(BIN_SOURCE, /feat\|fix\|docs\|style\|refactor\|perf\|test\|chore\|build\|ci/)
+  assert.match(cliImplementationSource(), /feat\|fix\|docs\|style\|refactor\|perf\|test\|chore\|build\|ci/)
 
   // A11：`goal` 已从工具 schema/白名单里删除（②），只在"已合并"说明里出现。
   assert.equal(taskTool.parameters.properties.goal, undefined, 'flow_task 不再暴露 goal 参数')
