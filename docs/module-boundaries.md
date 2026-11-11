@@ -108,7 +108,42 @@ node scripts/module-domain.mjs verify  # 期望 exit 0
 |---|---|---|
 | 1 | `lib/core.mjs` 按 `sections` 拆成 `lib/store/{contract,tasks,decisions,heartbeats,gates,experiments,description,aggregate}.mjs`，`core.mjs` 变成只做 re-export 的聚合层（所有现有 `import ... from './core.mjs'` 不变） | **未做**（下一期） |
 | 2 | `index.js` 拆成 `lib/host/*.mjs`，`index.js` 只剩 `apply` 装配 | ✅ 2026-11-08 完成（3256 → 320 行；707 用例 + 6 selftest 全绿） |
-| 3 | `client.js` 按面板区块拆（零 import、无构建的约束下用对象挂载或 IIFE 分片） | 未做 |
+| 3 | `client.js` 按面板区块拆 | **2026-11-11 判定：不拆**（见 §7.1） |
 
 每期都按「先加新文件 + re-export，再迁移实现，最后删旧段」三步走，任何一步测试全绿才进下一步。
 期 2 的实际顺序：`shared` → `session`（用 `sessionHooks` 注入打破与 enforce/team 的循环）→ `routes` → `team` → `state` → `enforce` → `tools` → `skills` → `index.js` 只剩入口。
+
+### 7.1 client.js 为什么保持单文件（2026-11-11 只读评估）
+
+评估结论：**物理拆分的两条路都不划算，保持单文件 + `#region` 逻辑分区。**
+
+1. **ESM 拆分（`lib/panel/*.mjs` + import/export）不可行（P0）**：DSH 宿主把
+   `package.json` 的 `exports["./client"]` 文件**原样当经典脚本**下发（`<script src>`、
+   无 `type=module`、不打包、只剥 sourcemap 后与其他插件 `;` 拼接），静态 import 在
+   浏览器就是 SyntaxError；`node --check` 因按 ESM 解析还会给出假绿。三个探针
+   harness（`.selftest/client-render.mjs`、`client-poll.mjs` 复制到 `.client-probe/`，
+   `test/t-20261111-01-goals-framework.test.mjs` 写 `.cjs`）在拆分后分别会
+   `ERR_MODULE_NOT_FOUND` / 语法错；另有 10 处直接读 `client.js` 源码的断言（字典定位、
+   CSS、token、挂载顺序）会全红。
+2. **源分片 + 生成单文件（形态 B）技术可行但代价过高**：原型按现有区段切片再顺序拼接，
+   输出与现文件逐字节相同（md5 一致），selftest 零改动；但要引入 `scripts/build-client.mjs`
+   构建步骤与漂移守卫 `--check`，并同步 CONTRACT/README/写域数据——与本插件
+   「零 import、无构建」的定位冲突。当前收益（5 个模块共享文件的写域冲突）不足以换这一层
+   构建管线；等真实出现并行编辑冲突再重启。
+3. **宿主 chunk（`client.<name>.js` + `require.async`）不满足约束**：异步化后
+   `__probe` 无法同步导出，两个 selftest 必须改；且 HMR 只监听入口、chunk 响应带
+   immutable，改了看不到。
+
+**当前并行编辑约定**（`client.js` 仍是 5 个模块的 shared 文件）：
+
+| 区段（`#region`） | 行段 | 主要归属 |
+|---|---|---|
+| locale dictionaries | 141–~500 | panel（改动影响所有卡片，需全员知觉） |
+| defensive helpers / state normalization / icon / presentational / fold header | ~502–1768 | panel |
+| experiment tree | ~1442–1577 | experiments |
+| right column cards | ~1769–3018 | tasks / decisions / heartbeats / gates / experiments（各自只改自己的卡片组件，跨卡片改动先协商） |
+| top bar / footer / states / panel + polling / display preferences / right-bar seats | ~3019–4064 | panel |
+| styles | ~4065–4370 | panel |
+
+真正发生并行冲突时，优先方案是给 `right column cards` 段内加更细的 `#region` 锚点并登记
+`sections`，而不是引入构建。
