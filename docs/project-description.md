@@ -1,7 +1,7 @@
 # 项目描述：project-flow
 
 > 生成物：由 `flow desc render` 从 `.agents/description/` 生成，不要手改。
-> 文件 44 ｜ 模块 119 ｜ 未描述 0
+> 文件 47 ｜ 模块 119 ｜ 未描述 0
 
 ## 1 项目语义
 
@@ -15,9 +15,9 @@ graph LR
   n2["experiments.js"]
   n3["gates.js"]
   n4["index.js"]
-  n41["tasks.js"]
-  n42["tui-host.js"]
-  n43["tui-panel.js"]
+  n44["tasks.js"]
+  n45["tui-host.js"]
+  n46["tui-panel.js"]
   subgraph bin
     n0["bin/flow.mjs"]
   end
@@ -29,48 +29,50 @@ graph LR
     n9["lib/commands.mjs"]
     n10["lib/core.mjs"]
     n11["lib/desc.mjs"]
-    n12["lib/host/enforce.mjs"]
-    n13["lib/host/routes.mjs"]
-    n14["lib/host/session.mjs"]
-    n15["lib/host/shared.mjs"]
-    n16["lib/host/skills.mjs"]
-    n17["lib/host/state.mjs"]
-    n18["lib/host/team.mjs"]
-    n19["lib/host/tools.mjs"]
-    n20["lib/lock.mjs"]
-    n21["lib/paths.mjs"]
-    n22["lib/plugin/mount.mjs"]
-    n23["lib/plugin/shared.mjs"]
-    n24["lib/proc.mjs"]
-    n25["lib/runner.mjs"]
-    n26["lib/source-scan.mjs"]
-    n27["lib/stage.mjs"]
-    n28["lib/state-snapshot.mjs"]
-    n29["lib/team-sync.mjs"]
-    n30["lib/tools/experiments.mjs"]
-    n31["lib/tools/gates.mjs"]
-    n32["lib/tools/subtasks.mjs"]
-    n33["lib/tools/tasks.mjs"]
-    n34["lib/util.mjs"]
-    n35["lib/veto.mjs"]
+    n12["lib/dispatch.mjs"]
+    n13["lib/host/enforce.mjs"]
+    n14["lib/host/routes.mjs"]
+    n15["lib/host/session.mjs"]
+    n16["lib/host/shared.mjs"]
+    n17["lib/host/skills.mjs"]
+    n18["lib/host/state.mjs"]
+    n19["lib/host/team.mjs"]
+    n20["lib/host/tools.mjs"]
+    n21["lib/lock.mjs"]
+    n22["lib/paths.mjs"]
+    n23["lib/plugin/mount.mjs"]
+    n24["lib/plugin/shared.mjs"]
+    n25["lib/proc.mjs"]
+    n26["lib/runner.mjs"]
+    n27["lib/source-scan.mjs"]
+    n28["lib/stage.mjs"]
+    n29["lib/state-snapshot.mjs"]
+    n30["lib/store/records.mjs"]
+    n31["lib/team-sync.mjs"]
+    n32["lib/tools/experiments.mjs"]
+    n33["lib/tools/gates.mjs"]
+    n34["lib/tools/subtasks.mjs"]
+    n35["lib/tools/tasks.mjs"]
+    n36["lib/util.mjs"]
+    n37["lib/veto.mjs"]
   end
   subgraph scripts
-    n36["scripts/commit-scope.mjs"]
-    n37["scripts/module-domain.mjs"]
+    n38["scripts/commit-scope.mjs"]
+    n39["scripts/doc-counts.mjs"]
+    n40["scripts/module-domain.mjs"]
   end
   subgraph skills
-    n38["skills/ai-collaborative-dev-workflow/scripts/doc_check.py"]
-    n39["skills/ai-collaborative-dev-workflow/scripts/gate.py"]
-    n40["skills/ai-collaborative-dev-workflow/scripts/precision_common.py"]
+    n41["skills/ai-collaborative-dev-workflow/scripts/doc_check.py"]
+    n42["skills/ai-collaborative-dev-workflow/scripts/gate.py"]
+    n43["skills/ai-collaborative-dev-workflow/scripts/precision_common.py"]
   end
   n0 --> n6
-  n2 --> n22
-  n2 --> n30
-  n3 --> n22
-  n3 --> n31
+  n2 --> n23
+  n2 --> n32
+  n3 --> n23
+  n3 --> n33
   n4 --> n7
   n4 --> n9
-  n4 --> n12
   n4 --> n13
   n4 --> n14
   n4 --> n15
@@ -78,111 +80,119 @@ graph LR
   n4 --> n17
   n4 --> n18
   n4 --> n19
-  n4 --> n22
+  n4 --> n20
   n4 --> n23
-  n4 --> n27
+  n4 --> n24
   n4 --> n28
   n4 --> n29
-  n4 --> n32
-  n4 --> n35
-  n5 --> n34
-  n7 --> n27
-  n8 --> n24
+  n4 --> n31
+  n4 --> n34
+  n4 --> n37
+  n5 --> n36
+  n7 --> n28
+  n8 --> n25
   n10 --> n5
   n10 --> n11
-  n10 --> n20
   n10 --> n21
-  n10 --> n24
+  n10 --> n22
   n10 --> n25
-  n10 --> n27
-  n10 --> n34
-  n11 --> n26
-  n11 --> n34
-  n12 --> n14
-  n12 --> n22
-  n12 --> n27
+  n10 --> n26
+  n10 --> n28
+  n10 --> n30
+  n10 --> n36
+  n11 --> n27
+  n11 --> n36
   n12 --> n28
+  n12 --> n36
   n13 --> n15
+  n13 --> n23
   n13 --> n28
-  n14 --> n6
-  n14 --> n7
-  n14 --> n9
-  n14 --> n15
-  n14 --> n22
-  n14 --> n23
-  n14 --> n27
-  n14 --> n28
+  n13 --> n29
+  n14 --> n16
   n14 --> n29
-  n14 --> n32
-  n14 --> n35
-  n15 --> n22
+  n15 --> n6
+  n15 --> n7
+  n15 --> n9
+  n15 --> n16
   n15 --> n23
+  n15 --> n24
   n15 --> n28
-  n16 --> n14
-  n16 --> n15
-  n16 --> n22
-  n16 --> n28
-  n17 --> n7
-  n17 --> n9
-  n17 --> n13
-  n17 --> n14
+  n15 --> n29
+  n15 --> n31
+  n15 --> n34
+  n15 --> n37
+  n16 --> n23
+  n16 --> n24
+  n16 --> n29
   n17 --> n15
-  n17 --> n18
-  n17 --> n22
+  n17 --> n16
   n17 --> n23
-  n17 --> n27
-  n17 --> n28
   n17 --> n29
-  n17 --> n32
-  n17 --> n35
+  n18 --> n7
+  n18 --> n9
   n18 --> n14
   n18 --> n15
+  n18 --> n16
+  n18 --> n19
+  n18 --> n23
+  n18 --> n24
   n18 --> n28
   n18 --> n29
-  n19 --> n7
-  n19 --> n9
-  n19 --> n12
-  n19 --> n13
-  n19 --> n14
+  n18 --> n31
+  n18 --> n34
+  n18 --> n37
   n19 --> n15
-  n19 --> n17
-  n19 --> n18
-  n19 --> n22
-  n19 --> n23
-  n19 --> n27
-  n19 --> n28
+  n19 --> n16
   n19 --> n29
-  n19 --> n32
-  n19 --> n35
-  n20 --> n5
+  n19 --> n31
+  n20 --> n7
+  n20 --> n9
+  n20 --> n13
+  n20 --> n14
+  n20 --> n15
+  n20 --> n16
+  n20 --> n18
+  n20 --> n19
+  n20 --> n23
+  n20 --> n24
+  n20 --> n28
+  n20 --> n29
+  n20 --> n31
   n20 --> n34
-  n21 --> n34
-  n22 --> n23
-  n22 --> n28
-  n23 --> n28
-  n23 --> n34
-  n25 --> n24
-  n25 --> n34
-  n26 --> n34
-  n27 --> n34
-  n28 --> n27
-  n29 --> n10
-  n29 --> n34
-  n30 --> n23
-  n30 --> n28
-  n31 --> n23
-  n31 --> n28
-  n32 --> n23
-  n32 --> n27
-  n32 --> n28
-  n33 --> n23
-  n33 --> n28
-  n35 --> n10
-  n35 --> n34
-  n41 --> n22
-  n41 --> n33
-  n42 --> n4
-  n42 --> n43
+  n20 --> n37
+  n21 --> n5
+  n21 --> n36
+  n22 --> n36
+  n23 --> n24
+  n23 --> n29
+  n24 --> n29
+  n24 --> n36
+  n26 --> n25
+  n26 --> n36
+  n27 --> n36
+  n28 --> n36
+  n29 --> n28
+  n30 --> n36
+  n31 --> n10
+  n31 --> n36
+  n32 --> n24
+  n32 --> n29
+  n33 --> n24
+  n33 --> n29
+  n34 --> n24
+  n34 --> n28
+  n34 --> n29
+  n35 --> n12
+  n35 --> n24
+  n35 --> n29
+  n35 --> n31
+  n35 --> n36
+  n37 --> n10
+  n37 --> n36
+  n44 --> n23
+  n44 --> n35
+  n45 --> n4
+  n45 --> n46
 ```
 
 ## 3 文件与模块
@@ -295,7 +305,6 @@ project-flow 的宿主入口（装配层）：声明 inject=['webServer'] 并 ap
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 入口依赖与常量：inject=['webServer']（TUI 宿主无 webServer 时本入口保持 pending，子插件仍可用），以及从 lib/host/* 引入的装配符号。 | inject |
 | tools | 装配：mountJsonRoute 把一条路由挂到 webServer（effect 内注册、卸载即注销）；apply 依次建 state 池、挂三条路由、注册工具/技能/提示/提醒/心跳钩子，并用 sessionHooks 注入 restrict 与 team caller 记忆。 | mountJsonRoute、apply |
 
 ### 3.6 lib/atomic.mjs
@@ -316,7 +325,7 @@ project-flow 的宿主入口（装配层）：声明 inject=['webServer'] 并 ap
 
 ### 3.8 lib/capture.mjs
 
-P1 捕获管线：在 agent/pre-step 只把本轮新增的用户话（排除 /命令、系统注入、队友消息、挂载前的历史与重复项）放进内存队列，再由 agent/turn-stopping 的 flushCapture 唯一写盘，落成 type=chore、source={kind:'utterance',key,at,text,attachments?} 的任务并从 created 推进到 queued-analysis。去重键以宿主稳定消息 id 为主料（无 id 时回落 timestamp+text），附件引用（image/file）规范化为 source.attachments 只存引用不存字节；纯附件无文字的消息也建卡并以「[附件] 图片 ×N」兜底标题。它同时装配 §9 状态块（栈顶、阶段计数、最近捕获、Team），供 index.js、flow_status 与 CLI status 共用；不 import core（由调用方注入），pre-step 永不抛错/写盘。
+P1 捕获流水线：agent/pre-step 只做内存的排除/集合差去重，agent/turn-stopping 才落盘（source.key 跨进程去重、创建即推进 queued-analysis）；同时产出 §9 状态块与栈顶选取。系统/同伴/后台任务通知按前缀排除，用户聊天才建卡；不 import core（core 由 index.js 注入，宿主无 core 时捕获自然降级）。
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
@@ -333,7 +342,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | RAW_CATALOG 固定四个检查及其解释器与参数契约，getCheck/listChecks 对外暴露；buildInvocation 只做参数合法性校验（未知检查、缺 --allow/--marker/--file/--type 一律 usage 报错），不触碰文件系统。 | DEFAULT_TIMEOUT_SECONDS、MAX_CAPTURE_BYTES、SCRIPTS_REL、SCRIPTS_DIR、DOC_TYPES、CHECK_EXIT_BY_CODE、RAW_CATALOG、CHECKS、scriptsDir、listChecks、getCheck、CheckError、usageError、normalizeAllows、buildInvocation |
+| top | RAW_CATALOG 固定四个检查及其解释器与参数契约，getCheck/listChecks 对外暴露；buildInvocation 只做参数合法性校验（未知检查、缺 --allow/--marker/--file/--type 一律 usage 报错），不触碰文件系统。 | DEFAULT_TIMEOUT_SECONDS、MAX_CAPTURE_BYTES、SCRIPTS_REL、SCRIPTS_DIR、DOC_TYPES、CHECK_EXIT_BY_CODE、RAW_CATALOG、CHECKS、scriptsDir、listChecks、getCheck、usageError、normalizeAllows、buildInvocation、CheckError |
 | section-1 | runCheck 先确认脚本存在、根目录是目录，再 spawn 并在超时后杀进程树；stdout/stderr 各只留最后 8 KiB，退出码统一映射为 0/1/2/3/4，win32 在 taskkill 后仍有 2s grace 兜底 resolve，绝不让检查永久挂起。 | createTail、writeThrough、superviseCheckChild、runCheck |
 
 ### 3.10 lib/commands.mjs
@@ -356,7 +365,6 @@ graph LR
   m13["aggregate"] --> m5["experiments"]
   m13["aggregate"] --> m7["gates"]
   m13["aggregate"] --> m11["heartbeat-liveness"]
-  m13["aggregate"] --> m4["storage-helpers"]
   m13["aggregate"] --> m6["tasks"]
   m13["aggregate"] --> m0["top"]
   m2["contract"] --> m1["decisions"]
@@ -367,7 +375,6 @@ graph LR
   m8["decisions-2"] --> m1["decisions"]
   m8["decisions-2"] --> m3["default-gate-seeds"]
   m8["decisions-2"] --> m7["gates"]
-  m8["decisions-2"] --> m4["storage-helpers"]
   m8["decisions-2"] --> m6["tasks"]
   m8["decisions-2"] --> m0["top"]
   m3["default-gate-seeds"] --> m2["contract"]
@@ -375,14 +382,12 @@ graph LR
   m14["description"] --> m2["contract"]
   m14["description"] --> m8["decisions-2"]
   m14["description"] --> m3["default-gate-seeds"]
-  m14["description"] --> m4["storage-helpers"]
   m14["description"] --> m6["tasks"]
   m15["description-stage-gate"] --> m2["contract"]
   m15["description-stage-gate"] --> m14["description"]
   m5["experiments"] --> m2["contract"]
   m5["experiments"] --> m1["decisions"]
   m5["experiments"] --> m3["default-gate-seeds"]
-  m5["experiments"] --> m4["storage-helpers"]
   m5["experiments"] --> m6["tasks"]
   m5["experiments"] --> m0["top"]
   m7["gates"] --> m2["contract"]
@@ -401,7 +406,6 @@ graph LR
   m12["heartbeat-write-api"] --> m11["heartbeat-liveness"]
   m12["heartbeat-write-api"] --> m10["heartbeat-workspace-root"]
   m12["heartbeat-write-api"] --> m9["heartbeats"]
-  m12["heartbeat-write-api"] --> m4["storage-helpers"]
   m12["heartbeat-write-api"] --> m6["tasks"]
   m9["heartbeats"] --> m2["contract"]
   m9["heartbeats"] --> m3["default-gate-seeds"]
@@ -415,7 +419,6 @@ graph LR
   m6["tasks"] --> m15["description-stage-gate"]
   m6["tasks"] --> m5["experiments"]
   m6["tasks"] --> m12["heartbeat-write-api"]
-  m6["tasks"] --> m4["storage-helpers"]
   m6["tasks"] --> m0["top"]
 ```
 
@@ -425,15 +428,15 @@ graph LR
 | decisions | 决策、心跳、实验、任务共用的常量与默认值：决策状态/种类、问题与理由长度上限、固定 approve/reject 选项，心跳超时与 Windows 会话名黑名单，PLUGIN_BIN，EXPERIMENT_DEFAULTS/TASK_DEFAULTS 及可写字段白名单、DAY_MS；它们是 defaultContract 与各 build*/apply* 校验的唯一常量来源。 | DECISION_SCHEMA、DECISION_STATUS、DECISION_KINDS、DECISION_ESCALATE_TURNS、DECISION_ESCALATE_HOURS、DECISION_GC_DAYS、DECISION_REMIND_MAX、DECISION_ID_RE、DECISION_OPTION_ID_RE、DECISION_QUESTION_MAX、DECISION_RATIONALE_MAX、DECISION_BY、DECISION_APPROVAL_OPTIONS、HEARTBEAT_STALE_SECONDS、HEARTBEAT_SCHEMA、HEARTBEAT_STATUS、HEARTBEAT_ACTIVE_STATUS、HEARTBEAT_PATCH_KEYS、HEARTBEAT_SESSION_MAX、HEARTBEAT_CLAIM_MAX、WINDOWS_RESERVED_SESSION_NAMES、WINDOWS_UNSAFE_SESSION_CHARS_RE、PLUGIN_BIN、EXPERIMENT_DEFAULTS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、TASK_ARCHIVE_AFTER_DAYS、TASK_ARCHIVE_MAX_DAYS、DAY_MS |
 | contract | 契约的读写与归一：defaultContract 给全部默认值，sanitizeContract 逐字段校验非法值并回退默认同时记 manifest-invalid，loadContract/saveContract 负责 flow.json，initProject 建库并 seed 门禁；storePaths 把契约目录解析为绝对路径并强制 containment，所有读写都先经过它。 | defaultContract、valueType、contractShapes、matchesContractKind、sanitizeContract、normalizeContract、loadContract、saveContract、resolveDir、storePaths、assertInitialized、initLockContract、initProject、PROJECT_ROOT_CACHE、resolveProjectRoot |
 | default-gate-seeds | flow init 时种子门禁（session-open/precommit/tests/release）的定义与写入，以及全库写路径共用的 withLock；不变量：只在 gates 目录里一个 .json 都没有时 seed，withLock 的 fn 必须同步且不可重入。 | defaultGateSeeds、seedDefaultGates、withLock |
-| storage-helpers | 集合与单条记录的读写原语：readCollection 跳过坏记录并以 unreadable 报告、requireText/optional* 收紧字段类型、assertSafeId 拒绝路径穿越、nextId/nextTaskId 生成不撞号的 id、sortByUpdatedDesc/sortByCreatedAsc 固定排序；各 CRUD 模块都建立在这些原语上。 | readCollection、unreadableCollector、assertTargetFree、assertSafeId、readRecord、sortByUpdatedDesc、sortByCreatedAsc、nextId、nextTaskId、assertPattern、requireText、optionalText、optionalBoolean、optionalEnum、optionalInt、stringArray、slugify、statusCounts |
+| storage-helpers | 集合与单条记录的读写原语：readCollection 跳过坏记录并以 unreadable 报告、requireText/optional* 收紧字段类型、assertSafeId 拒绝路径穿越、nextId/nextTaskId 生成不撞号的 id、sortByUpdatedDesc/sortByCreatedAsc 固定排序；各 CRUD 模块都建立在这些原语上。 | slugify |
 | experiments | 实验台账：schema2 七字段（direction/expected/primaryMetric/guardrails/falsify/windowDays/stopLoss）校验、终态补强（confirmed 需 measured+metrics、pivoted 需 learned+后继）与 CRUD；schema≠2 的旧记录只读，reviewExperimentRecord/checkExperiments 是 check 命令的唯一判定实现。 | normalizeParent、isLegacyExperiment、schema2FieldProblems、normalizeSchema2Fields、normalizeCleanup、warnTerminalGaps、validateExperimentTerminal、validateExperimentFields、buildExperiment、applyExperimentPatch、experimentIds、warnTaskExperiment、experimentContext、listExperiments、getExperiment、addExperiment、updateExperiment、cleanupExperiment、productizeExperiment、REVIEW_BRANCH、reviewExperimentRecord、checkExperiments、removeExperiment、createsCycle、experimentTree |
-| tasks | 任务台账：创建/更新字段白名单校验、由 stage 派生 status、started/done/archived 时间戳投影、旧记录 goal 合并与 type 回填迁移、终态归档；updateTask 在写盘之前调用描述阶段门，被拒时不留任何磁盘残留。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks、releaseDeadSessionTasks |
+| tasks | 任务台账：创建/更新字段白名单校验、由 stage 派生 status、started/done/archived 时间戳投影、旧记录 goal 合并与 type 回填迁移、终态归档、死会话任务释放、消息卡收口（sweepUtteranceTasks）；updateTask 在写盘之前调用描述阶段门，被拒时不留任何磁盘残留。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks、releaseDeadSessionTasks、sweepUtteranceTasks、utteranceCardAgeHours、utteranceCardSkipReason |
 | gates | 门禁定义的 CRUD 与 step 规范化：step id 唯一、expect 默认 exit 0 且语法未知时只告警、timeoutSeconds 有下限、phase 限于 commit/release/manual；这里只存定义，执行入口 runGate 在决策段。 | buildStep、validateGateFields、buildGate、applyGatePatch、gateIds、listGates、getGate、addGate、updateGate、removeGate |
 | decisions-2 | 决策记录与门禁执行：kind+问题文本的 sha256 指纹去重、open 才可答复、关闭后不可再改（重问需 supersede 新记录）、GC 只清关闭记录；listDecisions/summarizeDecisions 在给定 session 时按 asked_session 隔离（无 session 是全局视图，asked_session 为空的旧记录对任何会话都不可见）；purgeArchivedDecisions 按 Host 的归档会话集合删除其全部记录（含终态）并清空任务 decision 指针；同段还收纳 runGate/runGatesByPhase/listGateRuns，按 step 顺序执行、首个失败即停，并把合并输出写到 .agents/flow/logs/<gateId>/<timestamp>.json。 | codePointLength、decisionFingerprint、normalizeDecisionAffect、normalizeDecisionAffects、normalizeDecisionBlocks、buildDecisionOptions、decisionOptionId、normalizeDecisionSupersedes、normalizeDecisionFields、buildDecision、decisionRecords、decisionIds、decisionSortedNewest、annotateDecision、decisionOwnedBy、decisionSessionOf、decisionOpenOrder、listDecisions、getDecision、decisionClosedHint、addDecision、requireOpenDecision、answerDecision、withdrawDecision、gcDecisions、clearDecisionPointers、purgeArchivedDecisions、summarizeDecisions、decisionAffectsMatch、decisionStagedFiles、checkDecisions、isoFileStamp、runGate、runGatesByPhase、listGateRuns |
 | heartbeats | 心跳相关的两个常量：正文裁剪上限 MAX_HEARTBEAT_CLIP（400 字符）与已废弃 subagent 自动化写入的 LEGACY_SUBAGENT_AGENT 标记；读侧据此隐藏遗留记录。 | MAX_HEARTBEAT_CLIP、LEGACY_SUBAGENT_AGENT、HEARTBEAT_TITLE_MAX、removeHeartbeat |
-| heartbeat-workspace-root | 把心跳目录解析到项目主工作树（git worktree 探测 + 进程内缓存），使同一项目的 linked worktree 会话共享同一份台账；git 不可用或主工作树没有 store 时降级回 cwd 并记 heartbeat-root-degraded。 | MAIN_WORKSPACE_CACHE、GIT_PROBE_TIMEOUT_MS、GIT_PROBE_MAX_BUFFER、gitProbe、gitMainWorktree、resolveHeartbeatWorkspace、heartbeatWorkspace、clipText、parseHeartbeatStamp |
+| heartbeat-workspace-root | 把心跳目录解析到项目主工作树（git worktree 探测 + 进程内缓存），使同一项目的 linked worktree 会话共享同一份台账；git 不可用或主工作树没有 store 时降级回 cwd 并记 heartbeat-root-degraded。 | MAIN_WORKSPACE_CACHE、GIT_PROBE_TIMEOUT_MS、GIT_PROBE_MAX_BUFFER、gitProbe、gitMainWorktree、resolveHeartbeatWorkspace、heartbeatWorkspace、clipText、parseHeartbeatStamp、gitBranchOf |
 | heartbeat-liveness | 心跳的只读活性判定：以 host/boot_id/pid/pid_start 证据区分 live/dead/stale/foreign/unknown，无证据时回退到 6 小时年龄规则；纯读不写盘，且一次性 CLI 进程不得用自身 pid 覆盖宿主的活性证据。 | BOOT_ID_FILE、cachedBootId、currentBootId、isFlowCliEntrypoint、pidStartTime、pidAlive、heartbeatEvidenceOf、isCliWriter、heartbeatWriterEvidence、heartbeatAgeOf、livenessOf、heartbeatIsActive、heartbeatFiles、readHeartbeatJson、readHeartbeats、heartbeatDirPath、heartbeatMax、richHeartbeatJson、readHeartbeatSection |
-| heartbeat-write-api | 心跳写 API：session 名当文件名前的安全校验（Windows 保留名、非法字符、尾点/空格、80 字符上限）、claims 裁剪、start/update/end/status/gc；start 幂等保留首个 started_at，无匹配任务时按 created_at FIFO 复用或新建草稿任务卡。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、heartbeatStatus、gcLegacyHeartbeats |
+| heartbeat-write-api | 心跳写 API：session 名当文件名前的安全校验（Windows 保留名、非法字符、尾点/空格、80 字符上限）、claims 裁剪、start/update/end/status/gc；start 幂等保留首个 started_at，无匹配任务时按 created_at FIFO 复用或新建草稿任务卡。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、heartbeatStatus、gcLegacyHeartbeats、heartbeatFileMtime |
 | aggregate | 面板与 flow status 的只读聚合：readStoreState 一次读出 experiments/tasks/gates/decisions/heartbeat 段与状态计数，不跑 git、不执行门禁、不写盘。 | summarizeRun、readStoreState |
 | description | 项目描述台账在 core 侧的编排：契约段归一（enforce/minSemanticsChars/maxScanBytes 等）、记录与计划的读写、build 同步结构与 moduleEdges、check 漂移校验、render 与 apply；写路径全部在 withLock 内用 writeJsonAtomic，读路径一律无锁，扫描/校验纯逻辑留在 lib/desc.mjs。 | DESCRIPTION_SCHEMA、DESCRIPTION_ENFORCE_MODES、DESCRIPTION_MIN_SEMANTICS、DESCRIPTION_MAX_SCAN_BYTES、DESCRIPTION_GATE_STAGES、DESCRIPTION_PLAN_STAGES、descriptionConfigOf、descriptionMinSemantics、descriptionMaxScanBytes、descriptionEnforce、safeRelativePath、descriptionNow、descriptionLayoutOf、descriptionPaths、readJsonRecord、compareByPath、descriptionFilesAt、descriptionRevisionOf、descriptionPlanCount、writeDescriptionProject、readDescriptionProject、listDescriptionFiles、getDescriptionFile、getDescriptionPlan、descriptionStatus、renderDescription、descriptionIssue、checkDescription、buildDescription、setDescriptionFile、setDescriptionProject、mergePlanInput、descriptionScopeMatcher、planBaseOf、setDescriptionPlan、applyDescriptionPlan |
 | description-stage-gate | updateTask 调用的阶段门适配器：仅在 queued-implementation/queued-review/done 且非内部写、非子任务、enforce≠off 时生效，前者只查计划形状，后两者跑完整 checkDescription（done 另需测试证据），失败抛 invalid 并附修复命令。 | descriptionGateFailure、descriptionGateHint、planGateItems、assertDescriptionGate |
@@ -498,7 +501,7 @@ graph LR
 | glob | 最小 glob 引擎：`**` 只在整段时匹配零或多段，`*`/`?` 限于段内，其余字符按字面量，先把模式编译成 RegExp 再由 globMatcher 复用；scopeMatcherOf 用 include ∧ ¬exclude 定义「参与描述的文件范围」，是 listSourceFiles 与 checkPlan 共用的同一口径，不允许两处各写一遍。 | REGEX_SPECIALS、escapeRegExpChar、segmentRegExp、globToRegExp、globPathOf、globMatcher、scopeMatcherOf |
 | section-5 | 只读访问工作树：递归列文件（跳过符号链接与非普通文件、超 maxFiles 截断并告警、按 path 排序）、readSource 在 realpath 上判出根并拒绝符号链接/二进制/超大文件、算 sha256 与行数（末尾换行不多算一行），再把 source-scan 的裸 import 解析成 {specifier,kind,target}——相对 specifier 解析不到时 target 留 null 并保留 raw 供 ghost-import 判定。 | absoluteOf、listSourceFiles、countLines、hashOf、readSource、stripSpecifierSuffix、firstExistingFile、resolveJsTarget、resolvePythonTarget、resolveImportTarget、normalizeImports、normalizeLanguage、scanSourceAt |
 | build | 新记录的结构播种：slugify 把段名折成模块 id（中文段名 slug 为空则回退 section-N，冲突依次 -2/-3 且不超 41 字符），JS 按列首 `// ---- 段名` 切段、Python 按 class 切段（其余顶层归 top-level）、无标记则整文件一个模块。边界：只决定初始分区，已有记录不会被重新播种，人工划分必须保留。 | slugify、uniqueModuleId、moduleOf、scanSectionMarkers、baseNameWithoutExtension、seedJsModules、seedPythonModules、seedModules |
-| section-7 | 记录的创建与对账：createRecord 产出结构齐全、semantics 为空串的 schema 1 记录（含按种子成员现算的模块边），reconcileRecord 只同步 hash/bytes/lines/language/imports/moduleEdges，而保留 semantics 与 modules（含已失效成员，留给 check 报 unknown-member）；structuralKey 相同即返回原记录且 changed:false，避免无变化写盘。 | declarationsOf、createRecord、normalizeImportsFromScanned、structuralKey、reconcileRecord |
+| section-7 | 记录的创建与对账：createRecord 产出结构齐全、semantics 为空串的 schema 1 记录（含按种子成员现算的模块边），reconcileRecord 只同步 hash/bytes/lines/language/imports/moduleEdges，而保留 semantics 与 modules（含已失效成员，留给 check 报 unknown-member）；structuralKey 相同即返回原记录且 changed:false，避免无变化写盘。 | declarationsOf、createRecord、normalizeImportsFromScanned、structuralKey、reconcileRecord、memberOwnerOf、autoAssignMembers、appendMembers |
 | section-8 | 从成员引用推模块边：模块 A 的任一成员在代码里引用了模块 B 的成员即 A→B，count 为去重后的命中对数、why 取前 3 对 `a → b`，边按 (from,to) 排序、自环丢弃；成员名跨模块重复时以先出现的模块为归属，保证同一输入永远得到同一条边表。canonicalEdges 是记录值与现算值比较用的同一形状。 | edgeComparator、canonicalEdges、deriveModuleEdges |
 | set | `flow desc set` 的单文件补丁模型：validateFilePatch 校验模块 id 正则、title/semantics 类型与下限、members 去重非空、op 合法性（remove 只收 id，add 必须给 semantics 与非空 members）；applyFilePatch 先删后改地落模块，成员必须真实存在于当前扫描声明（否则 invalid），补丁新造出的跨模块成员重复也拒绝，并按新成员重推 moduleEdges。注意补丁的 members 是整体替换，计划里的才是增量断言。 | validateFilePatch、validateModulePatch、memberListOf、normalizeModules、memberOwnersOf、duplicatedMembers、applyFilePatch |
 | section-10 | 计划与记录的逐项对账：planRealization 比较计划要求的语义文本与结构（模块存在性、成员子集），返回未落地项（空数组=完全落地），供 apply 判 applied、check 报 plan-unrealized；它只判「落地没落地」，合法性与覆盖范围交给 checkProject/checkPlan。issue/sortIssues 统一检查项形状（kind/path/module/detail/hint/level）与稳定排序。 | issue、sortIssues、planRealization |
@@ -508,7 +511,15 @@ graph LR
 | section-14 | 展示层：summarize 现算 counts（missingSemantics 按待填单元计——文件 1 + 每模块 1，described 只数达标的文件），renderMarkdown 按 spec §10 骨架输出确定性 Markdown（文件按 path、模块按记录顺序、边按 (from,to)，Mermaid 节点用序号、标签转义）。刻意不含墙钟时间：同 project + records 永远同字节，否则 render --check 会在每次 build 后必然 stale。 | summarize、escapeMermaidLabel、tableCell、memberCell、fileGraphLines、moduleGraphLines、renderMarkdown |
 | git | 降级用 git 探针：runGit 带 GIT_TIMEOUT_MS 超时跑只读命令，gitProbe 返回 {ok,head,reason}（非工作树/无提交/没装 git 都 ok:false），gitChangedFiles 用 diff --name-only 加未跟踪文件给出 add/change/remove 列表。git 不可用一律降级为 warning，是否阻断由调用方决定。 | GIT_TIMEOUT_MS、runGit、gitProbe、statusOfGitCode、gitChangedFiles |
 
-### 3.13 lib/host/enforce.mjs
+### 3.13 lib/dispatch.mjs
+
+P3b 派工核心：把台账任务的 queued-* 阶段映射成 analyzer/implementer/reviewer 角色，拼零上下文的角色提示词，经宿主 subagents 服务起子代理，并把 childId 回执写进任务 checkpoints。只做决定与调用，不 import core，阶段真源仍是 lib/stage.mjs。
+
+| 模块 | 语义 | 成员 |
+|---|---|---|
+| dispatch | dispatchPlan 只接受 queued-analysis/queued-implementation/queued-review 且拒绝子任务；dispatchPrompt 自带仓库根、验收、写域与纪律，供零上下文子代理直接开工；dispatchTask 先 startActivation 拿 childId 再返回，失败转成带下一步的 FlowError；dispatchCheckpoint 生成写进 checkpoints 的短回执。 | SUBAGENT_SERVICE、DEFAULT_PROVIDER、DISPATCH_ROLES、WORKING_STAGE、ROLE_ZH、dispatchPlan、isDispatchStage、dispatchEnabled、dispatchProvider、clip、linesOf、ROLE_DUTIES、dispatchPrompt、dispatchCheckpoint、invalidDispatch、subagentServiceOf、dispatchTask、autoDispatchEnabled |
+
+### 3.14 lib/host/enforce.mjs
 
 Host P2 权限面：工具可见性 restrict 与调用拦截 guard，拒绝文案可执行；团队工具的调度/记账按 boardMode 分开。
 
@@ -516,7 +527,7 @@ Host P2 权限面：工具可见性 restrict 与调用拦截 guard，拒绝文�
 |---|---|---|
 | p2-permission-surface | 权限面：dispatch/board 工具名集合、stageGuardReason/subtaskGuardReason/enforceGuardReason、restrictMainSessionTools 与 actor/board 模式解析。 | DISPATCH_TOOL_NAMES、BOARD_TOOL_NAMES、TEAM_TOOL_NAMES、DISPATCH_TOOL_DENY、TEAM_TOOL_DENY、MAIN_SESSION_TEAM_DENY、MAIN_SESSION_TASK_ADD_DENY、SUBTASK_STAGES、guardTaskOf、stageGuardReason、subtaskGuardReason、enforceGuardReason、restrictMainSessionTools、enforceEnabled、resolveActorMode、resolveBoardMode |
 
-### 3.14 lib/host/routes.mjs
+### 3.15 lib/host/routes.mjs
 
 Host 写路由：面板仅有的两个写入口 init（建台账）与 gate（开关门禁），都经同一 root 作用域后交给 lib/core.mjs。
 
@@ -525,7 +536,7 @@ Host 写路由：面板仅有的两个写入口 init（建台账）与 gate（�
 | init-http | POST init：校验 root、限制请求体与创建数量，调用 core.initProject 并返回创建摘要。 | handleInit |
 | gate-http | POST gate：校验 root 与 id/enabled，调用 core.updateGate 翻转开关。 | handleGate |
 
-### 3.15 lib/host/session.mjs
+### 3.16 lib/host/session.mjs
 
 Host 会话面：会话 id 判定、心跳存活与可见性、per-turn 提醒组装、捕获流水线与 agent/created|disposed 钩子；与 index.js 的循环用 sessionHooks 注入打破。
 
@@ -544,13 +555,13 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。 | inject、BACKUP_WARNED、warnStaleBackup、backupReminderEnabled |
+| top | 模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。 | BACKUP_WARNED、warnStaleBackup、backupReminderEnabled |
 | heartbeats | 会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。 | sessionIdOf、usableSessionId、requireSession、liveSessionIds、sessionIsLive、applyAgentLiveness、applyHeartbeatVisibility、agentRoot、heartbeatOpen、heartbeatWorking、rootSessionVerdict、ROOT_SESSION_HEARTBEAT_ONLY、ROOT_SESSION_DECISION_ONLY、heartbeatRootOf、currentTaskOf |
 | reminder | per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息；待决策段只列本会话记录，拼提醒前先按 Host 归档集合清理已归档会话的决策（purgeArchivedSessionDecisions，无 workspaceRegistry 时降级为 no-op）。 | disciplineText、registerDisciplineSection、REMINDER_LIMIT、REMINDER_STACK_ROWS、COMMAND_ECHO_CLIP、DECISION_QUESTION_CLIP、ANSWER_DECISION_HINT、SUBMIT_DECISION_HINT、FIRST_TURN_HINT、hiddenDecisionsHint、clipEcho、reminderMessage、decisionContractOf、decisionSuspendedText、decisionReminderLine、taskReminderSection、decisionReminderSection、purgeArchivedSessionDecisions、composeTurnReminder、commandReminderLine、registerTurnReminder、heartbeatKeepalive、registerHeartbeatKeepalive |
-| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务；agent/created 自动开心跳、agent/disposed 自动关闭。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed |
+| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务并顺手收口过期消息卡；agent/created 自动开心跳、agent/disposed 自动关闭。自动收口窗口由 config.tasks.autoSweepHours 控制（默认 24，0/false 关闭）。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、DEFAULT_AUTO_SWEEP_HOURS、autoSweepHoursOf、autoSweepUtteranceCards |
 | session-switches | 会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。 | sessionHookCaller、captureEnabled、heartbeatGateEnabled、heartbeatGuardReason、claimTargetOf、claimMatches、heartbeatClaimsOf、claimsGateEnabled、claimsGuardReason、HEARTBEAT_TRACK_LIMIT、heartbeatEvidenceRefresh、heartbeatRootFor、heartbeatRoots、knownArchived、liveChildSessions、liveHeartbeatStatus、liveSessionOf、patchHeartbeat、refreshHeartbeat、registerHeartbeatSessionHooks、releaseDeadOwners、rememberHeartbeatRoot、rememberSubagentParent、removeHeartbeatEverywhere、sessionTitleOf、subagentParents、turnOpenOf |
 
-### 3.16 lib/host/shared.mjs
+### 3.17 lib/host/shared.mjs
 
 Host 共享层：包与路由常量、工作区作用域（纯路径运算，注册行零 fs 调用）、JSON HTTP 助手与请求体读取；供 host/* 其余模块 import。
 
@@ -567,7 +578,7 @@ graph LR
 | workspace-scope | 工作区作用域：canonicalRoot/isDirectory/workspacePath/listWorkspaces/rootWithin/rootAccepted/rootName；注册行只做纯路径前缀比较。 | canonicalRoot、isDirectory、workspacePath、listWorkspaces、rootWithin、rootAccepted、rootName |
 | http | HTTP 助手：sendJson/sendError/originAllowed 与 readBody（上限保护、超限后续丢弃）。 | sendJson、sendError、originAllowed、readBody |
 
-### 3.17 lib/host/skills.mjs
+### 3.18 lib/host/skills.mjs
 
 Host 技能注册：三个内嵌技能的 frontmatter 解析与通过 skills 服务注册，元数据只有文件内一个来源。
 
@@ -575,22 +586,21 @@ Host 技能注册：三个内嵌技能的 frontmatter 解析与通过 skills 服
 |---|---|---|
 | skills | 技能注册：SKILL_META、readSkillFrontmatter 与 registerSkills（目录技能带 resourceBase）。 | SKILL_META、readSkillFrontmatter、registerSkills |
 
-### 3.18 lib/host/state.mjs
+### 3.19 lib/host/state.mjs
 
 Host 读路径：fork 子进程池、请求级快照调用、GET state 路由、面板载荷组装与 TUI 读路径；主线程不碰同步 store 读。
 
 ```mermaid
 graph LR
-  m1["state-read-isolation"] --> m2["ledger-root"]
+  m0["state-read-isolation"] --> m1["ledger-root"]
 ```
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 模块头与 import：读路径依赖的服务、快照 API 与共享助手。 | inject |
-| state-read-isolation | 读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader；台账根解析由 ledger-root 负责，主线程不碰同步 store 读。 | STATE_DEADLINE_MS、STATE_READY_MS、STATE_MAX_IDLE、STATE_MAX_CHILDREN、stateMaxChildren、STATE_WORKER_DEFAULT_SCRIPT、stateWorkerScript、stateWorkerEnv、STATE_POOLS、statePoolOf、StateWorkerPool、requestStateSnapshot、handleState、collectPanelState、panelStateReader |
+| state-read-isolation | 读隔离：StateWorkerPool（预热/期限/崩溃回收）、requestStateSnapshot、handleState、collectPanelState 与 panelStateReader；台账根解析由 ledger-root 负责，主线程不碰同步 store 读。 | STATE_DEADLINE_MS、STATE_READY_MS、STATE_MAX_IDLE、STATE_MAX_CHILDREN、stateMaxChildren、STATE_WORKER_DEFAULT_SCRIPT、stateWorkerScript、stateWorkerEnv、STATE_POOLS、statePoolOf、requestStateSnapshot、handleState、collectPanelState、panelStateReader、StateWorkerPool |
 | ledger-root | 台账根解析：请求 root 是 linked worktree 根时归一到项目主工作区的 store（判据是 .git 为文件 + git worktree list 首条，与 root 有无 store 副本无关），普通目录/子目录保持自身作用域；git 全部异步执行，失败降级为请求 root。 | gitQuiet、gitTopLevel、gitMainWorktree、isFile、resolveLedgerRoot |
 
-### 3.19 lib/host/team.mjs
+### 3.20 lib/host/team.mjs
 
 Host 团队板读面：以最近主会话 agent 为授权凭据读取 Team 板，做只读对账并组装面板 team 行；零写入。
 
@@ -598,16 +608,15 @@ Host 团队板读面：以最近主会话 agent 为授权凭据读取 Team 板�
 |---|---|---|
 | p3a-read-only-team-board | 团队板只读对账：caller 缓存、teamStatusFor、applyTeamBoard（面板载荷 enrichment）与 TEAM_UNAVAILABLE 兜底。 | TEAM_UNAVAILABLE、TEAM_CALLERS、teamCallerState、rememberTeamCaller、teamCallerOf、teamStatusFor、applyTeamBoard |
 
-### 3.20 lib/host/tools.mjs
+### 3.21 lib/host/tools.mjs
 
 Host 工具面：flow_status/flow_heartbeat/flow_decision/flow_veto/flow_subtask 的 schema 与处理函数，以及统一注册（同一 core 写者、共享挂载骨架）。
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 模块头与 import：工具 schema 依赖的字段白名单、输出渲染与 core 网关。 | inject |
 | decisions | 工具定义与注册：buildToolDefinitions 五个工具、decisionTurnOf/decisionAskInput 等辅助、registerTools 挂载与 guard 组装。 | decisionTurnOf、decisionOptionInput、decisionAskInput、buildToolDefinitions、registerTools |
 
-### 3.21 lib/lock.mjs
+### 3.22 lib/lock.mjs
 
 store 排他锁：open(wx) 创建锁文件并写入含 pid/host/token 的所有权记录，配合陈旧判定（本机 30s、异机或未知 60s 宽限）、短暂 takeover claim 串行化接管以及超龄临时文件清扫。core 的 withLock 在锁内编排 build/apply，本模块只管锁本身；释放只删 token 与 pid 都对得上的锁。
 
@@ -615,7 +624,7 @@ store 排他锁：open(wx) 创建锁文件并写入含 pid/host/token 的所有�
 |---|---|---|
 | lock | acquireLock 最多尝试 MAX_LOCK_ATTEMPTS 次：新鲜锁或存活持有者直接 conflict；接管陈旧锁前必须先拿到 takeover claim，并在 claim 内重新校验快照，防止把另一个接管者刚建的新锁搬走；releaseLock 只删 token 与 pid 都匹配的锁，且永不抛错以免掩盖真实错误。 | LOCK_FILE、envPositiveInt、LOCK_STALE_MS、FOREIGN_STALE_MS、MAX_LOCK_ATTEMPTS、STALE_TMP_MS、TMP_NAME_RE、LOCK_TAKEOVER_RE、hostTag、readLockSnapshot、lockAgeMs、LOCK_ALIVE、LOCK_DEAD、LOCK_FOREIGN、LOCK_UNKNOWN、lockLiveness、lockConflict、restoreMovedLock、createLockFile、TAKEOVER_CLAIM_SUFFIX、TAKEOVER_CLAIM_ATTEMPTS、TAKEOVER_CLAIM_SLEEP_MS、takeoverClaimPath、recoverTakeoverClaim、claimConflict、acquireTakeoverClaim、releaseTakeoverClaim、acquireLock、releaseLock、lastSweepAt、sweepStaleTemps、sweepStaleTempsIn |
 
-### 3.22 lib/paths.mjs
+### 3.23 lib/paths.mjs
 
 清单路径包含性校验：flow.json 声明的每个 store 路径（root/experiments/tasks/gates/logs/current/heartbeats）都必须落在项目根内，符号链接经 realpath 逐层确认。不安全值不抛错——返回 undefined 并记 manifest-path-rejected 警告，由调用方退回默认目录；core 重导出 containedPath。
 
@@ -623,7 +632,7 @@ store 排他锁：open(wx) 创建锁文件并写入含 pid/host/token 的所有�
 |---|---|---|
 | paths | containedPath 先把清单值按根解析，再同时比较词法包含与逐层 realpath：绝对路径（除 allowAbsolute）、.. 逃逸、指向根外的符号链接都返回 undefined 并记 manifest-path-rejected；containedDir 在同样判定失败时返回调用方给的根内默认值。 | UNSAFE_PATH_PREVIEW_MAX、unsafePathPreview、noteUnsafeManifestPath、pathWithin、memoizedRealpath、pathMemoOf、realPathStaysInside、containedPath、containedDir |
 
-### 3.23 lib/plugin/mount.mjs
+### 3.24 lib/plugin/mount.mjs
 
 Host 挂载管线：防御式取 Cordis 服务、在 ctx.inject 可用时延迟注册、把注册包进 effect 以便卸载注销、包装 execute 让 core 警告到达调用方，并让同一挂载问题只报一次。index.js 与 tasks/gates/experiments 三个子插件共用这套语义，任何入口都不应向宿主抛错。
 
@@ -631,7 +640,7 @@ Host 挂载管线：防御式取 Cordis 服务、在 ctx.inject 可用时延迟�
 |---|---|---|
 | mount | provide 在 ctx.inject 可用时等目标服务出现再注册并把注册包进 effect（卸载即 dispose），否则仅在服务已存在时同步注册；registerToolDefinitions 逐个注册并吞掉单个失败，mountModule 只挂一个定义，所有异常都收敛为 warnMount 而不透传给宿主。 | service、mountWarnings、warnMount、provide、wrapToolDefinition、toolDeps、registerToolDefinitions、mountModule |
 
-### 3.24 lib/plugin/shared.mjs
+### 3.25 lib/plugin/shared.mjs
 
 flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每个 action 的字段白名单、列表上限 200 与 30s 写超时，以及「已知字段被用在错误 action 上」的守卫。共享 plugin 与三个子插件都从这里取规则，挂载逻辑在兄弟模块 mount.mjs。
 
@@ -639,7 +648,7 @@ flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每�
 |---|---|---|
 | shared | makeToolRoot 的优先级为显式 root 大于 workingDirectory 服务、再大于 session.cwd，三者皆无才报错；hasStore 只认 .dsh/flow/flow.json 这一份判据；assertOnlyFields 在调用 core 之前拒绝结构字段以外的已知字段，避免字段放错 action 被静默丢弃。 | ROOT_PROPERTY、ID_PROPERTY、EMPTY_STORE_NOTE、MAX_TOOL_ITEMS、WRITE_TIMEOUT_MS、toolOutput、requireDirectory、requireId、normalizeTaskParent、pickFields、makeToolRoot、makeRequireStore、hasStore、requireStore、EXP_ADD_FIELDS、EXP_UPDATE_FIELDS、TASK_ADD_FIELDS、TASK_UPDATE_FIELDS、GATE_ADD_FIELDS、GATE_UPDATE_FIELDS、STRUCTURAL_FIELDS、assertOnlyFields、EXP_ACTION_FIELDS、TASK_ACTION_FIELDS、GATE_ACTION_FIELDS |
 
-### 3.25 lib/proc.mjs
+### 3.26 lib/proc.mjs
 
 被 core、门禁 runner 与只读 checks 共用的子进程树杀灭：win32 走 taskkill /PID <pid> /T /F（5s 上限），非 win32 先杀进程组再退化为直接 SIGKILL。它被提取出来是为了让 checks 继续不 import core 的同时只保留一份 win32 修复；taskkill 失败只降级、从不抛错。
 
@@ -647,7 +656,7 @@ flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每�
 |---|---|---|
 | proc | win32 先 taskkill /T /F 再补 SIGKILL，并把 taskkill 的失败或超时降级为直接杀子进程；非 win32 先对进程组 -pid 发 SIGKILL，失败再退化到子进程自身，两条路径都只返回结果、不抛错。 | WIN32_KILL_GRACE_MS、TASKKILL_TIMEOUT_MS、runTaskkillSync、killProcessTree |
 
-### 3.26 lib/runner.mjs
+### 3.27 lib/runner.mjs
 
 门禁步骤执行：在项目根用 shell 跑一条命令、按超时杀进程树、保留有界输出尾部，并按 expect 判定 ok。runGate/listGateRuns 仍在 core（需要 store 路径、锁与日志文件）；杀进程委托 lib/proc.mjs，超时一律判失败。
 
@@ -655,7 +664,7 @@ flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每�
 |---|---|---|
 | runner | runStep 把 expect 解析为 exit N、contains: TEXT 或空（等于 exit 0），超时直接判 ok:false；输出按 512 KiB 截断、tail 再按行数并给每行 400 字符封顶，未识别的 expect 语法按 exit 0 处理并记 gate-expect-unknown 警告。 | TAIL_LINE_MAX、OUTPUT_CAP、tailText、EXPECT_EXIT_RE、EXPECT_CONTAINS_RE、expectSyntaxKnown、evaluateExpect、runStep |
 
-### 3.27 lib/source-scan.mjs
+### 3.28 lib/source-scan.mjs
 
 零第三方依赖的启发式源码扫描器：按扩展名把源码文本解析成 import 边（static/side-effect/dynamic/reexport）与顶层声明（name/kind/exported/startLine/endLine/identifiers），供 lib/desc.mjs 经 core 的 build/check 路径做成员归属与模块边推导。它只认识文本、不认识项目，不读盘不写盘，唯一依赖是 util.mjs 的 FlowError；已知漏扫（解构、匿名默认导出等）按「漏 = 不归属、不假红」处理。
 
@@ -680,7 +689,7 @@ graph LR
 | js-ts | JS/TS/JSX 顶层扫描：以括号深度 0 加语句起点判定 function/class/const\|let\|var（含 async/export/default 前缀与本地 export {…} 清单），收 import、export-from 与字面量 dynamic import 边；解构声明与匿名默认导出按已知局限跳过而不报假红。 | isStatementStart、statementStartOf、isExported、readJsDeclaration、scanJsImports、isDynamicImportSite、readDynamicImport、readImportClause、readExportFrom、readLocalExportList、scanJsDeclarations、finishJsDeclarations |
 | python | Python 扫描：先用等长掩码去掉 # 注释与单/双/三引号字符串，再按列首收 def/async def/class 与顶层 NAME= 赋值（exported = 名字不以 _ 开头），只记顶层 import/from…import；块边界按缩进回 0 判定，函数内延迟导入不计边。 | maskPython、skipPyString、splitLines、leadingWidth、scanPythonImports、scanPythonDeclarations |
 
-### 3.28 lib/stage.mjs
+### 3.29 lib/stage.mjs
 
 任务九阶段状态机，纯数据：阶段 id、中文名、合法边与每条边的期望推进者（plugin / session / reviewer）、stage 到 status 的派生与 legacy status 到 stage 的投影。core 从这里取阶段表，仓库内不得有第二份；analyzing 由会话推进，reviewing 的通过或打回都由审查者推进。
 
@@ -688,7 +697,7 @@ graph LR
 |---|---|---|
 | stage | STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。 | DEFAULT_STAGE、STAGE_IDS、STAGE_ZH、STAGE_MACHINE、nextStages、edgeOf、actorForEdge、STATUS_BY_STAGE、stageToStatus、legacyStageFromStatus、canTransition、assertTransition |
 
-### 3.29 lib/state-snapshot.mjs
+### 3.30 lib/state-snapshot.mjs
 
 只读快照模块：既可作为宿主 fork 出来的隔离 worker（PF_STATE_WORKER=1）响应 snapshot/ping IPC，也可被 import 作纯函数库（buildSnapshot），把 store、契约、任务、门禁、心跳与决策投影成有界、可序列化的面板 payload。它不做任何写操作、不 import 宿主，core 经动态 import 可选加载，realpath memo 只在单次请求内存在；宿主 index.js、lib/plugin/* 与 lib/tools/* 依赖它，边界是「只读 + 有界降级」。
 
@@ -739,22 +748,30 @@ graph LR
 | path-containment | root-relative 路径容纳校验的镜像实现：拒绝绝对路径与 .. 逃逸，并用请求级 memo 的 realpath 复核符号链接，非法值不抛错而是隐藏并写入调用方 warnings；刻意不 import lib/paths.mjs 以保持告警汇独立，供 tasks.current 等 manifest 路径复核。 | rejectManifestPath、pathWithin、memoizedRealpath、realPathStaysInside、containedPath、git |
 | contract | 读取展示与边界参数：readManifestName 异步从 flow.json 取项目名（失败回退目录名）、storeContractPath 拼路径、pickInteger 夹取数字选项；只做读取与夹取，不校验 contract 语义。 | pickInteger、readManifestName、storeContractPath |
 | head | 用只读 git 命令（rev-parse/log/status）采集 HEAD 短 sha、subject、branch 与 dirty，单项失败只追加 warnings 并留 null；git 在 worker 子进程里执行，超时也只让本次快照降级，不阻塞宿主事件循环。 | readHead |
-| tasks | 任务记录到面板行的投影：FIFO 按 created_at 排序、父链深度封顶 3，scope/acceptance/commits 等列表按 MAX_TASK_LIST 与 MAX_TASK_ITEM 裁剪，acceptance 兼容 {cmd,expect} 旧形状；只读派生，不写台账。 | timeValue、lastCheckpointGate、clipTaskList、clipTaskAcceptance、clipTaskScope、taskStageOf、panelTaskRow |
+| tasks | 任务记录到面板行的投影：FIFO 按 created_at 排序、父链深度封顶 3，scope/acceptance/commits 等列表按 MAX_TASK_LIST 与 MAX_TASK_ITEM 裁剪，acceptance 兼容 {cmd,expect} 旧形状；只读派生，不写台账。 | timeValue、lastCheckpointGate、clipTaskList、clipTaskAcceptance、clipTaskScope、taskStageOf、panelTaskRow、taskBranchOf |
 | heartbeats | 把 core 的富心跳项投影成面板行（补 title/statusLine），并按 liveness 与 ageSeconds 判定可见性：live 永远可见，dead/stale 隐藏，未知状态仅 6 小时内可见；heartbeatRowVisible 由宿主在 applyAgentLiveness 后复用同一规则。 | panelHeartbeat、panelHeartbeats、heartbeatRowVisible |
 | decisions | 按固定 11 键顺序投影决策行（丢弃 turnAge/rationale/affects/fingerprint 等不应进浏览器的字段），并把计数归一为七个固定键；core 未返回 decisions 时用 summarizeDecisions 重建，异常降级为空结构。 | DECISION_ITEM_KEYS、panelDecisionOption、panelDecision、panelDecisions、decisionSection |
 | payload | 组装完整 store payload 并负责有界化：合并契约/store/任务/门禁/心跳/决策/趋势，超 900KB 时逐条裁剪实验并同步剪枝树，必要时把 warnings 截到 20 条；契约或 store 读取失败时返回空 payload 加告警，进入时丢弃 core 诊断日志以免轮询污染下一次工具输出。 | pruneTree、capPayload、taskCountsOf、createdOrder、taskParentOf、taskDepthIndex、queueHeadId、activeTasksOf、draftTasksOf、recentDoneOf、teamLinksOf、isControlTask、controlOf、stageCountsOf、stageRowsOf、emptyStageCounts、emptyStages、emptyStoreState、buildStoreState、localDayNumber、localDayKey、trendTimestamp、deriveTrend、experimentsEnabled、legacyExperimentsWarning、experimentCountsOf、buildState、decisionRemindMax、DECISION_COUNT_KEYS、decisionCountsOf、emptyDecisionCounts、resolveLedgerRoot |
 | snapshot-api | buildSnapshot 是快照唯一出口：按请求构造 root/realRoot 与 per-request realpath memo，调用 buildState 后序列化一次用 capPayload 裁到上限，返回宿主可直接发送的普通对象；memo 绝不跨请求或跨进程传递。 | buildSnapshot |
 | worker-entry | fork 子进程入口：PF_STATE_WORKER=1 时启动 IPC 循环，先发 ready，再逐条处理 ping 与 snapshot 请求、回一条 JSON reply；channel 断开或未捕获异常直接 exit，stdout/stderr 不产生输出，被 import 时不启动。 | IS_WORKER、workerReply、startWorker |
 
-### 3.30 lib/team-sync.mjs
+### 3.31 lib/store/records.mjs
+
+记录层原语（store 模块）：把目录下的 <id>.json 读成集合、单条读取、id 生成（时间戳 + 同秒序号）、目标占用保护、入参校验原语、FIFO/更新时间排序与 status 计数。零业务语义，不 import core。
+
+| 模块 | 语义 | 成员 |
+|---|---|---|
+| records | readCollection/unreadableCollector 读集合（坏记录只 warn 一次并收集路径）；readRecord/assertSafeId 读单条；nextId/nextTaskId 生成 id；assertTargetFree 拒绝覆盖不可读的占用文件；requireText/optionalText/optionalBoolean/optionalEnum/optionalInt/stringArray/assertPattern 是各业务域共用的入参校验；sortByCreatedAsc/sortByUpdatedDesc/statusCounts 供列表投影。 | readCollection、unreadableCollector、assertTargetFree、assertSafeId、readRecord、sortByUpdatedDesc、sortByCreatedAsc、nextId、nextTaskId、assertPattern、requireText、optionalText、optionalBoolean、optionalEnum、optionalInt、stringArray、statusCounts |
+
+### 3.32 lib/team-sync.mjs
 
 团队板同步的只读半边：从 Host 的 agentTeams 服务读板与成员（读取以调用 Agent 作凭据），把台账 task.team.taskId 链接与板上任务对账成 matched/missing/orphaned。linkTask/unlinkTask 只写本地台账、不碰服务；板不可用时返回 available:false，绝不把读不到渲染成 0 个任务。
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| team-sync | teamTaskIdOf 只读 task.team.taskId；linkTask 校验 boardId 非空、revision 为非负整数、owner 为字符串或 null，写入只含 team 字段（链接不是状态迁移）；reconcileLinks 在 board.ok 不为 true 时返回三个空数组，交由调用方渲染 available:false 而不是误报 missing。 | TEAM_SERVICE、brief、textOf、teamServiceOf、teamTaskIdOf、linkTask、unlinkTask、requireLedgerTask、readTeamBoard、reconcile、reconcileLinks、teamStatusOf |
+| team-sync | teamTaskIdOf 只读 task.team.taskId；linkTask 校验 boardId 非空、revision 为非负整数、owner 为字符串或 null，写入只含 team 字段（链接不是状态迁移）；reconcileLinks 在 board.ok 不为 true 时返回三个空数组，交由调用方渲染 available:false 而不是误报 missing。 | TEAM_SERVICE、brief、textOf、teamServiceOf、teamTaskIdOf、linkTask、unlinkTask、requireLedgerTask、readTeamBoard、reconcile、reconcileLinks、teamStatusOf、teamMountEnabled、clipText、mountTaskOnBoard、completeBoardTask |
 
-### 3.31 lib/tools/experiments.mjs
+### 3.33 lib/tools/experiments.mjs
 
 flow_exp 工具定义（从 index.js 原样移出），让共享 project-flow 插件与 experiments 子插件注册同一个对象；store 探测、core 访问、字段白名单与列表上限全部来自 plugin/shared。list 用 readStoreState 的六态聚合计数并裁剪到 200 条，非 list 动作必须先过 requireStore。
 
@@ -762,7 +779,7 @@ flow_exp 工具定义（从 index.js 原样移出），让共享 project-flow �
 |---|---|---|
 | experiments | 九个 action 都先经 assertOnlyFields 校验本动作允许的字段，list 之外的 action 先 requireStore；list 的六态计数取自 readStoreState 而不是自己数，records 超过 MAX_TOOL_ITEMS 时附加 truncated；update/cleanup 没有任何可改字段即报错，未知 action 直接抛。 | buildDefinition |
 
-### 3.32 lib/tools/gates.mjs
+### 3.34 lib/tools/gates.mjs
 
 flow_gate 工具定义（从 index.js 原样移出），覆盖 list/show/add/update/remove/run/logs；list 在无 store 时返回空目录与 init 提示而不报错。run 会真正在项目根执行门禁步骤并写运行记录，logs 默认取最近 5 条（上限 50），add 必须给门禁 slug。
 
@@ -770,7 +787,7 @@ flow_gate 工具定义（从 index.js 原样移出），覆盖 list/show/add/upd
 |---|---|---|
 | gates | add 要求 id 非空 slug，update 至少要改一个字段；list 在无 store 时返回 store:false 与 init 提示，其余 action 先 requireStore 再走 core；run 调 core.runGate 真正执行步骤并落运行记录，logs 的 limit 经 pickInteger 限制在 1 到 50。 | buildDefinition |
 
-### 3.33 lib/tools/subtasks.mjs
+### 3.35 lib/tools/subtasks.mjs
 
 flow_subtask 工具定义（P4）：补上这个工具后 P2 的「仅实现阶段可用」规则才真正可达。写全部走 core 的 addTask/updateTask，add 固定子任务 stage=queued-analysis，update 只允许 notes/stage 且越界由 stage.mjs 的 assertTransition 拒绝，remove 不是物理删除。
 
@@ -778,15 +795,15 @@ flow_subtask 工具定义（P4）：补上这个工具后 P2 的「仅实现阶�
 |---|---|---|
 | subtasks | add 只转发 type/title/notes/scope/acceptance 并把 parent 与 stage=queued-analysis 交给 core，父任务存在性与禁环由 core 校验；update 的字段白名单只有 notes/stage，改 stage 前先 assertTransition；remove 必须给 reason，效果是 stage=done 加 notes 追加 [removed]，绝不物理删除。 | SUBTASK_UPDATE_FIELDS、SUBTASK_ADD_FIELDS、TASK_TYPE_ENUM、removedNote、buildDefinition |
 
-### 3.34 lib/tools/tasks.mjs
+### 3.36 lib/tools/tasks.mjs
 
 flow_task 工具定义（从 index.js 原样移出），覆盖 list/show/add/update/remove；list 在无 store 时返回空目录与 init 提示。parent 经 normalizeTaskParent 归一（空串/none/null 表示根），title/type 不可改由 core 统一拦截，工具只做字段白名单与 id 必填。
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe |
+| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe、dispatchOnce、autoDispatchAfterUpdate |
 
-### 3.35 lib/util.mjs
+### 3.37 lib/util.mjs
 
 flow store 的低层原语：稳定的 FlowError 错误类型、普通对象与深拷贝、本地时间戳格式化、按上限收集的警告通道、每进程单调的临时名后缀。core 重导出全部公开名，本模块不读写文件也不联网；pad 与 bin/flow.mjs 的同名函数契约不同，不能合并。
 
@@ -797,10 +814,10 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | FlowError 的 code 只取 invalid/not-found/conflict/io/usage；invalid(message) 是构造 code=invalid 的便捷入口，错误文本原样透传（调用方按消息匹配），因此这里不改写也不包装消息。 | FlowError、invalid |
+| top | FlowError 的 code 只取 invalid/not-found/conflict/io/usage；invalid(message) 是构造 code=invalid 的便捷入口，错误文本原样透传（调用方按消息匹配），因此这里不改写也不包装消息。 | invalid、FlowError |
 | tiny-helpers | isPlainObject/deepClone/pad/formatIso/dateStamp/timeStamp/timeValue/toPosix 都是无副作用纯函数（formatIso 手工算时区偏移，不依赖 Intl）；警告通道最多存 WARNING_CAP=200 条并由 drainWarnings 取空；nextTempSuffix 用进程级单调计数器保证临时名唯一。 | isPlainObject、deepClone、pad、formatIso、dateStamp、timeStamp、timeValue、toPosix、warningLog、WARNING_CAP、noteWarningEntry、noteWarning、drainWarnings、tempSeq、nextTempSuffix |
 
-### 3.36 lib/veto.mjs
+### 3.38 lib/veto.mjs
 
 分析期否决的本地台账实现：子任务否决由会话自决（子任务 done + notes [removed] + veto，父任务 notes 记一行，不建决策），主任务否决必须建 modify/delete 二选一的决策并把任务停在 analyzing。veto 是永久历史、decision 是答完即清的待办指针；delete 分支的 stage=done 走 source:'internal' 以免自证门禁。
 
@@ -808,7 +825,7 @@ graph LR
 |---|---|---|
 | veto | vetoTask 只允许 stage=analyzing 的主任务，建 choice 决策后把 decision 指向它；vetoSubtask 要求有 parent，收口子任务到 done 并向父任务 notes 追加一行；applyVetoAnswer 幂等，已清空 decision 的任务返回 applied:false，delete 分支的 updateTask 带 source:'internal'。 | VETO_CHOICES、VETO_OPTIONS、stamp、requireText、appendNote、taskOf、vetoSubtask、vetoTask、applyVetoPatch、applyVetoAnswer、applyVetoForDecision、answerDecisionAndApply |
 
-### 3.37 scripts/commit-scope.mjs
+### 3.39 scripts/commit-scope.mjs
 
 提交范围哨兵：暂存区同时包含 .dsh/flow/ 台账与仓库源码/测试时以 exit 1 失败，防止台账误写随源码提交一起进历史。支持 --stdin 绕过 git 供测试；空暂存区、只有一类内容、文档与配置混提都放行，环境错误退 2。
 
@@ -816,7 +833,15 @@ graph LR
 |---|---|---|
 | commit-scope | classify 只把 .dsh/flow/ 前缀判为 store，把 CODE_PREFIXES 与 CODE_FILES 判为 code，其余（docs、配置等）为 other；main 只在暂存区同时出现 store 与 code 时退出 1，git 失败或不是仓库退 2，--list 只影响打印明细。 | STORE_PREFIX、CODE_PREFIXES、CODE_FILES、classify、stagedFiles、main |
 
-### 3.38 scripts/module-domain.mjs
+### 3.40 scripts/doc-counts.mjs
+
+README 派生数字（用例数/测试文件数）的唯一计数实现与同步命令：只读比对过期 exit 1，--fix 就地改写；漂移测试 import 同一个 countTests()。
+
+| 模块 | 语义 | 成员 |
+|---|---|---|
+| doc-counts | 文档数字同步：test/ 下顶层 test()/it() 静态计数与测试文件数，供 README「N 用例（M 个文件）」比对与 --fix 改写。 | HERE、DEFAULT_ROOT、README_COUNTS、TEST_CALL、testFiles、countTests、readmeCounts、syncReadmeCounts、main、invokedDirectly |
+
+### 3.41 scripts/module-domain.mjs
 
 模块写域哨兵：读 docs/module-domain.json，提供 verify（覆盖/锚点/幽灵检查）、matrix（矩阵）与 check（按 git 改动判越界，越界 exit 1）。
 
@@ -839,7 +864,7 @@ graph LR
 | matrix | matrix：打印 11 个模块的独占/共享/测试计数与职责。 | matrix |
 | main | 入口：参数分发与退出码（0 通过 / 1 越界 / 2 用法）。 | main |
 
-### 3.39 skills/ai-collaborative-dev-workflow/scripts/doc_check.py
+### 3.42 skills/ai-collaborative-dev-workflow/scripts/doc_check.py
 
 按可选文档标准校验生成文档：任务/设计/事故/发布四类各自要求的章节必须存在且非空，并检查行数上限、模糊词、design 的备选方案、release 的升级或迁移步骤；未决问题缺 owner 只告警。被 gate.py 的 commit check 与 flow check doc 复用，配置读 .agents/doc-standard.json。
 
@@ -847,7 +872,7 @@ graph LR
 |---|---|---|
 | top-level | validate 用 doc-standard 的 required_sections/max_lines/vague_words（缺省内置四类模板）判定：缺章节或章节全空是错、超行是错、出现模糊词是错；design 的「方案」须含备选或替代，release 的「破坏性变更」有内容时须含升级或迁移，incident 的根因写成粗心或疏忽只告警。 | DEFAULT_REQUIRED、DEFAULT_MAX、DEFAULT_VAGUE、load_std、parse、find_section、validate、main |
 
-### 3.40 skills/ai-collaborative-dev-workflow/scripts/gate.py
+### 3.43 skills/ai-collaborative-dev-workflow/scripts/gate.py
 
 精度层门禁命令：gate commit 先做 check（任务必须 active、暂存文件在 scope.allow 内且不命中 deny、按匹配类型校验文档、执行 sync 声明的版本或命令检查）再调 git commit；push 检查只允许 dev 分支、origin/dev 是祖先、HEAD 不打标签且工作区干净；另有 doctor 环境自检与按 scope 取 build 命令。
 
@@ -855,7 +880,7 @@ graph LR
 |---|---|---|
 | top-level | check 要求 GATE_TASK_ID 或 .agents/tasks/.current 指向 active 任务、暂存区非空且每个文件都在 scope.allow 内不命中 deny，并按 sync 声明跑版本一致性或同步命令；push_check 拒非 dev 分支、非快进、HEAD 带标签或工作区不干净；commit 子命令先 check 再 git commit。 | git、staged_files、version_check、doc_type_for、check、push_check、doctor、build、main |
 
-### 3.41 skills/ai-collaborative-dev-workflow/scripts/precision_common.py
+### 3.44 skills/ai-collaborative-dev-workflow/scripts/precision_common.py
 
 精度层共享工具：仓库根与当前时间（TASK_ROOT/TASK_NOW 可覆盖，便于测试可复现）、JSON 读写、路径 under/overlap、gate-config 加载、任务定位与 task_errors 校验、envelope/print_errors 输出契约。doc_check.py 与 gate.py 都依赖它，因此这些校验规则只能有一份。
 
@@ -863,7 +888,7 @@ graph LR
 |---|---|---|
 | top-level | repo_root 优先 TASK_ROOT 再回退 git rev-parse，now 优先 TASK_NOW；task_errors 校验必填字段、id 形如 T-YYYYMMDD-NN、scope 路径相对且无 ..、acceptance 的 exit 0/empty/>=N、invariants 不超过 5 条、done 必须有提交与 pass 检查点，并检出同项目两个 active 任务的 scope 重叠。 | repo_root、now、iso、load_json、write_json、norm、under、overlap、load_config、task_dir、task_path、load_task、all_tasks、task_id_from_env、task_errors、envelope、print_errors |
 
-### 3.42 tasks.js
+### 3.45 tasks.js
 
 可选子插件入口 `@local/project-flow/tasks`：只把 `flow_task` 一个模型工具经 `lib/plugin/mount.mjs` 的 `mountModule` 挂到宿主 `tools` 服务上，让宿主 profile 按需选择工具面（可与共享插件并存，也可单独挂载）。不注册路由、技能或钩子，也不复制任何工具规则；`tools` 服务缺失时是静默 no-op，失败只进 mount warning 而不抛。
 
@@ -871,7 +896,7 @@ graph LR
 |---|---|---|
 | tasks | 整文件即入口：唯一导出的 `apply(ctx, config)` 忽略 config，只调用一次 `mountModule(ctx, { label: 'tasks', buildDefinition })`，工具 schema、字段白名单、上限与 root 解析全部来自 lib/tools/tasks.mjs 与共享依赖注入，本文件不持有任何规则副本。 | apply |
 
-### 3.43 tui-host.js
+### 3.46 tui-host.js
 
 TUI 宿主装配入口：作为独立 Cordis 行（`inject = ['tuiPanels']`）只服务终端宿主，把 index.js 的 `panelStateReader` 与 tui-panel.js 的 `registerProjectFlowPanel` 按 3000ms 刷新间隔接起来，并把 disposer 挂到 `ctx.effect` 上。web/desktop 宿主没有会出现的 `tuiPanels`，这一行在那里永久 pending、不污染共享插件；注册、日志与释放全部各自兜底，任何失败都不会抛进宿主。
 
@@ -879,7 +904,7 @@ TUI 宿主装配入口：作为独立 Cordis 行（`inject = ['tuiPanels']`）�
 |---|---|---|
 | tui-host | 整文件只有一个 `apply` 加两个常量：`apply` 至多注册一次面板，并把 `dispose()` 交给 `ctx.effect`（无 effect 设施时立即调用）；注册、日志、释放各自 try/catch，失败只 warn，因此面板问题永不阻断插件卸载，也不会拖延宿主启动。 | inject、PANEL_REFRESH_MS、apply |
 
-### 3.44 tui-panel.js
+### 3.47 tui-panel.js
 
 TUI（终端）侧的只读看板：把 `state` payload 投影成可脱离 React 测试的纯字符串视图模型，再交给宿主 ui kit 渲染成注册在 `tuiPanels` 上的侧栏面板，是 web 侧 client.js 面板的终端等价物。由 tui-host.js 的独立 Cordis 行装配，web/desktop 宿主不加载它；本文件不读台账、没有写路径，也不做 i18n（文案硬编码中文）。
 

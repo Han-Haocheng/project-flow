@@ -63,6 +63,7 @@
     "store": {
       "title": "存储基础（契约骨架 / 锁 / 原子写 / 路径 / 进程）",
       "owns": [
+        "lib/store/",
         "lib/core.mjs",
         "lib/util.mjs",
         "lib/paths.mjs",
