@@ -45,15 +45,12 @@ test('写域数据可被 verify 完整通过（覆盖 / 锚点 / 幽灵文件）
 })
 
 test('每个有源码职责的模块都登记了独占文件', () => {
-  // heartbeats 没有独立源码文件（全在 core/index 的区段里），显式跳过而不是假装通过。
-  const fileless = new Set(['heartbeats'])
+  // 2026-11-11 Phase 1 起 heartbeats 也有自己的目录（lib/heartbeats/），
+  // "唯一无独占文件"的历史特例消失；这条断言回归成统一规则。
   for (const name of Object.keys(modules)) {
-    if (fileless.has(name)) {
-      assert.ok((modules[name].owns ?? []).length === 0, `${name} 声称无独占文件，却登记了 owns`)
-      continue
-    }
     assert.ok((modules[name].owns ?? []).length > 0, `模块 ${name} 没有任何独占文件`)
   }
+  assert.ok((modules.heartbeats.owns ?? []).includes('lib/heartbeats/'), 'heartbeats 必须独占 lib/heartbeats/')
 })
 
 test('关键归属不漂移（抽五个最容易被误改的文件）', () => {

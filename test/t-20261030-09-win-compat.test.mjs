@@ -44,12 +44,20 @@ const LIB_DIR = path.join(REPO_ROOT, 'lib')
  * 成立。拼接顺序固定（`core.mjs` 最后）让结论不随文件系统枚举顺序漂移。
  */
 function readLibSource() {
-  const files = fs
-    .readdirSync(LIB_DIR)
-    .filter((name) => name.endsWith('.mjs'))
-    .sort()
-  const ordered = [...files.filter((name) => name !== 'core.mjs'), ...files.filter((name) => name === 'core.mjs')]
-  return ordered.map((name) => fs.readFileSync(path.join(LIB_DIR, name), 'utf8')).join('\n')
+  // 2026-11-11 Phase 1：实现开始按域拆进 lib/<domain>/，这里必须递归读整棵树，
+  // 否则"位置无关"的断言会变成"只认顶层文件"，一拆就假绿。
+  const files = []
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.name.endsWith('.mjs')) files.push(full)
+    }
+  }
+  walk(LIB_DIR)
+  files.sort()
+  const ordered = [...files.filter((file) => file !== path.join(LIB_DIR, 'core.mjs')), path.join(LIB_DIR, 'core.mjs')]
+  return ordered.map((file) => fs.readFileSync(file, 'utf8')).join('\n')
 }
 
 const TEMP_DIRS = []

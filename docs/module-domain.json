@@ -176,7 +176,9 @@
     },
     "heartbeats": {
       "title": "心跳模块（存活判定 / 自动开关 / 面板行）",
-      "owns": [],
+      "owns": [
+        "lib/heartbeats/"
+      ],
       "shared": [
         "lib/core.mjs",
         "lib/state-snapshot.mjs",
@@ -186,9 +188,6 @@
         "lib/host/session.mjs"
       ],
       "sections": {
-        "lib/core.mjs": [
-          "heartbeats"
-        ],
         "lib/state-snapshot.mjs": [
           "snapshot-heartbeats"
         ],
@@ -400,11 +399,7 @@
       },
       "decisions-2": {
         "from": "// ------------------------------------------------------------- decisions",
-        "to": "// ------------------------------------------------------------- heartbeats"
-      },
-      "heartbeats": {
-        "from": "// ------------------------------------------------------------- heartbeats",
-        "to": "// --------------------------------------------------- heartbeat workspace root"
+        "to": "// ------------------------------------------------------------- aggregate"
       },
       "aggregate": {
         "from": "// ------------------------------------------------------------- aggregate",

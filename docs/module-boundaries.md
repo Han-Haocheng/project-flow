@@ -24,7 +24,7 @@
 | `store` | 存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树 | `lib/store/`、`lib/core.mjs`、`lib/util.mjs`、`lib/paths.mjs`、`lib/atomic.mjs`、`lib/lock.mjs`、`lib/proc.mjs` | — | 6 |
 | `tasks` | 任务 CRUD、九阶段状态机、捕获流水线、子任务、P3b 派工、团队板对账 | `lib/stage.mjs`、`lib/capture.mjs`、`lib/team-sync.mjs`、`lib/dispatch.mjs`、`lib/tools/tasks.mjs`、`lib/tools/subtasks.mjs` | `lib/core.mjs`（tasks）、`lib/state-snapshot.mjs`（snapshot-tasks）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.2） | 12 |
 | `decisions` | 决策台账、否决、命令解析、会话隔离 | `lib/veto.mjs`、`lib/commands.mjs` | `lib/core.mjs`（decisions×2）、`lib/host/session.mjs`（reminder）、`lib/host/tools.mjs`（tools）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.6） | 4 |
-| `heartbeats` | 心跳存活判定、自动开关、面板行 | —（无独立源码文件） | `lib/core.mjs`（heartbeats）、`index.js`（heartbeats）、`lib/state-snapshot.mjs`（snapshot-heartbeats）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.5） | 3 |
+| `heartbeats` | 心跳存活判定、自动开关、面板行 | `lib/heartbeats/` | `lib/core.mjs`（heartbeats）、`index.js`（heartbeats）、`lib/state-snapshot.mjs`（snapshot-heartbeats）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.5） | 3 |
 | `gates` | 门禁定义/运行、`flow check` 检查器 | `lib/runner.mjs`、`lib/checks.mjs`、`lib/tools/gates.mjs` | `lib/core.mjs`（gates/default-gate-seeds）、`index.js`（gate-http）、`bin/flow.mjs`、`CONTRACT.md`（c3.3/c3.4/c6） | 3 |
 | `experiments` | 实验树、七字段、分流 | `lib/tools/experiments.mjs` | `lib/core.mjs`（experiments）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.1） | 0 |
 | `description` | 文件图/模块图/语义/漂移 | `lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
@@ -33,8 +33,8 @@
 | `cli` | 参数面、命令分发、输出 | `bin/flow.mjs` | — | 4 |
 | `docs` | 契约正文、README、内嵌技能 | `CONTRACT.md`、`README.md`、`skills/` | — | 3 |
 
-> `heartbeats` 是唯一没有独占源码文件的模块：它的代码全部在 `core` / `index` / `state-snapshot`
-> 的登记区段里。这不是遗漏——**把"没有独占文件"显式登记出来**，比让它偷偷共享更安全。
+> 2026-11-11 Phase 1 起，`heartbeats` 也有独占目录 `lib/heartbeats/`（此前它的代码全在
+> `core` / `index` / `state-snapshot` 的区段里）；"唯一无文件模块"的历史特例就此消失。
 
 ## 3 共享文件的区段协议
 
