@@ -1034,3 +1034,42 @@ test('捕获来源记分支：git 仓库里 source.branch = 当前分支，非 g
   assert.ok(plain)
   assert.equal(Object.hasOwn(plain.source, 'branch'), false, '非 git 目录不写 branch 键')
 })
+
+// ------------------------------------------- 排除 ⑤：同伴/子代理回报不建卡
+
+test('排除 ⑤：`Agent <id> sent a message:` 形状的同伴回报不建卡，excludedBy=peer', async () => {
+  const { root, contract } = freshProject('peer-agent-line')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-peer-agent-line')
+  const peer = 'Agent 403f3f7a-c502-4ea8-95f2-49af3eb54fc5 sent a message:\n追加（分析子代理，转）'
+  await preStep(harness, agent, [userMessage(peer, recentStamp(-3000))])
+  assert.equal(tasksOf(root, contract).length, 0, '子代理回报不是用户请求，不能建卡')
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'peer', `excludedBy 应为 peer：${status.capture.excludedBy}`)
+})
+
+test('排除 ⑤边界：用户自己写的「Agent 设计说明」仍被捕获（前缀不能过宽）', async () => {
+  const { root, contract } = freshProject('peer-not-wide')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-peer-not-wide')
+  await preStep(harness, agent, [userMessage('Agent 设计说明要重写一段', recentStamp(-3000))])
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1, '不是 sent-a-message 形状就不算 peer')
+  assert.equal(tasks[0].title, 'Agent 设计说明要重写一段')
+})
+
+test('排除 ⑤结构化判据：source 指明来自同伴/子代理时不建卡', async () => {
+  const { root, contract } = freshProject('peer-structural')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-peer-structural')
+  const memory = {
+    id: 'm-peer-1',
+    role: 'user',
+    content: [{ type: 'text', text: '不动声色的一条回报' }],
+    source: { kind: 'peer' },
+  }
+  await preStep(harness, agent, [memory])
+  assert.equal(tasksOf(root, contract).length, 0, '结构化 source.kind=peer 必须排除')
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'peer')
+})
