@@ -611,7 +611,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
       "id": "tests",                    // 步骤内唯一；缺省 step-N
       "run": "ctest --test-dir build/x --output-on-failure",
       "expect": "exit 0",               // exit 0 | exit N | contains:文本
-      "timeoutSeconds": 600             // 整数 >= 1，默认 600
+      "timeoutSeconds": 600,            // 整数 >= 1，默认 600
+      "allowUnknownExpect": false       // 仅显式容错时为 true；见下方 expect 规则
     }
   ],
   "created_at": "...",
@@ -620,8 +621,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 ```
 
 - 未指定 id 时用标题推导 slug（小写、非字母数字转 `-`，截 40），推不出则要求显式 `--id`。
-- 步骤未写 `expect` 时统一落盘为 `exit 0`（core 与 CLI 一致）；未知写法在 `runGate`
-  运行时按 `exit 0` 处理并记 `gate-expect-unknown` warning。
+- 步骤未写 `expect` 时统一落盘为 `exit 0`（core 与 CLI 一致）。**未知写法在定义期直接拒绝**
+  （`invalid`，退出 2，不落盘）：错误消息点名步骤 id、原始 `expect` 与合法写法
+  `exit N` / `contains: TEXT`。确需容错时显式传 `--allow-unknown-expect`（core 选项
+  `allowUnknownExpect: true`，`flow_gate` 工具同名参数）：此时落盘
+  `step.allowUnknownExpect: true`、定义期记 `gate-expect-unknown` warning，运行时按
+  `exit 0` 放行并每次留 warning。历史记录里没有该标记的未知 `expect` 在运行时**判失败**
+  并记 `gate-expect-invalid` warning——绝不再静默当成 `exit 0`。
 - `gate update` 的 `--step` 是**整体替换** `steps`，不是追加。
 - `enabled` 是真实开关，不只是面板标记：
   - `runGate(...)`（单条）在 `enabled === false` 时抛
@@ -1164,7 +1170,8 @@ flow --root <dir> <command> [--json]
 | `-h`, `--help` | 显示帮助并退出 0 |
 
 **警告流**：每次调用收集两个来源——`loadContract().warnings`（契约修复诊断）与
-`core.drainWarnings()`（锁接管、不可读记录、containment、`gate-expect-unknown` 等）——并
+`core.drainWarnings()`（锁接管、不可读记录、containment、`gate-expect-unknown` /
+`gate-expect-invalid` 等）——并
 去重。`--json` 模式下只出现在信封顶层 `warnings`，**不写 stderr**；人类模式下在命令输出
 之后、错误行之前逐条打印 `警告: <text>` 到 stderr（成功与失败路径都打印）。
 `gate run` 步骤子进程的 stderr 只进 `data.steps[].tail`，**不**转发到父进程 warnings。
@@ -1216,9 +1223,10 @@ flow task normalize [--type-map <file.json>] [--dry-run]
 
 flow gate list | show <id>
 flow gate add    --id SLUG --title T --phase commit|release|manual
-                 [--step 'id=run>>expect' ...]
+                 [--step 'id=run>>expect' ...] [--allow-unknown-expect]
 flow gate update <id> [--title T] [--phase commit|release|manual]
                  [--enabled true|false] [--step 'id=run>>expect' ...]
+                 [--allow-unknown-expect]
 flow gate enable <id>
 flow gate disable <id>
 flow gate rm <id> [--yes]
@@ -1363,7 +1371,10 @@ flow check description [--task <T-id>] [--strict] [--json]
   `active`/`draft` 的 FIFO 顺序（`created_at` 升序，见 §5.3）**不同**；两者各自稳定，不要
   互相推断（`task list` 不因 FIFO 改造而改变）。
 - `--step` 格式 `id=命令>>expect`，可重复；`expect` 可为 `exit 0`、`exit 2`、
-  `contains:文本`；未写 `>>expect` 时为 `exit 0`。
+  `contains:文本`；未写 `>>expect` 时为 `exit 0`。**未知写法（如 `exit:1`、`exit=1`）在
+  定义期直接 `invalid` 拒绝（退出 2，不落盘）**，只有显式 `--allow-unknown-expect`
+  才接受并在记录上落 `allowUnknownExpect: true`（见 §3.3）；`flow_gate` 工具用同名布尔
+  参数 `allowUnknownExpect`（缺省 `false`，仅 add/update 接受）。
 - `gate run --timeout SECONDS` 覆盖该次运行所有步骤的超时（默认按步骤的 600 秒）。
   步骤超时后 core 终止**整个进程树**：POSIX 杀以 detached 启动的进程组；win32 先
   `taskkill /PID <pid> /T /F`（`/T` 含子进程、`/F` 强制），再直接杀子进程兜底。win32 上

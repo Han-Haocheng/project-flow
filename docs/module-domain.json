@@ -238,7 +238,9 @@
       "tests": [
         "test/checks.test.mjs",
         "test/t-20261106-check-tasks.test.mjs",
-        "test/t-20261106-contract-check-tasks.test.mjs"
+        "test/t-20261106-contract-check-tasks.test.mjs",
+        "test/t-20261111-gate-expect-docs.test.mjs",
+        "test/t-20261111-gate-expect-tool.test.mjs"
       ]
     },
     "experiments": {
