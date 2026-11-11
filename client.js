@@ -48,6 +48,10 @@
  *     answers `{ ok:true, root, gate:{ id, enabled } }` (or `{ ok:false,
  *     error:{ code, message } }`);
  *   - `tasks.counts.other` covers task records whose status is unknown;
+ *   - `description` is a read-only projection of the `.agents/description`
+ *     ledger (`{ available, counts:{files,modules,missingSemantics,plans},
+ *     recentPlans[] }`); `available !== true` (or a missing key) hides the
+ *     framework card entirely instead of drawing zero counters;
  *   - every row in `tasks.active` / `tasks.draft` / `tasks.recentDone` carries
  *     `goal` plus bounded detail fields (`notes`, `scope`, `acceptance`,
  *     `commits`, `created_at`, `updated_at`). A row renders its title and a
@@ -253,6 +257,10 @@ window.__ModuleLoader__.load({
       'tasks.detail.commits': '提交',
       'tasks.detail.created': '创建于',
       'tasks.detail.updated': '更新于',
+      'framework.title': '框架视图',
+      'framework.summary': '文件 {files} · 模块 {modules} · 缺语义 {missing} · 计划 {plans}',
+      'framework.plans': '最近语义变更',
+      'framework.plansEmpty': '还没有已实现的语义变更计划。',
       'gates.title': '门禁',
       'gates.empty': '还没有门禁定义；用 flow gate add 创建',
       'gates.phase.commit': '提交',
@@ -428,6 +436,10 @@ window.__ModuleLoader__.load({
       'tasks.detail.commits': 'Commits',
       'tasks.detail.created': 'Created',
       'tasks.detail.updated': 'Updated',
+      'framework.title': 'Framework view',
+      'framework.summary': '{files} files · {modules} modules · {missing} missing semantics · {plans} plans',
+      'framework.plans': 'Recent semantic changes',
+      'framework.plansEmpty': 'No implemented semantic-change plans yet.',
       'gates.title': 'Gates',
       'gates.empty': 'No gate definitions yet; create one with flow gate add',
       'gates.phase.commit': 'commit',
@@ -989,6 +1001,44 @@ window.__ModuleLoader__.load({
     }
 
     /** Tolerant mapping of the host payload; never throws on missing fields. */
+    /**
+     * Framework view projection: description-ledger counts + the latest
+     * implemented semantic-change plans. Returns null when the ledger is absent
+     * (`available !== true`), which is the card's hide signal. A counter that
+     * was not computable stays null and renders as "—", never as a fake 0.
+     */
+    function normalizeDescription(raw) {
+      const src = asObject(raw);
+      if (src.available !== true) return null;
+      const countsSrc = asObject(src.counts);
+      const countOf = (value) => {
+        const number = asNumber(value, null);
+        return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : null;
+      };
+      return {
+        counts: {
+          files: countOf(countsSrc.files),
+          modules: countOf(countsSrc.modules),
+          missingSemantics: countOf(countsSrc.missingSemantics),
+          plans: countOf(countsSrc.plans),
+        },
+        plans: asArray(src.recentPlans)
+          .map((entry) => asObject(entry))
+          .map((entry) => {
+            const at = asText(entry.at);
+            const atMs = Date.parse(at);
+            return {
+              task: asText(entry.task),
+              title: asText(entry.title),
+              at,
+              atMs: Number.isFinite(atMs) ? atMs : null,
+            };
+          })
+          .filter((entry) => entry.task !== '')
+          .slice(0, 5),
+      };
+    }
+
     function normalize(payload) {
       const src = asObject(payload);
       const headSrc = asObject(src.head);
@@ -1114,6 +1164,8 @@ window.__ModuleLoader__.load({
         /* T-13 A5: rows the payload held back (hidden dead/stale beats). */
         heartbeatsHidden: asNumber(src.heartbeatsHidden, 0),
         decisions: normalizeDecisions(src.decisions),
+        /* Read-only framework view over the description ledger; null hides it. */
+        description: normalizeDescription(src.description),
         warnings,
       };
     }
@@ -2459,6 +2511,67 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * Read-only 「框架视图」: the description-ledger summary plus the latest
+     * implemented semantic-change plans. Every field is optional at render time:
+     * a missing counter shows "—", a missing plan timestamp drops the time, and
+     * the whole card is not mounted at all when `normalize` returned null.
+     */
+    function FrameworkCard(props) {
+      const description = asObject(props.description);
+      const counts = asObject(description.counts);
+      const plans = asArray(description.plans);
+      const t = props.t;
+      const now = props.now;
+      const dash = t('misc.dash');
+      const countText = (value) => (Number.isFinite(value) ? String(value) : dash);
+      return React.createElement(
+        'section',
+        { className: 'project-flow-card' },
+        props.showTitle === false
+          ? null
+          : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('framework.title')),
+        React.createElement(
+          'p',
+          { className: 'project-flow-muted project-flow-frameworkSummary' },
+          t('framework.summary', {
+            files: countText(counts.files),
+            modules: countText(counts.modules),
+            missing: countText(counts.missingSemantics),
+            plans: countText(counts.plans),
+          })
+        ),
+        React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.plans')),
+        plans.length === 0
+          ? React.createElement(EmptyLine, null, t('framework.plansEmpty'))
+          : React.createElement(
+              'ul',
+              { className: 'project-flow-list project-flow-frameworkList' },
+              plans.map((plan, index) => {
+                const when = Number.isFinite(plan.atMs) ? relativeMoment(plan.atMs, now, t) : null;
+                const timeText = when || asText(plan.at);
+                return React.createElement(
+                  'li',
+                  { className: 'project-flow-frameworkRow', key: asText(plan.task) || 'plan-' + index },
+                  React.createElement('span', { className: 'project-flow-frameworkId', title: plan.task }, plan.task),
+                  React.createElement(
+                    'span',
+                    { className: 'project-flow-frameworkTitle', title: plan.title || undefined },
+                    plan.title || dash
+                  ),
+                  timeText
+                    ? React.createElement(
+                        'span',
+                        { className: 'project-flow-muted project-flow-frameworkTime' },
+                        timeText
+                      )
+                    : null
+                );
+              })
+            )
+      );
+    }
+
     /** Phase chip text: known phases are localized, anything else is shown raw. */
     function phaseOf(phase, t) {
       const value = asText(phase);
@@ -3363,7 +3476,7 @@ window.__ModuleLoader__.load({
     // #endregion
 
     /**
-     * The data-state body of the panel: display control row, the five cards and
+     * The data-state body of the panel: display control row, the cards and
      * the footer. Split out of `Panel` (which owns the poll) so the layout and
      * the switches can be rendered and clicked without a fetch — the selftest
      * mounts this component directly.
@@ -3461,6 +3574,16 @@ window.__ModuleLoader__.load({
           'decisions.title',
           React.createElement(DecisionsCard, { decisions: view.decisions, t, now, showTitle: false })
         ),
+        /* Framework view: a read-only projection of the description ledger.
+           An unbuilt/absent ledger normalizes to null, so the card is not
+           mounted at all (no empty shell, no fake zeros). */
+        view.description
+          ? foldCard(
+              'framework',
+              'framework.title',
+              React.createElement(FrameworkCard, { description: view.description, t, now, showTitle: false })
+            )
+          : null,
         React.createElement(
           'div',
           /* The base class stays a literal (a selftest pins it); a closed
@@ -4170,6 +4293,13 @@ window.__ModuleLoader__.load({
 .project-flow-decisionBlocks{flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:10px;}
 .project-flow-decisionAge{flex:none;margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;}
 .project-flow-decisionCopy{flex:none;height:22px;padding:0 8px;font-size:10.5px;}
+.project-flow-frameworkSummary{margin:0 0 6px;}
+.project-flow-frameworkList{gap:2px;}
+.project-flow-frameworkRow{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:6px;row-gap:1px;padding:3px 3px 3px 0;border-radius:5px;min-width:0;font-size:11.5px;}
+.project-flow-frameworkRow:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-frameworkId{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-weight:600;font-size:11px;}
+.project-flow-frameworkTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);}
+.project-flow-frameworkTime{flex:none;margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:10px;}
 @container (min-width:640px){
 .project-flow-top{align-items:flex-start;gap:12px 16px;}
 .project-flow-lead{gap:12px;}
@@ -4194,6 +4324,9 @@ window.__ModuleLoader__.load({
 .project-flow-cardTitle{font-size:13px;line-height:20px;}
 .project-flow-cardTitle--spaced{margin-bottom:10px;}
 .project-flow-subTitle{margin:14px 0 6px;font-size:11px;}
+.project-flow-frameworkRow{column-gap:8px;padding:4px 4px 4px 0;font-size:12px;}
+.project-flow-frameworkId{font-size:11.5px;}
+.project-flow-frameworkTime{font-size:10.5px;}
 .project-flow-current{margin-top:10px;padding:6px 8px;font-size:12px;}
 .project-flow-list{gap:2px;}
 .project-flow-taskList{gap:2px;}
