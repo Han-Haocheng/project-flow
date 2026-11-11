@@ -1073,3 +1073,103 @@ test('排除 ⑤结构化判据：source 指明来自同伴/子代理时不建�
   const status = await flowStatus(harness, agent, root)
   assert.equal(status.capture.excludedBy, 'peer')
 })
+
+// ------------------- 排除 ⑤宿主契约：source.kind 真值与文本兜底同口径（2026-11-11）
+//
+// 权威出处：`@deepseek-ai/dsh-llm` 的 `MessageBase {id, content, source}`
+// （lib/types/message.d.ts）；`@deepseek-ai/dsh-subagent` 的
+// continuation-messages.js 构造 `agent-message`（senderSessionId）与
+// `subagent-settled`（summary + senderSessionId）；队友消息是
+// `TeamMessageSource`（kind:'team-message', senderId/senderName）。
+// 人类消息的 source 恒为 `{kind:'user'}`。
+
+test('排除 ⑤宿主形状：真 agent-message + 中性文本（无 `Agent … sent a message:` 前缀）→ 0 卡，excludedBy=peer', async () => {
+  const { root, contract } = freshProject('peer-host-agent-message')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-peer-host-agent-message')
+  // 宿主真实形状（continuation-messages.js 的 createAgentMessage）：
+  // content 在这里故意**不带** `Agent <id> sent a message: ` 前缀，只有 source 能证明来源。
+  const message = {
+    id: 'm-host-agent-message-1',
+    role: 'user',
+    content: [{ type: 'text', text: '这行没有任何同伴前缀，只有结构信号' }],
+    source: { kind: 'agent-message', form: 'relay', senderSessionId: '403f3f7a-c502-4ea8-95f2-49af3eb54fc5' },
+  }
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+  assert.equal(tasksOf(root, contract).length, 0, 'peer 消息不是用户请求：agent-message 不能建卡')
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, 'peer', `peer 消息不是用户请求：excludedBy 应为 peer，实际 ${status.capture.excludedBy}`)
+})
+
+test('排除 ⑤宿主形状（表驱动）：team-message / subagent-settled 的 source.kind → 0 卡', async () => {
+  const rows = [
+    {
+      label: 'team-message',
+      source: {
+        kind: 'team-message',
+        teamId: 'team-1',
+        messageId: 'tm-1',
+        senderId: 'session-exec-panel',
+        senderName: 'exec-panel',
+      },
+    },
+    {
+      label: 'subagent-settled',
+      source: {
+        kind: 'subagent-settled',
+        form: 'notice',
+        summary: 'Background subagent 9c1 finished.',
+        senderSessionId: '9c1',
+      },
+    },
+  ]
+  for (const row of rows) {
+    const { root, contract } = freshProject(`peer-host-${row.label}`)
+    const harness = makeHarness(root)
+    const agent = harness.addAgent(`session-peer-host-${row.label}`)
+    const message = {
+      id: `m-host-${row.label}-1`,
+      role: 'user',
+      content: [{ type: 'text', text: '没有文本前缀的一条回报' }],
+      source: row.source,
+    }
+    await preStep(harness, agent, [message])
+    await turnStopping(harness, agent)
+    assert.equal(tasksOf(root, contract).length, 0, `${row.label}：peer 消息不是用户请求，不能建卡`)
+    const status = await flowStatus(harness, agent, root)
+    assert.equal(status.capture.excludedBy, 'peer', `${row.label}：excludedBy 应为 peer，实际 ${status.capture.excludedBy}`)
+  }
+})
+
+test('排除 ⑤文本兜底与结构判据同口径：exclusionReasonOf 对 sent-a-message 形状返回 peer，「Agent 设计说明」不命中', () => {
+  assert.equal(
+    exclusionReasonOf('Agent 403f3f7a-c502-4ea8-95f2-49af3eb54fc5 sent a message: hi'),
+    'peer',
+    'peer 消息不是用户请求：文本兜底必须与结构判据同口径',
+  )
+  assert.equal(
+    exclusionReasonOf('Agent 设计说明要重写一段'),
+    null,
+    '边界：普通文本（非 sent-a-message 形状）不得被当成 peer',
+  )
+})
+
+test('排除 ⑤不误杀人类消息：source.kind=user 仍捕获，excludedBy=null', async () => {
+  const { root, contract } = freshProject('peer-host-human')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-peer-host-human')
+  const message = {
+    id: 'm-host-human-1',
+    role: 'user',
+    content: [{ type: 'text', text: '人类自己的普通一句话' }],
+    source: { kind: 'user' },
+  }
+  await preStep(harness, agent, [message])
+  await turnStopping(harness, agent)
+  const tasks = tasksOf(root, contract)
+  assert.equal(tasks.length, 1, '人类消息不是 peer，必须建卡')
+  assert.equal(tasks[0].title, '人类自己的普通一句话')
+  const status = await flowStatus(harness, agent, root)
+  assert.equal(status.capture.excludedBy, null, '人类消息不得被 peer 判据误杀')
+})

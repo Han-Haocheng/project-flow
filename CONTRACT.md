@@ -1583,13 +1583,24 @@ capture: {
 | ① | 插件注入 context | content 以 `<flow-context>` 开头 | `sentinel` |
 | ② | 系统前缀 | `【project-flow】` / `<system-reminder>` / `[WIP]` | `prefix` |
 | ③ | 集合差重放 | 与上一 step 的 key 集合相同（或本批已见） | `dup` |
-| ④ | **Agent Teams 队友消息** | content 以固定前缀 **`Team message from `** 开头（**含末尾空格**） | `peer` |
+| ④ | **同伴/子代理消息** | `source.kind ∈ {agent-message, team-message, subagent-settled}`（结构信号）为主；无 `source` 时退回文本：content 以 **`Team message from `**（含末尾空格）或 **`Agent <id> sent a message:`** 开头 | `peer` |
 | — | 恢复会话的旧历史 | 时间戳早于挂载宽限窗口 `CAPTURE_GRACE_MS` | `stale` |
 
-规则 ④ 的判据是**文本约定，不是结构信号**：宿主 `UserMessage`（真实形状
-`{id, role, content, source}`，见 `@deepseek-ai/dsh-llm` 的 message typings）没有 sender 字段，
-队友消息与用户原话都以 `role:'user'` 出现在同一个 `payload.messages` 里。若宿主将来给消息加
-sender 元数据，应改成按元数据判断并删除该前缀。
+规则 ④ 的主判据是**结构信号（宿主 `source` 契约）**，不是文本约定：宿主 `UserMessage` 的
+真实形状是 `{id, role, content, source}`，`source` 是 `MessageBase` 的必填字段（见
+`@deepseek-ai/dsh-llm` 的 `lib/types/message.d.ts`），`source.kind` 直接标明来源：
+
+| `source.kind` | 其余字段 | 出处 |
+|---|---|---|
+| `agent-message` | `form:'relay'`、`senderSessionId` | `@deepseek-ai/dsh-subagent` 的 `continuation-messages.js`（`agentMessageSource` / `createAgentMessage`） |
+| `team-message` | `teamId`、`messageId`、`senderId`、`senderName` | `TeamMessageSource` |
+| `subagent-settled` | `form:'notice'`、`summary`、`senderSessionId` | `continuation-messages.js` 的 `createSettlementMessage` |
+
+人类消息的 `source.kind` 恒为 `'user'`（user-rpc 的 source 带 `rpcId`，kind 仍是 `'user'`），
+因此结构判据不会误杀用户原话。**文本只作兜底**：没有 `source` 的旧夹具/旧记录才按
+`Team message from `（含末尾空格）和 `Agent <id> sent a message:` 开头匹配；后者正是宿主
+`createAgentMessage` 的 content 首块，边界只认「Agent + 单个 id + sent a message:」——用户自己
+写的「Agent 设计说明」不命中。宿主将来改文案时结构判据仍然生效（这正是该判据存在的理由）。
 
 **消息身份与时间**：真实 `UserMessage` **没有 `timestamp`**（旧文档写的 `{role, content, timestamp}`
 是方案草图的错误假设）。去重键因此以稳定 `id` 为主料（见 §3.2「去重身份」）；`source.at` 在无
