@@ -615,23 +615,36 @@ const hbRootAgent = mockAgent('session-hb-root', storeRoot)
 registerRootAgent(hbRootAgent)
 const hbRootExec = { agent: hbRootAgent }
 
+eq('guard: one heartbeat guard registered', guards.length, 1)
+// H-4: the merged reminder keeps ONE hook; a second one would make the
+// host drive only the first and silently lose a section.
+eq('pre-step: exactly one reminder hook', preStepHandlers.length, 1)
+// T-20261111183409：这条断言必须排在 pre-step 之前——补登记会在 pre-step 里为缺失记录
+// 开一条 working 心跳，之后再断言「没有心跳就拒绝」只会测到放行分支。文案也换成
+// 「没有记录」那一支（pre-step 自动补登记 + CLI start），不再指向死路 update。
+const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
+check(
+  'guard: root without heartbeat denies edit',
+  typeof rootEditReason === 'string' &&
+    rootEditReason.includes('agent/pre-step') &&
+    rootEditReason.includes(`flow heartbeat start --session ${hbRootAgent.id}`),
+  String(rootEditReason),
+)
+check('guard: bash is never denied', guards[0]?.({ name: 'bash', agent: hbRootAgent }) === undefined)
+
 const reminded = await runPreStep(hbRootAgent)
 check(
   'pre-step: root session is reminded (task/decision section)',
   reminded !== null && Array.isArray(reminded.messages) && reminded.messages.length === 1 && reminded.messages[0].role === 'user',
   JSON.stringify(reminded),
 )
-eq('guard: one heartbeat guard registered', guards.length, 1)
-// H-4: the merged reminder keeps ONE hook; a second one would make the
-// host drive only the first and silently lose a section.
-eq('pre-step: exactly one reminder hook', preStepHandlers.length, 1)
-const rootEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
+// 自愈语义：pre-step 已把缺失的心跳补开，同一份守卫调用必须放行。
+const backfilledEditReason = guards[0]?.({ name: 'edit', agent: hbRootAgent })
 check(
-  'guard: root without heartbeat denies edit',
-  typeof rootEditReason === 'string' && rootEditReason.includes('flow_heartbeat update'),
-  String(rootEditReason),
+  'guard: pre-step backfill opens the heartbeat, edit allowed',
+  backfilledEditReason === undefined,
+  String(backfilledEditReason),
 )
-check('guard: bash is never denied', guards[0]?.({ name: 'bash', agent: hbRootAgent }) === undefined)
 
 // A delegated child: no reminder, no write gate, and the tool refuses to write.
 const hbSubAgent = mockAgent('session-hb-sub', storeRoot, {
