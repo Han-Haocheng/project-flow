@@ -1,5 +1,9 @@
 # project-flow 契约（schema 2）
 
+> 目标真源：[docs/GOALS.md](GOALS.md)（最重要：减少 AI 思考机会与长度；核心：明确流程 /
+> 明确验证 / 清晰语义 / 并行不冲突；扩展：框架可见 / 语义变化 / 会话状态）。本契约与代码
+> 的所有取舍以此为准。
+
 `project-flow` 现在是**项目的流程台账**，面板是它的只读视图（唯一例外：「初始化」按钮
 POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 parent 谱系）、
 任务、门禁定义与门禁运行记录都写在项目自己的 `.agents/flow/` 目录里。写入只有两个入口——
