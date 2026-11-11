@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
-import { heartbeatStatus, initProject, loadContract, startHeartbeat } from '../lib/core.mjs'
+import { addTask, heartbeatStatus, initProject, listTasks, loadContract, startHeartbeat, updateHeartbeat } from '../lib/core.mjs'
+import { captureLateMountStart, heartbeatGuardReason } from '../lib/host/session.mjs'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const TEMP_ROOTS = []
@@ -84,8 +85,18 @@ function makeHarness() {
       rootIds.add(id)
       return agent
     },
+    /** A live agent the registry does **not** list as a root: a real subagent. */
+    addSubAgent(id, root) {
+      const agent = { id, session: { cwd: root, header: { origin: 'subagent' } } }
+      live.set(id, agent)
+      return agent
+    },
     turnStopping() {
       const set = handlers.get('agent/turn-stopping')
+      return set === undefined ? [] : [...set]
+    },
+    preStep() {
+      const set = handlers.get('agent/pre-step')
       return set === undefined ? [] : [...set]
     },
     disposeAll() {
@@ -322,4 +333,295 @@ test('源码兜底：保活实现里没有 agent.steer( 调用', () => {
   const end = source.indexOf('function registerHeartbeatKeepalive(', start)
   assert.ok(end > start, 'registerHeartbeatKeepalive must follow it')
   assert.equal(source.slice(start, end).includes('steer('), false, 'turn-stopping must never steer the agent')
+})
+
+// ========== T-20261111155603-02：插件挂载前创建的会话，pre-step 幂等补登记 ==========
+//
+// 缺陷：会话在插件挂载**之前**创建 → `agent/created` 漏跑 → 没有心跳文件 →
+// 写文件被心跳门禁挡住，提示"先 flow_heartbeat update"，而 `flow_heartbeat update`
+// 对缺失记录返回 `not-found`；唯一出路是人工跑 `flow heartbeat start`。
+//
+// 修法：`agent/pre-step`（主会话每轮第一步）幂等补登记——无记录且确认主会话才
+// `startHeartbeat`（沿用 `agent/created` 的入参与空栈占位 goal 语义）；已有记录
+// 完全跳过（不得重置 turn/stats/started_at）；失败只记 mount warning、不打断本轮。
+// 同时 `update` 对缺失记录的文案给出可执行的恢复命令。
+
+/** One `agent/pre-step` waterfall dispatch with a minimal enter decision. */
+async function dispatchPreStep(agent, payload = {}, h = harness) {
+  const listeners = h.preStep()
+  assert.equal(listeners.length, 1, `expected exactly one pre-step listener, got ${listeners.length}`)
+  let nextCalls = 0
+  const next = async () => {
+    nextCalls += 1
+    return { kind: 'enter' }
+  }
+  const decision = await listeners[0](
+    { agent, step: 0, turn: 1, messages: [], ...payload },
+    next,
+  )
+  assert.equal(nextCalls, 1, 'waterfall 必须先调用 next()')
+  return decision
+}
+
+const beatExists = (root, session) => fs.existsSync(heartbeatFile(root, session))
+
+/** Warnings this backfill owns (the shared harness may carry unrelated mount warns). */
+const backfillWarns = (since = 0, h = harness) =>
+  h.warns.slice(since).filter((line) => String(line).includes('late-mount backfill'))
+
+test('T1111-① 挂载前创建的主会话：一次 pre-step 后自动补登记（栈顶 goal/task）', async () => {
+  const { root, contract } = freshProject('late-main')
+  const agent = harness.addAgent('session-late-main', root)
+  const task = addTask(root, contract, { type: 'feat', title: '挂载后补登记' })
+  const warnCount = harness.warns.length
+
+  assert.equal(beatExists(root, 'session-late-main'), false, '夹具前提：创建时插件还没挂载，没有心跳')
+
+  const decision = await dispatchPreStep(agent)
+  assert.equal(decision.kind, 'enter', '补登记不得改变 pre-step 的 decision')
+
+  const beat = readJson(heartbeatFile(root, 'session-late-main'))
+  assert.equal(beat.session, 'session-late-main')
+  assert.equal(beat.status, 'working', '补登记必须落在可写的 working 状态')
+  assert.equal(beat.task, task.id, '沿用 captureAutoStart：栈顶任务进心跳')
+  assert.equal(beat.goal, '挂载后补登记')
+  assert.deepEqual(beat.claims, [], '无 scope 的任务不虚报 claims')
+  assert.equal(beat.turn, 1)
+  assert.equal(beat.stats.turns, 1)
+  assert.match(String(beat.started_at), /^\d{4}-\d{2}-\d{2}T/)
+  assert.deepEqual(backfillWarns(warnCount), [], '补登记是正常路径，不得 warn')
+})
+
+test('T1111-①b 空台账补登记：占位 goal + task:null，不凭空造任务', async () => {
+  const { root, contract } = freshProject('late-empty')
+  const agent = harness.addAgent('session-late-empty', root)
+  const warnCount = harness.warns.length
+  const before = listTasks(root, contract).length
+
+  await dispatchPreStep(agent)
+  const beat = readJson(heartbeatFile(root, 'session-late-empty'))
+  assert.equal(beat.status, 'working')
+  assert.equal(beat.task, null, '空栈不得凭空指向一条任务')
+  assert.equal(beat.goal, '（台账暂无未完成任务）')
+  assert.equal(listTasks(root, contract).length, before, '补登记不得顺手造任务')
+  assert.deepEqual(backfillWarns(warnCount), [])
+})
+
+test('T1111-② 已有心跳：pre-step 完全跳过，started_at / turn / stats 一律不变', async () => {
+  const { root, contract } = freshProject('late-already')
+  const agent = harness.addAgent('session-late-already', root)
+  const task = addTask(root, contract, { type: 'feat', title: '已登记任务' })
+  const warnCount = harness.warns.length
+
+  // 模拟挂载后已登记、且已跑过若干轮：turn=3、stats.turns=3。
+  startHeartbeat(root, contract, {
+    session: 'session-late-already',
+    goal: '已登记任务',
+    task: task.id,
+    turn: 3,
+    status: 'working',
+  })
+  const before = readJson(heartbeatFile(root, 'session-late-already'))
+  assert.equal(before.turn, 3)
+  assert.equal(before.stats.turns, 3)
+
+  await dispatchPreStep(agent)
+  await dispatchPreStep(agent, { turn: 2, step: 1 })
+
+  const afterBeat = readJson(heartbeatFile(root, 'session-late-already'))
+  assert.deepEqual(afterBeat, before, '已有记录必须完全跳过：补登记不得重置任何字段')
+  assert.equal(afterBeat.started_at, before.started_at)
+  assert.equal(afterBeat.turn, before.turn)
+  assert.deepEqual(afterBeat.stats, before.stats)
+  assert.deepEqual(backfillWarns(warnCount), [])
+})
+
+test('T1111-②b 已关闭（done）的心跳也跳过：不在 pre-step 里复活它', async () => {
+  const { root, contract } = freshProject('late-done')
+  const agent = harness.addAgent('session-late-done', root)
+  const task = addTask(root, contract, { type: 'chore', title: '已关闭' })
+  const warnCount = harness.warns.length
+
+  startHeartbeat(root, contract, { session: 'session-late-done', goal: '已关闭', task: task.id })
+  updateHeartbeat(root, contract, 'session-late-done', { status: 'done' })
+  const file = heartbeatFile(root, 'session-late-done')
+  const rawBefore = fs.readFileSync(file, 'utf8')
+
+  await dispatchPreStep(agent)
+  assert.equal(fs.readFileSync(file, 'utf8'), rawBefore, '任何已有记录（含 done）都不得被补登记改写')
+  assert.deepEqual(backfillWarns(warnCount), [])
+})
+
+test('T1111-③ 子代理与后台任务会话前缀（mnemon-task-/bg-task-/task-subagent-）不补登记', async () => {
+  const { root } = freshProject('late-synthetic')
+  const warnCount = harness.warns.length
+
+  const sub = harness.addSubAgent('session-late-sub', root)
+  const mnemon = harness.addAgent('mnemon-task-late-1', root)
+  const bg = harness.addAgent('bg-task-late-1', root)
+  const taskSub = harness.addAgent('task-subagent-late-1', root)
+
+  for (const agent of [sub, mnemon, bg, taskSub]) {
+    await dispatchPreStep(agent)
+  }
+  for (const id of ['session-late-sub', 'mnemon-task-late-1', 'bg-task-late-1', 'task-subagent-late-1']) {
+    assert.equal(beatExists(root, id), false, `${id} 不得获得心跳（否则面板会多出不存在的行）`)
+  }
+
+  // 对照：同一次挂载下的普通主会话仍会补登记——排除只来自判定口径，不是把补登记关了。
+  const control = harness.addAgent('session-late-control', root)
+  await dispatchPreStep(control)
+  assert.equal(beatExists(root, 'session-late-control'), true)
+  assert.deepEqual(backfillWarns(warnCount), [])
+})
+
+test('T1111-④ 补登记前 write/edit 被门禁挡住；补登记后放行（read 一直放行）', async () => {
+  const { root } = freshProject('late-gate')
+  const agent = harness.addAgent('session-late-gate', root)
+  const warnCount = harness.warns.length
+
+  const deniedBefore = heartbeatGuardReason(harness.ctx, { name: 'write', agent })
+  assert.equal(typeof deniedBefore, 'string', '夹具前提：无心跳时写门禁必须真的拦住')
+  // 完全没有记录时的文案必须是**活路**：下一轮 pre-step 自动补登记 + CLI start，
+  // 而不是指向 `flow_heartbeat update`（它对缺失记录只能报 not-found）。
+  assert.match(deniedBefore, /agent\/pre-step/)
+  assert.match(deniedBefore, new RegExp(`flow heartbeat start --session session-late-gate`))
+  assert.equal(deniedBefore.includes('flow_heartbeat update'), false, '无记录时不得指向 update（死路）')
+  assert.equal(typeof heartbeatGuardReason(harness.ctx, { name: 'edit', agent }), 'string')
+  assert.equal(heartbeatGuardReason(harness.ctx, { name: 'read', agent }), undefined, '非写工具不受心跳门禁影响')
+  assert.equal(beatExists(root, 'session-late-gate'), false, '门禁只报错，不得替会话开记录')
+
+  await dispatchPreStep(agent)
+
+  assert.equal(beatExists(root, 'session-late-gate'), true, 'pre-step 必须先补上心跳')
+  assert.equal(heartbeatGuardReason(harness.ctx, { name: 'write', agent }), undefined, '补登记后 write 必须放行')
+  assert.equal(heartbeatGuardReason(harness.ctx, { name: 'edit', agent }), undefined, '补登记后 edit 必须放行')
+  assert.equal(heartbeatGuardReason(harness.ctx, { name: 'read', agent }), undefined, 'read 一直放行')
+  assert.deepEqual(backfillWarns(warnCount), [])
+})
+
+test('T1111-④b 有记录但不 working（idle/done）：文案指向 flow_heartbeat update，且照做后门禁放行', async () => {
+  const { root, contract } = freshProject('late-gate-idle')
+  const session = 'session-late-gate-idle'
+  const agent = harness.addAgent(session, root)
+  startHeartbeat(root, contract, { session, goal: '已登记但空闲', createTask: false })
+  updateHeartbeat(root, contract, session, { status: 'idle' })
+
+  const reason = heartbeatGuardReason(harness.ctx, { name: 'write', agent })
+  assert.equal(typeof reason, 'string', 'idle 心跳不得放行写入')
+  // 记录存在 ⇒ update 是活路，不能用「没有心跳文件」那套文案。
+  assert.match(reason, /flow_heartbeat update/)
+  assert.equal(reason.includes('flow heartbeat start --session'), false, '有记录时不该让人从 CLI start 重开')
+  assert.equal(reason.includes('没有心跳文件'), false, '文案不得谎称没有记录')
+
+  // 文案可执行：照做 update 之后同一调用必须放行。
+  updateHeartbeat(root, contract, session, { status: 'working' })
+  assert.equal(heartbeatGuardReason(harness.ctx, { name: 'write', agent }), undefined, '按文案 update 后必须放行')
+})
+
+test('T1111-⑤ update 对缺失记录：仍是 not-found，但文案给出 flow heartbeat start --session <id>', () => {
+  const { root, contract } = freshProject('late-message')
+  const missing = 'session-late-missing'
+  assert.throws(
+    () => updateHeartbeat(root, contract, missing, { status: 'idle' }),
+    (error) =>
+      error.code === 'not-found' &&
+      String(error.message).includes(`flow heartbeat start --session ${missing}`) &&
+      String(error.message).includes('not found'),
+  )
+})
+
+test('T1111-⑥ 幂等：补登记成功后，后续 pre-step 不重置 started_at / turn / stats', async () => {
+  const { root } = freshProject('late-idempotent')
+  const agent = harness.addAgent('session-late-idempotent', root)
+  const warnCount = harness.warns.length
+
+  await dispatchPreStep(agent)
+  const afterFirst = readJson(heartbeatFile(root, 'session-late-idempotent'))
+  assert.equal(afterFirst.turn, 1)
+
+  // 模拟这一轮之后跑过若干轮（turn/stats 由 start/keepalive 递增），再让 pre-step
+  // 经过一次：补登记若在第二轮被重跑，`turn` 会变成 2、`stats.turns` 会翻倍。
+  const file = heartbeatFile(root, 'session-late-idempotent')
+  const aged = { ...afterFirst, turn: 3, stats: { ...afterFirst.stats, turns: 3 } }
+  fs.writeFileSync(file, JSON.stringify(aged))
+  const before = readJson(file)
+
+  await dispatchPreStep(agent, { turn: 2, step: 1 })
+  const after = readJson(file)
+
+  assert.equal(after.started_at, before.started_at, 'started_at 一旦写入就不得被重置')
+  assert.equal(after.turn, before.turn, 'turn 不得被第二轮补登记推进')
+  assert.deepEqual(after.stats, before.stats, 'stats 不得被第二轮补登记改写')
+  assert.equal(after.status, 'working')
+  assert.deepEqual(backfillWarns(warnCount), [], '幂等跳过是正常路径，不得 warn')
+})
+
+test('T1111-⑦ 补登记与捕获解耦：config.capture=false 时仍补登记', async () => {
+  const local = makeHarness()
+  const { root, contract } = freshProject('late-capture-off')
+  const agent = local.addAgent('session-late-capture-off', root)
+  // 捕获是显式 opt-in：这里显式关掉，补登记仍必须发生（否则关捕获=关可写）。
+  apply(local.ctx, { capture: false })
+  try {
+    const decision = await dispatchPreStep(agent, {}, local)
+    assert.equal(decision.kind, 'enter')
+    const beat = readJson(heartbeatFile(root, 'session-late-capture-off'))
+    assert.equal(beat.session, 'session-late-capture-off')
+    assert.equal(beat.status, 'working', '捕获关闭不得连带关掉心跳补登记')
+    assert.equal(listTasks(root, contract).length, 0, '捕获关掉时补登记同样不得造任务卡')
+  } finally {
+    local.disposeAll()
+  }
+})
+
+test('T1111-⑧ 锁冲突只 warn 且不改变 decision；锁释放后下一轮重试成功', async () => {
+  const { root } = freshProject('late-lock')
+  const agent = harness.addAgent('session-late-lock', root)
+  const warnCount = harness.warns.length
+  const lockPath = path.join(root, '.agents', 'flow', '.lock')
+  fs.writeFileSync(lockPath, JSON.stringify({ schema: 1, pid: process.pid, at: new Date().toISOString() }))
+  let decision
+  try {
+    decision = await dispatchPreStep(agent)
+  } finally {
+    fs.unlinkSync(lockPath)
+  }
+
+  assert.equal(decision.kind, 'enter', '补登记失败不得改变本轮的 decision')
+  assert.equal(beatExists(root, 'session-late-lock'), false, '拿不到锁时不得写出半截记录')
+  const warns = backfillWarns(warnCount)
+  assert.equal(warns.length, 1, `锁冲突只留一条 backfill warning，got ${warns.length}`)
+  assert.ok(warns[0].includes('late-mount backfill skipped'), `unexpected warning: ${warns[0]}`)
+
+  // 下一轮重试成功（补登记是幂等重试，不需要人工清理）。
+  const retry = await dispatchPreStep(agent)
+  assert.equal(retry.kind, 'enter')
+  assert.equal(beatExists(root, 'session-late-lock'), true, '锁释放后下一轮必须补上心跳')
+  assert.equal(readJson(heartbeatFile(root, 'session-late-lock')).status, 'working')
+  assert.deepEqual(backfillWarns(warnCount).slice(1), [], '重试成功不再 warn')
+})
+
+test('T1111-⑨ 未初始化工作区 / 坏 session id：静默跳过，不写不 warn', async () => {
+  // 未初始化：没有 .agents/flow/flow.json，既没有心跳文件也没有可写目标。
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-t47-keepalive-bare-'))
+  TEMP_ROOTS.push(bare)
+  const bareAgent = harness.addAgent('session-late-bare', bare)
+  const bareWarn = harness.warns.length
+  assert.doesNotThrow(() => captureLateMountStart(harness.ctx, { agent: bareAgent }))
+  assert.equal(fs.existsSync(path.join(bare, '.agents')), false, '未初始化工作区不得被补登记创建目录')
+  assert.deepEqual(backfillWarns(bareWarn), [], '未初始化不是异常：不得 warn')
+
+  // 坏 session id：不可写文件名 → captureTarget 直接放弃。
+  const { root } = freshProject('late-bad-id')
+  const badAgent = harness.addAgent('../escape', root)
+  const badWarn = harness.warns.length
+  const dir = path.join(root, '.agents', 'heartbeat')
+  // 心跳目录是惰性创建的：不存在本身就是"没写"的证据。
+  const listing = fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []
+  assert.doesNotThrow(() => captureLateMountStart(harness.ctx, { agent: badAgent }))
+  const badDecision = await dispatchPreStep(badAgent)
+  assert.equal(badDecision.kind, 'enter', '坏 session id 不得改变 decision')
+  assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [], listing, '坏 session id 不得写出心跳文件')
+  assert.deepEqual(backfillWarns(badWarn), [], '坏 session id 是静默跳过')
 })
