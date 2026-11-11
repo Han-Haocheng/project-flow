@@ -136,6 +136,7 @@
     "decisions": {
       "title": "决策模块（决策台账 / 否决 / 命令解析）",
       "owns": [
+        "lib/decisions/",
         "lib/veto.mjs",
         "lib/commands.mjs"
       ],
@@ -241,6 +242,7 @@
     "experiments": {
       "title": "实验模块（实验树 / 七字段 / 分流）",
       "owns": [
+        "lib/experiments/",
         "lib/tools/experiments.mjs"
       ],
       "shared": [
@@ -265,6 +267,7 @@
     "description": {
       "title": "项目描述模块（文件图 / 模块图 / 语义 / 漂移）",
       "owns": [
+        "lib/description/",
         "lib/desc.mjs",
         "lib/source-scan.mjs"
       ],

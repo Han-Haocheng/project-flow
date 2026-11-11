@@ -54,6 +54,10 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/gates/records.mjs` | **门禁域**（Phase 1）：门禁定义与步骤归一、CRUD、按 phase 运行、运行日志读取。运行时只取锁写日志，步骤执行在 `lib/runner.mjs` | core、CLI |
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
+| `lib/experiments/records.mjs` | **实验域**（Phase 1）：七字段校验、谱系、分流与 counts；直接 import tasks（单向） | core、CLI |
+| `lib/decisions/records.mjs` | **决策域**（Phase 1）：D- 记录生命周期、答案、GC、提醒；直接 import tasks/gates | core、CLI |
+| `lib/description/records.mjs` | **描述台账编排**（Phase 1）：build/set/plan/apply/render 的锁内读写；纯规则仍在 `lib/desc.mjs` | core、CLI |
+| `lib/description/gate.mjs` | **描述阶段门**：stage×计划状态判定，供 tasks 注入调用 | core |
 | `lib/tasks/records.mjs` | **任务域**（Phase 1）：记录校验/构建/投影、九阶段、父与 owner 校验、归档与清扫。描述门与实验 id 由 `configureTasks` 注入 | core、CLI |
 | `lib/heartbeats/records.mjs` | **心跳域**（Phase 1）：心跳根归一、存活证据、读写 API、GC 与面板投影。不 import core；任务建卡能力由 `configureHeartbeats` 注入 | core、CLI |
 | `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |

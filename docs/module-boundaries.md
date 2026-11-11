@@ -23,11 +23,11 @@
 | `framework` | Host 装配：`apply`、路由、工具/技能/提示注册、权限面、子插件入口、清单；装配层已拆到 `lib/host/*` | `index.js`、`lib/host/*`、`tasks.js`/`gates.js`/`experiments.js`、`tui-host.js`、`lib/plugin/*`、`dsh-plugin.json`、`cordis.patch.yml`、`package.json`、`docs/`、`scripts/module-domain.mjs`、`scripts/doc-counts.mjs` | `lib/core.mjs`（contract/storage-helpers/aggregate）、`bin/flow.mjs`（entry）、`README.md`（selftest-count）、`CONTRACT.md`（c1.1） | 7 |
 | `store` | 存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树 | `lib/store/`、`lib/core.mjs`、`lib/util.mjs`、`lib/paths.mjs`、`lib/atomic.mjs`、`lib/lock.mjs`、`lib/proc.mjs` | — | 6 |
 | `tasks` | 任务 CRUD、九阶段状态机、捕获流水线、子任务、P3b 派工、团队板对账 | `lib/stage.mjs`、`lib/capture.mjs`、`lib/team-sync.mjs`、`lib/dispatch.mjs`、`lib/tools/tasks.mjs`、`lib/tools/subtasks.mjs` | `lib/core.mjs`（tasks）、`lib/state-snapshot.mjs`（snapshot-tasks）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.2） | 12 |
-| `decisions` | 决策台账、否决、命令解析、会话隔离 | `lib/veto.mjs`、`lib/commands.mjs` | `lib/core.mjs`（decisions×2）、`lib/host/session.mjs`（reminder）、`lib/host/tools.mjs`（tools）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.6） | 4 |
+| `decisions` | 决策台账、否决、命令解析、会话隔离 | `lib/decisions/`、`lib/veto.mjs`、`lib/commands.mjs` | `lib/core.mjs`（decisions×2）、`lib/host/session.mjs`（reminder）、`lib/host/tools.mjs`（tools）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.6） | 4 |
 | `heartbeats` | 心跳存活判定、自动开关、面板行 | `lib/heartbeats/` | `lib/core.mjs`（heartbeats）、`index.js`（heartbeats）、`lib/state-snapshot.mjs`（snapshot-heartbeats）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.5） | 3 |
 | `gates` | 门禁定义/运行、`flow check` 检查器 | `lib/runner.mjs`、`lib/checks.mjs`、`lib/tools/gates.mjs` | `lib/core.mjs`（gates/default-gate-seeds）、`index.js`（gate-http）、`bin/flow.mjs`、`CONTRACT.md`（c3.3/c3.4/c6） | 3 |
-| `experiments` | 实验树、七字段、分流 | `lib/tools/experiments.mjs` | `lib/core.mjs`（experiments）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.1） | 0 |
-| `description` | 文件图/模块图/语义/漂移 | `lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
+| `experiments` | 实验树、七字段、分流 | `lib/experiments/`、`lib/tools/experiments.mjs` | `lib/core.mjs`（experiments）、`client.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.1） | 0 |
+| `description` | 文件图/模块图/语义/漂移 | `lib/description/`、`lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
 | `panel` | 只读快照投影、Web 面板、TUI 面板 | `lib/state-snapshot.mjs`、`client.js`、`tui-panel.js`、`locale/*` | `index.js`（state-read-isolation）、`CONTRACT.md`（c9） | 11 |
 | `backup` | 台账本地快照、`flow doctor` 完整性报告、过期快照提醒 | `lib/backup.mjs` | `bin/flow.mjs`（命令）、`lib/host/session.mjs`（挂载提醒）、`CONTRACT.md`（c8） | 1 |
 | `cli` | 参数面、命令分发、输出 | `bin/flow.mjs` | — | 4 |
