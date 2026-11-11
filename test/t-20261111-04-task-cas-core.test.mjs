@@ -422,7 +422,12 @@ test('并发：两个子进程带同一 revision 同时写，恰好一个成功�
   const disk = readTaskOnDisk(root, created.id)
   assert.equal(disk.notes, `writer ${wins[0].label}`)
   assert.equal(getTask(root, contract, created.id).notes, `writer ${wins[0].label}`)
-  assert.equal(wins[0].revision, taskRevision(disk), '赢家返回的记录就是磁盘上的记录')
+  // 赢家报回的 revision 必须等于「磁盘当前签名」。两边都取磁盘基准比较：
+  // 子进程用 `taskRevisionOf`（读磁盘原记录，见 CHILD_SOURCE），这里也用
+  // `taskRevisionOf` 重新读一次磁盘——**不要**拿 `taskRevision(返回记录)` 比，
+  // `updateTask` 返回的是读投影（补派生 stage），与磁盘不是同一基准。
+  assert.equal(wins[0].revision, taskRevisionOf(root, contract, created.id), '赢家返回的记录就是磁盘上的记录')
+  assert.equal(wins[0].revision, taskRevision(disk), '赢家的 revision 等于本进程读到的磁盘签名')
   assert.notEqual(taskRevisionOf(root, contract, created.id), revision)
 
   // 失败事务不得留下锁或临时文件，任务目录仍只有那一条记录。
