@@ -154,6 +154,7 @@ test('提示词：带仓库/任务/验收/职责/纪律，子代理零上下文�
   assert.match(analyzer, /lib\/dispatch\.mjs/)
   assert.match(analyzer, /任务书/)
   assert.match(analyzer, /不要 git push/)
+  assert.match(analyzer, /开工前先 flow_task show 复核 stage/, '提示词要求开工前复核阶段（防 spawn 后卡被完成的窗口）')
   const reviewer = dispatchPrompt({ id: 'T-2', title: 'x', stage: 'queued-review' })
   assert.match(reviewer, /审查子代理/)
   assert.match(reviewer, /五条清单/)
@@ -470,29 +471,93 @@ test('派工不校验终态 ②：派工途中被别人推到 done → 写回执
   assert.deepEqual(after.checkpoints, [], '冲突时不得留下派工回执')
 })
 
-test('派工不校验终态 ③：同一 from 阶段重复调用 dispatch 不重复起子代理', async () => {
+test('派工不校验终态 ③：幂等只认最后一条回执——紧接重复复用，中间轮次后回同入口必须重派', async () => {
   const { root, contract } = freshProject('race-dup')
   const task = addTask(root, contract, { type: 'feat', title: '幂等派工', stage: 'queued-analysis' })
   const subagents = fakeSubagents()
-  const first = await dispatchTaskRecord(recordDeps(root, contract, subagents, getTask(root, contract, task.id)).deps)
+  const dispatchNow = () =>
+    dispatchTaskRecord(recordDeps(root, contract, subagents, getTask(root, contract, task.id)).deps)
+  const first = await dispatchNow()
   assert.equal(subagents.calls.length, 1)
   assert.equal(first.task.stage, 'analyzing')
 
-  /* 阶段被人退回 queued-analysis（同一条入口）：不得再起第二个 worker，
-     直接返回已有回执。 */
+  /* 同一入口紧接重复（阶段被人退回 queued-analysis，没有新的轮次）：最后一条回执
+     就是当前入口，不得再起第二个 worker，直接返回已有回执。 */
   updateTask(root, contract, task.id, { stage: 'queued-analysis' }, { source: 'internal' })
-  const second = await dispatchTaskRecord(recordDeps(root, contract, subagents, getTask(root, contract, task.id)).deps)
-  assert.equal(subagents.calls.length, 1, '不得重复起子代理')
+  const second = await dispatchNow()
+  assert.equal(subagents.calls.length, 1, '紧接重复不得起子代理')
   assert.equal(second.reused, true)
-  assert.equal(second.dispatch.childId, 'child-1', '返回的是已有回执')
+  assert.equal(second.dispatch.childId, 'child-1', '返回的是最后一条回执')
   assert.equal(second.task.stage, 'queued-analysis', '复用时不改台账')
 
-  /* `failed: true` 是显式「这次没派成」的标记：允许重派。 */
-  const checkpoints = getTask(root, contract, task.id).checkpoints.map((item) => ({ ...item, failed: true }))
+  /* 走完一轮（实现 → 审查）再回到同一入口：更早的 from=queued-analysis 回执属于上一轮，
+     最后一条是 from=queued-review。旧实现逐条向后扫会复用 child-1，返工环死锁。 */
+  updateTask(root, contract, task.id, { stage: 'queued-implementation' }, { source: 'internal' })
+  const implemented = await dispatchNow()
+  assert.equal(implemented.dispatch.childId, 'child-2')
+  updateTask(root, contract, task.id, { stage: 'queued-review' }, { source: 'internal' })
+  const reviewed = await dispatchNow()
+  assert.equal(reviewed.dispatch.childId, 'child-3')
+  updateTask(root, contract, task.id, { stage: 'queued-analysis' }, { source: 'internal' })
+  const again = await dispatchNow()
+  assert.equal(subagents.calls.length, 4, '中间轮次之后回同一入口必须起新子代理')
+  assert.equal(again.reused, undefined, '不得复用上一轮回执')
+  assert.equal(again.dispatch.childId, 'child-4')
+  assert.equal(again.task.stage, 'analyzing')
+
+  /* `failed: true` 是最后一条回执上「这次没派成」的显式标记：允许重派。 */
+  updateTask(root, contract, task.id, { stage: 'queued-analysis' }, { source: 'internal' })
+  const beforeRetry = getTask(root, contract, task.id)
+  const checkpoints = beforeRetry.checkpoints.map((item, index) =>
+    index === beforeRetry.checkpoints.length - 1 ? { ...item, failed: true } : item,
+  )
   updateTask(root, contract, task.id, { checkpoints }, { source: 'internal' })
-  const third = await dispatchTaskRecord(recordDeps(root, contract, subagents, getTask(root, contract, task.id)).deps)
-  assert.equal(subagents.calls.length, 2, '失败标记后可重派')
-  assert.equal(third.task.stage, 'analyzing')
+  const retried = await dispatchNow()
+  assert.equal(subagents.calls.length, 5, '最后一条回执带失败标记后可重派')
+  assert.equal(retried.dispatch.childId, 'child-5')
+  assert.equal(retried.task.stage, 'analyzing')
+})
+
+test('审查打回回归：reviewing → queued-implementation 后必须起新实现者，不复用上一轮回执', async () => {
+  const { root, contract } = freshProject('review-bounce')
+  const task = addTask(root, contract, { type: 'fix', title: '审查打回返工', stage: 'queued-implementation' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, { subagents })
+
+  /* 第一轮实现者：queued-implementation → implementing。 */
+  const first = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(subagents.calls.length, 1)
+  assert.equal(first.task.stage, 'implementing')
+  assert.equal(first.dispatch.childId, 'child-1')
+
+  /* 实现完成 → queued-review，插件自动派审查者。 */
+  const queuedReview = await tool.execute({ action: 'update', id: task.id, stage: 'queued-review', root }, exec)
+  assert.equal(subagents.calls.length, 2)
+  assert.equal(queuedReview.task.stage, 'reviewing')
+  assert.equal(queuedReview.dispatch.role, 'reviewer')
+  assert.equal(queuedReview.dispatch.childId, 'child-2')
+
+  /* 审查不通过：reviewing → queued-implementation（唯一后退边），必须派**新的**实现者。
+     旧实现拿第一轮 from=queued-implementation 的回执判 reused，spawns 停在 2。 */
+  const bounced = await tool.execute(
+    { action: 'update', id: task.id, stage: 'queued-implementation', root, notes: '审查不通过，退回修改' },
+    exec,
+  )
+  assert.equal(subagents.calls.length, 3, '打回后必须起第二个实现者')
+  assert.equal(bounced.task.stage, 'implementing')
+  assert.equal(bounced.dispatch.role, 'implementer')
+  assert.equal(bounced.dispatch.reused, undefined)
+  assert.notEqual(bounced.dispatch.childId, first.dispatch.childId)
+  assert.equal(bounced.dispatch.from, 'queued-implementation')
+  const froms = bounced.task.checkpoints.filter((item) => item.kind === 'dispatch').map((item) => item.from)
+  assert.deepEqual(froms, ['queued-implementation', 'queued-review', 'queued-implementation'])
+
+  /* working 阶段仍然拒绝再派（放宽幂等不得产生第二个 worker）。 */
+  await assert.rejects(
+    () => tool.execute({ action: 'dispatch', id: task.id, root }, exec),
+    /只有待分析\/待实现\/待审查可以派工/,
+  )
+  assert.equal(subagents.calls.length, 3)
 })
 
 test('派工不校验终态 ④：正常路径不受影响（单次派工 + 回执 from/to 正确）', async () => {
