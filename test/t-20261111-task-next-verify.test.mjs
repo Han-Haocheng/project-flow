@@ -28,7 +28,7 @@ import {
   loadContract,
   updateTask,
 } from '../lib/core.mjs'
-import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, stageNextStep } from '../lib/stage.mjs'
+import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, edgeDoctrineKey, stageNextStep } from '../lib/stage.mjs'
 import { acceptancePlan, recordTaskVerification, verificationStateOf } from '../lib/tasks/records.mjs'
 import { vetoSubtask } from '../lib/veto.mjs'
 
@@ -91,10 +91,11 @@ function addTaskCli(root, args) {
 test('doctrine：每条合法边都有动作/验证说明，且没有幽灵键', () => {
   const edges = []
   for (const [stage, node] of Object.entries(STAGE_MACHINE)) {
-    for (const edge of node.next) edges.push(`${stage}>${edge.to}`)
+    // 同目标边靠 `key` 区分（queued-analysis → analyzing 的汇总轮入口），键因此带后缀。
+    for (const edge of node.next) edges.push(edgeDoctrineKey(stage, edge))
   }
   // 正例守护：边表真的读到了，否则下面的集合比较会假绿。
-  assert.equal(edges.length, 9, `边表应有 9 条边，实际 ${edges.length}`)
+  assert.equal(edges.length, 11, `边表应有 11 条边（含汇总轮 analyzing>done），实际 ${edges.length}`)
   const declared = Object.keys(STAGE_EDGE_DOCTRINE)
   assert.deepEqual(
     [...declared].sort(),

@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { apply } from '../index.js'
 import {
   addTask,
+  endHeartbeat,
   heartbeatStatus,
   initProject,
   loadContract,
@@ -26,6 +27,7 @@ import {
   startHeartbeat,
   updateHeartbeat,
 } from '../lib/core.mjs'
+import { buildSnapshot } from '../lib/state-snapshot.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -470,4 +472,157 @@ test('CLI：heartbeat update --status waiting 被接受并落盘', () => {
   assert.equal(updated.code, 0, updated.stderr)
   assert.equal(readBeat(root, 'session-cli-waiting').status, 'waiting')
   assert.match(updated.stdout, /title\s+-/, '人类摘要必须带 title 行')
+})
+
+// ---------------------------------------------------------------- 卫生/可观测
+
+test('卫生：心跳文件名 = 会话 id；同一会话多次 start/update/end 只有一个文件', () => {
+  const { root, contract } = freshProject('file-1to1')
+  const dir = path.join(root, '.agents', 'heartbeat')
+  const sessions = ['session-1to1-a', 'session-1to1-b']
+  for (const session of sessions) startHeartbeat(root, contract, { session, createTask: false })
+  startHeartbeat(root, contract, { session: sessions[0], createTask: false })
+  updateHeartbeat(root, contract, sessions[0], { status: 'idle', last_action: '第一次更新' })
+  endHeartbeat(root, contract, { session: sessions[0] })
+  startHeartbeat(root, contract, { session: sessions[0], createTask: false })
+  updateHeartbeat(root, contract, sessions[0], { last_action: '补开后更新' })
+  endHeartbeat(root, contract, { session: sessions[0] })
+
+  const files = fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith('.json'))
+    .sort()
+  assert.deepEqual(
+    files,
+    sessions.map((session) => `${session}.json`).sort(),
+    '一个会话一个文件：文件名就是会话 id，多次 start/update/end 不得产生副本',
+  )
+  for (const session of sessions) assert.equal(readBeat(root, session).session, session)
+  assert.equal(
+    readHeartbeatSection(root, contract, { visibility: 'all' }).counts.total,
+    sessions.length,
+    '投影条数 == 会话数（不会「每来一次操作多一个文件」）',
+  )
+})
+
+test('卫生：claims 继承任务 scope.allow；显式 claims 覆盖；无任务/无 scope 为空', () => {
+  const { root, contract } = freshProject('claims-inherit')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '带文件域的任务',
+    scope: { allow: ['lib/a.mjs', 'test/b.test.mjs'] },
+  })
+  const inherited = startHeartbeat(root, contract, {
+    session: 'session-claims-inherit',
+    createTask: false,
+  })
+  assert.equal(inherited.task, task.id, '心跳必须挂在那条任务上')
+  assert.deepEqual(inherited.claims, ['lib/a.mjs', 'test/b.test.mjs'], 'claims 来自任务 scope.allow')
+
+  const explicit = updateHeartbeat(root, contract, 'session-claims-inherit', {
+    claims: ['lib/c.mjs'],
+  })
+  assert.deepEqual(explicit.claims, ['lib/c.mjs'], '显式 claims 覆盖继承值（会话可以自己收窄）')
+
+  // 任务存在但 scope.allow 为空 → claims 为空
+  const empty = freshProject('claims-empty')
+  const bare = addTask(empty.root, empty.contract, { type: 'feat', title: '没有文件域的任务' })
+  const noScope = startHeartbeat(empty.root, empty.contract, {
+    session: 'session-claims-empty',
+    createTask: false,
+  })
+  assert.equal(noScope.task, bare.id)
+  assert.deepEqual(noScope.claims, [], '任务没有 scope.allow → 心跳 claims 为空')
+
+  // 会话没有任务（空台账、createTask:false）→ claims 为空
+  const noTask = freshProject('claims-no-task')
+  const orphan = startHeartbeat(noTask.root, noTask.contract, {
+    session: 'session-claims-orphan',
+    createTask: false,
+  })
+  assert.equal(orphan.task, null)
+  assert.deepEqual(orphan.claims, [])
+})
+
+test('可观：心跳行带 taskStage/taskStageZh（同源 stage 表；无任务/旧任务规则）', () => {
+  const { root, contract } = freshProject('stage-row')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '阶段投影',
+    stage: 'implementing',
+    scope: { allow: ['lib/stage-row.mjs'] },
+  })
+  startHeartbeat(root, contract, { session: 'session-stage-row', createTask: false })
+  const row = readHeartbeatSection(root, contract, { visibility: 'all' }).items.find(
+    (item) => item.session === 'session-stage-row',
+  )
+  assert.equal(row.task, task.id)
+  assert.equal(row.taskStage, 'implementing')
+  assert.equal(row.taskStageZh, '实现中', '中文名必须来自 lib/stage.mjs 的 STAGE_ZH')
+
+  // 旧任务没有 stage：按 status 经 stage.mjs 派生（draft → created/已创建）
+  const legacy = freshProject('stage-legacy')
+  const oldTask = addTask(legacy.root, legacy.contract, { type: 'feat', title: '旧任务' })
+  startHeartbeat(legacy.root, legacy.contract, { session: 'session-stage-legacy', createTask: false })
+  const legacyRow = readHeartbeatSection(legacy.root, legacy.contract, { visibility: 'all' }).items.find(
+    (item) => item.session === 'session-stage-legacy',
+  )
+  assert.equal(legacyRow.task, oldTask.id)
+  assert.equal(legacyRow.taskStage, 'created', '旧记录走 legacyStageFromStatus(status)')
+  assert.equal(legacyRow.taskStageZh, '已创建')
+
+  // 没有任务：字段显式 null（向后兼容）
+  const none = freshProject('stage-none')
+  startHeartbeat(none.root, none.contract, { session: 'session-stage-none', createTask: false })
+  const noneRow = readHeartbeatSection(none.root, none.contract, { visibility: 'all' }).items.find(
+    (item) => item.session === 'session-stage-none',
+  )
+  assert.equal(noneRow.task, null)
+  assert.equal(noneRow.taskStage, null)
+  assert.equal(noneRow.taskStageZh, null)
+})
+
+test('可观：面板 payload 的心跳行透传任务阶段（readHeartbeatSection → panel）', async () => {
+  const { root, contract } = freshProject('stage-panel')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '面板阶段',
+    stage: 'implementing',
+    scope: { allow: ['lib/stage-panel.mjs'] },
+  })
+  startHeartbeat(root, contract, { session: 'session-stage-panel', createTask: false })
+
+  const payload = await buildSnapshot({ root })
+  const row = payload.heartbeats.find((item) => item.session === 'session-stage-panel')
+  assert.ok(row, '心跳行必须出现在面板 payload 里：' + JSON.stringify(payload.heartbeats))
+  assert.equal(row.task, task.id)
+  assert.equal(row.taskStage, 'implementing')
+  assert.equal(row.taskStageZh, '实现中')
+})
+
+test('CLI：heartbeat status / list --json 都含任务阶段，且只读不改写盘', () => {
+  const { root, contract } = freshProject('stage-cli')
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: 'CLI 阶段',
+    stage: 'implementing',
+    scope: { allow: ['lib/cli-stage.mjs'] },
+  })
+  startHeartbeat(root, contract, { session: 'session-cli-stage', createTask: false })
+  const file = heartbeatFile(root, 'session-cli-stage')
+  const before = fs.readFileSync(file, 'utf8')
+
+  const status = runCli(root, ['heartbeat', 'status', '--session', 'session-cli-stage', '--json'])
+  assert.equal(status.code, 0, status.stderr)
+  assert.equal(status.json.data.record.task, task.id)
+  assert.equal(status.json.data.taskStage, 'implementing')
+  assert.equal(status.json.data.taskStageZh, '实现中')
+
+  const list = runCli(root, ['heartbeat', 'list', '--all', '--json'])
+  assert.equal(list.code, 0, list.stderr)
+  const item = list.json.data.items.find((entry) => entry.session === 'session-cli-stage')
+  assert.equal(item.taskStage, 'implementing')
+  assert.equal(item.taskStageZh, '实现中')
+
+  assert.equal(fs.readFileSync(file, 'utf8'), before, '只读自查不得改写心跳文件')
 })

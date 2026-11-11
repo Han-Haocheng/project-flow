@@ -183,6 +183,7 @@ graph LR
   n27 --> n5
   n27 --> n36
   n27 --> n37
+  n27 --> n43
   n27 --> n45
   n27 --> n46
   n27 --> n47
@@ -283,6 +284,7 @@ graph LR
   n53 --> n24
   n53 --> n39
   n53 --> n44
+  n53 --> n48
   n53 --> n49
   n53 --> n54
   n55 --> n19
@@ -578,7 +580,7 @@ P3b 派工核心：把台账任务的 queued-* 阶段映射成 analyzer/implemen
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| dispatch | dispatchPlan 只接受 queued-analysis/queued-implementation/queued-review 且拒绝子任务；dispatchPrompt 自带仓库根、验收、写域与纪律，供零上下文子代理直接开工；dispatchTask 先 startActivation 拿 childId 再返回，失败转成带下一步的 FlowError；dispatchCheckpoint 生成写进 checkpoints 的短回执。 | SUBAGENT_SERVICE、DEFAULT_PROVIDER、DISPATCH_ROLES、WORKING_STAGE、ROLE_ZH、dispatchPlan、isDispatchStage、dispatchEnabled、dispatchProvider、clip、linesOf、ROLE_DUTIES、dispatchPrompt、dispatchCheckpoint、invalidDispatch、subagentServiceOf、dispatchTask、autoDispatchEnabled、hasSubagentService、dispatchTaskRecord、autoDispatchTask |
+| dispatch | dispatchPlan 只接受 queued-analysis/queued-implementation/queued-review 且拒绝子任务；dispatchPrompt 自带仓库根、验收、写域与纪律，供零上下文子代理直接开工；dispatchTask 先 startActivation 拿 childId 再返回，失败转成带下一步的 FlowError；dispatchCheckpoint 生成写进 checkpoints 的短回执。 | SUBAGENT_SERVICE、DEFAULT_PROVIDER、DISPATCH_ROLES、WORKING_STAGE、ROLE_ZH、dispatchPlan、isDispatchStage、dispatchEnabled、dispatchProvider、clip、linesOf、ROLE_DUTIES、dispatchPrompt、dispatchCheckpoint、invalidDispatch、subagentServiceOf、dispatchTask、autoDispatchEnabled、hasSubagentService、dispatchTaskRecord、autoDispatchTask、AGGREGATE_ROUND、isAggregateRound、stageZh、rereadTask、revisionOf、revalidateStage、priorDispatch |
 
 ### 3.26 lib/experiments/records.mjs
 
@@ -603,6 +605,7 @@ P3b 派工核心：把台账任务的 queued-* 阶段映射成 analyzer/implemen
 ```mermaid
 graph LR
   m2["heartbeat-liveness"] --> m1["heartbeat-workspace-root"]
+  m2["heartbeat-liveness"] --> m3["heartbeat-write-api"]
   m2["heartbeat-liveness"] --> m0["top"]
   m1["heartbeat-workspace-root"] --> m0["top"]
   m3["heartbeat-write-api"] --> m2["heartbeat-liveness"]
@@ -615,7 +618,7 @@ graph LR
 | top | 心跳常量（schema/状态/claim/title 上限/legacy 标记）与 Windows 会话名规则；configureHeartbeats 注入任务建卡能力。 | HOOKS、configureHeartbeats、HEARTBEAT_STALE_SECONDS、HEARTBEAT_SCHEMA、HEARTBEAT_STATUS、HEARTBEAT_ACTIVE_STATUS、HEARTBEAT_PATCH_KEYS、HEARTBEAT_TITLE_MAX、HEARTBEAT_SESSION_MAX、HEARTBEAT_CLAIM_MAX、WINDOWS_RESERVED_SESSION_NAMES、WINDOWS_UNSAFE_SESSION_CHARS_RE、MAX_HEARTBEAT_CLIP、LEGACY_SUBAGENT_AGENT |
 | heartbeat-workspace-root | 心跳根解析：resolveHeartbeatWorkspace 归一主工作区（降级记 warning），heartbeatWorkspace/clipText/parseHeartbeatStamp 支撑读写侧。 | MAIN_WORKSPACE_CACHE、gitBranchOf、resolveHeartbeatWorkspace、heartbeatWorkspace、clipText、parseHeartbeatStamp |
 | heartbeat-liveness | 存活判定：boot_id/pid_start 证据、livenessOf 产出 live/dead/stale/foreign、readHeartbeats 与 readHeartbeatSection 投影、heartbeatFiles/heartbeatDirPath 目录解析。 | BOOT_ID_FILE、cachedBootId、currentBootId、isFlowCliEntrypoint、pidStartTime、pidAlive、heartbeatEvidenceOf、isCliWriter、heartbeatWriterEvidence、heartbeatAgeOf、livenessOf、heartbeatIsActive、heartbeatFiles、readHeartbeatJson、readHeartbeats、heartbeatDirPath、heartbeatMax、richHeartbeatJson、readHeartbeatSection |
-| heartbeat-write-api | 写入 API：start/update/end/remove 走锁与原子写，session 名校验（Windows 保留名/ADS/结尾点空格），pickSessionTask 选任务、gcLegacyHeartbeats 清理。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、removeHeartbeat、heartbeatStatus、heartbeatFileMtime、gcLegacyHeartbeats、SYNTHETIC_SESSION_PREFIXES、isSyntheticSession |
+| heartbeat-write-api | 写入 API：start/update/end/remove 走锁与原子写，session 名校验（Windows 保留名/ADS/结尾点空格），pickSessionTask 选任务、gcLegacyHeartbeats 清理。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、removeHeartbeat、heartbeatStatus、heartbeatFileMtime、gcLegacyHeartbeats、SYNTHETIC_SESSION_PREFIXES、isSyntheticSession、stageOfTaskRecord、taskStagesById、attachTaskStage |
 
 ### 3.29 lib/host/enforce.mjs
 
@@ -744,7 +747,7 @@ flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每�
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| shared | makeToolRoot 的优先级为显式 root 大于 workingDirectory 服务、再大于 session.cwd，三者皆无才报错；hasStore 只认 .dsh/flow/flow.json 这一份判据；assertOnlyFields 在调用 core 之前拒绝结构字段以外的已知字段，避免字段放错 action 被静默丢弃。 | ROOT_PROPERTY、ID_PROPERTY、EMPTY_STORE_NOTE、MAX_TOOL_ITEMS、WRITE_TIMEOUT_MS、toolOutput、requireDirectory、requireId、normalizeTaskParent、pickFields、makeToolRoot、makeRequireStore、hasStore、requireStore、EXP_ADD_FIELDS、EXP_UPDATE_FIELDS、TASK_ADD_FIELDS、TASK_UPDATE_FIELDS、GATE_ADD_FIELDS、GATE_UPDATE_FIELDS、STRUCTURAL_FIELDS、assertOnlyFields、EXP_ACTION_FIELDS、TASK_ACTION_FIELDS、GATE_ACTION_FIELDS |
+| shared | makeToolRoot 的优先级为显式 root 大于 workingDirectory 服务、再大于 session.cwd，三者皆无才报错；hasStore 只认 .dsh/flow/flow.json 这一份判据；assertOnlyFields 在调用 core 之前拒绝结构字段以外的已知字段，避免字段放错 action 被静默丢弃。 | ROOT_PROPERTY、ID_PROPERTY、EMPTY_STORE_NOTE、MAX_TOOL_ITEMS、WRITE_TIMEOUT_MS、toolOutput、requireDirectory、requireId、normalizeTaskParent、pickFields、makeToolRoot、makeRequireStore、hasStore、requireStore、EXP_ADD_FIELDS、EXP_UPDATE_FIELDS、TASK_ADD_FIELDS、TASK_UPDATE_FIELDS、GATE_ADD_FIELDS、GATE_UPDATE_FIELDS、STRUCTURAL_FIELDS、assertOnlyFields、EXP_ACTION_FIELDS、TASK_ACTION_FIELDS、GATE_ACTION_FIELDS、TASK_PLAN_FIELDS |
 
 ### 3.41 lib/proc.mjs
 
@@ -793,7 +796,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| stage | STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。 | DEFAULT_STAGE、STAGE_IDS、STAGE_ZH、STAGE_MACHINE、nextStages、edgeOf、actorForEdge、STATUS_BY_STAGE、stageToStatus、legacyStageFromStatus、canTransition、assertTransition、STAGE_EDGE_DOCTRINE、NEXT_TERMINAL_STAGES、stageNextStep |
+| stage | STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。 | DEFAULT_STAGE、STAGE_IDS、STAGE_ZH、STAGE_MACHINE、nextStages、edgeOf、actorForEdge、STATUS_BY_STAGE、stageToStatus、legacyStageFromStatus、canTransition、assertTransition、STAGE_EDGE_DOCTRINE、NEXT_TERMINAL_STAGES、stageNextStep、edgeDoctrineKey |
 
 ### 3.45 lib/state-snapshot.mjs
 
@@ -889,8 +892,8 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 任务常量（id 形状/类型/状态/默认值/可写键）与 createsCycle 父引用环检测；configureTasks 注入 descriptionGate 与 experimentIds。 | TASK_ID_RE、TASK_TYPES、TASK_STATUS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、HOOKS、configureTasks、createsCycle、warnTaskExperiment、ACCEPTANCE_CMD_PREFIX、ACCEPTANCE_GATE_PREFIX、ACCEPTANCE_GATE_STAGES、VERIFICATION_STEPS_MAX、VERIFICATION_TAIL_MAX、ACCEPTANCE_POLICY_DEFAULT、parseAcceptanceEntry、acceptancePlan、acceptanceSignature、verificationStateOf、acceptancePolicyOf、assertAcceptanceGate、normalizeVerificationTail、validateVerificationField、recordTaskVerification |
-| tasks | listTasks/getTask/addTask/updateTask/removeTask/archiveTasks/sweepUtteranceTasks/releaseDeadSessionTasks：锁内读写、阶段投影与描述门、owner 存活判定（heartbeatStatus）、归档窗口与 notes 收口。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、normalizeOwnerInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、releaseDeadSessionTasks、sweepUtteranceTasks、utteranceCardAgeHours、utteranceCardSkipReason、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks |
+| top | 任务常量（id 形状/类型/状态/默认值/可写键）与 createsCycle 父引用环检测；configureTasks 注入 descriptionGate 与 experimentIds。 | TASK_ID_RE、TASK_TYPES、TASK_STATUS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、HOOKS、configureTasks、createsCycle、warnTaskExperiment、ACCEPTANCE_CMD_PREFIX、ACCEPTANCE_GATE_PREFIX、ACCEPTANCE_GATE_STAGES、VERIFICATION_STEPS_MAX、VERIFICATION_TAIL_MAX、ACCEPTANCE_POLICY_DEFAULT、parseAcceptanceEntry、acceptancePlan、acceptanceSignature、verificationStateOf、acceptancePolicyOf、assertAcceptanceGate、normalizeVerificationTail、validateVerificationField、recordTaskVerification、AGGREGATE_ENTRY_STAGE |
+| tasks | listTasks/getTask/addTask/updateTask/removeTask/archiveTasks/sweepUtteranceTasks/releaseDeadSessionTasks：锁内读写、阶段投影与描述门、owner 存活判定（heartbeatStatus）、归档窗口与 notes 收口。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、normalizeOwnerInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、releaseDeadSessionTasks、sweepUtteranceTasks、utteranceCardAgeHours、utteranceCardSkipReason、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks、canonicalTaskJson、taskRevision、taskRevisionOf、describeRevisionInput、normalizeExpectedRevision、finishAggregateRound |
 
 ### 3.50 lib/team-sync.mjs
 
@@ -914,7 +917,7 @@ flow_gate 工具定义（从 index.js 原样移出），覆盖 list/show/add/upd
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| gates | add 要求 id 非空 slug，update 至少要改一个字段；list 在无 store 时返回 store:false 与 init 提示，其余 action 先 requireStore 再走 core；run 调 core.runGate 真正执行步骤并落运行记录，logs 的 limit 经 pickInteger 限制在 1 到 50。 | buildDefinition |
+| gates | add 要求 id 非空 slug，update 至少要改一个字段；list 在无 store 时返回 store:false 与 init 提示，其余 action 先 requireStore 再走 core；run 调 core.runGate 真正执行步骤并落运行记录，logs 的 limit 经 pickInteger 限制在 1 到 50。 | buildDefinition、ALLOW_UNKNOWN_EXPECT、acceptedFields |
 
 ### 3.53 lib/tools/subtasks.mjs
 
@@ -930,7 +933,7 @@ flow_task 工具定义（从 index.js 原样移出），覆盖 list/show/add/upd
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe、dispatchOnce、autoDispatchAfterUpdate、settleParentAfterChild |
+| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe、dispatchOnce、autoDispatchAfterUpdate、settleParentAfterChild、TASK_UPDATE_ARG_FIELDS、TASK_ACTION_ARG_FIELDS、TASK_REVISION_RE、requireExpectedRevision、taskWithRevision、MAX_PLAN_TASKS、PLAN_ITEM_FIELDS、PLAN_TYPE_ENUM、planInvalid、planScopePath、normalizedPlanTitle、normalizedScopeAllow、scopeAllowEqual、validateTaskPlan、openTaskConflicts、planNotes |
 
 ### 3.55 lib/util.mjs
 

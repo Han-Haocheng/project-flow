@@ -209,3 +209,102 @@ test('路径逃逸：目标在项目根外，直接拒绝', () => {
   const reason = guard(call('edit', { file_path: path.join(root, '..', 'outside.txt') }, agent))
   assert.match(reason, /不在项目根内/)
 })
+
+// --------------------------------------------------------- dsh-ops 结构写工具
+//
+// ops_write_file / ops_edit_file / ops_replace / ops_move / ops_copy / ops_remove
+// 是宿主的替代写工具；它们原来绕过 claims 门禁，并行会话各自 claim 不同文件
+// 的约束因此形同虚设。下面把同一个域判定钉在这些工具参数上。
+
+test('ops_write_file：域外目标同样被拒', () => {
+  const { root, contract } = freshProject('ops-write-out')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-ops-write-out')
+  withClaims(root, contract, 'session-ops-write-out', ['lib/'])
+  const guard = harness.guardOf()
+  const reason = guard(call('ops_write_file', { path: path.join(root, 'test/x.mjs') }, agent))
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /test\/x\.mjs/)
+  assert.match(reason, /flow_heartbeat update --claim/)
+})
+
+test('ops_edit_file：域内目标放行', () => {
+  const { root, contract } = freshProject('ops-edit-in')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-ops-edit-in')
+  withClaims(root, contract, 'session-ops-edit-in', ['lib/'])
+  const guard = harness.guardOf()
+  assert.equal(guard(call('ops_edit_file', { path: path.join(root, 'lib/host/shared.mjs') }, agent)), undefined)
+})
+
+test('ops_replace：`path` 是目录根，按目录前缀判域', () => {
+  const { root, contract } = freshProject('ops-replace-dir')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-ops-replace-dir')
+  withClaims(root, contract, 'session-ops-replace-dir', ['lib/host/'])
+  const guard = harness.guardOf()
+  // 目录本身及其子目录都在域内
+  assert.equal(guard(call('ops_replace', { path: path.join(root, 'lib/host') }, agent)), undefined)
+  // 目录根不在域内则整批拒绝
+  assert.match(guard(call('ops_replace', { path: path.join(root, 'test') }, agent)), /test 不在其中/)
+  // 别的会话 claim 了目录里的具体文件：整批替换同样会碰到它，必须拒绝。
+  const other = harness.addAgent('session-ops-replace-other')
+  withClaims(root, contract, 'session-ops-replace-other', ['lib/host/x.mjs'])
+  assert.match(guard(call('ops_replace', { path: path.join(root, 'lib/host') }, agent)), /session-ops-replace-other/)
+})
+
+test('ops_move / ops_copy：源与目标任一越界即拒', () => {
+  const { root, contract } = freshProject('ops-move')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-ops-move')
+  withClaims(root, contract, 'session-ops-move', ['lib/'])
+  const guard = harness.guardOf()
+  // 源在域内、目标越界：拒绝，并点名目标路径
+  assert.match(
+    guard(call('ops_move', { path: path.join(root, 'lib/a.mjs'), to: path.join(root, 'test/b.mjs') }, agent)),
+    /目标路径 .*test\/b\.mjs 不在项目根内|test\/b\.mjs/,
+  )
+  // 目标在域内、源越界：同样拒绝
+  assert.match(guard(call('ops_copy', { path: path.join(root, 'test/a.mjs'), to: path.join(root, 'lib/b.mjs') }, agent)), /test\/a\.mjs/)
+  // 目标逃出项目根也拒绝
+  assert.match(guard(call('ops_move', { path: path.join(root, 'lib/a.mjs'), to: path.join(root, '..', 'outside.txt') }, agent)), /不在项目根内/)
+})
+
+test('ops_remove：域内删除放行、域外删除拒绝', () => {
+  const { root, contract } = freshProject('ops-remove')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-ops-remove')
+  withClaims(root, contract, 'session-ops-remove', ['lib/'])
+  const guard = harness.guardOf()
+  assert.equal(guard(call('ops_remove', { path: path.join(root, 'lib/tmp.mjs') }, agent)), undefined)
+  assert.match(guard(call('ops_remove', { path: path.join(root, 'test/tmp.mjs') }, agent)), /test\/tmp\.mjs/)
+})
+
+test('只读 ops_* 工具不在门禁集合内，不拦', () => {
+  const { root } = freshProject('ops-readonly')
+  const harness = makeHarness(root)
+  // 无心跳、无 claims：只读工具照样放行。
+  const agent = harness.addAgent('session-ops-readonly')
+  const guard = harness.guardOf()
+  const readOnlyTools = ['ops_read_files', 'ops_grep', 'ops_glob', 'ops_stat', 'ops_diff', 'ops_inspect_local_file']
+  for (const name of readOnlyTools) {
+    assert.equal(guard(call(name, { path: path.join(root, 'test/x.mjs') }, agent)), undefined, `${name} 不应被 claims 门禁拦截`)
+  }
+})
+
+test('ops_write_file：被别的活会话 claim 时同样拒绝（跨会话反查生效）', () => {
+  const { root, contract } = freshProject('ops-foreign')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-ops-foreign-a')
+  const other = harness.addAgent('session-ops-foreign-b')
+  withClaims(root, contract, 'session-ops-foreign-a', ['lib/'])
+  withClaims(root, contract, 'session-ops-foreign-b', ['lib/host/'])
+  const guard = harness.guardOf()
+  const reason = guard(call('ops_write_file', { path: path.join(root, 'lib/host/x.mjs') }, mine))
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /session-ops-foreign-b/)
+  assert.equal(guard(call('ops_write_file', { path: path.join(root, 'lib/other/x.mjs') }, mine)), undefined)
+  // 反向同样生效：对方的域里也在本会话的 lib/ 范围内。
+  assert.match(guard(call('ops_write_file', { path: path.join(root, 'lib/host/x.mjs') }, other)), /session-ops-foreign-a/)
+})
+

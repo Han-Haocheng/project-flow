@@ -744,6 +744,9 @@ window.__ModuleLoader__.load({
         agent: asText(entry.agent),
         goal: asText(entry.goal),
         task: asText(entry.task),
+        /* 心跳行的任务阶段（宿主 join 任务卡后投影；旧记录/未挂任务为 null）。 */
+        taskStage: asText(entry.taskStage),
+        taskStageZh: asText(entry.taskStageZh),
         branch: asText(entry.branch),
         worktree: asText(entry.worktree),
         claims: asArray(entry.claims)
@@ -2955,7 +2958,14 @@ window.__ModuleLoader__.load({
                             )
                           : null,
                       beat.task
-                        ? React.createElement('span', { className: 'project-flow-beatTask', title: t('hb.task') }, beat.task)
+                        ? React.createElement(
+                            'span',
+                            {
+                              className: 'project-flow-beatTask',
+                              title: joinParts([t('hb.task'), beat.task, beat.taskStageZh]),
+                            },
+                            beat.taskStageZh ? beat.task + ' \u00b7 ' + beat.taskStageZh : beat.task
+                          )
                         : null,
                       beat.branch
                         ? React.createElement(

@@ -496,3 +496,38 @@ test('⑰ 重复 agent/created（resume/clear）：不重复 start，turn 不涨
   assert.equal(second.stats.turns, 1)
   assert.equal(second.started_at, first.started_at, 'started_at 不得被重复 created 改写')
 })
+
+// ------------------------------------------- ⑱ 后台任务会话：不建 + 遗留可回收
+
+test('⑱ 后台任务会话前缀不建心跳；遗留文件 GC 一次清掉且 reason=synthetic', async () => {
+  const { root, contract } = freshProject('synthetic')
+  const harness = makeHarness(root)
+  const core = await import('../lib/core.mjs')
+
+  // 1) 三种前缀都不建心跳（它们的会话照样能让 rootSessionVerdict 判成根）
+  for (const id of ['mnemon-task-abc', 'bg-task-abc', 'task-subagent-abc']) {
+    const agent = harness.addAgent(id)
+    await openThrougCreated(harness, agent)
+    assert.equal(fs.existsSync(heartbeatFile(root, id)), false, `${id} 不得建心跳（否则每来一个后台任务多一个文件）`)
+  }
+  assert.deepEqual(harness.warns, [])
+
+  // 2) 旧代码/别的路径留下的文件：GC 不看年龄，原因必须可解释为 synthetic
+  core.startHeartbeat(root, contract, {
+    session: 'mnemon-task-legacy',
+    goal: '后台任务遗留文件',
+    createTask: false,
+  })
+  const legacyFile = heartbeatFile(root, 'mnemon-task-legacy')
+  assert.equal(fs.existsSync(legacyFile), true, '夹具前提：文件确实存在')
+
+  const dry = core.gcLegacyHeartbeats(root, contract, { dryRun: true })
+  assert.deepEqual(dry.removed.map((item) => item.file), ['mnemon-task-legacy.json'])
+  assert.equal(dry.removed[0].reason, 'synthetic', '回收原因必须可解释（不是「已结束」）')
+  assert.equal(fs.existsSync(legacyFile), true, 'dry-run 不删')
+
+  core.gcLegacyHeartbeats(root, contract)
+  assert.equal(fs.existsSync(legacyFile), false, '后台任务会话的遗留心跳被回收')
+  assert.equal(core.readHeartbeatSection(root, contract, { visibility: 'all' }).counts.total, 0)
+  assert.deepEqual(harness.warns, [])
+})

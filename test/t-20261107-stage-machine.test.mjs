@@ -141,8 +141,10 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
   }
   // 表头行（卡里的定稿）：后继与 actor 逐行一致
   assert.deepEqual(nextStages('created'), ['queued-analysis'])
-  assert.deepEqual(nextStages('queued-analysis'), ['analyzing'])
-  assert.deepEqual(nextStages('analyzing'), ['queued-implementation'])
+  // queued-analysis 有两条同目标边：普通领取 + 汇总轮（normalizeTask，T-20261111170544）。
+  assert.deepEqual(nextStages('queued-analysis'), ['analyzing', 'analyzing'])
+  // T-20261111170544：汇总轮新增 analyzing → done（子任务全部完成后分析者收口）。
+  assert.deepEqual(nextStages('analyzing'), ['queued-implementation', 'done'])
   assert.deepEqual(nextStages('queued-implementation'), ['implementing'])
   assert.deepEqual(nextStages('implementing'), ['queued-review'])
   assert.deepEqual(nextStages('queued-review'), ['reviewing'])
@@ -385,11 +387,19 @@ test('⑦ 非法 stage：invalid 且文案列出九值；CLI 的 invalid 映射�
 // 结构变更、**零行为变更**：`next` 从 `string[]` 升级为带 actor 的边表。
 // 行为不变由第 ⑫ 条的 9×9 矩阵锁死——任何"大部分对、个别边悄悄变了"都会红。
 
-/** 全部 9 条边（顺序即方案 §4 的表序；前 8 条是阶段间推进，末条是归档）。 */
+/**
+ * 全部 11 条边（顺序即方案 §4 的表序；新增两条：
+ * `analyzing → done` 汇总收口、`queued-analysis → analyzing{key:normalizeTask}` 汇总轮入口）。
+ */
 const EDGES = [
   { from: 'created', to: 'queued-analysis', actor: 'plugin', back: undefined },
   { from: 'queued-analysis', to: 'analyzing', actor: 'plugin', back: undefined },
+  // T-20261111170544：同一目标的第二条边，靠 `key` 区分（汇总轮派工入口）。
+  { from: 'queued-analysis', to: 'analyzing', actor: 'plugin', back: undefined, key: 'normalizeTask' },
   { from: 'analyzing', to: 'queued-implementation', actor: 'session', back: undefined },
+  // T-20261111170544：汇总轮（子任务全部完成后分析者把父任务收口）。actor 与拆任务
+  // 同为 session（汇总轮就是被重新派进来的分析者），因此不需要 actorOverride。
+  { from: 'analyzing', to: 'done', actor: 'session', back: undefined },
   { from: 'queued-implementation', to: 'implementing', actor: 'plugin', back: undefined },
   { from: 'implementing', to: 'queued-review', actor: 'session', back: undefined },
   { from: 'queued-review', to: 'reviewing', actor: 'plugin', back: undefined },
@@ -398,16 +408,17 @@ const EDGES = [
   { from: 'done', to: 'archived', actor: 'plugin', back: undefined },
 ]
 
-test('⑧ 边表逐项：9 条边的 {from, to, actor} 与方案 §4 表一致', () => {
+test('⑧ 边表逐项：11 条边的 {from, to, actor} 与方案 §4 表一致', () => {
   for (const edge of EDGES) {
     const node = STAGE_MACHINE[edge.from]
-    const found = node.next.find((item) => item.to === edge.to)
+    // 同目标边靠 `key` 区分：没有 key 的行必须命中**不带 key** 的那条边。
+    const found = node.next.find((item) => item.to === edge.to && (item.key ?? undefined) === edge.key)
     assert.ok(found, `${edge.from} → ${edge.to} 边不见了`)
     assert.equal(found.actor, edge.actor, `${edge.from} → ${edge.to} 的 actor 错了`)
   }
-  // 边总数 = 8（没有多出来的边）
+  // 边总数 = 11（没有多出来的边）
   const total = STAGE_IDS.reduce((sum, id) => sum + STAGE_MACHINE[id].next.length, 0)
-  assert.equal(total, EDGES.length, '边总数必须恰好 9 条（8 条阶段推进 + done→archived）')
+  assert.equal(total, EDGES.length, '边总数必须恰好 11 条（10 条阶段推进 + done→archived）')
 })
 
 test('⑨ back 标记：恰好一条，且就是 reviewing → queued-implementation', () => {
@@ -438,7 +449,7 @@ test('⑩ nextStages 是边表的投影，不是第二份数组', () => {
   assert.deepEqual(nextStages('archived'), [], '终态没有后继')
 })
 
-test('⑪ actorForEdge：9 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
+test('⑪ actorForEdge：11 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
   for (const edge of EDGES) {
     assert.equal(actorForEdge(edge.from, edge.to), edge.actor, `${edge.from} → ${edge.to}`)
   }
@@ -460,7 +471,7 @@ test('⑫ canTransition 零行为变更：9×9 全组合与硬编码真值表逐
   const TRUTH = [
     [true,  true,  false, false, false, false, false, false, false], // created
     [false, true,  true,  false, false, false, false, false, false], // queued-analysis
-    [false, false, true,  true,  false, false, false, false, false], // analyzing
+    [false, false, true,  true,  false, false, false, true,  false], // analyzing（拆任务 + 汇总收口）
     [false, false, false, true,  true,  false, false, false, false], // queued-implementation
     [false, false, false, false, true,  true,  false, false, false], // implementing
     [false, false, false, false, false, true,  true,  false, false], // queued-review
