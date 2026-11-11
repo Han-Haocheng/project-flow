@@ -44,6 +44,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/core.mjs` | **唯一写者**：契约、记录 CRUD、门禁执行、心跳、决策 | 工具层、CLI、快照 |
 | `lib/desc.mjs` | **描述台账模型**（纯函数）：`description/` 三族记录的校验、build 回填（哈希/import）、模块图推导（`moduleEdges`）、漂移检查（`checkDescription`）、确定性渲染。**不 import core**（与 `checks.mjs` 同一策略：模型只算，锁内编排与写盘在 core） | core |
 | `lib/source-scan.mjs` | 零依赖源码扫描器（仅 import `./util.mjs` 的 `FlowError` 用于非法入参）：JS/TS/JSX 的注释剥离与顶层声明、Python 的 `def`/`class`/顶层赋值/import；产出 `declarations`（含 `identifiers`）供模块归属推导。**不 import 其它 lib 模块**（扫描器不认识项目，只认识文本） | `lib/desc.mjs` |
+| `lib/store/contract.mjs` | **契约与存储路径**（Phase 1）：schema-2 默认值、类型修复/归一、契约读写、记录目录解析（containment）、`assertInitialized`、**唯一的锁入口 `withLock`**。零业务规则 | core |
 | `lib/store/git-root.mjs` | **git 探测与项目根归一**：`gitProbe` / `gitMainWorktree` / `resolveProjectRoot`（只重定向工作树根，普通目录不 spawn git）。契约层与心跳共用一份规则 | core |
 | `lib/store/records.mjs` | **记录层原语**（2026-11-11 Phase 1）：目录读集合、单条读、id 生成、占用保护、入参校验原语、排序与 status 计数。零业务语义、不 import core；core 从这里 import | core |
 | `lib/lock.mjs` | 写锁与 CAS 接管（30 秒过期、`takeover-claim`） | core |
