@@ -48,7 +48,7 @@ const USAGE = `project-flow CLI（schema 2）
   exp cleanup <id> [--flag F]... [--code C]... [--data D]...
   exp rm <id> [--yes]
 
-  task list | show <id>
+  task list | show <id> | next <id> | verify <id>
   task add --title T --type <t> [--id T-YYYYMMDDHHMMSS] [--status draft|active|done|archived]
            [--stage <s>] [--owner O] [--notes N] [--experiment E-id] [--parent T-id]
   task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
@@ -60,6 +60,15 @@ const USAGE = `project-flow CLI（schema 2）
           owner 是任务的会话归属：--owner <会话 id> 领取；--owner none|null 释放为未指定会话；
           活跃会话的任务不能被其他会话改写/释放（见 CONTRACT §3.2.1）
           父子：--parent 的父任务须存在、禁自指/禁环；--parent ''|none|null 清空为根
+  task next <id> [--json]
+          只读查表：打印这个任务的唯一下一步——目标阶段、该谁做（session/plugin/
+          reviewer）、必做动作、验证命令、推进命令；有多条合法边时给主推荐 + 备选。
+          终态（done/archived）或未知 id 退出非 0（不推理，只读 lib/stage.mjs 的边表）。
+  task verify <id> [--timeout SECONDS]
+          按 acceptance 顺序执行 cmd:<shell 命令> / gate:<gateId>，把结论回填到任务的
+          verification 字段；任一项失败退出 1 并给修复命令（默认每项超时 600 秒）。
+          进入 reviewing/done 前必须先通过验收；任务没有可执行验收项时默认只警告
+          （tasks.requireAcceptance=strict 可改为拒绝，见 lib/tasks/records.mjs）。
   task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账，零外部写入）
   task unlink <TASK-ID>                   # 解除挂载（team=null；同样零外部写入）
   task archive [--older-than N] [--dry-run]
@@ -169,7 +178,12 @@ const USAGE = `project-flow CLI（schema 2）
 const EXIT = { usage: 1, invalid: 2, notFound: 3, io: 4 }
 // `check-failed` 只由检查族抛出：`flow check` 走下面的 `CHECK_EXIT_BY_CODE`，
 // `flow desc render --check` 走这张表（同样按「检查失败 → 1」归一）。
-const EXIT_BY_CODE = { usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4, 'check-failed': 1 }
+const EXIT_BY_CODE = {
+  usage: 1, invalid: 2, 'not-found': 3, conflict: 2, io: 4, 'check-failed': 1,
+  // `flow task next` 的「没有下一步」：终态（done/archived）不是错误，但按约定必须
+  // 退非 0（0 表示确实还有下一步可走），所以单列一个码，消息里写清原因。
+  terminal: 3,
+}
 
 // `flow check` 的退出码词汇（数字与插件一致，语义按检查归一，见 CONTRACT §6）。
 const CHECK_EXIT_BY_CODE = {
@@ -256,6 +270,9 @@ export const SPEC = Object.freeze({
     normalize: { flags: ['type-map', 'dry-run'] },
     link: { flags: ['id', 'team'] },
     unlink: { flags: ['id'] },
+    // 下一步查表（只读）与可执行验收（写 verification 回执）。
+    next: { flags: ['id'] },
+    verify: { flags: ['id', 'timeout'] },
     rm: { flags: ['id', 'yes'] },
   }),
   gate: Object.freeze({
@@ -1300,7 +1317,12 @@ function readParentFlag(flags, core) {
 
 async function cmdTask(ctx, sub) {
   const { core, flags } = ctx
-  if (!sub) throw new CliError('usage', '用法: flow task <list|show|add|update|archive|sweep|normalize|link|unlink|rm>')
+  if (!sub) {
+    throw new CliError(
+      'usage',
+      '用法: flow task <list|show|next|verify|add|update|archive|sweep|normalize|link|unlink|rm>',
+    )
+  }
   const contract = loadContractFor(ctx, ctx.root)
 
   if (sub === 'list') {
@@ -1463,6 +1485,214 @@ async function cmdTask(ctx, sub) {
     return record
   }
 
+  if (sub === 'next') {
+    const id = requireString(flags, 'id', '用法: flow task next <id>')
+    const stage = await loadStageModel()
+    const taskModel = await loadTaskModel()
+    const record = await core.getTask(ctx.root, contract, id)
+    const current = typeof record.stage === 'string' && record.stage !== '' ? record.stage : stage.DEFAULT_STAGE
+    const verification = taskModel.verificationStateOf(record)
+    const acceptance = {
+      executable: verification.executable,
+      cmd: verification.cmd,
+      gate: verification.gate,
+      passed: verification.passed,
+      verified: verification.ok === true,
+      fresh: verification.fresh,
+      at: verification.at,
+      verifyCommand: verification.executable > 0 ? `flow task verify ${record.id}` : null,
+    }
+    const base = {
+      id: record.id,
+      title: typeof record.title === 'string' ? record.title : '',
+      stage: current,
+      stageZh: stage.STAGE_ZH[current] ?? current,
+      owner: typeof record.owner === 'string' ? record.owner : '',
+      terminal: stage.NEXT_TERMINAL_STAGES.includes(current),
+    }
+    // 终态：明确说「没有下一步」，并按约定退非 0（3）。`done` 的归档是插件的边，
+    // 不当作"下一步"——否则命令会永远有输出，"完成"这个事实被稀释。
+    if (base.terminal) {
+      const message =
+        current === 'archived'
+          ? `任务 ${record.id} 已归档（archived）：终态，没有下一步`
+          : `任务 ${record.id} 已完成（done）：没有可执行的下一步（归档由插件按 tasks.archiveAfterDays 自动完成，或 flow task archive）`
+      const error = new CliError('terminal', message)
+      error.payload = { ...base, next: null, alternatives: [], acceptance }
+      throw error
+    }
+    const step = stage.stageNextStep(current)
+    const next = step.primary === null ? null : nextEdgeView(step.primary, record.id)
+    const alternatives = step.alternatives.map((row) => nextEdgeView(row, record.id))
+    const data = { ...base, actor: next === null ? step.actor : next.actor, next, alternatives, acceptance }
+    if (!ctx.json) {
+      out(`任务 ${record.id}  ${base.stageZh}（${base.stage}）  owner: ${base.owner === '' ? '-' : base.owner}`)
+      if (next === null) {
+        out('下一步  （这条阶段没有出边）')
+      } else {
+        out(`下一步  → ${next.stageZh}（${next.stage}）  ${next.actor}${next.back ? '  回退边' : '  主推荐'}`)
+        out(`动作    ${next.action === '' ? '-' : next.action}`)
+        out(`命令    ${next.command}`)
+        out(`验证    ${next.verify === null ? '（无需验证）' : next.verify}`)
+      }
+      for (const row of alternatives) {
+        out(`备选    → ${row.stageZh}（${row.stage}）  ${row.actor}${row.back ? '  回退边' : ''}`)
+        out(`        ${row.action === '' ? '-' : row.action}`)
+        out(`        ${row.command}`)
+        if (row.verify !== null) out(`        ${row.verify}`)
+      }
+      out(`验收    ${acceptanceStateText(acceptance)}`)
+      if (acceptance.executable > 0 && acceptance.passed !== true) {
+        out(`提示    进入 reviewing/done 前必须先跑 ${acceptance.verifyCommand}`)
+      }
+    }
+    return data
+  }
+
+  if (sub === 'verify') {
+    const id = requireString(flags, 'id', '用法: flow task verify <id>')
+    const timeoutSeconds = readPositiveInteger(flags, 'timeout', '--timeout 需要正整数秒（例如 --timeout 300）')
+    const taskModel = await loadTaskModel()
+    const record = await core.getTask(ctx.root, contract, id)
+    const plan = taskModel.acceptancePlan(record)
+    // 没有可执行验收项：不跑任何命令、不写回执、退出 0，但把"什么都没验"说清楚。
+    // 静默成功会让调用方以为验收过了，比失败更危险。
+    if (plan.steps.length === 0) {
+      if (!ctx.json) {
+        out(`验收 ${record.id}  没有可执行验收项（acceptance 里没有 cmd: / gate: 条目）`)
+        out('做法    把验收写成 cmd:<shell 命令> 或 gate:<gateId>（flow_task update 的 acceptance 字段可写）')
+        out(`重跑    flow task verify ${record.id}`)
+      }
+      return {
+        id: record.id,
+        ok: true,
+        executed: 0,
+        passed: 0,
+        failed: [],
+        steps: [],
+        skipped: 'no-executable-acceptance',
+        verification: null,
+      }
+    }
+    if (!ctx.json) {
+      out(
+        `验收 ${record.id}  阶段 ${typeof record.stage === 'string' ? record.stage : '-'}  可执行 ${plan.steps.length} 项` +
+          `（cmd ${plan.steps.filter((item) => item.kind === 'cmd').length}` +
+          ` · gate ${plan.steps.filter((item) => item.kind === 'gate').length}）`,
+      )
+    }
+    const steps = []
+    for (const item of plan.steps) {
+      if (item.kind === 'gate') {
+        const started = Date.now()
+        let result
+        try {
+          const run = await core.runGate(ctx.root, contract, item.target, {})
+          const failedSteps = Array.isArray(run.steps) ? run.steps.filter((one) => one.ok !== true) : []
+          // 门禁失败时把内层步骤的 id/exit 也带出来：只报"gate X 没通过"没法定位。
+          const gateTail = failedSteps
+            .map((one) => {
+              const head = `${one.id} exit ${one.exit ?? '?'}`
+              return typeof one.tail === 'string' && one.tail !== '' ? `${head}\n${one.tail}` : head
+            })
+            .join('\n')
+          result = {
+            index: item.index,
+            kind: 'gate',
+            target: item.target,
+            ok: run.ok === true,
+            exit: null,
+            durationMs: Number.isFinite(run.durationMs) ? run.durationMs : Date.now() - started,
+            tail: gateTail,
+            repair: `flow gate run ${item.target}`,
+          }
+        } catch (error) {
+          if (!(error instanceof core.FlowError)) throw error
+          // 门禁缺失/被禁用也是"没通过"：不能把跑不起来的门禁当成证据。
+          result = {
+            index: item.index,
+            kind: 'gate',
+            target: item.target,
+            ok: false,
+            exit: null,
+            durationMs: Date.now() - started,
+            tail: error.message,
+            repair: `flow gate run ${item.target}`,
+            error: { code: error.code, message: error.message },
+          }
+        }
+        steps.push(result)
+        if (!ctx.json) printAcceptanceStep(result)
+        continue
+      }
+      const seconds = item.timeoutSeconds === null || item.timeoutSeconds === undefined
+        ? (timeoutSeconds === undefined ? 600 : timeoutSeconds)
+        : item.timeoutSeconds
+      const run = await core.runStep(
+        ctx.root,
+        { id: `acceptance-${item.index + 1}`, run: item.target, expect: item.expect },
+        seconds * 1000,
+        40,
+      )
+      const result = {
+        index: item.index,
+        kind: 'cmd',
+        target: item.target,
+        ok: run.ok === true,
+        exit: run.exit,
+        durationMs: run.durationMs,
+        tail: run.ok === true ? '' : (typeof run.tail === 'string' ? run.tail : ''),
+        repair: `flow task verify ${record.id}`,
+      }
+      steps.push(result)
+      if (!ctx.json) printAcceptanceStep(result)
+    }
+    const failed = steps.filter((step) => step.ok !== true)
+    const ok = failed.length === 0
+    const written = taskModel.recordTaskVerification(ctx.root, contract, record.id, {
+      ok,
+      signature: plan.signature,
+      steps: steps.map((step) => ({
+        index: step.index,
+        kind: step.kind,
+        target: step.target,
+        ok: step.ok,
+        exit: step.exit,
+        durationMs: step.durationMs,
+        tail: step.tail,
+      })),
+    })
+    const data = {
+      id: record.id,
+      ok,
+      executed: steps.length,
+      passed: steps.length - failed.length,
+      failed: failed.map((step) => `${step.kind}:${step.target}`),
+      steps,
+      verification: written.verification ?? null,
+      repair: ok ? null : `flow task verify ${record.id}`,
+    }
+    if (!ctx.json) {
+      out(
+        `结果  ${ok ? '通过' : '未通过'}  ${steps.length - failed.length}/${steps.length}` +
+          (ok ? '' : `（失败 ${failed.map((step) => `${step.kind}:${step.target}`).join('、')}）`),
+      )
+      if (ok) out(`回执  已写入 verification（${fmtTime(data.verification.at)}）`)
+      else {
+        out(`修复  ${data.repair}`)
+        const gateRepairs = [...new Set(failed.filter((step) => step.kind === 'gate').map((step) => step.repair))]
+        if (gateRepairs.length > 0) out(`      门禁可单独查：${gateRepairs.join('；')}`)
+        out('      进入 reviewing/done 前必须让验收全绿')
+      }
+    }
+    if (!ok) {
+      const error = new CliError('check-failed', `验收未通过：${failed.length}/${steps.length} 项失败（${data.failed.join('、')}） — 修复后重跑 ${data.repair}`)
+      error.payload = { verification: data }
+      throw error
+    }
+    return data
+  }
+
   if (sub === 'rm') {
     const id = requireString(flags, 'id', '用法: flow task rm <id> [--yes]')
     await confirmDelete(ctx, `任务 ${id}`)
@@ -1471,7 +1701,79 @@ async function cmdTask(ctx, sub) {
     return result
   }
 
-  throw new CliError('usage', `未知子命令 task ${sub}（可用 list|show|add|update|archive|sweep|normalize|link|unlink|rm）`)
+  throw new CliError(
+    'usage',
+    `未知子命令 task ${sub}（可用 list|show|next|verify|add|update|archive|sweep|normalize|link|unlink|rm）`,
+  )
+}
+
+// ------------------------------------------------ next：只读的下一步查表
+//
+// 用户目标（本卡最重要）：**下一步做什么、怎么验证由机器直接给出**，不要让模型
+// 读一堆记录后自己推理。所以这里只做三件事：查 `lib/stage.mjs` 的边表拿目标阶段/
+// actor/动作/验证命令，读任务当前 `stage`/`owner`/验收状态，把两者拼成一段固定的
+// 输出。没有启发式、没有"视情况而定"——同样的记录永远给同一句话。
+
+/** `lib/stage.mjs`（边表 + 每边动作/验证命令）。懒加载，`flow --help` 不付钱。 */
+async function loadStageModel() {
+  try {
+    return await import(new URL('../lib/stage.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载阶段机（lib/stage.mjs）：${error?.message || String(error)}`)
+  }
+}
+
+/** `lib/tasks/records.mjs` 的任务域（验收解析 / 验证回执的读写入口）。 */
+async function loadTaskModel() {
+  try {
+    return await import(new URL('../lib/tasks/records.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载任务域（lib/tasks/records.mjs）：${error?.message || String(error)}`)
+  }
+}
+
+/** doctrine 模板的 `{id}` 占位符代入（stage.mjs 不认识记录，不做渲染）。 */
+function renderNextTemplate(template, id) {
+  if (typeof template !== 'string' || template === '') return ''
+  return template.split('{id}').join(id)
+}
+
+/** 一条边的人类可读块（`next` 的主动作与备选共用）。 */
+function nextEdgeView(row, id) {
+  return {
+    stage: row.stage,
+    stageZh: row.zh,
+    actor: row.actor,
+    back: row.back === true,
+    action: renderNextTemplate(row.action, id),
+    verify: row.verify === null || row.verify === undefined ? null : renderNextTemplate(row.verify, id),
+    command: renderNextTemplate(row.command, id),
+  }
+}
+
+/** 验收状态的一句话（人类输出用）：可执行项数与最近结论。 */
+function acceptanceStateText(acceptance) {
+  const head = `${acceptance.executable} 项可执行（cmd ${acceptance.cmd} · gate ${acceptance.gate}）`
+  if (acceptance.executable === 0) return `${head} · 没有可执行验收项`
+  if (acceptance.passed === true) return `${head} · 最近验证 通过${acceptance.at === null ? '' : ` ${fmtTime(acceptance.at)}`}`
+  if (acceptance.at === null) return `${head} · 未验证`
+  if (acceptance.fresh === false) return `${head} · 最近验证已过期（验收被改动）`
+  return `${head} · 最近验证 未通过`
+}
+
+/**
+ * 一条验收步骤的人类输出（边跑边打，长命令不会看起来像卡住）。
+ *
+ * cmd 步恒打 `exit N`：失败时即使命令一个字都没输出也要能看出退出码；门禁步的
+ * 内层退出码在 tail 里（`<step> exit N`），外层没有单独退出码。
+ */
+function printAcceptanceStep(step) {
+  const mark = step.ok === true ? '✓' : '✗'
+  const exit = step.kind === 'cmd' && Number.isInteger(step.exit) ? `  exit ${step.exit}` : ''
+  out(`${mark} acceptance[${step.index + 1}]  ${step.kind}:${step.target}${exit}  ${fmtDuration(step.durationMs)}`)
+  if (step.ok !== true && typeof step.tail === 'string' && step.tail !== '') {
+    for (const line of step.tail.split('\n').slice(-10)) out(`    ${line}`)
+  }
 }
 
 // ---------------------------------------------------------------- flow desc
@@ -3401,6 +3703,8 @@ async function main() {
         'review', 'productize', 'cleanup',
         // T-20261108 D4：`flow desc plan T-xxx …` / `flow desc apply T-xxx`
         'plan', 'apply',
+        // 2026-11-11：`flow task next T-xxx` / `flow task verify T-xxx`
+        'next', 'verify',
       ].includes(action) &&
       // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
       !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&

@@ -60,6 +60,8 @@ flow task add --title T --type feat [--status draft|active|done|archived] [--par
 flow task archive [--older-than N]   # 归档到期任务（默认 tasks.archiveAfterDays=7，0 关闭）
 flow task normalize [--type-map <file.json>] [--dry-run]
                              # 旧记录归一：goal 并入 title、按 map 补 type（不猜 type；--dry-run 只报告不写盘）
+flow task next <id> [--json] # 查表给出唯一下一步：目标阶段 / 谁做 / 必做动作 / 验证命令（终态 exit 3）
+flow task verify <id>        # 按 acceptance 顺序执行 cmd:/gate: 并回填 verification（失败 exit 1）
 flow gate add --id smoke --title 冒烟 --phase commit --step 'tests=ctest ...>>exit 0'
 flow gate run smoke             # 顺序执行步骤、首个失败即停、写运行记录
 flow gate logs smoke            # 最近运行记录
@@ -75,8 +77,9 @@ flow check description --task T-… [--strict]  # 审查阶段：计划对齐 + 
 flow backup [--keep N]         # 给 .agents 拍本地快照（默认保留 5 份，存 .agents-backups/，不入库）
 flow doctor [--stale-hours N]  # 台账体检：契约/记录目录/git 忽略/快照新鲜度（error 退出 1）
 
-所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法 /
-2 校验 / 3 未找到 / 4 IO。
+所有命令支持 `--root <dir>` 与 `--json`；`rm` 需 `--yes`。退出码：0 成功 / 1 用法（含
+`flow task verify` 验收失败，`check-failed`）/ 2 校验 / 3 未找到（含 `flow task next` 的终态
+`terminal`）/ 4 IO。
 
 ## 实验（可选）
 
@@ -245,7 +248,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：793 用例（62 个文件）
+node --test test/                        # core + CLI + check：814 用例（63 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale

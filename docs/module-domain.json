@@ -130,7 +130,8 @@
         "test/t-20261107-status-accuracy.test.mjs",
         "test/t-20261107-subtask.test.mjs",
         "test/t-20261107-team-sync.test.mjs",
-        "test/t-20261109-dispatch.test.mjs"
+        "test/t-20261109-dispatch.test.mjs",
+        "test/t-20261111-task-next-verify.test.mjs"
       ]
     },
     "decisions": {
@@ -331,7 +332,8 @@
         "test/t-20261106-panel-row-contract.test.mjs",
         "test/t-20261107-panel-stage.test.mjs",
         "test/t-20261107-state-degradation.test.mjs",
-        "test/warnings.test.mjs"
+        "test/warnings.test.mjs",
+        "test/t-20261111-01-goals-framework-test.mjs"
       ]
     },
     "backup": {

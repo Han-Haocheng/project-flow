@@ -332,7 +332,7 @@ graph LR
 | section-3 | 心跳、决策与 status 共用的前置与展示辅助：读 DSH 会话日志头判定 delegation（子会话禁止写心跳）、把心跳根解析到项目主工作区，并集中收集 core/契约警告、提供年龄/会话短名/claims 格式化。 | readSessionHeader、zstdText、sessionOriginOf、assertMainSessionHeartbeat、heartbeatWorkspaceOf、fmtAge、shortSession、fmtClaims、pendingWarnings、coreRef、collectWarnings、drainCoreWarnings、loadContractFor、printWarnings |
 | section-4 | 把 flags 里的原始字符串归一成命令可用的强类型值：非负/正整数、JSON 对象或任意 JSON（desc set 允许数组）、逗号列表、必填字符串与 gate --step 的 'id=命令>>expect'；格式不合法一律抛 usage，不做静默降级。 | readString、readInteger、readPositiveInteger、readJsonObject、readJsonValue、readList、requireString、parseStep |
 | section-5 | init 与 status 两条命令的实现：init 把 name/force/no-gates 转交 core.initProject 并打印新建文件与种子门禁；status 聚合实验/任务/门禁/决策/心跳/描述计数，并刻意区分「台账未初始化或不可读」与「计数为零」。 | cmdInit、unreadableTail、countsOf、cmdStatus、cmdBackup、cmdDoctor、byteText |
-| t-12-b2 | exp 与 task 两类命令的实现：收集各子命令 flag，把 schema-2 七个判定字段与 parent/experiment 归一后交给 core，并输出表格或记录详情；CLI 只做输入归一与展示，所有落盘仍由 core 在写锁内完成。 | splitEntries、experimentSeven、cmdExp、printArchiveResult、readParentFlag、cmdTask |
+| t-12-b2 | exp 与 task 两类命令的实现：收集各子命令 flag，把 schema-2 七个判定字段与 parent/experiment 归一后交给 core，并输出表格或记录详情；CLI 只做输入归一与展示，所有落盘仍由 core 在写锁内完成。 | splitEntries、experimentSeven、cmdExp、printArchiveResult、readParentFlag、cmdTask、loadStageModel、loadTaskModel、renderNextTemplate、nextEdgeView、acceptanceStateText、printAcceptanceStep |
 | flow-desc | flow desc 子命令面（status/build/show/set/plan/apply/render）的实现，以及同一源码段内、没有独立段头的 gate 子命令（list/show/add/update/enable/disable/rm/run/logs）；desc 的台账读写与校验全部委托 core，仅 desc plan --template 懒加载 lib/desc.mjs 做只读源码扫描，--out 与 description.render 被限制在项目根内。 | descModeOf、descInsideRoot、descRelativeLabel、descTreeLines、descPlanShape、printDescPlan、loadDescModel、descPlanTemplate、cmdDesc、cmdGate |
 | section-8 | 心跳记录的人类可读详情：把 session/agent/goal/task/claims/status/年龄/turn/时间戳/stats 排成对齐的 label-value 行；纯展示、不改记录，start/update/end/status 复用同一渲染。 | printHeartbeat |
 | 9-p1 | §9 项目状态块与 heartbeat 子命令的 CLI 侧：懒加载 lib/capture.mjs 的 buildStatusBlock 作为栈与计数的唯一真源，这里只做显示截断（HEARTBEAT_STACK_ROWS=5）和折叠提示，并编排 start/update/end/list/status/gc；块装配失败只记 warning，绝不让已落盘的心跳写入失败。 | HEARTBEAT_STACK_ROWS、heartbeatStatusBlock、loadCapture、statusBlockOf、printStatusBlock、printHeartbeatList、cmdHeartbeat |
@@ -749,7 +749,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| stage | STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。 | DEFAULT_STAGE、STAGE_IDS、STAGE_ZH、STAGE_MACHINE、nextStages、edgeOf、actorForEdge、STATUS_BY_STAGE、stageToStatus、legacyStageFromStatus、canTransition、assertTransition |
+| stage | STAGE_MACHINE 是唯一阶段表：九阶段只有 9 条边，其中 reviewing 到 queued-implementation 是唯一回退边；未知阶段在 canTransition/nextStages 里视为无边而不是抛错，只有 assertTransition 把非法迁移报成 invalid；stageToStatus 与 legacyStageFromStatus 负责与旧 status 视图互转。 | DEFAULT_STAGE、STAGE_IDS、STAGE_ZH、STAGE_MACHINE、nextStages、edgeOf、actorForEdge、STATUS_BY_STAGE、stageToStatus、legacyStageFromStatus、canTransition、assertTransition、STAGE_EDGE_DOCTRINE、NEXT_TERMINAL_STAGES、stageNextStep |
 
 ### 3.36 lib/state-snapshot.mjs
 
@@ -796,7 +796,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 文件级不可变常量：payload 字节/条目/字符串与任务行、树深、趋势窗口上限，实验六态，legacy 告警去重集合，以及 .dsh/flow/flow.json 契约路径；下游所有裁剪与告警文本都引用这里，改值即改对外 payload 形状。 | LIB_ROOT、CORE_URL、GIT_TIMEOUT_MS、GIT_MAX_BUFFER、MAX_STRING、MAX_PAYLOAD_BYTES、MAX_STORE_ITEMS、MAX_DRAFT_TASKS、MAX_TASK_ROWS、MAX_TASK_DEPTH、MAX_TASK_ITEM、EXPERIMENT_STATUS_SIX、MAX_TREND_DAYS、TREND_DEFAULT_DAYS、DAY_MS、LEGACY_EXPERIMENTS_WARNED、MAX_TASK_LIST、STORE_CONTRACT |
+| top | 文件级不可变常量：payload 字节/条目/字符串与任务行、树深、趋势窗口上限，实验六态，legacy 告警去重集合，以及 .dsh/flow/flow.json 契约路径；下游所有裁剪与告警文本都引用这里，改值即改对外 payload 形状。 | LIB_ROOT、CORE_URL、GIT_TIMEOUT_MS、GIT_MAX_BUFFER、MAX_STRING、MAX_PAYLOAD_BYTES、MAX_STORE_ITEMS、MAX_DRAFT_TASKS、MAX_TASK_ROWS、MAX_TASK_DEPTH、MAX_TASK_ITEM、EXPERIMENT_STATUS_SIX、MAX_TREND_DAYS、TREND_DEFAULT_DAYS、DAY_MS、LEGACY_EXPERIMENTS_WARNED、MAX_TASK_LIST、STORE_CONTRACT、MAX_DESCRIPTION_PLANS、RECENT_DESCRIPTION_PLANS、MAX_DESCRIPTION_PLAN_TEXT |
 | core-module | 动态加载 lib/core.mjs 并暴露 coreAvailable/requireCore/takeCoreWarnings 等探针：core 存在时是唯一 store 读取入口，加载失败则降级为 core-unavailable 告警与可操作错误，绝不让插件加载整体失败，也不复制 core 的逻辑。 | core、coreFailure、takeCoreWarnings、coreModule、coreUnavailableMessage、coreAvailable、requireCore |
 | primitives | 无状态基础工具：把时间戳格式化为带本地偏移的 ISO 字符串、把任意错误/字符串裁剪成有界告警片段，并提供 isPlainObject/splitLines/toPosix 等纯函数；不读盘、不抛错，是其余投影逐字段兜底的第一层。 | isoLocal、clip、errorText、brief、isPlainObject、splitLines、toPosix |
 | path-containment | root-relative 路径容纳校验的镜像实现：拒绝绝对路径与 .. 逃逸，并用请求级 memo 的 realpath 复核符号链接，非法值不抛错而是隐藏并写入调用方 warnings；刻意不 import lib/paths.mjs 以保持告警汇独立，供 tasks.current 等 manifest 路径复核。 | rejectManifestPath、pathWithin、memoizedRealpath、realPathStaysInside、containedPath、git |
@@ -805,7 +805,7 @@ graph LR
 | tasks | 任务记录到面板行的投影：FIFO 按 created_at 排序、父链深度封顶 3，scope/acceptance/commits 等列表按 MAX_TASK_LIST 与 MAX_TASK_ITEM 裁剪，acceptance 兼容 {cmd,expect} 旧形状；只读派生，不写台账。 | timeValue、lastCheckpointGate、clipTaskList、clipTaskAcceptance、clipTaskScope、taskStageOf、panelTaskRow、taskBranchOf |
 | heartbeats | 把 core 的富心跳项投影成面板行（补 title/statusLine），并按 liveness 与 ageSeconds 判定可见性：live 永远可见，dead/stale 隐藏，未知状态仅 6 小时内可见；heartbeatRowVisible 由宿主在 applyAgentLiveness 后复用同一规则。 | panelHeartbeat、panelHeartbeats、heartbeatRowVisible |
 | decisions | 按固定 11 键顺序投影决策行（丢弃 turnAge/rationale/affects/fingerprint 等不应进浏览器的字段），并把计数归一为七个固定键；core 未返回 decisions 时用 summarizeDecisions 重建，异常降级为空结构。 | DECISION_ITEM_KEYS、panelDecisionOption、panelDecision、panelDecisions、decisionSection |
-| payload | 组装完整 store payload 并负责有界化：合并契约/store/任务/门禁/心跳/决策/趋势，超 900KB 时逐条裁剪实验并同步剪枝树，必要时把 warnings 截到 20 条；契约或 store 读取失败时返回空 payload 加告警，进入时丢弃 core 诊断日志以免轮询污染下一次工具输出。 | pruneTree、capPayload、taskCountsOf、createdOrder、taskParentOf、taskDepthIndex、queueHeadId、activeTasksOf、draftTasksOf、recentDoneOf、teamLinksOf、isControlTask、controlOf、stageCountsOf、stageRowsOf、emptyStageCounts、emptyStages、emptyStoreState、buildStoreState、localDayNumber、localDayKey、trendTimestamp、deriveTrend、experimentsEnabled、legacyExperimentsWarning、experimentCountsOf、buildState、decisionRemindMax、DECISION_COUNT_KEYS、decisionCountsOf、emptyDecisionCounts、resolveLedgerRoot |
+| payload | 组装完整 store payload 并负责有界化：合并契约/store/任务/门禁/心跳/决策/趋势，超 900KB 时逐条裁剪实验并同步剪枝树，必要时把 warnings 截到 20 条；契约或 store 读取失败时返回空 payload 加告警，进入时丢弃 core 诊断日志以免轮询污染下一次工具输出。 | pruneTree、capPayload、taskCountsOf、createdOrder、taskParentOf、taskDepthIndex、queueHeadId、activeTasksOf、draftTasksOf、recentDoneOf、teamLinksOf、isControlTask、controlOf、stageCountsOf、stageRowsOf、emptyStageCounts、emptyStages、emptyStoreState、buildStoreState、localDayNumber、localDayKey、trendTimestamp、deriveTrend、experimentsEnabled、legacyExperimentsWarning、experimentCountsOf、buildState、decisionRemindMax、DECISION_COUNT_KEYS、decisionCountsOf、emptyDecisionCounts、resolveLedgerRoot、emptyDescriptionState、descriptionCountsOf、taskTitlesOf、descriptionPlanTitle、descriptionPlanTime、readRecentDescriptionPlans、readDescriptionState |
 | snapshot-api | buildSnapshot 是快照唯一出口：按请求构造 root/realRoot 与 per-request realpath memo，调用 buildState 后序列化一次用 capPayload 裁到上限，返回宿主可直接发送的普通对象；memo 绝不跨请求或跨进程传递。 | buildSnapshot |
 | worker-entry | fork 子进程入口：PF_STATE_WORKER=1 时启动 IPC 循环，先发 ready，再逐条处理 ping 与 snapshot 请求、回一条 JSON reply；channel 断开或未捕获异常直接 exit，stdout/stderr 不产生输出，被 import 时不启动。 | IS_WORKER、workerReply、startWorker |
 
@@ -840,11 +840,12 @@ git 探测与项目根归一：判断目录是否工作树根、找主工作区�
 ```mermaid
 graph LR
   m1["tasks"] --> m0["top"]
+  m0["top"] --> m1["tasks"]
 ```
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 任务常量（id 形状/类型/状态/默认值/可写键）与 createsCycle 父引用环检测；configureTasks 注入 descriptionGate 与 experimentIds。 | TASK_ID_RE、TASK_TYPES、TASK_STATUS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、HOOKS、configureTasks、createsCycle、warnTaskExperiment |
+| top | 任务常量（id 形状/类型/状态/默认值/可写键）与 createsCycle 父引用环检测；configureTasks 注入 descriptionGate 与 experimentIds。 | TASK_ID_RE、TASK_TYPES、TASK_STATUS、TASK_DEFAULTS、TASK_CREATE_KEYS、TASK_IMMUTABLE_KEYS、TASK_UPDATABLE_KEYS、TASK_SYSTEM_KEYS、HOOKS、configureTasks、createsCycle、warnTaskExperiment、ACCEPTANCE_CMD_PREFIX、ACCEPTANCE_GATE_PREFIX、ACCEPTANCE_GATE_STAGES、VERIFICATION_STEPS_MAX、VERIFICATION_TAIL_MAX、ACCEPTANCE_POLICY_DEFAULT、parseAcceptanceEntry、acceptancePlan、acceptanceSignature、verificationStateOf、acceptancePolicyOf、assertAcceptanceGate、normalizeVerificationTail、validateVerificationField、recordTaskVerification |
 | tasks | listTasks/getTask/addTask/updateTask/removeTask/archiveTasks/sweepUtteranceTasks/releaseDeadSessionTasks：锁内读写、阶段投影与描述门、owner 存活判定（heartbeatStatus）、归档窗口与 notes 收口。 | arrayOfStringsOrObjects、validateTaskFields、deriveTaskStatus、buildTask、isStamp、stampTaskTimes、projectTaskTimes、applyTaskPatch、taskIds、normalizeParentInput、normalizeOwnerInput、taskRecordMap、assertTaskParent、projectTaskParent、projectTaskType、projectTaskStage、projectTaskRecord、listTasks、getTask、addTask、updateTask、releaseDeadSessionTasks、sweepUtteranceTasks、utteranceCardAgeHours、utteranceCardSkipReason、TASK_GOAL_SEPARATOR、migrationType、taskTypeMissing、mergedTaskTitle、taskFormatIssues、normalizeTaskRecord、normalizeTaskFormat、removeTask、archiveWindowDays、archivableTaskFiles、archiveTasks |
 
 ### 3.41 lib/team-sync.mjs

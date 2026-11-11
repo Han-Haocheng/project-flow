@@ -151,6 +151,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `experiments.enabled` | boolean（**默认 false**：面板隐藏实验区、`check experiments` skip） | 非 boolean → 回退 `false` 并记 `manifest-invalid: experiments.enabled: expected boolean, got <type>` |
 | `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` / `archiveAfterDays` number | 逐字段回退 |
 | `tasks.archiveAfterDays` | 有限 number（manifest **只校验类型**，不校验范围；`0` = 关闭自动归档） | 非 number / 非有限 → 回退默认值 7 并记 `manifest-invalid`；负数与越界不在 loadContract 报错，运行期降级（见下） |
+| `tasks.requireAcceptance` | string：`warn`（默认）\| `strict` \| `off`；控制「任务没有可执行验收项（`cmd:` / `gate:`）」时的推进策略 | 非 string → 回退 `warn` 并记 `manifest-invalid`；未知值按 `warn` 处理 |
 | `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
 | `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
 | `decisions` | object：`dir` 为 string | 逐字段回退 |
@@ -326,7 +327,12 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "done_at": null,                      // 可选（T-09）：进入 done 的时刻；回 active/draft 清空
   "archived_at": null,                  // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
   "veto": { "by": "analysis", "reason": "...", "at": "..." }, // 可选（P4）：分析期否决记录，历史永不清
-  "decision": "D-20261107-01"           // 可选（P4）：主任务否决生成的待办决策 id；答完清为 null
+  "decision": "D-20261107-01",          // 可选（P4）：主任务否决生成的待办决策 id；答完清为 null
+  "verification": {                     // 可选（2026-11-11）：flow task verify 的回执，系统字段
+    "ok": true, "at": "...", "stage": "implementing",
+    "signature": "…",                   // acceptance 内容的指纹：验收项改过即视为过期
+    "steps": [{ "kind": "cmd", "target": "node --test test/", "ok": true, "code": 0, "ms": 1234 }]
+  }
 }
 ```
 
@@ -338,6 +344,15 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   完成）。之后由 `tasks.archiveAfterDays` 的归档 sweep 接手。宿主在每次捕获落盘后自动跑一遍，
   窗口由 `config.tasks.autoSweepHours` 控制（默认 24；`0`/`false` 关闭，非法值回落默认）。
   另有结构性排除：`background job …` 开头的后台任务完成通知在捕获阶段就按 `prefix` 丢弃，不建卡。
+
+- **验收门（2026-11-11，任务模块）**：`acceptance` 条目支持可执行形式 `cmd:<shell 命令>` 与
+  `gate:<gateId>`（另兼容旧对象形状 `{cmd, expect}` / `{gate}`）。`flow task verify <id>` 按顺序
+  全跑（不短路，一次拿全证据），把结果写进系统字段 `verification`（含 `signature`：验收项改过
+  即视为过期），失败退 `1`。进入 `reviewing` / `done` 前**必须**已有通过且未过期的回执，否则
+  `FlowError('invalid')` 并提示先跑 `verify`；`source: 'internal'`（sweep/否决/迁移）豁免。
+  任务没有可执行验收项时按 `tasks.requireAcceptance` 处理（默认 `warn` 只提示；`strict` 拒绝；
+  `off` 关闭）。插件派工（`source: 'plugin'`）进入 `reviewing` 只警告不硬拦——否则带验收项的
+  任务会卡在 `queued-review`（派工器不会自己跑 verify）；真正的判定点是 `reviewing → done`。
 - **id 分配（T-08 / D-20261105-05 timestamp）**：新任务 id = `T-<YYYYMMDDHHMMSS>`
   （**本地时间 14 位**，如 `T-20261105212130`）。同一秒创建第二张起追加 `-NN`（两位，从
   `02` 起，例 `T-20261105212130-02`）；同秒上限 **99**，超出抛
@@ -2237,7 +2252,24 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   后挂在 B 项目下。web 侧等价于工作区切换即重启整条链（abort + 清空 + 立即首拉）。
 - 整条链只发 `GET state`，不发写请求；写操作只有用户点击触发的 init/gate 两个 POST。
 
-#### 9.1.3 实验节（`GET state` 的 `experiments`）
+##### 9.1.3 payload 的 `description` 节（面板框架视图，2026-11-11）
+
+```jsonc
+"description": {
+  "available": true,                      // 台账不可用/未建时 false（同键位，counts:null）
+  "counts": { "files": 56, "modules": 120, "missingSemantics": 0, "plans": 5 },
+  "recentPlans": [ { "task": "T-…", "title": "…", "at": "…" } ]   // implemented 计划，倒序前 5
+}
+```
+
+- 只读：`core.storePaths()` 解析契约里的 `description.dir`（自定义目录同样生效）+
+  `descriptionStatus()` 现算计数；`recentPlans` 读 `description/tasks/*.json`，只收
+  `status: 'implemented'`，标题取同 id 任务卡的 `title`（回落到 `reason`，再回落到文件列表）。
+- 降级：无台账 → `available:false`；坏计划逐个跳过；超过 200 个计划只读最新 200 并记
+  `description-plans-truncated` warning；任何读失败转 warning，绝不抛错（面板侧整卡隐藏）。
+- 面板：这是「框架视图」卡片的数据面，只读，不新增写路径。
+
+### 9.1.3 实验节（`GET state` 的 `experiments`）
 
 - **关闭（默认，`experiments.enabled: false`）**：`data.experiments` 只保留
   `{ enabled: false, total, counts }`——`counts` 是 **8 键**：`total` + 六态
