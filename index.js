@@ -79,6 +79,8 @@ import {
 // core-warning wrapper and the mount-warning channel are shared with the three
 // module sub-plugins (tasks.js / gates.js / experiments.js).
 import { STAGE_ZH, actorForEdge, edgeOf, nextStages } from './lib/stage.mjs'
+import { autoDispatchEnabled, dispatchProvider } from './lib/dispatch.mjs'
+import { allowMainDispatchOf } from './lib/host/enforce.mjs'
 import { readTeamBoard, reconcileLinks, teamStatusOf } from './lib/team-sync.mjs'
 import { buildDefinition as buildSubtaskDefinition } from './lib/tools/subtasks.mjs'
 import { answerDecisionAndApply, applyVetoAnswer, vetoSubtask, vetoTask } from './lib/veto.mjs'
@@ -238,9 +240,10 @@ export function apply(ctx, config) {
   // still-broken core re-adds its message every time.
   mountWarnings.length = 0
   if (coreAvailable() === false) warnMount(coreUnavailableMessage(), ctx)
-  // `config.capture === false` is the rollback switch: no pre-step recording, no
-  // turn-stopping flush and no heartbeat auto-start — the plugin behaves like P0.
-  const captureEnabled = isPlainObject(config) === false || config.capture !== false
+  // 2026-11-11 用户口径：**取消"每句话都是任务"**。捕获改为显式 opt-in
+  // （`config.capture: true` 才开），默认不建卡、不做捕获——任务由主会话分析后
+  // 用 flow_task add 主动创建，插件只负责派工与流转。
+  const captureEnabled = isPlainObject(config) === true && config.capture === true
   const settings = {
     heartbeatGate: heartbeatGateEnabled(config),
     claims: claimsGateEnabled(config),
@@ -253,6 +256,10 @@ export function apply(ctx, config) {
     // actually dispatches analyzer/implementer/reviewer work.
     actorMode: resolveActorMode(config, ctx),
     boardMode: resolveBoardMode(config, ctx),
+    // 捕获即派工（2026-11-11）：默认跟随 config.dispatch.auto；宿主没有 subagents 服务时自动跳过。
+    allowMainDispatch: allowMainDispatchOf(config),
+    autoDispatch: autoDispatchEnabled(config),
+    dispatchProvider: dispatchProvider(config),
     // Per-mount dedupe for §5.2 ① (a re-apply restores the team tools until the
     // new mount restricts again; a module-level set would skip that).
     restrictedAgents: new WeakSet(),

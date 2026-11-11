@@ -68,7 +68,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |
 | `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；只有数据，不捕获不派工（派工在 `lib/dispatch.mjs`） | core |
 | `lib/dispatch.mjs` | P3b 派工核心：`queued-* → 角色` 映射（analyzer/implementer/reviewer）、角色提示词、派工回执（写 `checkpoints`）、`subagents` 服务取用。**不 import core**（core 由工具层注入），纯函数可单测 | `lib/tools/tasks.mjs` |
-| `lib/capture.mjs` | P1 捕获流水线：`agent/pre-step` 只做内存的排除/集合差去重，`agent/turn-stopping` 才落盘（`source.key` 跨进程去重、创建即推进 `queued-analysis`）；同时产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入，宿主无 core 时捕获自然降级） | `index.js` |
+| `lib/capture.mjs` | P1 捕获流水线（**2026-11-11 起默认关闭，`config.capture: true` 才开**）：pre-step 过滤/去重后**立即落盘**（`captureTurnStart`），turn-stopping 的 `captureTurnStop` 只作兜底（pending 空即 no-op）；产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
 | `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**工具层的懒 core 网关**（`requireCore`） | `index.js`、`lib/plugin/*`、`lib/tools/*` |
 | `lib/tools/subtasks.mjs` | P4 `flow_subtask` 工具：`add`（子任务直接落 `queued-analysis`）/ `update`（仅 notes+stage，走 `assertTransition`）/ `remove`（**软关闭**：`stage=done` + `notes` 追加 `[removed]`，不物理删除）；写入一律走 core 的 `addTask`/`updateTask` | index.js |
@@ -1523,10 +1523,10 @@ restrict——这样插件挂载前就已存在的会话、以及关闭 capture 
 | # | 条件 | 拒绝文案要点 |
 |---|---|---|
 | 1 | 主会话调用团队工具 | `主会话不得直接调度团队。用 flow_task_update（即 flow_task 的 update 动作）推进阶段，插件会派工。` |
-| 2 | 主会话 `flow_task add` | `任务由插件按你的每句话自动创建，不需要也不允许手动建。若要补记一条，说明理由后由插件建。` |
+| 2 | 主会话 `flow_task add` 且带 `parent`（直接建子任务） | `主会话只建主任务；子任务由分析者拆分创建（flow_subtask add），实现/审查自动流转。`（主会话建**主任务**放行） |
 | 3 | `flow_task update` 带 `stage` 且该边不存在 | `<from> 只能到 <nextStages(from)>，你给了 <to>。` |
 | 4 | `team` 模式下，边存在但 `edge.actor !== 'session'` | `<from> → <to> 由 <actor> 推进，不是你。你只能推进：<该阶段 actor=session 的边>。` |
-| 5 | `flow_subtask add/remove` 而父任务不在 `queued-implementation`/`implementing` | `只有实现阶段可以改子任务（当前 <阶段中文>）。` |
+| 5 | `flow_subtask add/remove` 而父任务不在 `analyzing`/`queued-implementation`/`implementing` | `只有分析/实现阶段可以改子任务（当前 <阶段中文>）。` |
 
 规则 3/4 的唯一真源是 `lib/stage.mjs` 的 `edgeOf(from,to)` / `actorForEdge(from,to)` /
 `nextStages(from)`——`index.js` 不重写任何阶段判断。规则 4 是 `team` 模式的实现，**不删除**；
@@ -2491,7 +2491,7 @@ cannot change the outcome*（数据决定结果，监听器顺序不影响）；
 
 - **段序固定**：命令行（仅当本 step 有 `/` 命令时；只识别、不执行、不写台账）→ A 当前任务
   → B 待决策 / C 无待决策的提交指引。无未完成任务时 A 段换成 D（`当前无未完成任务 ｜
-  用户新说的每句话会自动成为任务`，**不写"请先建任务"**）。
+  由你分析用户诉求后 flow_task add 建主任务（插件负责派工）`）。
 - **A 段**取状态块栈顶：`当前任务：<T-id> [<中文阶段>] <标题 clip 48>` +
   `未完成 N 条 ｜ 栈顶 1 条`；`N>1` 时追加 `（另有 N-1 条待处理）`。阶段中文**只**
   来自 `buildStatusBlock().stack[].stageZh`（`lib/capture.mjs` → `lib/stage.mjs` 的
@@ -2623,11 +2623,16 @@ H7/H8/H10/H11 新口径。
 - **提示词**：零上下文交接书——仓库根、任务 id/标题/类型/阶段、验收、写域/禁区、notes 摘要、
   角色职责（分析出任务书/实现按任务书+跑门禁/审查五条清单）、纪律（`flow_task update` 推阶段、
   不 push、阻塞写 notes 并 `send_message` 报告）。
-- **第二批：阶段入口自动派工**（2026-11-09）：`flow_task update` 把任务推进到 `queued-*` 之后，
-  插件直接起该阶段的角色子代理（复用同一 `dispatchOnce`），并立刻走 plugin 边到 working 阶段；
-  结果里 `dispatch.auto: true`。触发条件刻意只有「经工具显式推进阶段」：捕获建卡走 core、不经过
-  这个工具，所以聊天消息不会触发派工——**只有会话把任务排进队列才派**，避免每句话生一个子代理。
-  自动派工失败不拖垮 update（台账已写成功）：结果带 `dispatch: {auto:true, ok:false, error}`，
+- **第二批：阶段入口自动派工**（2026-11-09 起；2026-11-11 扩展成完整流水线）：
+  `flow_task add` / `update` 让任务进入 `queued-*` 时，插件直接起该阶段的角色子代理，
+  并立刻走 plugin 边到 working 阶段（结果里 `dispatch.auto: true`）。
+  **完整流水线（用户 2026-11-11 定）**：主会话（lead）只负责分析诉求、建主任务、调度主任务；
+  主任务进 `queued-analysis` → 插件派**分析者**；分析者拆作用域、用 `flow_subtask add`
+  建子任务（默认 `queued-implementation`）→ 插件自动派**实现者**；实现完成推进
+  `queued-review` → 插件派**审查者**；审查通过子任务 `done`。同一父任务的子任务全部终态时，
+  插件把父任务退回 `queued-analysis` 并重新派分析者做**汇总轮**：分析者核对证据、写汇总、
+  把父任务推进 `done` 并 `send_message` 回报 lead。子任务流转全程不经过主会话。
+  自动派工失败不拖垮写入（台账已写成功）：结果带 `dispatch: {auto:true, ok:false, error}`，
   阶段停在 queued，调用方可用显式 `dispatch` 重试。
 - **配置（完整）**：`config.dispatch.enabled`（默认 `true`；`false` 连显式 dispatch 都关）、
   `config.dispatch.auto`（默认 `true`；`false` 只关阶段入口自动派工，保留显式 dispatch）、

@@ -46,7 +46,8 @@ const HARNESSES = []
 
 // ---------------------------------------------------------------- fake host
 
-function makeHarness(root, config = {}) {
+// 2026-11-11 起捕获是显式 opt-in（默认关）；本文件测的就是捕获机制本身，默认开。
+function makeHarness(root, config = { capture: true }) {
   const handlers = new Map()
   const effects = []
   const live = new Map()
@@ -189,7 +190,7 @@ after(() => {
 
 // ------------------------------------------------------------------- 1 正例
 
-test('捕获正例：一条用户消息 → 恰好 1 条任务，source/stage 正确，且 pre-step 本身不落盘', async () => {
+test('捕获正例：一条用户消息 → pre-step 立即落盘 1 条任务，turn-stopping 幂等', async () => {
   const { root, contract } = freshProject('basic')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-capture-basic')
@@ -197,11 +198,13 @@ test('捕获正例：一条用户消息 → 恰好 1 条任务，source/stage �
   const text = '把 P1 捕获流水线做完'
 
   await preStep(harness, agent, [userMessage(text, at)])
-  assert.equal(tasksOf(root, contract).length, 0, 'pre-step must stay memory-only (no task before turn-stopping)')
+  // 2026-11-11：捕获改在 pre-step 落盘——用户说一句话就应看到任务卡，
+  // 不再依赖可能永远不触发的 turn-stopping（被中断的回合曾经整批丢卡）。
+  assert.equal(tasksOf(root, contract).length, 1, 'pre-step 必须立即落盘一条任务')
 
   await turnStopping(harness, agent)
   const tasks = tasksOf(root, contract)
-  assert.equal(tasks.length, 1, `expected exactly one task, got ${tasks.length}`)
+  assert.equal(tasks.length, 1, `turn-stopping 必须幂等，实际 ${tasks.length}`)
   const task = tasks[0]
   assert.equal(task.title, text)
   assert.deepEqual(task.source, { kind: 'utterance', key: utteranceKey(at, text), at, text }, 'source.text keeps the full sentence')
@@ -520,7 +523,7 @@ test('诊断③：正常捕获 → skipped "ok"、created>0、lastAt 有值，�
   const agent = harness.addAgent('session-diag-ok')
   startHeartbeat(root, contract, { session: agent.id, goal: '观察捕获' })
   await preStep(harness, agent, [userMessage('这条应该被捕获', recentStamp(-2000))])
-  await turnStopping(harness, agent)
+  // 捕获在 pre-step 就落盘，诊断状态此刻即为 ok（turn-stopping 只是兜底）。
   const status = await flowStatus(harness, agent, root)
   assert.equal(status.capture.skipped, 'ok')
   assert.equal(status.capture.created, 1)
@@ -545,19 +548,29 @@ test('诊断⑤：flush 抛错 → skipped "flush-failed" + error 带函数名 +
   const { root } = freshProject('diag-fail')
   const harness = makeHarness(root)
   const agent = harness.addAgent('session-diag-fail')
-  await preStep(harness, agent, [userMessage('会失败的一句', recentStamp(-1000))])
-  // Removing the store makes the write fail for real (not a fake stub).
-  fs.rmSync(path.join(root, '.agents'), { recursive: true, force: true })
-  await turnStopping(harness, agent)
+  // 让写盘真的失败（不是 fake stub）：tasks 目录只读，addTask 会抛。
+  // 捕获现在在 pre-step 落盘，所以失败与诊断都发生在 pre-step 这一次。
+  const tasksDir = path.join(root, '.agents', 'tasks')
+  fs.chmodSync(tasksDir, 0o555)
+  try {
+    await preStep(harness, agent, [userMessage('会失败的一句', recentStamp(-1000))])
+  } finally {
+    fs.chmodSync(tasksDir, 0o755)
+  }
   const state = createCaptureState() // unused sanity
   assert.ok(state)
   const status = await flowStatus(harness, agent, root)
   assert.equal(status.capture.skipped, 'flush-failed')
   assert.equal(typeof status.capture.error, 'string')
-  assert.ok(status.capture.error.includes('captureTurnStop:') || status.capture.error.includes('flushCapture:'), status.capture.error)
   assert.ok(
-    harness.warns.some((line) => line.includes('captureTurnStop:')),
-    `expected a captureTurnStop warning, got ${JSON.stringify(harness.warns)}`
+    status.capture.error.includes('captureTurnStop:') ||
+      status.capture.error.includes('captureTurnStart:') ||
+      status.capture.error.includes('flushCapture:'),
+    status.capture.error
+  )
+  assert.ok(
+    harness.warns.some((line) => line.includes('captureTurnStop:') || line.includes('captureTurnStart:')),
+    `expected a capture warning, got ${JSON.stringify(harness.warns)}`
   )
 })
 

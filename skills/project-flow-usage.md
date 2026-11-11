@@ -67,17 +67,31 @@ CLI 只暴露常用字段。
 - `task add` **必填** `--type`（`feat`/`fix`/`docs`/`style`/`refactor`/`perf`/`test`/`chore`/
   `build`/`ci`，conventional commit 类型）；缺 → `invalid: type is required`。
 
+## 任务流水线（2026-11-11 口径）
+
+主会话（lead）只做三件事：**分析诉求 → 建主任务 → 调度主任务**。子任务流转由插件与
+分析者完成，主会话不参与：
+
+1. 主会话建主任务：`flow_task add`（stage 给 `queued-analysis` 即触发派工）；
+2. 插件派**分析者**：拆作用域、`flow_subtask add` 建子任务（默认 `queued-implementation`）；
+3. 插件为每个子任务派**实现者** → 实现完推进 `queued-review` → 插件派**审查者**；
+4. 同一父任务子任务全部终态后，插件把父任务退回 `queued-analysis` 派分析者做**汇总轮**：
+   分析者核对证据、写汇总、推进 `done`、`send_message` 回报 lead。
+
 ```bash
-flow task add --title "接 CLI 与面板 — 跑通主链路" --type feat \
-  --status active --owner agent-a
+flow task add --title "接 CLI 与面板 — 跑通主链路" --type feat --stage queued-analysis
 flow task list
 flow task show T-20261028-01
 flow task next T-20261028-01          # 下一步由边表给出：目标阶段 / 谁做 / 动作 / 验证命令
-flow task update T-20261028-01 --stage reviewing
 flow task verify T-20261028-01        # 跑 acceptance 的 cmd:/gate:，回填 verification
-flow task update T-20261028-01 --stage done --notes "验收通过"
 flow task rm T-20261028-01 --yes
 ```
+
+- **不要**再指望"说一句话自动生成任务"：捕获已默认关闭（`config.capture: true` 才开）；
+  任务由主会话分析后显式创建。
+- 主会话**不能**直接建子任务（`flow_task add --parent` 会被拒）；子任务只由分析者用
+  `flow_subtask add` 创建。
+- 收口用 `--stage`，不要用 `--status done`。
 
 - **收口不要用 `--status done`**：`stage` 是流程真源，`status` 只是兼容视图。用
   `flow task next <id>` 拿到下一阶段，再 `--stage` 推进；带可执行验收项的任务必须先

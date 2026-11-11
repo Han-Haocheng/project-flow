@@ -99,6 +99,7 @@ graph LR
   n3 --> n51
   n4 --> n7
   n4 --> n18
+  n4 --> n24
   n4 --> n28
   n4 --> n29
   n4 --> n30
@@ -195,6 +196,7 @@ graph LR
   n30 --> n6
   n30 --> n7
   n30 --> n18
+  n30 --> n24
   n30 --> n31
   n30 --> n38
   n30 --> n39
@@ -273,6 +275,7 @@ graph LR
   n50 --> n44
   n51 --> n39
   n51 --> n44
+  n52 --> n24
   n52 --> n39
   n52 --> n43
   n52 --> n44
@@ -574,7 +577,7 @@ P3b 派工核心：把台账任务的 queued-* 阶段映射成 analyzer/implemen
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| dispatch | dispatchPlan 只接受 queued-analysis/queued-implementation/queued-review 且拒绝子任务；dispatchPrompt 自带仓库根、验收、写域与纪律，供零上下文子代理直接开工；dispatchTask 先 startActivation 拿 childId 再返回，失败转成带下一步的 FlowError；dispatchCheckpoint 生成写进 checkpoints 的短回执。 | SUBAGENT_SERVICE、DEFAULT_PROVIDER、DISPATCH_ROLES、WORKING_STAGE、ROLE_ZH、dispatchPlan、isDispatchStage、dispatchEnabled、dispatchProvider、clip、linesOf、ROLE_DUTIES、dispatchPrompt、dispatchCheckpoint、invalidDispatch、subagentServiceOf、dispatchTask、autoDispatchEnabled |
+| dispatch | dispatchPlan 只接受 queued-analysis/queued-implementation/queued-review 且拒绝子任务；dispatchPrompt 自带仓库根、验收、写域与纪律，供零上下文子代理直接开工；dispatchTask 先 startActivation 拿 childId 再返回，失败转成带下一步的 FlowError；dispatchCheckpoint 生成写进 checkpoints 的短回执。 | SUBAGENT_SERVICE、DEFAULT_PROVIDER、DISPATCH_ROLES、WORKING_STAGE、ROLE_ZH、dispatchPlan、isDispatchStage、dispatchEnabled、dispatchProvider、clip、linesOf、ROLE_DUTIES、dispatchPrompt、dispatchCheckpoint、invalidDispatch、subagentServiceOf、dispatchTask、autoDispatchEnabled、hasSubagentService、dispatchTaskRecord、autoDispatchTask |
 
 ### 3.26 lib/experiments/records.mjs
 
@@ -619,7 +622,7 @@ Host P2 权限面：工具可见性 restrict 与调用拦截 guard，拒绝文�
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| p2-permission-surface | 权限面：dispatch/board 工具名集合、stageGuardReason/subtaskGuardReason/enforceGuardReason、restrictMainSessionTools 与 actor/board 模式解析。 | DISPATCH_TOOL_NAMES、BOARD_TOOL_NAMES、TEAM_TOOL_NAMES、DISPATCH_TOOL_DENY、TEAM_TOOL_DENY、MAIN_SESSION_TEAM_DENY、MAIN_SESSION_TASK_ADD_DENY、SUBTASK_STAGES、guardTaskOf、stageGuardReason、subtaskGuardReason、enforceGuardReason、restrictMainSessionTools、enforceEnabled、resolveActorMode、resolveBoardMode |
+| p2-permission-surface | P2 权限面：dispatch/board 工具名集合、allowMainDispatchOf 开关、stage/subtask/enforce 三类守卫、restrictMainSessionTools 可见性收缩与 actor/board 模式解析；主会话只建主任务，子任务建卡留给子代理。 | DISPATCH_TOOL_NAMES、BOARD_TOOL_NAMES、TEAM_TOOL_NAMES、DISPATCH_TOOL_DENY、TEAM_TOOL_DENY、MAIN_SESSION_TEAM_DENY、MAIN_SESSION_SUBTASK_ADD_DENY、SUBTASK_STAGES、guardTaskOf、stageGuardReason、subtaskGuardReason、enforceGuardReason、restrictMainSessionTools、enforceEnabled、resolveActorMode、resolveBoardMode、allowMainDispatchOf |
 
 ### 3.30 lib/host/routes.mjs
 
@@ -652,7 +655,7 @@ graph LR
 | top | 模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。 | BACKUP_WARNED、warnStaleBackup、backupReminderEnabled |
 | heartbeats | 会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。 | sessionIdOf、usableSessionId、requireSession、liveSessionIds、sessionIsLive、applyAgentLiveness、applyHeartbeatVisibility、agentRoot、heartbeatOpen、heartbeatWorking、rootSessionVerdict、ROOT_SESSION_HEARTBEAT_ONLY、ROOT_SESSION_DECISION_ONLY、heartbeatRootOf、currentTaskOf |
 | reminder | per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息；待决策段只列本会话记录，拼提醒前先按 Host 归档集合清理已归档会话的决策（purgeArchivedSessionDecisions，无 workspaceRegistry 时降级为 no-op）。 | disciplineText、registerDisciplineSection、REMINDER_LIMIT、REMINDER_STACK_ROWS、COMMAND_ECHO_CLIP、DECISION_QUESTION_CLIP、ANSWER_DECISION_HINT、SUBMIT_DECISION_HINT、FIRST_TURN_HINT、hiddenDecisionsHint、clipEcho、reminderMessage、decisionContractOf、decisionSuspendedText、decisionReminderLine、taskReminderSection、decisionReminderSection、purgeArchivedSessionDecisions、composeTurnReminder、commandReminderLine、registerTurnReminder、heartbeatKeepalive、registerHeartbeatKeepalive |
-| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务并顺手收口过期消息卡；agent/created 自动开心跳、agent/disposed 自动关闭。自动收口窗口由 config.tasks.autoSweepHours 控制（默认 24，0/false 关闭）。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、DEFAULT_AUTO_SWEEP_HOURS、autoSweepHoursOf、autoSweepUtteranceCards |
+| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务并顺手收口过期消息卡；agent/created 自动开心跳、agent/disposed 自动关闭。自动收口窗口由 config.tasks.autoSweepHours 控制（默认 24，0/false 关闭）。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、DEFAULT_AUTO_SWEEP_HOURS、autoSweepHoursOf、autoSweepUtteranceCards、SYNTHETIC_SESSION_PREFIXES、isSyntheticSession、captureTurnStart、autoDispatchCaptured |
 | session-switches | 会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。 | sessionHookCaller、captureEnabled、heartbeatGateEnabled、heartbeatGuardReason、claimTargetOf、claimMatches、heartbeatClaimsOf、claimsGateEnabled、claimsGuardReason、HEARTBEAT_TRACK_LIMIT、heartbeatEvidenceRefresh、heartbeatRootFor、heartbeatRoots、knownArchived、liveChildSessions、liveHeartbeatStatus、liveSessionOf、patchHeartbeat、refreshHeartbeat、registerHeartbeatSessionHooks、releaseDeadOwners、rememberHeartbeatRoot、rememberSubagentParent、removeHeartbeatEverywhere、sessionTitleOf、subagentParents、turnOpenOf |
 
 ### 3.32 lib/host/shared.mjs
@@ -926,7 +929,7 @@ flow_task 工具定义（从 index.js 原样移出），覆盖 list/show/add/upd
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe、dispatchOnce、autoDispatchAfterUpdate |
+| tasks | list 在无 store 时返回空目录、计数与 init 提示；add/update 只接受 TASK_ADD_FIELDS 与 TASK_UPDATE_FIELDS 白名单字段并先 normalizeTaskParent（空串/none/null 为根，父必须存在且无环），title/type 不可改的错误统一由 core 给出。 | buildDefinition、sessionOfExec、sessionLiveProbe、dispatchOnce、autoDispatchAfterUpdate、settleParentAfterChild |
 
 ### 3.55 lib/util.mjs
 

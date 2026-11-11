@@ -241,14 +241,15 @@ test('规则 1c：非法 boardMode → 按 lead 处理并 warn 一条，不崩',
 
 // ------------------------------------------------------------- 3 规则 2
 
-test('规则 2：主会话 flow_task add → 拒绝，文案说明"由插件建"与补记通道', () => {
+test('规则 2：主会话可以建主任务，但不能直接建子任务（子任务归分析者）', () => {
   const { root } = freshProject('rule2')
   const harness = makeHarness(root)
   const main = harness.addAgent('session-main')
-  const reason = harness.guardOf()(call('flow_task', { action: 'add', title: 't', type: 'feat' }, main))
-  assert.equal(typeof reason, 'string')
-  assert.ok(reason.includes('由插件'), reason)
-  assert.ok(reason.includes('补记'), reason)
+  const guard = harness.guardOf()
+  assert.equal(guard(call('flow_task', { action: 'add', title: 't', type: 'feat' }, main)), undefined, '主会话建主任务必须放行')
+  const reason = guard(call('flow_task', { action: 'add', title: 't', type: 'feat', parent: 'T-20261111120000' }, main))
+  assert.equal(typeof reason, 'string', '主会话直接建子任务应被拒')
+  assert.ok(reason.includes('分析者'), reason)
 })
 
 // ------------------------------------------------------------- 4 规则 3
@@ -282,14 +283,14 @@ test('规则 4（team 模式）：边存在但 actor 不是 session → 拒绝�
 
 // ------------------------------------------------------------- 6 规则 5
 
-test('规则 5：父任务在 analyzing 时改子任务 → 拒绝并报当前阶段中文', () => {
+test('规则 5：父任务在 queued-analysis 时改子任务 → 拒绝并报当前阶段中文（analyzing 已放行给分析者）', () => {
   const { root, contract } = freshProject('rule5-deny')
   const harness = makeHarness(root)
   const main = harness.addAgent('session-main')
-  const parent = addTask(root, contract, { type: 'feat', title: '父任务', stage: 'analyzing', status: 'active' })
+  const parent = addTask(root, contract, { type: 'feat', title: '父任务', stage: 'queued-analysis', status: 'active' })
   const reason = harness.guardOf()(call('flow_subtask', { action: 'add', parent: parent.id, title: '子' }, main))
   assert.equal(typeof reason, 'string')
-  assert.ok(reason.includes('分析中'), reason)
+  assert.ok(reason.includes('待分析'), reason)
 })
 
 // ------------------------------------------------------- 7 规则 5 正例

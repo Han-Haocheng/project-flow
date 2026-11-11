@@ -231,14 +231,14 @@ test('A+B：有栈顶任务 + 待决策 → 待决策段、回答指引、段序
   assert.equal(/\n.*【project-flow】/.test(text), false, text)
 })
 
-test('D：无未完成任务 → 明确说「当前无未完成任务」，且不写「请先建任务」', async () => {
+test('D：无未完成任务 → 明确说「当前无未完成任务」，并引导主会话建主任务', async () => {
   const { root } = freshProject('no-task')
   const agent = harness.addRoot('session-t82-d', root)
 
   const text = reminderText(await runPreStep(agent))
 
   assert.ok(text.includes('当前无未完成任务'), text)
-  assert.ok(text.includes('用户新说的每句话会自动成为任务'), text)
+  assert.ok(text.includes('flow_task add 建主任务'), text)
   assert.equal(text.includes('请先建任务'), false, text)
   // 没有任务也仍要给出「怎么提交决策」——这正是无决策时的常驻引导。
   assert.ok(text.includes('无待决策'), text)

@@ -96,7 +96,7 @@ function addParent(root, contract, stage) {
 
 // ------------------------------------------------------------- add + 规则 5
 
-test('add：父任务在 implementing → guard 放行，子任务落到 queued-analysis 且 parent 正确', async () => {
+test('add：父任务在 implementing → guard 放行，子任务默认落到 queued-implementation 且 parent 正确', async () => {
   const { root, contract } = freshProject('add-ok')
   const harness = makeHarness(root)
   const parent = addParent(root, contract, 'implementing')
@@ -106,8 +106,8 @@ test('add：父任务在 implementing → guard 放行，子任务落到 queued-
   assert.equal(harness.guard({ name: 'flow_subtask', arguments: args, agent: harness.main }), undefined, 'rule 5 allows an implementing parent')
   const result = await tool.execute(args, { agent: harness.main })
   assert.equal(result.task.parent, parent.id)
-  assert.equal(result.task.stage, 'queued-analysis', 'a child starts its own analysis now')
-  assert.equal(result.task.status, 'active', 'queued-analysis derives active')
+  assert.equal(result.task.stage, 'queued-implementation', '分析者拆出的子任务是实现单元，默认直接进实现队列')
+  assert.equal(result.task.status, 'active', 'queued-implementation derives active')
   assert.equal(result.task.title, '子任务一')
 })
 
@@ -121,13 +121,13 @@ test('add：父任务在 queued-implementation → 同样放行（另一个实�
   )
 })
 
-test('规则 5 可达：父任务在 analyzing → guard 拒绝，文案含当前阶段中文「分析中」', () => {
+test('规则 5 可达：父任务在 queued-analysis → guard 拒绝，文案含当前阶段中文「待分析」（analyzing 放行）', () => {
   const { root, contract } = freshProject('rule5')
   const harness = makeHarness(root)
-  const parent = addParent(root, contract, 'analyzing')
+  const parent = addParent(root, contract, 'queued-analysis')
   const reason = harness.guard({ name: 'flow_subtask', arguments: { ...SUBTASK_ARGS, parent: parent.id }, agent: harness.main })
   assert.equal(typeof reason, 'string', 'rule 5 must now fire: the tool exists')
-  assert.ok(reason.includes('分析中'), `the rejection must name the current stage in Chinese: ${reason}`)
+  assert.ok(reason.includes('待分析'), `the rejection must name the current stage in Chinese: ${reason}`)
 })
 
 test('add：父任务不存在 → core 拒绝（不产生孤儿）', async () => {
@@ -148,14 +148,13 @@ test('update：只允许 notes/stage；合法边可写，非法边抛 invalid �
   const noted = await tool.execute({ action: 'update', id: task.id, notes: '补充说明' }, { agent: harness.main })
   assert.equal(noted.task.notes, '补充说明')
 
-  // queued-analysis → analyzing is a legal edge (actor plugin, but tool-level
-  // update uses the same machine: the client asked for this stage explicitly).
-  const advanced = await tool.execute({ action: 'update', id: task.id, stage: 'analyzing' }, { agent: harness.main })
-  assert.equal(advanced.task.stage, 'analyzing')
+  // queued-implementation → implementing is a legal edge。
+  const advanced = await tool.execute({ action: 'update', id: task.id, stage: 'implementing' }, { agent: harness.main })
+  assert.equal(advanced.task.stage, 'implementing')
 
   await assert.rejects(
     () => tool.execute({ action: 'update', id: task.id, stage: 'done' }, { agent: harness.main }),
-    (error) => error.code === 'invalid' && /analyzing/.test(error.message) && /queued-implementation/.test(error.message),
+    (error) => error.code === 'invalid' && /implementing/.test(error.message) && /queued-review/.test(error.message),
     'an illegal jump must name the legal successors'
   )
   // Any field outside notes/stage is refused instead of silently dropped.
