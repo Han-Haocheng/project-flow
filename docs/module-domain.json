@@ -84,6 +84,7 @@
     "tasks": {
       "title": "任务模块（任务 CRUD / 九阶段状态机 / 捕获 / 子任务 / 团队板对账）",
       "owns": [
+        "lib/tasks/",
         "lib/stage.mjs",
         "lib/capture.mjs",
         "lib/team-sync.mjs",
@@ -101,9 +102,6 @@
         "lib/host/team.mjs"
       ],
       "sections": {
-        "lib/core.mjs": [
-          "tasks"
-        ],
         "lib/state-snapshot.mjs": [
           "snapshot-tasks"
         ],
@@ -391,10 +389,6 @@
       },
       "experiments": {
         "from": "// ---------------------------------------------------------- experiments",
-        "to": "// ---------------------------------------------------------------- tasks"
-      },
-      "tasks": {
-        "from": "// ---------------------------------------------------------------- tasks",
         "to": "// ------------------------------------------------------------- decisions"
       },
       "decisions-2": {

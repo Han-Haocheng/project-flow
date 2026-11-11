@@ -54,6 +54,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/gates/records.mjs` | **门禁域**（Phase 1）：门禁定义与步骤归一、CRUD、按 phase 运行、运行日志读取。运行时只取锁写日志，步骤执行在 `lib/runner.mjs` | core、CLI |
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
+| `lib/tasks/records.mjs` | **任务域**（Phase 1）：记录校验/构建/投影、九阶段、父与 owner 校验、归档与清扫。描述门与实验 id 由 `configureTasks` 注入 | core、CLI |
 | `lib/heartbeats/records.mjs` | **心跳域**（Phase 1）：心跳根归一、存活证据、读写 API、GC 与面板投影。不 import core；任务建卡能力由 `configureHeartbeats` 注入 | core、CLI |
 | `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |
 | `lib/stage.mjs` | 九阶段状态机（`stage` 表/边/`stage→status` 派生）**唯一真源**；只有数据，不捕获不派工（派工在 `lib/dispatch.mjs`） | core |
