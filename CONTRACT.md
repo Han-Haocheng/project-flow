@@ -126,8 +126,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
     "testGate": "tests",        // "" = 关闭测试证据要求
     "include": ["**/*.mjs", "**/*.js", "**/*.cjs", "**/*.ts", "**/*.tsx", "**/*.jsx", "**/*.py"],
     "exclude": ["**/node_modules/**", "**/.git/**", "**/dist/**", "**/build/**", "**/coverage/**",
-                 ".dsh/**", ".dsh-ops/**", "test/**", "**/*.test.mjs", "**/*.spec.mjs",
-                 ".selftest/**", "docs/**"],
+                 ".dsh/**", "test/**", "**/*.test.mjs", "**/*.spec.mjs",
+                 ".selftest/**", ".scratch/**", ".agents/**", "docs/**"],
     "render": "",               // 非空 = 生成文档的仓库相对路径（§3.7）
     "minSemanticsChars": 10,
     "maxFiles": 2000,

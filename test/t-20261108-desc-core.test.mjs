@@ -62,6 +62,7 @@ const DEFAULT_EXCLUDE = [
   '**/*.test.mjs',
   '**/*.spec.mjs',
   '.selftest/**',
+  '.scratch/**',
   '.agents/**',
   'docs/**',
 ]
@@ -337,6 +338,63 @@ test('契约缺节：flow.json 没有 description → 静默补默认，warnings
   assert.deepEqual(warnings, [], '缺节是正常的部分清单，不该报警')
   assert.deepEqual(contract.description.include, DEFAULT_INCLUDE)
   assert.equal(contract.description.enforce, 'auto')
+})
+
+// 2026-11-11 回归：`.scratch/`（本机实验目录，例如复制整仓做并发测试）不在默认
+// exclude 里时，`flow desc build` 会把副本当源码收进台账——实测一次灌进 528 条
+// missing-semantics。下面三条锁死「新项目默认排除」与「老项目不强行改写」。
+test('契约默认值：description.exclude 含 .scratch/**（本机实验目录不进台账）', () => {
+  const root = tempRoot('contract-exclude-scratch')
+  initProject(root, { name: 'contract', noGates: true })
+  const { contract, warnings } = loadContract(root)
+  assert.deepEqual(warnings, [])
+  assert.ok(contract.description.exclude.includes('.scratch/**'), contract.description.exclude.join(','))
+  // 只补这一条惯用名：`.tmp/**`、`.work/**` 不在默认值里。
+  assert.ok(!contract.description.exclude.includes('.tmp/**'))
+  assert.ok(!contract.description.exclude.includes('.work/**'))
+  // 落盘的默认值同样带这条（不是只在内存里补）。
+  const onDisk = JSON.parse(fs.readFileSync(path.join(root, '.agents/flow/flow.json'), 'utf8'))
+  assert.ok(onDisk.description.exclude.includes('.scratch/**'))
+})
+
+test('buildDescription：.scratch/ 下的 .mjs 不被收进台账（listSourceFiles + build 双证）', async () => {  const { listSourceFiles } = await import('../lib/desc.mjs')
+  const { root, contract } = projectWith('build-scratch', {
+    'lib/a.mjs': 'export function alpha() {}\n',
+    // 复制整仓做实验的典型产物：大量无名语义的副本。
+    '.scratch/copy-1/lib/a.mjs': 'export function alpha() {}\n',
+    '.scratch/copy-2/lib/b.mjs': 'export function beta() {}\n',
+  })
+  const listed = listSourceFiles(root, contract).files.map((file) => file.path)
+  assert.deepEqual(listed, ['lib/a.mjs'], `.scratch 必须整体跳过：${listed.join(',')}`)
+
+  const result = buildDescription(root, contract, { now: NOW })
+  assert.deepEqual(result, { created: 1, updated: 0, unchanged: 0, pruned: 0, warnings: [] })
+  const stored = listDescriptionFiles(root, contract).map((record) => record.path)
+  assert.deepEqual(stored, ['lib/a.mjs'])
+})
+
+test('契约兼容：用户显式配置了不含 .scratch 的 exclude → 原样生效，不注入默认条目', async () => {
+  const { listSourceFiles } = await import('../lib/desc.mjs')
+  const root = tempRoot('contract-exclude-user')
+  initProject(root, { name: 'contract', noGates: true })
+  const userExclude = ['**/node_modules/**', 'test/**']
+  writeFlowJson(root, { schema: 2, name: 'contract', description: { exclude: userExclude } })
+  const { contract, warnings } = loadContract(root)
+  assert.deepEqual(warnings, [], '合法的用户数组不是 manifest 错误')
+  assert.deepEqual(contract.description.exclude, userExclude, '既有项目的 exclude 数组不许被默认值改写')
+  assert.ok(!contract.description.exclude.includes('.scratch/**'))
+
+  // 行为也随之保持用户配置：用户没排除 .scratch，就照常被扫到。
+  writeFile(root, 'lib/a.mjs', 'export function alpha() {}\n')
+  writeFile(root, '.scratch/copy-1/lib/a.mjs', 'export function alpha() {}\n')
+  const listed = listSourceFiles(root, contract).files.map((file) => file.path)
+  assert.deepEqual(listed, ['.scratch/copy-1/lib/a.mjs', 'lib/a.mjs'])
+
+  // 缺键（不是空数组）才回落到带 .scratch 的默认值。
+  const root2 = tempRoot('contract-exclude-missing-key')
+  initProject(root2, { name: 'contract', noGates: true })
+  writeFlowJson(root2, { schema: 2, name: 'contract', description: { enforce: 'auto' } })
+  assert.deepEqual(reload(root2).description.exclude, DEFAULT_EXCLUDE)
 })
 
 test('storePaths：description 默认落在 .agents/description，custom store.root 不改变它', () => {
