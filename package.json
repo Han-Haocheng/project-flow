@@ -41,7 +41,8 @@
     "test/",
     "skills/",
     "docs/module-boundaries.md",
-    "docs/module-domain.json"
+    "docs/module-domain.json",
+    "docs/GOALS.md"
   ],
   "dsh": {
     "bundle": {

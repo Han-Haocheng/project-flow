@@ -31,7 +31,9 @@ export function testFiles(root = DEFAULT_ROOT) {
     return []
   }
   return names
-    .filter((name) => name.endsWith('.test.mjs'))
+    // 与 node --test 的发现规则对齐：`*.test.mjs` 与 `*-test.mjs` 都会被运行。
+    // 只认前者会让 `-test.mjs` 文件绕过 README 计数守卫（2026-11-11 审查 P1-4）。
+    .filter((name) => /(?:\.test|[-_]test)\.mjs$/.test(name))
     .sort()
     .map((name) => path.join(dir, name))
 }

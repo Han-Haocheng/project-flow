@@ -72,10 +72,16 @@ flow task add --title "接 CLI 与面板 — 跑通主链路" --type feat \
   --status active --owner agent-a
 flow task list
 flow task show T-20261028-01
-flow task update T-20261028-01 --status done --notes "测试全绿"
+flow task next T-20261028-01          # 下一步由边表给出：目标阶段 / 谁做 / 动作 / 验证命令
+flow task update T-20261028-01 --stage reviewing
+flow task verify T-20261028-01        # 跑 acceptance 的 cmd:/gate:，回填 verification
+flow task update T-20261028-01 --stage done --notes "验收通过"
 flow task rm T-20261028-01 --yes
 ```
 
+- **收口不要用 `--status done`**：`stage` 是流程真源，`status` 只是兼容视图。用
+  `flow task next <id>` 拿到下一阶段，再 `--stage` 推进；带可执行验收项的任务必须先
+  `flow task verify <id>` 通过（否则 reviewing/done 会被拒，并给出修复命令）。
 - `task update` **不能改** `id`/`schema`/`created_at`，也**不能改** `title`/`type`
   （→ `invalid: task <key> cannot be changed`，退出码 2）；换标题就新建任务。
 - 旧记录磁盘上的 `goal` 键由格式门禁的 `normalizeTaskFormat` 迁移到 `title`

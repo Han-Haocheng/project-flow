@@ -75,10 +75,20 @@ function actualTestFiles() {
  * @returns {number|null} 拿不到时返回 null（而不是 0，避免把「解析失败」当成「0 个用例」）
  */
 function runtimeTestCount() {
+  /* 默认跳过：套件内的 `node --test test/` 会因 NODE_TEST_CONTEXT 被 Node 的递归
+     保护挡掉（打印 "skipping running files"）而解析不到计数，等于恒跳过、假绿。
+     真正的运行时交叉校验只在显式 opt-in 时做（CI 可跑
+     `PF_DOC_RUNTIME=1 node --test test/`）：清掉 NODE_TEST_CONTEXT 后起子进程，
+     并给子进程 PF_DOC_RUNTIME=0，避免它再递归一次。 */
+  if (process.env.PF_DOC_RUNTIME !== '1') return null
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  env.PF_DOC_RUNTIME = '0'
   const result = spawnSync(process.execPath, ['--test', 'test/'], {
     cwd: REPO,
     encoding: 'utf8',
     timeout: 600_000,
+    env,
   })
   const text = `${result.stdout ?? ''}\n${result.stderr ?? ''}`
   // 只认 `tests <N>` 汇总行；不同 reporter 的样式差异一律视为「拿不到」。

@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|
 | G1 | L1 | P0 | 减少 AI 思考机会与长度 | 同一个动作的下一步由 `flow task next` / 阶段边表直接输出，执行者只填空：新增一步不需要重新阅读流程文档或反复推理 | `flow task next`、九阶段边表、门禁模板、CLI 信封 |
 | G2 | L2 | P1 | 明确处理流程 | 任务下一阶段由 `lib/stage.mjs` 的边表唯一决定；未知阶段与终态给出明确提示，不靠模型猜 | 九阶段状态机、阶段门、`flow check` 族 |
-| G3 | L2 | P1 | 明确结果验证 | 每个任务的验收可执行（`cmd:` / `gate:`），进入 reviewing/done 前自动跑通；完成判定不靠自述 | acceptance 绑定、`flow task verify`、`precommit` 门禁 |
+| G3 | L2 | P1 | 明确结果验证 | 有可执行验收项（`cmd:` / `gate:`）时，进入 reviewing/done 前必须先 `flow task verify` 通过（未验证会拒绝并给修复命令，命令由 `flow task next` 给出）；没有可执行项按 `tasks.requireAcceptance` 策略（默认 warn）；完成判定不靠自述 | acceptance 绑定、`flow task verify`、`precommit` 门禁 |
 | G4 | L2 | P1 | 清晰语义定义 | 文件/模块语义只有一个真源（description 台账），查得到、改得动，漂移被 `check description` 拦成红 | `.agents/description/`、`flow desc`、`check description` |
 | G5 | L2 | P1 | 多 AI 并行不冲突 | 写域（文件 / 段）唯一归属；越界改动在提交前被 `module-domain check` 判红 | `docs/module-domain.json`、`scripts/module-domain.mjs`、precommit 门禁 |
 | G6 | L3 | P2 | 看见整体框架 | 面板一屏可见描述台账汇总（文件数 / 模块数 / 缺语义 / 计划数）；台账缺失时该区块隐藏 | 面板「框架视图」、`description` payload 投影 |
@@ -46,3 +46,4 @@
 | rev | 日期 | 变更 |
 |---|---|---|
 | 1 | 2026-11-11 | 初版：把用户 2026-11-11 的三档目标整理为 L0–L3 四层、8 条目标与可执行检验。 |
+| 2 | 2026-11-11 | G3 措辞对齐实现：验收门是「必须先 verify 通过」，不是「自动跑通」；无可执行项按 requireAcceptance（默认 warn）。 |

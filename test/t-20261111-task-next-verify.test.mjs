@@ -30,6 +30,7 @@ import {
 } from '../lib/core.mjs'
 import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, stageNextStep } from '../lib/stage.mjs'
 import { acceptancePlan, recordTaskVerification, verificationStateOf } from '../lib/tasks/records.mjs'
+import { vetoSubtask } from '../lib/veto.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
@@ -426,4 +427,71 @@ test('acceptancePlan / verificationStateOf：签名只覆盖可执行条目，fr
   // 只改自由文本：签名不变，验证仍然有效。
   const stillOk = updateTask(root, contract, task.id, { acceptance: ['换了个说法', 'cmd:node -e "process.exit(0)"'] })
   assert.equal(verificationStateOf(stillOk).passed, true)
+})
+
+// ================================================= ⑤ 回归：验收门的三个后门
+
+test('回归 P1-1：legacy 记录的 `--status done` 不能绕过验收门（按投影阶段判定）', () => {
+  const { root, contract } = freshProject('status-bypass')
+  // 老记录（没有 stage 键）：读投影按 status 反推阶段。这正是原先的后门形态。
+  const task = addTask(root, contract, { type: 'feat', title: 'status 后门', status: 'active' })
+  setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(1)"'])
+  assert.equal(getTask(root, contract, task.id).stage, 'queued-analysis')
+
+  const result = runCli(root, ['task', 'update', task.id, '--status', 'done', '--json'])
+  assert.equal(result.code, 2, `--status done 必须被验收门拒绝：${result.stdout}${result.stderr}`)
+
+  const disk = readTaskOnDisk(root, task.id)
+  assert.notEqual(disk.status, 'done', '被拒绝的写入不能落盘')
+  assert.equal(disk.verification, undefined, '被拒绝的写入不能留下验证回执')
+})
+
+test('回归 P1-2：创建即 done 也要过验收门，且补 done_at', () => {
+  const { root, contract } = freshProject('add-done')
+  assert.throws(
+    () =>
+      addTask(root, contract, {
+        type: 'feat',
+        title: '直接完成',
+        stage: 'done',
+        acceptance: ['cmd:node -e "process.exit(1)"'],
+      }),
+    (error) => error.code === 'invalid',
+    '带可执行验收项、创建即 done 必须被拒绝',
+  )
+
+  const plain = addTask(root, contract, { type: 'feat', title: '无验收直接完成', stage: 'done' })
+  const disk = readTaskOnDisk(root, plain.id)
+  assert.equal(typeof disk.done_at, 'string', '创建即 done 必须写 done_at')
+  assert.ok(disk.done_at !== '')
+})
+
+test('回归 P1-3：子任务 veto 不被验收门误拦（source=internal）', () => {
+  const { root, contract } = freshProject('veto-sub')
+  const parent = addTask(root, contract, { type: 'feat', title: '父任务' })
+  const child = addTask(root, contract, {
+    type: 'feat',
+    title: '子任务',
+    parent: parent.id,
+    acceptance: ['cmd:node -e "process.exit(1)"'],
+  })
+
+  vetoSubtask(root, contract, { taskId: child.id, reason: '不做了' })
+  assert.equal(getTask(root, contract, child.id).stage, 'done', '子任务否决必须落到 done')
+})
+
+test('回归：插件派工进 reviewing 只警告不硬拦；reviewing→done 仍是硬门', () => {
+  const { root, contract } = freshProject('plugin-review')
+  const task = addTask(root, contract, { type: 'feat', title: '派工豁免', stage: 'implementing' })
+  setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(1)"'])
+  updateTask(root, contract, task.id, { stage: 'queued-review' })
+
+  const reviewing = updateTask(root, contract, task.id, { stage: 'reviewing' }, { source: 'plugin' })
+  assert.equal(reviewing.stage, 'reviewing', '插件派工不能被验收门卡死')
+
+  assert.throws(
+    () => updateTask(root, contract, task.id, { stage: 'done' }, { source: 'plugin' }),
+    (error) => error.code === 'invalid',
+    'reviewing→done 是判定边，插件也不能带未验证的验收项通过',
+  )
 })

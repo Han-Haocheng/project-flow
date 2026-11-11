@@ -333,7 +333,7 @@
         "test/t-20261107-panel-stage.test.mjs",
         "test/t-20261107-state-degradation.test.mjs",
         "test/warnings.test.mjs",
-        "test/t-20261111-01-goals-framework-test.mjs"
+        "test/t-20261111-01-goals-framework.test.mjs"
       ]
     },
     "backup": {

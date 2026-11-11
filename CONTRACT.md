@@ -1,6 +1,6 @@
 # project-flow 契约（schema 2）
 
-> 目标真源：[docs/GOALS.md](GOALS.md)（最重要：减少 AI 思考机会与长度；核心：明确流程 /
+> 目标真源：[docs/GOALS.md](docs/GOALS.md)（最重要：减少 AI 思考机会与长度；核心：明确流程 /
 > 明确验证 / 清晰语义 / 并行不冲突；扩展：框架可见 / 语义变化 / 会话状态）。本契约与代码
 > 的所有取舍以此为准。
 
@@ -44,8 +44,8 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 |---|---|---|
 | `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
 | `lib/host/*.mjs` | Host 装配拆分（2026-11-08 框架会话）：`shared`=常量/工作区作用域/HTTP 助手；`session`=心跳/提醒/捕获/会话钩子；`state`=快照池与 HTTP 读路由；`team`=团队板读面；`routes`=init/gate 写路由；`enforce`=P2 权限面；`tools`=工具定义与注册；`skills`=技能注册。**`index.js` 只做 `apply` 装配** | `index.js` |
-| `bin/flow.mjs` | CLI：只做参数解析与输出，校验/加锁/原子写全部在 core | 人、脚本、门禁 |
-| `lib/core.mjs` | **唯一写者**：契约、记录 CRUD、门禁执行、心跳、决策 | 工具层、CLI、快照 |
+| `bin/flow.mjs` | CLI：只做参数解析与输出，校验/加锁/原子写全部在域模块（经 core 门面） | 人、脚本、门禁 |
+| `lib/core.mjs` | **契约装配与对外门面**（Phase 1 后 501 行）：gate seeds、`initProject`、只读聚合 `readStoreState`，其余 97 个 API 从各域 import 后原样 re-export；域模块之间不 import core，全部写盘仍经同一把 store 锁 | 工具层、CLI、快照 |
 | `lib/desc.mjs` | **描述台账模型**（纯函数）：`description/` 三族记录的校验、build 回填（哈希/import）、模块图推导（`moduleEdges`）、漂移检查（`checkDescription`）、确定性渲染。**不 import core**（与 `checks.mjs` 同一策略：模型只算，锁内编排与写盘在 core） | core |
 | `lib/source-scan.mjs` | 零依赖源码扫描器（仅 import `./util.mjs` 的 `FlowError` 用于非法入参）：JS/TS/JSX 的注释剥离与顶层声明、Python 的 `def`/`class`/顶层赋值/import；产出 `declarations`（含 `identifiers`）供模块归属推导。**不 import 其它 lib 模块**（扫描器不认识项目，只认识文本） | `lib/desc.mjs` |
 | `lib/store/contract.mjs` | **契约与存储路径**（Phase 1）：schema-2 默认值、类型修复/归一、契约读写、记录目录解析（containment）、`assertInitialized`、**唯一的锁入口 `withLock`**。零业务规则 | core |
@@ -175,7 +175,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 
 `experiments.enabled` 是**实验面板开关**，默认 `false`（`flow init` 写入 `false`；缺键补
 `false` 且**不**记 warning，只有类型不对才回退 + `manifest-invalid`）。关闭时 `GET state` 的
-`experiments` 节只返回 `{enabled:false, total, counts}`（**无** items/tree，见 §9.1.3），
+`experiments` 节只返回 `{enabled:false, total, counts}`（**无** items/tree，见 §9.1.4），
 面板不渲染实验区、任务区单列；`check experiments` **直接 exit 0 跳过**（不阻断 CI）。它**只
 影响展示与该门禁步**——`flow exp …`、`flow_exp` 工具与写路径照常可用。旧项目缺 `enabled`
 且目录里已有实验记录时**仍按关闭处理**：由**面板读路径**（`state-snapshot.mjs`，`GET state`
@@ -335,7 +335,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "verification": {                     // 可选（2026-11-11）：flow task verify 的回执，系统字段
     "ok": true, "at": "...", "stage": "implementing",
     "signature": "…",                   // acceptance 内容的指纹：验收项改过即视为过期
-    "steps": [{ "kind": "cmd", "target": "node --test test/", "ok": true, "code": 0, "ms": 1234 }]
+    "steps": [{ "index": 1, "kind": "cmd", "target": "node --test test/", "ok": true,
+                "exit": 0, "durationMs": 1234, "tail": "…" }]
   }
 }
 ```
@@ -592,7 +593,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 - **实现位置**：`lib/stage.mjs` 是唯一真源（阶段表、边、派生、`canTransition`/`assertTransition`）；
   `lib/core.mjs` 只 import 它的 id/派生用于校验与投影，不复制表。
 - 本版**只有数据**：没有捕获、没有 guard、没有派工；`stage` 不会自行推进，
-  `canTransition`/`assertTransition` 也还没有被任何写路径调用。
+  `assertTransition` 已用于子任务更新（`lib/tools/subtasks.mjs`）；CLI 的 `--stage` 仍不校验边
+  （操作员通道，见 §5.1），插件/工具侧的阶段推进按边表校验。
 
 ### 3.3 门禁 `gates/<slug>.json`
 
@@ -1205,6 +1207,8 @@ flow task archive [--older-than N] [--dry-run]
 flow task sweep [--older-than-hours N] [--dry-run]
                  # 消息卡收口（见 §3.2）：把过期且从没被领取的捕获卡标完成；
                  # 默认 24 小时，--dry-run 只报告不写盘
+flow task next <id> [--json]   # 查表给唯一下一步：目标阶段/actor/动作/验证命令；终态 exit 3
+flow task verify <id>          # 按 acceptance 顺序执行 cmd:/gate:，回填 verification；失败 exit 1
 flow task normalize [--type-map <file.json>] [--dry-run]
                  # 归一旧记录：goal 并入 title、按 map 补 type；--dry-run 只报告不改盘，
                  # 恒 exit 0（报告不是门禁）。写盘成功 → exit 0，残留见 data.ok:false。
@@ -1390,6 +1394,10 @@ flow check description [--task <T-id>] [--strict] [--json]
 
 `flow check` 复用同一组数字但语义按检查归一：0 通过 · 1 检查失败 · 2 用法/配置错误 ·
 3 脚本或解释器缺失 · 4 启动/IO 失败（含超时），见 §6.2。
+
+`flow task next` 对终态（`done`/`archived`）与未知 id 都退 **3**（`error.code` 分别是
+`terminal` / `not-found`）；`flow task verify` 验收失败退 **1**（`error.code = check-failed`，
+与 `check` 家族一致）。
 
 补充：`gate run`（单条或 `--phase` 批量）的门禁失败仍是退出 0（用 `data.ok` /
 `data.runs[].ok` 表达）；`heartbeat status --require-active` 在没有 active 心跳时退出 1
@@ -1742,7 +1750,7 @@ CLI 入口（SKILL.md 里声明的首选检查入口）。它是**只读**的：
 只读、不写 store、不取锁。`experiments.enabled` 为 `false` 时**直接退出 0 跳过**（不阻断、
 CI 保持绿；人类输出「实验功能未开启…跳过」），**不读实验目录**；缺 `enabled` 且目录里已有
 实验记录的老项目同样按关闭处理——但该检查不读目录，所以**不**发引导 warning；一次性
-`experiments-disabled-legacy` 由**面板读路径**发出（见 §2/§9.1.3，`state-snapshot.mjs`）。
+`experiments-disabled-legacy` 由**面板读路径**发出（见 §2/§9.1.4，`state-snapshot.mjs`）。
 开启时逐条检查 `schema: 2` 记录（`schema: 1` 历史记录跳过、只计入 `legacy` 计数）。
 
 失败（退出 1，`--json` 给 `failed[]`，每项 `{id, rule, message}`）：
@@ -2256,7 +2264,7 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   后挂在 B 项目下。web 侧等价于工作区切换即重启整条链（abort + 清空 + 立即首拉）。
 - 整条链只发 `GET state`，不发写请求；写操作只有用户点击触发的 init/gate 两个 POST。
 
-##### 9.1.3 payload 的 `description` 节（面板框架视图，2026-11-11）
+#### 9.1.3 payload 的 `description` 节（面板框架视图，2026-11-11）
 
 ```jsonc
 "description": {
@@ -2273,7 +2281,7 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   `description-plans-truncated` warning；任何读失败转 warning，绝不抛错（面板侧整卡隐藏）。
 - 面板：这是「框架视图」卡片的数据面，只读，不新增写路径。
 
-### 9.1.3 实验节（`GET state` 的 `experiments`）
+#### 9.1.4 实验节（`GET state` 的 `experiments`）
 
 - **关闭（默认，`experiments.enabled: false`）**：`data.experiments` 只保留
   `{ enabled: false, total, counts }`——`counts` 是 **8 键**：`total` + 六态
@@ -2292,7 +2300,7 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   一次枚举/投影纪律。面板仍**只读**：开关只改 `flow.json`，没有开关 POST，实验写操作只走
   CLI / `flow_exp`。
 
-#### 9.1.4 面板任务区：行形状、视觉树与趋势
+#### 9.1.5 面板任务区：行形状、视觉树与趋势
 
 - **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 15 键
   `id, type, title, status, owner, notes, scope, acceptance, commits, created_at, updated_at,
