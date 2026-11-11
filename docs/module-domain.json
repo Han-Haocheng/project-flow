@@ -132,7 +132,9 @@
         "test/t-20261107-team-sync.test.mjs",
         "test/t-20261109-dispatch.test.mjs",
         "test/t-20261111-task-next-verify.test.mjs",
-        "test/t-20261111-03-pipeline-e2e.test.mjs"
+        "test/t-20261111-03-pipeline-e2e.test.mjs",
+        "test/t-20261111-04-task-cas-core.test.mjs",
+        "test/t-20261111-04-task-cas-tool.test.mjs"
       ]
     },
     "decisions": {
