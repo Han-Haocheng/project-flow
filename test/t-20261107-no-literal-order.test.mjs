@@ -76,17 +76,7 @@ function orderedArrayLiteralFindings(source) {
  * 文件被修好，这条豁免就该被删掉（下面的自检会在豁免项已不存在时报错，防止它变成
  * 永久免死金牌）。
  */
-const KNOWN_OFFENDERS = Object.freeze([
-  Object.freeze({
-    file: 't-20261107-stage-cli.test.mjs',
-    regex: /for \\\(const key of/,
-    members: 'title, type, status, stage, owner, notes',
-    why: 'handler 的 add/update 字段循环用字面量表断言（test/t-20261107-stage-cli.test.mjs:177-180），'
-      + '但 bin/flow.mjs:1195/:1214 是 `input[key] = value` 赋值语义，顺序对行为零影响。'
-      + '改法：解析出两个循环的成员集合，用 includes 断言 stage 在两个循环里都出现。',
-    owner: 'task-63 / stage-cli 的实现者写域（lead 已知，待批量或逐个修）',
-  }),
-])
+const KNOWN_OFFENDERS = Object.freeze([])
 
 test('守卫：test/ 下不得用数组字面量的顺序去断言源码（顺序不是值得保护的属性）', () => {
   const offenders = []

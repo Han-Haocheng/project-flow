@@ -16,7 +16,15 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+const ROOT = path.resolve(HERE, '..')
 const BIN_SOURCE = fs.readFileSync(BIN, 'utf8')
+
+/** CLI 实现源码：bin 入口 +（拆分后）lib/cli 命令模块；缺失目录时只扫 bin。 */
+function cliImplementationSource() {
+  const dir = path.join(ROOT, 'lib', 'cli')
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.mjs')).sort() : []
+  return [BIN_SOURCE, ...files.map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))].join('\n')
+}
 const TEMP_ROOTS = []
 
 after(() => {
@@ -174,8 +182,9 @@ test('回归：VALUE_FLAGS / SPEC / handler 三处登记齐备（少一处就静
 
   // ③ handler：声明了却读不到 = 静默丢弃（比报错更糟）。本文件的字段是**循环**读取，
   //    所以钉的是 add / update 两个循环的元素表，而不是 `readString(flags, 'stage')`。
-  const loops = BIN_SOURCE.match(
-    /for \(const key of \['title', 'type', 'status', 'stage', 'owner', 'notes'\]\)/g,
-  ) ?? []
+  const wanted = ['title', 'type', 'status', 'stage', 'owner', 'notes']
+  const loops = [...cliImplementationSource().matchAll(/for \(const key of \[([^\]]*)\]\)/g)]
+    .map((match) => match[1].split(',').map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean))
+    .filter((members) => wanted.every((field) => members.includes(field)))
   assert.equal(loops.length, 2, `handler 的 add/update 字段循环都必须含 stage（实际 ${loops.length} 处）`)
 })

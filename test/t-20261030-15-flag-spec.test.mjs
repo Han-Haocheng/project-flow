@@ -14,7 +14,15 @@ import { initProject, loadContract } from '../lib/core.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+const ROOT = path.resolve(HERE, '..')
 const BIN_SOURCE = fs.readFileSync(BIN, 'utf8')
+
+/** CLI 实现源码：bin 入口 +（拆分后）lib/cli 命令模块；缺失目录时只扫 bin。 */
+function cliSourceForFlags() {
+  const dir = path.join(ROOT, 'lib', 'cli')
+  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.mjs')).sort() : []
+  return [BIN_SOURCE, ...files.map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))].join('\n')
+}
 const TEMP_ROOTS = []
 
 after(() => {
@@ -201,7 +209,7 @@ test('SPEC 与 handler 双向一致：declared ⊆ source；handler 读取的 fl
 
   // 每个声明的 flag 都在源码里真实出现（SPEC 之外还至少一处）。
   for (const flag of [...soft, ...repeat]) {
-    const occurrences = BIN_SOURCE.split(`'${flag}'`).length - 1
+    const occurrences = cliSourceForFlags().split(`'${flag}'`).length - 1
     assert.ok(occurrences >= 2, `SPEC 声明了 --${flag}，但 handler/usage 里找不到使用`)
   }
 
