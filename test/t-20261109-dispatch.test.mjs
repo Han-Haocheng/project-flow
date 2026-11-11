@@ -105,7 +105,7 @@ test('派工映射：只有 queued-* 可派，角色/working 阶段与 stage 表
     assert.equal(plan.ok, false, `${stage} 不该可派工`)
     assert.match(plan.reason, /只有待分析\/待实现\/待审查可以派工/)
   }
-  assert.equal(dispatchPlan({ id: 'T-2', stage: 'queued-analysis', parent: 'T-1' }).ok, false, '子任务跟随父任务')
+  assert.equal(dispatchPlan({ id: 'T-2', stage: 'queued-analysis', parent: 'T-1' }).ok, true, '子任务各自派工（2026-11-11 流程）')
 })
 
 test('配置：dispatch 默认开，false 关闭，provider 空值回落 spawn', () => {

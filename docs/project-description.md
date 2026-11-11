@@ -197,6 +197,7 @@ graph LR
   n30 --> n7
   n30 --> n18
   n30 --> n24
+  n30 --> n27
   n30 --> n31
   n30 --> n38
   n30 --> n39
@@ -365,7 +366,7 @@ P1 捕获流水线：agent/pre-step 只做内存的排除/集合差去重，agen
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| capture | 以 <root,session> 分桶维护待捕获队列与 lastKeys/seen 去重键，经结构排除、挂载窗口、命令前缀筛选后，由 flushCapture 按时间倒序串行写台账（source.key 预去重，失败把未写项回滚进队列），并输出可区分的 skip/excludedBy/error 诊断与栈顶/计数状态块；唯一写盘点固定在 turn-stopping。附件保真：attachmentsOfContent 把 image/file 块归一化为 source.attachments（畸形块跳过），utteranceKeyOf 以稳定消息 id 建身份键，attachmentTitle 为纯附件消息生成兜底标题。 | CAPTURE_CONTEXT_SENTINEL、SYSTEM_MESSAGE_PREFIXES、PEER_MESSAGE_PREFIXES、COMMAND_PREFIX、exclusionReasonOf、STACK_LIMIT、RECENT_CAPTURED_LIMIT、CAPTURED_TASK_TYPE、TITLE_MAX、SOURCE_TEXT_MAX、CAPTURE_GRACE_MS、isPlainObject、timeValue、compareStack、effectiveStage、isUnfinished、textOfContent、utteranceKey、isExcludedText、extractUtterance、stampOf、clipTitle、sourceTextOf、timestampMsOf、createCaptureState、markCapture、noteCaptureGate、describe、captureSummary、bucketKey、bucketOf、mountedAtOf、recordPreStep、pendingUtterances、flushCapture、compareUtteranceDesc、readTasks、captureStack、stackTop、TEAM_UNAVAILABLE、teamStatusOf、buildStatusBlock、stageName、utteranceKeyOf、attachmentsOfContent、attachmentTitle |
+| capture | 以 <root,session> 分桶维护待捕获队列与 lastKeys/seen 去重键，经结构排除、挂载窗口、命令前缀筛选后，由 flushCapture 按时间倒序串行写台账（source.key 预去重，失败把未写项回滚进队列），并输出可区分的 skip/excludedBy/error 诊断与栈顶/计数状态块；唯一写盘点固定在 turn-stopping。附件保真：attachmentsOfContent 把 image/file 块归一化为 source.attachments（畸形块跳过），utteranceKeyOf 以稳定消息 id 建身份键，attachmentTitle 为纯附件消息生成兜底标题。 | CAPTURE_CONTEXT_SENTINEL、SYSTEM_MESSAGE_PREFIXES、PEER_MESSAGE_PREFIXES、COMMAND_PREFIX、exclusionReasonOf、STACK_LIMIT、RECENT_CAPTURED_LIMIT、CAPTURED_TASK_TYPE、TITLE_MAX、SOURCE_TEXT_MAX、CAPTURE_GRACE_MS、isPlainObject、timeValue、compareStack、effectiveStage、isUnfinished、textOfContent、utteranceKey、isExcludedText、extractUtterance、stampOf、clipTitle、sourceTextOf、timestampMsOf、createCaptureState、markCapture、noteCaptureGate、describe、captureSummary、bucketKey、bucketOf、mountedAtOf、recordPreStep、pendingUtterances、flushCapture、compareUtteranceDesc、readTasks、captureStack、stackTop、TEAM_UNAVAILABLE、teamStatusOf、buildStatusBlock、stageName、utteranceKeyOf、attachmentsOfContent、attachmentTitle、PEER_MESSAGE_PATTERN、PEER_SOURCE_KINDS、isPeerMessage |
 
 ### 3.9 lib/checks.mjs
 
@@ -593,7 +594,7 @@ P3b 派工核心：把台账任务的 queued-* 阶段映射成 analyzer/implemen
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| records | GATE_ID_RE/GATE_PHASES 定义 id 与阶段；slugify 从标题派生 id；buildStep 归一步骤（expect 语法未知只 warn）；listGates/getGate/addGate/updateGate/removeGate 走锁；runGate/runGatesByPhase 顺序执行步骤、首个失败即停、写 logs/<gate>/<ts>.json；listGateRuns 按 started_at 倒序截断。 | GATE_ID_RE、GATE_PHASES、slugify、buildStep、validateGateFields、buildGate、applyGatePatch、gateIds、listGates、getGate、addGate、updateGate、removeGate、isoFileStamp、runGate、runGatesByPhase、listGateRuns |
+| records | GATE_ID_RE/GATE_PHASES 定义 id 与阶段；slugify 从标题派生 id；buildStep 归一步骤（未知 expect 默认拒绝，仅显式 allowUnknownExpect 容错并留警告）；validateGateFields 校验整份记录；listGates/getGate/addGate/updateGate/removeGate 走锁；runGate/runGatesByPhase 顺序执行步骤、首个失败即停、写 logs/<gate>/<ts>.json；listGateRuns 按 started_at 倒序截断。 | GATE_ID_RE、GATE_PHASES、slugify、buildStep、validateGateFields、buildGate、applyGatePatch、gateIds、listGates、getGate、addGate、updateGate、removeGate、isoFileStamp、runGate、runGatesByPhase、listGateRuns |
 
 ### 3.28 lib/heartbeats/records.mjs
 
@@ -614,7 +615,7 @@ graph LR
 | top | 心跳常量（schema/状态/claim/title 上限/legacy 标记）与 Windows 会话名规则；configureHeartbeats 注入任务建卡能力。 | HOOKS、configureHeartbeats、HEARTBEAT_STALE_SECONDS、HEARTBEAT_SCHEMA、HEARTBEAT_STATUS、HEARTBEAT_ACTIVE_STATUS、HEARTBEAT_PATCH_KEYS、HEARTBEAT_TITLE_MAX、HEARTBEAT_SESSION_MAX、HEARTBEAT_CLAIM_MAX、WINDOWS_RESERVED_SESSION_NAMES、WINDOWS_UNSAFE_SESSION_CHARS_RE、MAX_HEARTBEAT_CLIP、LEGACY_SUBAGENT_AGENT |
 | heartbeat-workspace-root | 心跳根解析：resolveHeartbeatWorkspace 归一主工作区（降级记 warning），heartbeatWorkspace/clipText/parseHeartbeatStamp 支撑读写侧。 | MAIN_WORKSPACE_CACHE、gitBranchOf、resolveHeartbeatWorkspace、heartbeatWorkspace、clipText、parseHeartbeatStamp |
 | heartbeat-liveness | 存活判定：boot_id/pid_start 证据、livenessOf 产出 live/dead/stale/foreign、readHeartbeats 与 readHeartbeatSection 投影、heartbeatFiles/heartbeatDirPath 目录解析。 | BOOT_ID_FILE、cachedBootId、currentBootId、isFlowCliEntrypoint、pidStartTime、pidAlive、heartbeatEvidenceOf、isCliWriter、heartbeatWriterEvidence、heartbeatAgeOf、livenessOf、heartbeatIsActive、heartbeatFiles、readHeartbeatJson、readHeartbeats、heartbeatDirPath、heartbeatMax、richHeartbeatJson、readHeartbeatSection |
-| heartbeat-write-api | 写入 API：start/update/end/remove 走锁与原子写，session 名校验（Windows 保留名/ADS/结尾点空格），pickSessionTask 选任务、gcLegacyHeartbeats 清理。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、removeHeartbeat、heartbeatStatus、heartbeatFileMtime、gcLegacyHeartbeats |
+| heartbeat-write-api | 写入 API：start/update/end/remove 走锁与原子写，session 名校验（Windows 保留名/ADS/结尾点空格），pickSessionTask 选任务、gcLegacyHeartbeats 清理。 | windowsReservedSessionName、assertSessionName、resolveHeartbeatSession、normalizeClaims、readHeartbeatRecord、pickSessionTask、heartbeatTaskClaims、startHeartbeat、updateHeartbeat、endHeartbeat、removeHeartbeat、heartbeatStatus、heartbeatFileMtime、gcLegacyHeartbeats、SYNTHETIC_SESSION_PREFIXES、isSyntheticSession |
 
 ### 3.29 lib/host/enforce.mjs
 
@@ -653,10 +654,10 @@ graph LR
 | 模块 | 语义 | 成员 |
 |---|---|---|
 | top | 模块头与 import：会话面依赖的宿主服务、状态块与捕获工具。 | BACKUP_WARNED、warnStaleBackup、backupReminderEnabled |
-| heartbeats | 会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。 | sessionIdOf、usableSessionId、requireSession、liveSessionIds、sessionIsLive、applyAgentLiveness、applyHeartbeatVisibility、agentRoot、heartbeatOpen、heartbeatWorking、rootSessionVerdict、ROOT_SESSION_HEARTBEAT_ONLY、ROOT_SESSION_DECISION_ONLY、heartbeatRootOf、currentTaskOf |
+| heartbeats | 会话与心跳判定：sessionIdOf/usableSessionId/liveSessionIds/agentRoot/rootSessionVerdict/heartbeatOpen/heartbeatWorking 与存活标注。 | sessionIdOf、usableSessionId、requireSession、liveSessionIds、sessionIsLive、applyAgentLiveness、applyHeartbeatVisibility、agentRoot、heartbeatOpen、heartbeatWorking、rootSessionVerdict、ROOT_SESSION_HEARTBEAT_ONLY、ROOT_SESSION_DECISION_ONLY、heartbeatRootOf、currentTaskOf、heartbeatRecordExists |
 | reminder | per-turn 提醒：纪律段、命令回显、当前任务段、待决策段与预算裁剪；只在主会话 step 0/1 注入一条消息；待决策段只列本会话记录，拼提醒前先按 Host 归档集合清理已归档会话的决策（purgeArchivedSessionDecisions，无 workspaceRegistry 时降级为 no-op）。 | disciplineText、registerDisciplineSection、REMINDER_LIMIT、REMINDER_STACK_ROWS、COMMAND_ECHO_CLIP、DECISION_QUESTION_CLIP、ANSWER_DECISION_HINT、SUBMIT_DECISION_HINT、FIRST_TURN_HINT、hiddenDecisionsHint、clipEcho、reminderMessage、decisionContractOf、decisionSuspendedText、decisionReminderLine、taskReminderSection、decisionReminderSection、purgeArchivedSessionDecisions、composeTurnReminder、commandReminderLine、registerTurnReminder、heartbeatKeepalive、registerHeartbeatKeepalive |
-| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务并顺手收口过期消息卡；agent/created 自动开心跳、agent/disposed 自动关闭。自动收口窗口由 config.tasks.autoSweepHours 控制（默认 24，0/false 关闭）。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、DEFAULT_AUTO_SWEEP_HOURS、autoSweepHoursOf、autoSweepUtteranceCards、SYNTHETIC_SESSION_PREFIXES、isSyntheticSession、captureTurnStart、autoDispatchCaptured |
-| session-switches | 会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。 | sessionHookCaller、captureEnabled、heartbeatGateEnabled、heartbeatGuardReason、claimTargetOf、claimMatches、heartbeatClaimsOf、claimsGateEnabled、claimsGuardReason、HEARTBEAT_TRACK_LIMIT、heartbeatEvidenceRefresh、heartbeatRootFor、heartbeatRoots、knownArchived、liveChildSessions、liveHeartbeatStatus、liveSessionOf、patchHeartbeat、refreshHeartbeat、registerHeartbeatSessionHooks、releaseDeadOwners、rememberHeartbeatRoot、rememberSubagentParent、removeHeartbeatEverywhere、sessionTitleOf、subagentParents、turnOpenOf |
+| capture | 捕获流水线：pre-step 只内存记录、turn-stopping 落盘建任务并顺手收口过期消息卡；agent/created 自动开心跳、agent/disposed 自动关闭。自动收口窗口由 config.tasks.autoSweepHours 控制（默认 24，0/false 关闭）。 | captureTarget、captureClaims、captureTurnStop、EMPTY_STACK_GOAL、captureAutoStart、captureAutoEnd、registerAgentCreated、registerAgentDisposed、DEFAULT_AUTO_SWEEP_HOURS、autoSweepHoursOf、autoSweepUtteranceCards、captureTurnStart、autoDispatchCaptured、startSessionHeartbeat、captureLateMountStart、HEARTBEAT_GC_DONE |
+| session-switches | 会话开关与拒绝文案：captureEnabled/heartbeatGateEnabled/heartbeatGuardReason 与子代理专用错误常量。 | sessionHookCaller、captureEnabled、heartbeatGateEnabled、heartbeatGuardReason、claimMatches、heartbeatClaimsOf、claimsGateEnabled、claimsGuardReason、HEARTBEAT_TRACK_LIMIT、heartbeatEvidenceRefresh、heartbeatRootFor、heartbeatRoots、knownArchived、liveChildSessions、liveHeartbeatStatus、liveSessionOf、patchHeartbeat、refreshHeartbeat、registerHeartbeatSessionHooks、releaseDeadOwners、rememberHeartbeatRoot、rememberSubagentParent、removeHeartbeatEverywhere、sessionTitleOf、subagentParents、turnOpenOf、gcHeartbeatJunkOnce、ctxRootForGc、claimTargetsOf、foreignClaimOwner |
 
 ### 3.32 lib/host/shared.mjs
 
@@ -670,7 +671,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| top | 常量区：包根、三条路由路径、init 请求体上限、心跳会话约束、SUBAGENT_ORIGIN 与 toolRoot 工厂。 | toolRoot、PACKAGE_ROOT、ROUTE_PATH、INIT_ROUTE_PATH、GATE_ROUTE_PATH、MAX_INIT_BODY_BYTES、MAX_INIT_CREATED、MAX_INIT_WARNINGS、HEARTBEAT_GATE_TOOLS、HEARTBEAT_SESSION_MAX、HEARTBEAT_SESSION_PATTERN、SUBAGENT_ORIGIN |
+| top | 常量区：包根、三条路由路径、init 请求体上限、心跳会话约束、SUBAGENT_ORIGIN 与 toolRoot 工厂。 | toolRoot、PACKAGE_ROOT、ROUTE_PATH、INIT_ROUTE_PATH、GATE_ROUTE_PATH、MAX_INIT_BODY_BYTES、MAX_INIT_CREATED、MAX_INIT_WARNINGS、HEARTBEAT_GATE_TOOLS、HEARTBEAT_SESSION_MAX、HEARTBEAT_SESSION_PATTERN、SUBAGENT_ORIGIN、OPS_WRITE_GATE_TOOLS |
 | workspace-inspection | 异步 store 探测 hasStoreAsync，供 HTTP 与面板请求路径使用。 | hasStoreAsync |
 | workspace-scope | 工作区作用域：canonicalRoot/isDirectory/workspacePath/listWorkspaces/rootWithin/rootAccepted/rootName；注册行只做纯路径前缀比较。 | canonicalRoot、isDirectory、workspacePath、listWorkspaces、rootWithin、rootAccepted、rootName |
 | http | HTTP 助手：sendJson/sendError/originAllowed 与 readBody（上限保护、超限后续丢弃）。 | sendJson、sendError、originAllowed、readBody |
@@ -759,7 +760,7 @@ flow_* 工具的共享层：输出契约、root/id 解析、store 探测、每�
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| runner | runStep 把 expect 解析为 exit N、contains: TEXT 或空（等于 exit 0），超时直接判 ok:false；输出按 512 KiB 截断、tail 再按行数并给每行 400 字符封顶，未识别的 expect 语法按 exit 0 处理并记 gate-expect-unknown 警告。 | TAIL_LINE_MAX、OUTPUT_CAP、tailText、EXPECT_EXIT_RE、EXPECT_CONTAINS_RE、expectSyntaxKnown、evaluateExpect、runStep |
+| runner | runStep 把 expect 解析为 exit N、contains: TEXT 或空（等于 exit 0），超时直接判 ok:false；输出按 512 KiB 截断、tail 再按行数并给每行 400 字符封顶。未知 expect 写法默认判失败并记 gate-expect-invalid 警告，只有记录上显式 allowUnknownExpect 才按 exit 0 放行并记 gate-expect-unknown 警告；EXPECT_SYNTAX_HELP 是定义期/运行期共用的合法写法文案。 | TAIL_LINE_MAX、OUTPUT_CAP、tailText、EXPECT_EXIT_RE、EXPECT_CONTAINS_RE、expectSyntaxKnown、evaluateExpect、runStep、EXPECT_SYNTAX_HELP |
 
 ### 3.43 lib/source-scan.mjs
 

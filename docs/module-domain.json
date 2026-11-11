@@ -131,7 +131,8 @@
         "test/t-20261107-subtask.test.mjs",
         "test/t-20261107-team-sync.test.mjs",
         "test/t-20261109-dispatch.test.mjs",
-        "test/t-20261111-task-next-verify.test.mjs"
+        "test/t-20261111-task-next-verify.test.mjs",
+        "test/t-20261111-03-pipeline-e2e.test.mjs"
       ]
     },
     "decisions": {

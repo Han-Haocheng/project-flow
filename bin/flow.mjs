@@ -61,6 +61,8 @@ const BOOL_FLAGS = new Set([
   'json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all',
   // T-20261108 D4：`desc plan/show/rebase`、`desc render --check`、`check description --strict`
   'strict', 'show', 'rebase', 'no-semantic-change', 'check',
+  // T-20261111155622：门禁步骤 expect 手误默认拒绝，只有显式开这个开关才容错
+  'allow-unknown-expect',
 ])
 const VALUE_FLAGS = new Set([
   'root', 'name', 'keep', 'stale-hours',
@@ -137,8 +139,8 @@ export const SPEC = Object.freeze({
   gate: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
-    add: { flags: ['id', 'title', 'phase'], repeat: ['step'] },
-    update: { flags: ['id', 'title', 'phase', 'enabled'], repeat: ['step'] },
+    add: { flags: ['id', 'title', 'phase', 'allow-unknown-expect'], repeat: ['step'] },
+    update: { flags: ['id', 'title', 'phase', 'enabled', 'allow-unknown-expect'], repeat: ['step'] },
     enable: { flags: ['id'] },
     disable: { flags: ['id'] },
     rm: { flags: ['id', 'yes'] },

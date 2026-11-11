@@ -278,11 +278,12 @@ test('坏记录+nextId：显式 id 撞可读记录仍是 already exists（不误
 
 // -------------------------------------------------- expect 拼错（A2 ⑤）
 
-test('expect 拼错：gate add 的 gate-expect-unknown 走 CLI 信封与 stderr', () => {
+test('expect 拼错：显式 --allow-unknown-expect 时 gate-expect-unknown 走 CLI 信封与 stderr', () => {
   const { root } = freshProject('expect-typo')
 
   const json = runCli(root, [
-    'gate', 'add', '--id', 'typo', '--title', '拼错', '--phase', 'manual', '--step', 'a=echo hi>>exitt 0', '--json',
+    'gate', 'add', '--id', 'typo', '--title', '拼错', '--phase', 'manual',
+    '--step', 'a=echo hi>>exitt 0', '--allow-unknown-expect', '--json',
   ])
   assert.equal(json.code, 0, json.stderr)
   assert.equal(json.json.ok, true)
@@ -293,7 +294,8 @@ test('expect 拼错：gate add 的 gate-expect-unknown 走 CLI 信封与 stderr'
   assert.equal(json.stderr, '', '--json 模式不应往 stderr 打 warning')
 
   const human = runCli(root, [
-    'gate', 'add', '--id', 'typo2', '--title', '拼错2', '--phase', 'manual', '--step', 'a=echo hi>>exitt 0',
+    'gate', 'add', '--id', 'typo2', '--title', '拼错2', '--phase', 'manual',
+    '--step', 'a=echo hi>>exitt 0', '--allow-unknown-expect',
   ])
   assert.equal(human.code, 0)
   assert.ok(human.stderr.includes('警告: gate-expect-unknown:'), human.stderr)

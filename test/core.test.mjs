@@ -979,18 +979,146 @@ test('runGate 超时：按 timeoutMs 终止并把步骤记为失败', async () =
   assert.ok(elapsed < 4000, `超时应在约 250ms 后终止，实际 ${elapsed}ms`)
 })
 
-test('runGate 未知 expect 记 warning 并按 exit 0 处理', async () => {
+test('runGate 未知 expect：显式 allowUnknownExpect 时记 warning 并按 exit 0 放行', async () => {
   const { root, contract } = freshProject('gate-expect')
-  addGate(root, contract, {
-    id: 'odd-expect',
-    title: '怪 expect',
-    phase: 'manual',
-    steps: [{ id: 'odd', run: 'true', expect: 'whatever' }],
-  })
+  // T-20261111155622：未知 expect 默认被拒；容错必须显式开启。
+  addGate(
+    root,
+    contract,
+    {
+      id: 'odd-expect',
+      title: '怪 expect',
+      phase: 'manual',
+      steps: [{ id: 'odd', run: 'true', expect: 'whatever' }],
+    },
+    { allowUnknownExpect: true },
+  )
   drainWarnings()
   const record = await runGate(root, contract, 'odd-expect')
   assert.equal(record.ok, true)
   assert.ok(drainWarnings().some((item) => item.startsWith('gate-expect-unknown:')))
+})
+
+// ---------------------------------------------- T-20261111155622：expect 手误默认拒绝
+//
+// 旧行为：`gate add --step 'a=false>>exit:1'` 只警告并把该步按 exit 0 处理，手误
+// 会把本该失败的门禁静默变成通过。以下用例锁定：默认拒绝、合法写法照常、显式
+// `--allow-unknown-expect` 才容错、且历史非法记录运行期不会被静默判通过。
+
+const ADD_INVALID_EXPECT = () => [
+  'gate', 'add', '--id', 'fg', '--title', 'x', '--phase', 'commit', '--step', 'a=false>>exit:1',
+]
+
+test('① 非法 expect：gate add 直接拒绝（exit 2），文案含合法写法并点名 step id 与原始值', () => {
+  const { root } = freshProject('reject')
+  const result = runCli(root, ADD_INVALID_EXPECT())
+  assert.equal(result.code, 2, result.stdout + result.stderr)
+  assert.match(result.stderr, /步骤 "a"/)
+  assert.match(result.stderr, /"exit:1"/)
+  assert.match(result.stderr, /合法写法/)
+  assert.match(result.stderr, /exit N/)
+  assert.match(result.stderr, /contains: TEXT/)
+  assert.match(result.stderr, /--allow-unknown-expect/)
+  // 拒绝发生在任何写之前：门禁没有落盘。
+  assert.equal(fs.existsSync(path.join(root, '.agents/gates/fg.json')), false)
+  assert.equal(runCli(root, ['gate', 'run', 'fg']).code, 3, '不存在的门禁应是 not-found，而不是被静默创建')
+})
+
+test('① gate update 同样拒绝非法 expect；显式开关后才接受', () => {
+  const { root } = freshProject('update')
+  const ok = runCli(root, ['gate', 'add', '--id', 'fg', '--title', 'x', '--phase', 'commit', '--step', 'a=true>>exit 0'])
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr)
+  const before = fs.readFileSync(path.join(root, '.agents/gates/fg.json'), 'utf8')
+
+  const rejected = runCli(root, ['gate', 'update', 'fg', '--step', 'a=false>>exit:abc'])
+  assert.equal(rejected.code, 2, rejected.stdout + rejected.stderr)
+  assert.match(rejected.stderr, /步骤 "a"/)
+  assert.match(rejected.stderr, /"exit:abc"/)
+  assert.match(rejected.stderr, /contains: TEXT/)
+  assert.equal(fs.readFileSync(path.join(root, '.agents/gates/fg.json'), 'utf8'), before, '被拒的更新不得落盘')
+
+  const allowed = runCli(root, ['gate', 'update', 'fg', '--step', 'a=false>>exit:abc', '--allow-unknown-expect'])
+  assert.equal(allowed.code, 0, allowed.stdout + allowed.stderr)
+  assert.match(allowed.stderr, /警告: gate-expect-unknown:/)
+  assert.match(allowed.stderr, /放行/)
+  const step = JSON.parse(fs.readFileSync(path.join(root, '.agents/gates/fg.json'), 'utf8')).steps[0]
+  assert.equal(step.allowUnknownExpect, true, '显式容错要落在记录上，run 才能区分')
+})
+
+test('② 合法 expect：`exit 1` 与 `contains: x` 正常定义并运行通过', () => {
+  const { root } = freshProject('legal')
+  const added = runCli(root, [
+    'gate', 'add', '--id', 'legal', '--title', '合法', '--phase', 'manual',
+    '--step', 'false-exit1=false>>exit 1',
+    '--step', 'say-x=node -e "console.log(\'x\')">>contains: x',
+  ])
+  assert.equal(added.code, 0, added.stdout + added.stderr)
+  assert.equal(added.stderr, '', '合法 expect 不应有任何警告')
+
+  const run = runCli(root, ['gate', 'run', 'legal', '--json'])
+  assert.equal(run.code, 0, run.stdout + run.stderr)
+  assert.equal(run.json.data.ok, true)
+  assert.deepEqual(run.json.data.steps.map((step) => step.ok), [true, true])
+  assert.deepEqual(run.json.warnings, [])
+})
+
+test('③ --allow-unknown-expect：放行 + 保留警告，且文案说明按 exit 0 判定', () => {
+  const { root } = freshProject('allow')
+  const added = runCli(root, [
+    'gate', 'add', '--id', 'tolerant', '--title', '容错', '--phase', 'manual',
+    '--step', 'a=true>>exit:1', '--allow-unknown-expect', '--json',
+  ])
+  assert.equal(added.code, 0, added.stdout + added.stderr)
+  assert.equal(added.json.ok, true)
+  assert.ok(
+    Array.isArray(added.json.warnings)
+      && added.json.warnings.some((item) => item.startsWith('gate-expect-unknown:')
+        && /放行/.test(item) && /exit 0/.test(item)),
+    JSON.stringify(added.json.warnings),
+  )
+  const record = JSON.parse(fs.readFileSync(path.join(root, '.agents/gates/tolerant.json'), 'utf8'))
+  assert.equal(record.steps[0].allowUnknownExpect, true)
+
+  // `true` 的真实 exit 是 0：容错按 exit 0 判定 → 通过；运行期仍留警告。
+  const run = runCli(root, ['gate', 'run', 'tolerant', '--json'])
+  assert.equal(run.code, 0, run.stdout + run.stderr)
+  assert.equal(run.json.data.ok, true)
+  assert.ok(run.json.warnings.some((item) => item.startsWith('gate-expect-unknown:')))
+
+  // 同类手误若真实 exit 非 0，仍会被判失败（不是无条件放行）。
+  const failing = runCli(root, [
+    'gate', 'add', '--id', 'tolerant-fail', '--title', '容错失败', '--phase', 'manual',
+    '--step', 'a=false>>exit:1', '--allow-unknown-expect',
+  ])
+  assert.equal(failing.code, 0, failing.stderr)
+  // `gate run` 的 CLI 退出码约定是「写完日志即 0」，失败用 data.ok:false 表达。
+  const failingRun = runCli(root, ['gate', 'run', 'tolerant-fail', '--json'])
+  assert.equal(failingRun.code, 0, failingRun.stdout + failingRun.stderr)
+  assert.equal(failingRun.json.data.ok, false)
+})
+
+test('④ 真实门禁里（绕过定义校验的）非法 expect 步骤不会静默变通过', () => {
+  const { root } = freshProject('legacy')
+  // 模拟历史记录 / 手工写入：没有 allowUnknownExpect 的非法 expect。
+  fs.writeFileSync(
+    path.join(root, '.agents/gates/legacy.json'),
+    JSON.stringify({
+      schema: 1,
+      id: 'legacy',
+      title: 'legacy',
+      phase: 'manual',
+      enabled: true,
+      steps: [{ id: 'odd', run: 'true', expect: 'exit:1' }],
+    }),
+  )
+  const run = runCli(root, ['gate', 'run', 'legacy', '--json'])
+  assert.equal(run.code, 0, run.stdout + run.stderr)
+  assert.equal(run.json.data.ok, false, '门禁应失败，不能把非法 expect 当 exit 0 放行')
+  assert.equal(run.json.data.steps[0].ok, false)
+  assert.ok(
+    run.json.warnings.some((item) => item.startsWith('gate-expect-invalid:')),
+    JSON.stringify(run.json.warnings),
+  )
 })
 
 test('listGateRuns 新→旧排序并可 limit；readStoreState 附 lastRun 与计数', async () => {
