@@ -209,6 +209,18 @@ test('兼容：不传 expectedRevision 时 update 行为与旧版一致（仍然
   assert.equal(getTask(root, contract, task.id).notes, '不带令牌也能写')
 })
 
+test('边界：expectedRevision 只属于 update，其余动作被白名单拒绝', async () => {
+  const { root, contract } = freshProject('only-update')
+  const { tool, exec } = makeHost(root)
+  const task = seedTask(root, contract)
+
+  await assert.rejects(
+    () => tool.execute({ action: 'show', id: task.id, expectedRevision: taskRevisionOf(root, contract, task.id) }, exec),
+    /does not accept "expectedRevision"/,
+    'show 不接受 CAS 令牌：它只读，令牌只能跟着一次写入走',
+  )
+})
+
 test('校验：非 16 位小写 hex 的 expectedRevision 一律 invalid（不静默忽略）', async () => {
   const { root, contract } = freshProject('invalid')
   const { tool, exec } = makeHost(root)
@@ -221,6 +233,8 @@ test('校验：非 16 位小写 hex 的 expectedRevision 一律 invalid（不静
     current.slice(0, 15), // 15 位
     `${current}0`, // 17 位
     'z'.repeat(16), // 非 hex
+    '', // 空串不能当作「不加锁」
+    '   ', // 纯空白同理
     123, // 非字符串
     null, // 显式 null 不是「没传」
   ]
