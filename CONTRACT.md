@@ -1608,7 +1608,10 @@ capture: {
 | `subagent-settled` | `form:'notice'`、`summary`、`senderSessionId` | `continuation-messages.js` 的 `createSettlementMessage` |
 
 人类消息的 `source.kind` 恒为 `'user'`（user-rpc 的 source 带 `rpcId`，kind 仍是 `'user'`），
-因此结构判据不会误杀用户原话。**文本只作兜底**：没有 `source` 的旧夹具/旧记录才按
+因此结构判据不会误杀用户原话。除 `kind` 之外还有一层**字段兜底**：`kind` 不在上表但
+`source` 带 `senderSessionId` / `senderId` / `senderName`（旧宿主/兼容来源）时同样按结构
+判据排除；人类消息的 `source` 不含这些字段，字段兜底同样不会误杀用户原话。
+**文本只作兜底**：没有 `source` 的旧夹具/旧记录才按
 `Team message from `（含末尾空格）和 `Agent <id> sent a message:` 开头匹配；后者正是宿主
 `createAgentMessage` 的 content 首块，边界只认「Agent + 单个 id + sent a message:」——用户自己
 写的「Agent 设计说明」不命中。宿主将来改文案时结构判据仍然生效（这正是该判据存在的理由）。

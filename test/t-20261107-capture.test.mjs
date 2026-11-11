@@ -1142,6 +1142,33 @@ test('排除 ⑤宿主形状（表驱动）：team-message / subagent-settled �
   }
 })
 
+test('排除 ⑤字段兜底：kind 不在契约表但带 senderSessionId/senderId/senderName → 0 卡，excludedBy=peer', async () => {
+  // 宿主真值的三种 kind 已由上一组用例覆盖；这里守的是 isPeerMessage 的**字段兜底**
+  // （审查轮指出的缺口：kind 未知 + sender* 字段没有独立用例）。旧宿主/兼容来源可能
+  // 只有 sender 字段而没有已知 kind，只靠 kind 列表会漏掉它们。
+  const rows = [
+    { label: 'sender-session-id', source: { kind: 'legacy-relay', senderSessionId: '403f3f7a-c502-4ea8-95f2-49af3eb54fc5' } },
+    { label: 'sender-id', source: { kind: 'legacy-team', senderId: 'session-exec-panel' } },
+    { label: 'sender-name', source: { kind: 'legacy-team', senderName: 'exec-panel' } },
+  ]
+  for (const row of rows) {
+    const { root, contract } = freshProject(`peer-host-field-${row.label}`)
+    const harness = makeHarness(root)
+    const agent = harness.addAgent(`session-peer-host-field-${row.label}`)
+    const message = {
+      id: `m-host-field-${row.label}-1`,
+      role: 'user',
+      content: [{ type: 'text', text: '只有字段信号、没有已知 kind 的一条回报' }],
+      source: row.source,
+    }
+    await preStep(harness, agent, [message])
+    await turnStopping(harness, agent)
+    assert.equal(tasksOf(root, contract).length, 0, `${row.label}：peer 消息不是用户请求，不能建卡`)
+    const status = await flowStatus(harness, agent, root)
+    assert.equal(status.capture.excludedBy, 'peer', `${row.label}：excludedBy 应为 peer，实际 ${status.capture.excludedBy}`)
+  }
+})
+
 test('排除 ⑤文本兜底与结构判据同口径：exclusionReasonOf 对 sent-a-message 形状返回 peer，「Agent 设计说明」不命中', () => {
   assert.equal(
     exclusionReasonOf('Agent 403f3f7a-c502-4ea8-95f2-49af3eb54fc5 sent a message: hi'),
