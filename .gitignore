@@ -16,3 +16,7 @@ test/.tmp/
 
 # 桌面端运行日志（本地）
 dsh-desktop.log
+
+# 并行取证的临时产物（多成员同时复现/压测会生成，不该进仓库）
+.evidence/
+.pf-repro/
