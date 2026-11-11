@@ -1,6 +1,7 @@
 // 台账快照与体检（2026-11-09）：.agents 被 git 忽略后，git 不再提供任何保护，
 // 本地快照是唯一恢复源；doctor 把“能不能用/有没有风险”变成可执行报告。
 import { test, after } from 'node:test'
+import { spawnSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -9,6 +10,7 @@ import { initProject } from '../lib/core.mjs'
 import { BACKUP_DIR, backupHealthWarning, createBackup, doctorReport, listBackups } from '../lib/backup.mjs'
 
 const TEMP_ROOTS = []
+const BIN = new URL('../bin/flow.mjs', import.meta.url).pathname
 
 function freshProject(label) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), `pf-backup-${label}-`))
@@ -122,4 +124,25 @@ test('backupHealthWarning：无台账静默；无快照/过期给出可执行提
 
   const stale = backupHealthWarning(root, { now: Date.now() + 48 * 3600 * 1000 })
   assert.match(stale, /小时未更新/)
+})
+
+test('CLI：backup --keep 与 doctor --stale-hours 是已声明 flag（VALUE_FLAGS 回归）', () => {
+  const root = freshProject('cli-value-flags')
+  createBackup(root, { now: new Date(2026, 10, 9, 10, 0, 0) })
+  assert.equal(listBackups(root).length, 1)
+
+  const backup = spawnSync(process.execPath, [BIN, '--root', root, 'backup', '--keep', '1', '--json'], {
+    encoding: 'utf8',
+  })
+  assert.equal(backup.status, 0, `backup --keep 1 必须被识别：${backup.stderr}`)
+  const parsed = JSON.parse(backup.stdout)
+  assert.equal(parsed.ok, true)
+  // 先有 1 份，CLI 再拍 1 份，--keep 1 只保留最新的一份。
+  assert.equal(listBackups(root).length, 1, '--keep 1 必须把旧快照清到只剩 1 份')
+
+  const doctor = spawnSync(process.execPath, [BIN, '--root', root, 'doctor', '--stale-hours', '1', '--json'], {
+    encoding: 'utf8',
+  })
+  assert.equal(doctor.status, 0, `doctor --stale-hours 必须被识别：${doctor.stderr}`)
+  assert.equal(JSON.parse(doctor.stdout).ok, true)
 })

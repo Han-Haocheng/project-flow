@@ -355,6 +355,7 @@
     "cli": {
       "title": "CLI（参数面 / 命令分发 / 输出）",
       "owns": [
+        "lib/cli/",
         "bin/flow.mjs"
       ],
       "shared": [],

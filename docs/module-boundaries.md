@@ -30,7 +30,7 @@
 | `description` | 文件图/模块图/语义/漂移 | `lib/description/`、`lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
 | `panel` | 只读快照投影、Web 面板、TUI 面板 | `lib/state-snapshot.mjs`、`client.js`、`tui-panel.js`、`locale/*` | `index.js`（state-read-isolation）、`CONTRACT.md`（c9） | 11 |
 | `backup` | 台账本地快照、`flow doctor` 完整性报告、过期快照提醒 | `lib/backup.mjs` | `bin/flow.mjs`（命令）、`lib/host/session.mjs`（挂载提醒）、`CONTRACT.md`（c8） | 1 |
-| `cli` | 参数面、命令分发、输出 | `bin/flow.mjs` | — | 4 |
+| `cli` | 参数面、命令分发、输出 | `lib/cli/`、`bin/flow.mjs`（薄入口） | — | 4 |
 | `docs` | 契约正文、README、内嵌技能 | `CONTRACT.md`、`README.md`、`skills/` | — | 3 |
 
 > 2026-11-11 Phase 1 起，`heartbeats` 也有独占目录 `lib/heartbeats/`（此前它的代码全在
@@ -109,6 +109,7 @@ node scripts/module-domain.mjs verify  # 期望 exit 0
 | 1 | `lib/core.mjs` 按 `sections` 拆成 `lib/store/{contract,tasks,decisions,heartbeats,gates,experiments,description,aggregate}.mjs`，`core.mjs` 变成只做 re-export 的聚合层（所有现有 `import ... from './core.mjs'` 不变） | **未做**（下一期） |
 | 2 | `index.js` 拆成 `lib/host/*.mjs`，`index.js` 只剩 `apply` 装配 | ✅ 2026-11-08 完成（3256 → 320 行；707 用例 + 6 selftest 全绿） |
 | 3 | `client.js` 按面板区块拆 | **2026-11-11 判定：不拆**（见 §7.1） |
+| 4 | `bin/flow.mjs` 拆成薄入口 + `lib/cli/*` 命令模块 | ✅ 2026-11-11 完成（3756 → 520 行 + 9 个命令模块；825 用例 + 门禁全绿） |
 
 每期都按「先加新文件 + re-export，再迁移实现，最后删旧段」三步走，任何一步测试全绿才进下一步。
 期 2 的实际顺序：`shared` → `session`（用 `sessionHooks` 注入打破与 enforce/team 的循环）→ `routes` → `team` → `state` → `enforce` → `tools` → `skills` → `index.js` 只剩入口。
