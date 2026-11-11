@@ -51,6 +51,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/atomic.mjs` | 原子写（临时文件 + fsync + 改名 + 目录 fsync + 重试） | core、lock |
 | `lib/paths.mjs` | 路径 containment（拒绝绝对路径、`..` 逃逸、真实路径越界） | core |
 | `lib/proc.mjs` | **进程树杀灭的唯一实现**（POSIX 进程组 / win32 `taskkill /T /F` + grace 兜底） | core、checks |
+| `lib/gates/records.mjs` | **门禁域**（Phase 1）：门禁定义与步骤归一、CRUD、按 phase 运行、运行日志读取。运行时只取锁写日志，步骤执行在 `lib/runner.mjs` | core、CLI |
 | `lib/runner.mjs` | 门禁步骤执行（spawn、超时、输出截断、`expect` 求值） | core |
 | `lib/util.mjs` | 零依赖叶子：`FlowError`、warning 通道、深拷贝、时间格式、`isPlainObject`、`pad` | 上面全部 |
 | `lib/backup.mjs` | 台账本地快照与体检：`createBackup`/`listBackups`（跳过 `worktrees`/`tmp`、按 `keep` 剪枝）、`doctorReport`（契约/目录/git 忽略/快照新鲜度）、`backupHealthWarning`。**不 import core**，供 CLI 与宿主使用 | CLI、`lib/host/session.mjs` |
