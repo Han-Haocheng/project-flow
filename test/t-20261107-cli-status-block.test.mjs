@@ -281,3 +281,17 @@ test('flow state --root：只报被指定的那个工作区，不回退到 cwd',
   assert.equal(result.json.data.root, root)
   assert.equal(result.json.data.tasks.total, 1)
 })
+test('flow state 人读输出：给摘要，--json 与人读不互相掺', () => {
+  const root = freshProject('state-human')
+  addTasks(root, 1)
+  const human = runCli(root, ['state'])
+  assert.equal(human.code, 0, human.stdout + human.stderr)
+  assert.match(human.stdout, /面板快照：/)
+  assert.match(human.stdout, /任务 1/)
+  assert.equal(human.stdout.trim().startsWith('{'), false, '人读模式不得输出 JSON 信封')
+
+  const json = runCli(root, ['state', '--json'])
+  assert.equal(json.code, 0)
+  assert.ok(json.json !== null, '--json 必须是可解析信封')
+  assert.equal(json.json.data.ok, true)
+})
