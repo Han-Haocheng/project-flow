@@ -182,6 +182,38 @@ plugin_manager install_bundle  target=<仓库根目录>
 安装即五个一起装载，不提供逐条启用。安装后刷新页面；卸载用
 `plugin_manager remove_bundle target=@local/project-flow`。
 
+## 派工模型配置（可选）
+
+插件派出的分析者/实现者/审查者，默认**合并父会话的模型选项**（零介入、与旧版逐字节一致）。
+要让子代理跑在指定模型上，在项目 `.agents/flow/flow.json` 里加 `dispatch` 段：
+
+```jsonc
+{
+  "dispatch": {
+    "enabled": true,          // 默认 true；false 连显式 dispatch 都关
+    "auto": true,             // 默认 true；false 只关阶段入口自动派工，保留显式 dispatch
+    "provider": "spawn",      // 默认 spawn
+
+    "model": "iceman-contributor-free",                    // 全部角色统一用这个模型
+    "models": { "reviewer": "longcat-2.5-free" },          // 按角色覆盖（analyzer/implementer/reviewer）
+    "requireModel": false     // 默认 false：宿主不支持 model 时降级按父模型跑；true 则报错
+  }
+}
+```
+
+要点（完整契约见 `CONTRACT.md` §10.1.1）：
+
+- **不声明 `model` / `models` = 不干预**：派工请求里不会出现 `agentOptions`，子代理跟着父会话模型走。
+- **一旦声明，缺省就是 `iceman-contributor-free`**（本机 `opencode-go` 的免费模型之一，另一个是
+  `longcat-2.5-free`）；取值优先级 `models[role]` → `model` → 默认值。
+- **接受 `model` 或 `provider/model`**（取末段）；provider 仍由 `dispatch.provider` 决定，不写在模型名里。
+- **降级不失败**：宿主子代理服务没声明 `capabilities.agentOptions` 时按父模型派工，回执里
+  `model` 留空并带 `degraded` 说明；只有 `requireModel: true` 才报错。
+- **回执可追溯**：派工回执（任务 `checkpoints`）多一个 `model` 字段，记录子代理实际用的模型。
+
+所有 `flow_*` 工具的结果**已是中文可读报告**（不是 JSON 文本）：首行一行摘要，列表每项一行，
+失败显示 `✖ <code>：<message>` 与「下一步」。程序调用方拿到的仍是规范化对象值，schema 未变。
+
 ## TUI 侧栏面板
 
 在 dsh-tui 里，同一份 `.agents/flow` 台账还会以一个只读侧栏面板呈现（面板标题「项目流程」）。
@@ -248,7 +280,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：906 用例（69 个文件）
+node --test test/                        # core + CLI + check：933 用例（71 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
