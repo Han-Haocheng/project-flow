@@ -767,7 +767,12 @@ test('aspect 锁⑥：续租延长租约；非占用方不能续租/释放（for
       () => releaseAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-stranger' }),
       (error) => error.code === 'conflict' && /只有它自己能释放/.test(error.message),
     )
-    const forced = releaseAspectLock(root, contract, { aspect: 'liveness', force: true })
+    // force 是越过占用方的动作：必须给 reason（审计留痕），空 reason 直接 usage。
+    assert.throws(
+      () => releaseAspectLock(root, contract, { aspect: 'liveness', force: true }),
+      (error) => error.code === 'usage' && /必须给 reason/.test(error.message),
+    )
+    const forced = releaseAspectLock(root, contract, { aspect: 'liveness', force: true, reason: '清理测试锁', by: 'test' })
     assert.equal(forced.released, true)
   })
 })
@@ -872,5 +877,59 @@ test('aspect CLI：list/acquire/release 走真实命令实现（--ttl 秒 / --wa
   const released = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli' }), 'release')
   assert.equal(released.released, true)
   assert.equal(listAspectLocks(root, contract).counts.total, 0)
+  void contract
+})
+
+test('aspect CLI：命令入口惰性清扫死锁（CLI 场景没有 agent/created 也不留死锁）', async () => {
+  const { root, contract } = freshProject('aspect-cli-sweep')
+  writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+  const core = { loadContract }
+  const makeCtx = (flags) => ({ core, root, flags, json: false, contract: null, contractRoot: null })
+  await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-dead', ttl: '60' }), 'acquire')
+  // 把续期时间改成两小时前 = 租约过期（模拟占用方异常退出、没走 disposed）。
+  const lockFile = path.join(root, '.agents', 'aspect-locks', 'state-machine.json')
+  const record = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
+  record.owner.renewed_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  fs.writeFileSync(lockFile, JSON.stringify(record, null, 2))
+  const listed = await cmdAspect(makeCtx({}), 'list')
+  assert.deepEqual(listed.swept, ['state-machine'], 'list 入口惰性清扫过期锁')
+  assert.equal(listed.locks.length, 0)
+  // acquire 入口同样先清扫：死锁不该挡住新占用。
+  fs.writeFileSync(lockFile, JSON.stringify({ ...record, owner: { ...record.owner, renewed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() } }, null, 2))
+  const acquired = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-next' }), 'acquire')
+  assert.equal(acquired.acquired, true)
+  assert.equal(acquired.lock.owner.session, 'session-cli-next')
+  void contract
+})
+
+test('aspect：force 释放必须给 reason，并写审计日志（谁/为什么）', async () => {
+  const { root, contract } = freshProject('aspect-force-audit')
+  writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+  const core = { loadContract }
+  const makeCtx = (flags) => ({ core, root, flags, json: false, contract: null, contractRoot: null })
+  await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-owner' }), 'acquire')
+  await assert.rejects(
+    () => cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-maint', force: true }), 'release'),
+    (error) => /必须给 reason/.test(error.message),
+  )
+  const released = await cmdAspect(
+    makeCtx({
+      aspect: 'state-machine',
+      session: 'session-maint',
+      force: true,
+      reason: '占用方会话已删、手工回收',
+      by: 'session-maint',
+    }),
+    'release',
+  )
+  assert.equal(released.released, true)
+  assert.equal(released.forced, true)
+  const log = JSON.parse(fs.readFileSync(path.join(root, '.agents', 'aspect-release-log.json'), 'utf8'))
+  assert.equal(log.entries.length, 1)
+  assert.equal(log.entries[0].aspect, 'state-machine')
+  assert.equal(log.entries[0].owner, 'session-owner')
+  assert.equal(log.entries[0].by, 'session-maint')
+  assert.match(log.entries[0].reason, /手工回收/)
+  assert.equal(log.entries[0].forced, true)
   void contract
 })
