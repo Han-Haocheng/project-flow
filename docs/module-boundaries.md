@@ -99,6 +99,82 @@
 `verify` 用「数量 ≤ 6」做刹车：超过上限必须先在数据里补理由。**不建议**加 style / formatting /
 perf / test-coverage 类 aspect——它们没有事故面，只会稀释复核责任。
 
+### 4.3 数据形状与只读消费契约（供 aspect 锁等程序）
+
+`aspects⟫ / `roles⟫ 不只是人读文本：每条都要能被确定性校验、被程序稳定解析。下面是**字段契约**；
+消费方（例如阶段 2 的 aspect 锁）**只读**，不得写、不得推导没声明的字段。
+
+~~~text
+aspects: {                                // 键 = aspectId，^[a-z][a-z0-9-]{2,40}$
+  <aspectId>: {
+    title:      string,                   // 人读短名（不参与匹配）
+    semantics:  string,                   // ≥10 字符：这条横切面保证什么不变量（唯一权威语义）
+    ownerRole:  <roleId>,                 // 必须能在 roles 里解析；是「复核角色」，不是人、不是 session
+    files:      string[],                 // 非空、去重；精确文件或 dir/ 前缀；每项必须存在且已归属某模块
+    rationale:  string                    // ≥20 字符：为什么存在（证据：已有守卫测试 / 跨模块 / 事故面）
+  }
+}
+roles: {                                  // 键 = roleId，同一 id 规则
+  <roleId>: {
+    title:     string,
+    semantics: string,                    // ≥10 字符
+    modules:   string[]                   // 非空；每个名字必须是 modules{} 的键
+  }
+}
+~~~
+
+校验对照（`verify⟫ 的保证；逐条列出是为了让消费方知道「合法数据长什么样」）：
+
+| 检查 | 结果 |
+|---|---|
+| aspect / role 的 id 形态 | 非法即红 |
+| `semantics⟫ < 10 字符 / `rationale⟫ < 20 字符 | 红 |
+| `ownerRole⟫ 不在 `roles⟫ 里 | 红 |
+| aspect 的 `files⟫ 为空 / 有重复 / 路径不存在 | 红 |
+| aspect 的 `files⟫ 条目未被任何模块 owns/shared/tests 覆盖 | 红 |
+| aspect 数量 > 6 | 红 |
+| `role.modules⟫ 为空或指向未知模块 | 红 |
+| role 未被任何 aspect 使用 | 仅 warn |
+
+**匹配语义（与 `owns⟫ 完全同一套，不要另写一份）**：
+
+- 条目以 `/⟫ 结尾 → 目录前缀：`file === entry.slice(0, -1) || file.startsWith(entry)⟫；
+- 否则 → 精确相等：`file === entry⟫；
+- 文件路径一律是**仓库相对 POSIX 路径**（`/⟫ 分隔、无 `./⟫ 前缀、按 FS 大小写）；
+- 一个文件可同时命中多个 aspect（多归属是特性，不是冲突）。
+
+**aspect 与 owns 的机器边界（消费方必读）**：
+
+1. aspect **不是写权**：判断「这次改动越不越界」只用 owns / shared + sections，绝不能用 aspect；
+2. aspect **不是审批闸**：不得把 `ownerRole⟫ 当批准条件（裁定 6：审批换成锁）；
+3. `ownerRole⟫ 只有两个用途：解析「复核通知发给谁」（`roles[ownerRole].modules⟫），以及
+   在 aspect 锁上记录「持锁角色关注的面」——**都不产生放行/拒绝语义**；
+4. 数据里**没有「人」**：角色到会话的映射由心跳与 claims 管，不要在 aspects/roles 里塞 session id。
+
+**只读消费契约（aspect 锁必须遵守）**：
+
+1. **只读**：任何程序不得写回 `docs/module-domain.json⟫；写入口只有「编辑该文件 + 跑 verify」；
+2. **每次从磁盘读**，不跨会话缓存；数据变更（git diff 命中该文件）后已持有的 aspect 锁一律失效重建，
+   不得自动迁移到新的 `files⟫；
+3. **先校验再消费**：读之前跑 `node scripts/module-domain.mjs verify --json⟫，`ok:false⟫ 时拒绝加锁
+   （宁可不锁，也不要基于坏数据锁错文件）；
+4. **反查用 `owners⟫**：单文件 → aspect 列表以 `owners --json⟫ 的 `files[].aspects⟫ 为准（它做路径匹配），
+   不要自己重新实现前缀匹配；
+5. **锁键用 `aspectId⟫**：不要用 `ownerRole⟫ 当锁键（同角色多 aspect 会串行，等于退回单点瓶颈）；
+6. **缺键降级**：`aspects⟫ / `roles⟫ 缺失时按「无 aspect」处理，不崩；未知字段忽略（schema 恒为 1）。
+
+**机器接口**：
+
+~~~bash
+node scripts/module-domain.mjs verify --json   # {ok, problems:[{kind,path,module,detail,hint,extra,level}], warnings}
+node scripts/module-domain.mjs owners --files a.mjs,b.mjs --json
+#   {schema:1, range, files:[{path,status,owners,sharedBy,sections,aspects,attribution}],
+#    summary:{modules,aspects,exempt,unknown}, ok}
+~~~
+
+`problem.kind⟫ 是**稳定标识**（如 `aspect 文件不存在⟫、`aspect ownerRole 未定义⟫），消费方可按 kind 分类；
+`detail⟫ 是人读文案，**不得**被程序做字符串匹配（会随措辞改进而变）。
+
 ## 5 `roles`：职责角色
 
 `roles` 声明「哪些模块由同一个职责角色负责」，供 `aspects[].ownerRole` 解析。
