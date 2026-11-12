@@ -559,15 +559,30 @@ test('字段出现条件：变体路径的形状（archive closed / heartbeat cr
 
 test('aspect 锁命令面：list/acquire/renew/release/sweep 五种 data 形状 + pending 与惰性清扫', () => {
   const root = tempRoot('aspect')
+  // 关键：夹具必须像真实仓库一样有 docs/module-domain.json 的 aspects 定义。
+  // 没有定义时锁行是「裸投影」，正是这个差异让上一次漏登记（定义投影会多字段）。
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'stage.mjs'), 'export const stage = 1\n')
+  fs.writeFileSync(
+    path.join(root, 'docs', 'module-domain.json'),
+    JSON.stringify({
+      schema: 1,
+      aspects: {
+        'state-machine': { title: '任务状态机', files: ['lib/stage.mjs'], ownerRole: 'tasks-owner' },
+      },
+      modules: {},
+    }),
+  )
   initProject(root, { name: 'asp' })
   const lockFile = (aspect) => path.join(root, '.agents', 'aspect-locks', aspect + '.json')
 
-  // 1) acquire 成功：锁投影（owner/files/state/releasable/...）
-  const acquired = run(root, ['aspect', 'acquire', '--aspect', 'state-machine', '--session', 's1', '--file', 'lib/x.mjs', '--json'])
+  // 1) acquire 成功：锁投影（owner/files/state/releasable/...），files 来自 aspect 定义
+  const acquired = run(root, ['aspect', 'acquire', '--aspect', 'state-machine', '--session', 's1', '--json'])
   assert.equal(acquired.code, 0, acquired.stderr)
   assert.deepEqual(validateInvocation('aspect', acquired.json), [])
   assert.equal(acquired.json.data.acquired, true)
-  assert.deepEqual(acquired.json.data.lock.files, ['lib/x.mjs'])
+  assert.deepEqual(acquired.json.data.lock.files, ['lib/stage.mjs'])
   assert.equal(acquired.json.data.lock.state, 'held')
   assert.equal(acquired.json.data.lock.owner.session, 's1')
 
@@ -582,8 +597,11 @@ test('aspect 锁命令面：list/acquire/renew/release/sweep 五种 data 形状 
   assert.equal(listed.code, 0, listed.stderr)
   assert.deepEqual(validateInvocation('aspect', listed.json), [])
   assert.equal(listed.json.data.counts.held, 1)
-  assert.equal(listed.json.data.counts.aspects, 0)
-  assert.equal(Object.hasOwn(listed.json.data, 'source'), false)
+  assert.equal(listed.json.data.counts.aspects, 1)
+  assert.equal(listed.json.data.source, 'docs/module-domain.json')
+  assert.deepEqual(listed.json.data.aspects.map((item) => item.title), ['任务状态机'])
+  assert.equal(listed.json.data.locks.length, 1)
+  assert.equal(listed.json.data.locks[0].aspect, 'state-machine')
   assert.equal(Object.hasOwn(listed.json.data, 'swept'), false)
 
   // 3) acquire 被活着占用方挡住：pending 分支（不阻断，waitedMs 是数字）

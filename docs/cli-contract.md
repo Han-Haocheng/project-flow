@@ -270,7 +270,9 @@ stderr 只在极少数非契约场景出现（见 §8）。
 
 ### 9.2 aspect 锁投影（`flow aspect list` 的 `locks[]` 行同源）
 
-`{aspect, files[], owner{session,pid,host,acquired_at,renewed_at,ttl_seconds}, waiters[], state, releasable, reason, evidence, leaseExpiresAt, ttlSeconds, updated_at}`；
+`{aspect, title?, files[], owner{session,pid,host,acquired_at,renewed_at,ttl_seconds}, waiters[], state, releasable, reason, evidence, leaseExpiresAt, ttlSeconds, updated_at}`；
+
+`title` 是可选键：定义投影带了 title 的版本会下发它，当前 `projectLock` 不下发（面板用 `aspects[]` 按 id 关联），两种投影都必须能读。
 `state` 取 `held|dead|foreign|expired`，`releasable` 是「可以被清扫」的唯一判据。
 
 ## 10 变更记录
