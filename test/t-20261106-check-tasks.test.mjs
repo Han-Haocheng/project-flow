@@ -169,11 +169,11 @@ test('A3：人类输出逐条 ✗ + 合计行 + 可复制提示', () => {
 
 // -------------------------------------------------------------------- A4
 
-test('A4：--json 信封键集精确（不多不少）', () => {
+test('A4：--json 信封键集精确（不多不少；schemaVersion 由契约 T-20261112161101 冻结）', () => {
   const root = freshProject('a4')
   seedLegacyPair(root)
   const result = runCli(root, ['--root', root, 'check', 'tasks', '--json'])
-  assert.deepEqual(Object.keys(result.json).sort(), ['error', 'ok', 'warnings'])
+  assert.deepEqual(Object.keys(result.json).sort(), ['error', 'ok', 'schemaVersion', 'warnings'])
   assert.deepEqual(
     Object.keys(result.json.error).sort(),
     ['check', 'code', 'counts', 'durationMs', 'exitCode', 'issues', 'message', 'ok', 'stderr', 'stdout', 'typeMap'],

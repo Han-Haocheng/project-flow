@@ -1,0 +1,473 @@
+// T-20261112161101 · 重构⑤：CLI --json 契约的守卫测试。
+//
+// --json 是前后端唯一的接口（用户边界：前端通过 CLI 调用后端），所以这里不测
+// 「输出好看不好看」，只测**形状**：
+//   1. 信封恒为 {schemaVersion, ok, data|error, warnings}，版本号与契约文件一致；
+//   2. 每条命令的真实 --json 输出都符合 lib/cli/contract.mjs 登记的形状
+//      （未登记字段即失败 —— 增/删/改字段必须同步契约）；
+//   3. SPEC（bin 的命令/参数表）与 DATA_SHAPES 一一对应，没有漏登记的命令，
+//      也没有已删除命令的幽灵形状；
+//   4. 契约测试**自证有效**：故意改名/加字段/错类型/错版本都必须被校验器抓住；
+//   5. --json 与人类输出分工：--json 只吐单行 JSON、不写 stderr、不掺人类文案。
+//
+// 只使用 os.tmpdir() 下的一次性项目（含一个 git 仓库，因为 check 族需要暂存区）。
+
+import { after, test } from 'node:test'
+import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { initProject } from '../lib/core.mjs'
+import {
+  CLI_CONTRACT_VERSION,
+  DATA_SHAPES,
+  commandKeys,
+  validateEnvelope,
+  validateCommandData,
+  validateInvocation,
+  validateShape,
+  contractDocument,
+  canonicalEnvelope,
+} from '../lib/cli/contract.mjs'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const ROOT = path.resolve(HERE, '..')
+const BIN = path.join(ROOT, 'bin', 'flow.mjs')
+const DOC = path.join(ROOT, 'docs', 'cli-contract.md')
+const BIN_SOURCE = fs.readFileSync(BIN, 'utf8')
+
+const TEMP_ROOTS = []
+after(() => {
+  for (const dir of TEMP_ROOTS) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
+  }
+})
+
+function tempRoot(label) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-contract-' + label + '-'))
+  TEMP_ROOTS.push(dir)
+  return dir
+}
+
+const ENV = { ...process.env }
+delete ENV.DSH_SESSION_ID
+delete ENV.DSH_AGENT_ID
+
+function run(cwd, args) {
+  const result = spawnSync(process.execPath, [BIN, '--root', cwd, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: ENV,
+  })
+  let json = null
+  try {
+    json = JSON.parse(result.stdout)
+  } catch {
+    json = null
+  }
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr, json }
+}
+
+/** SPEC 表只在 bin 源码里（import 会执行 main），用与 flag-spec 测试相同的解析法。 */
+function specFromSource() {
+  const start = BIN_SOURCE.indexOf('export const SPEC = Object.freeze({')
+  assert.ok(start > 0, 'bin/flow.mjs 里找不到 SPEC 表')
+  const open = BIN_SOURCE.indexOf('{', start)
+  let depth = 0
+  let end = -1
+  for (let index = open; index < BIN_SOURCE.length; index += 1) {
+    const char = BIN_SOURCE[index]
+    if (char === '{') depth += 1
+    else if (char === '}') {
+      depth -= 1
+      if (depth === 0) {
+        end = index + 1
+        break
+      }
+    }
+  }
+  assert.ok(end > open, 'SPEC 表括号不配对')
+  return new Function('return (' + BIN_SOURCE.slice(open, end) + ')')()
+}
+
+/** SPEC 展开成契约命令键：单命令用命令名，多子命令用 command.action。 */
+function specCommandKeys() {
+  const keys = []
+  for (const [command, entry] of Object.entries(specFromSource())) {
+    if (Object.hasOwn(entry, 'flags')) keys.push(command)
+    else for (const action of Object.keys(entry)) keys.push(command + '.' + action)
+  }
+  return keys.sort()
+}
+
+function describeCommand(key) {
+  const [command, action] = key.split('.')
+  return action === undefined ? [command, '--json'] : [command, action, '--json']
+}
+
+// ---------------------------------------------------------------- 信封
+
+test('信封：成功路径带 schemaVersion/data/warnings，无多余顶层字段', () => {
+  const root = tempRoot('envelope')
+  initProject(root, { name: 'env' })
+  const result = run(root, ['status', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  const parts = result.stdout.trim().split('\n')
+  assert.equal(parts.length, 1, '--json 的 stdout 必须恰好一行 JSON：' + JSON.stringify(result.stdout))
+  assert.deepEqual(Object.keys(result.json).sort(), ['data', 'ok', 'schemaVersion', 'warnings'])
+  assert.equal(result.json.schemaVersion, CLI_CONTRACT_VERSION)
+  assert.equal(result.json.ok, true)
+  assert.deepEqual(validateEnvelope(result.json), [])
+  assert.deepEqual(validateCommandData('status', result.json.data), [])
+  assert.equal(result.stderr, '', '--json 成功路径不写 stderr')
+})
+
+test('信封：失败路径只带 error，退出码按 error.code 映射', () => {
+  const root = tempRoot('envelope-fail')
+  initProject(root, { name: 'envf' })
+  const cases = [
+    { args: ['nope'], code: 1, errorCode: 'usage' },
+    { args: ['task', 'show', 'T-29990101-99'], code: 3, errorCode: 'not-found' },
+    { args: ['task', 'add', '--title', 'x', '--type', 'not-a-type'], code: 2, errorCode: 'invalid' },
+    { args: ['task', 'next', 'T-29990101-99'], code: 3, errorCode: 'not-found' },
+  ]
+  for (const item of cases) {
+    const result = run(root, item.args.concat(['--json']))
+    assert.equal(result.code, item.code, item.args.join(' ') + ' 的退出码')
+    assert.equal(result.json.ok, false)
+    assert.deepEqual(Object.keys(result.json).sort(), ['error', 'ok', 'schemaVersion', 'warnings'])
+    assert.equal(result.json.error.code, item.errorCode)
+    assert.equal(typeof result.json.error.message, 'string')
+    assert.deepEqual(validateEnvelope(result.json), [])
+  }
+})
+
+test('信封：Warnings 恒为数组，且 --json 下不重复写 stderr', () => {
+  const root = tempRoot('envelope-warn')
+  initProject(root, { name: 'envw', noGates: true })
+  // 坏记录 → core warning；--json 只走信封顶层 warnings。
+  fs.mkdirSync(path.join(root, '.agents', 'tasks'), { recursive: true })
+  fs.writeFileSync(path.join(root, '.agents', 'tasks', 'T-20260101-01.json'), '{oops')
+  const result = run(root, ['task', 'list', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.ok(Array.isArray(result.json.warnings))
+  assert.ok(result.json.warnings.some((line) => line.startsWith('unreadable:')), JSON.stringify(result.json.warnings))
+  assert.equal(result.stderr, '')
+})
+
+// ---------------------------------------------------------------- 覆盖
+
+test('契约覆盖：SPEC 的每个命令键都有 data 形状，且没有幽灵形状', () => {
+  const spec = specCommandKeys()
+  const registered = commandKeys()
+  assert.ok(spec.length >= 60, 'SPEC 只解析出 ' + spec.length + ' 个命令键，解析器坏了')
+  const missing = spec.filter((key) => Object.hasOwn(DATA_SHAPES, key) === false)
+  assert.deepEqual(missing, [], '这些命令没有登记 --json data 形状：' + missing.join(', '))
+  const ghosts = registered.filter((key) => spec.includes(key) === false)
+  assert.deepEqual(ghosts, [], '契约里登记了 SPEC 中不存在的命令（幽灵形状）：' + ghosts.join(', '))
+})
+
+test('契约覆盖：docs/cli-contract.md 逐个登记了全部命令键', () => {
+  const doc = fs.readFileSync(DOC, 'utf8')
+  const missing = commandKeys().filter((key) => doc.includes('flow ' + key.replace('.', ' ')) === false)
+  assert.deepEqual(missing, [], '文档漏了这些命令：' + missing.join(', '))
+  assert.ok(doc.includes('schemaVersion'), '文档必须写 schemaVersion')
+  assert.ok(doc.includes(String(CLI_CONTRACT_VERSION)), '文档必须写当前契约版本号')
+})
+
+// ---------------------------------------------------------------- 逐命令形状
+
+test('契约形状：每条命令真实 --json 输出都符合登记形状', () => {
+  const root = tempRoot('run')
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export const a = 1\n')
+  fs.writeFileSync(path.join(root, '.gitignore'), '.agents/\n')
+  const git = (args) => {
+    const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+    assert.equal(result.status, 0, 'git ' + args.join(' ') + ': ' + result.stderr)
+    return result.stdout
+  }
+  git(['init', '-q'])
+  git(['add', '-A'])
+  git(['-c', 'user.email=contract@test', '-c', 'user.name=contract', 'commit', '-qm', 'init'])
+
+  const problems = []
+  const covered = new Set()
+
+  const idOf = (result) => {
+    const data = result.json?.data
+    if (data === null || data === undefined) return null
+    if (typeof data.id === 'string') return data.id
+    if (Array.isArray(data) && typeof data[0]?.id === 'string') return data[0].id
+    if (typeof data.decision?.id === 'string') return data.decision.id
+    return null
+  }
+
+  /** 跑一条命令并校验信封 + data；返回 {code, data} 供后续步骤取 id。 */
+  const expect = (key, args) => {
+    covered.add(key)
+    const result = run(root, args.concat(['--json']))
+    if (result.json === null) {
+      problems.push(key + '：stdout 不是 JSON（' + JSON.stringify(result.stdout.slice(0, 120)) + '）stderr=' + result.stderr.slice(0, 200))
+      return result
+    }
+    const errors = validateInvocation(key, result.json)
+    for (const error of errors) problems.push(key + ' ' + args.join(' ') + ' → ' + error)
+    return result
+  }
+
+  /** check 族脚本检查：成功路径要外部环境，失败路径的 error 也必须带运行结果五字段。 */
+  const expectErrorRun = (key, args, fields = ['check', 'exitCode', 'stdout', 'stderr']) => {
+    covered.add(key)
+    const result = run(root, args.concat(['--json']))
+    assert.equal(result.json?.ok, false, key + ' 期望失败：' + result.stdout)
+    // checks.runCheck 的失败载荷带 check/exitCode/stdout/stderr；成功 data 才带 durationMs。
+    // 内置检查（gate rules）不跑子进程，所以只有 check/exitCode。
+    for (const field of fields) {
+      if (Object.hasOwn(result.json.error, field) === false) {
+        problems.push(key + ' 的 error 缺少运行结果字段 ' + field)
+      }
+    }
+    if (result.json.error.check !== key.split('.')[1]) {
+      problems.push(key + ' 的 error.check 应为 ' + key.split('.')[1] + '，实际 ' + result.json.error.check)
+    }
+    return result
+  }
+
+  expect('init', ['init', '--name', 'contract'])
+  expect('status', ['status'])
+  expect('state', ['state'])
+  expect('doctor', ['doctor'])
+  expect('backup', ['backup'])
+
+  const expAdded = expect('exp.add', [
+    'exp', 'add', '--title', 'T1', '--hypothesis', 'H', '--direction', 'D', '--expected', 'E',
+    '--primary-metric', 'M', '--guardrail', 'G', '--falsify', 'F', '--window-days', '7', '--stop-loss', 'S',
+  ])
+  const expId = idOf(expAdded)
+  expect('exp.list', ['exp', 'list'])
+  expect('exp.show', ['exp', 'show', expId])
+  expect('exp.tree', ['exp', 'tree'])
+  expect('exp.review', ['exp', 'review', expId])
+  expect('exp.update', ['exp', 'update', expId, '--status', 'confirmed', '--measured', 'm', '--metrics', '{"x":1}'])
+  expect('exp.cleanup', ['exp', 'cleanup', expId, '--flag', 'f1'])
+
+  const taskAdded = expect('task.add', ['task', 'add', '--title', 'TK', '--type', 'feat', '--stage', 'implementing'])
+  const taskId = idOf(taskAdded)
+  expect('task.list', ['task', 'list'])
+  expect('task.show', ['task', 'show', taskId])
+  expect('task.update', ['task', 'update', taskId, '--notes', 'notes'])
+  expect('task.next', ['task', 'next', taskId])
+  expect('task.verify', ['task', 'verify', taskId])
+  expect('task.normalize', ['task', 'normalize', '--dry-run'])
+  expect('task.archive', ['task', 'archive', '--dry-run'])
+  expect('task.sweep', ['task', 'sweep', '--dry-run'])
+  expect('task.link', ['task', 'link', taskId, '--team', 'B-1'])
+  expect('task.unlink', ['task', 'unlink', taskId])
+
+  expect('gate.list', ['gate', 'list'])
+  expect('gate.show', ['gate', 'show', 'precommit'])
+  expect('gate.add', ['gate', 'add', '--id', 'g1', '--title', 'G', '--phase', 'manual', '--step', 'a=exit 0'])
+  expect('gate.update', ['gate', 'update', 'g1', '--enabled', 'false'])
+  expect('gate.enable', ['gate', 'enable', 'g1'])
+  expect('gate.run', ['gate', 'run', 'g1'])
+  expect('gate.run', ['gate', 'run', '--phase', 'manual'])
+  expect('gate.logs', ['gate', 'logs', 'g1'])
+  expect('gate.disable', ['gate', 'disable', 'g1'])
+  expect('gate.rm', ['gate', 'rm', 'g1', '--yes'])
+
+  expect('heartbeat.start', ['heartbeat', 'start', '--session', 's1', '--goal', 'G'])
+  expect('heartbeat.update', ['heartbeat', 'update', '--session', 's1', '--status', 'idle'])
+  expect('heartbeat.status', ['heartbeat', 'status', '--session', 's1'])
+  expect('heartbeat.list', ['heartbeat', 'list', '--all'])
+  expect('heartbeat.end', ['heartbeat', 'end', '--session', 's1'])
+  expect('heartbeat.rm', ['heartbeat', 'rm', 's1', '--yes'])
+  expect('heartbeat.gc', ['heartbeat', 'gc', '--dry-run'])
+
+  const asked = expect('decision.ask', [
+    'decision', 'ask', '--question', 'Q', '--kind', 'choice',
+    '--option', 'a=A>>i', '--option', 'b=B>>i', '--recommendation', 'a', '--rationale', 'R',
+  ])
+  const decisionId = asked.json.data.decision.id
+  expect('decision.list', ['decision', 'list'])
+  expect('decision.show', ['decision', 'show', decisionId])
+  expect('decision.answer', ['decision', 'answer', decisionId, '--choice', 'a'])
+  const withdrawn = expect('decision.ask', ['decision', 'ask', '--question', 'Q2', '--kind', 'input', '--rationale', 'R'])
+  expect('decision.withdraw', ['decision', 'withdraw', withdrawn.json.data.decision.id, '--reason', 'R'])
+  expect('decision.gc', ['decision', 'gc', '--dry-run'])
+
+  expect('desc.status', ['desc', 'status'])
+  expect('desc.build', ['desc', 'build'])
+  expect('desc.show', ['desc', 'show'])
+  expect('desc.show', ['desc', 'show', '--graph', 'mermaid'])
+  expect('desc.set', ['desc', 'set', '--project-semantics', '这是一个足够长的项目语义描述'])
+  expect('desc.plan', ['desc', 'plan', taskId, '--template', 'lib/a.mjs'])
+  expect('desc.plan', ['desc', 'plan', taskId, '--input', '{"files":[{"path":"lib/a.mjs","op":"change"}]}'])
+  expect('desc.plan', ['desc', 'plan', taskId, '--show'])
+  expect('desc.apply', ['desc', 'apply', taskId, '--dry-run'])
+  expect('desc.render', ['desc', 'render'])
+
+  expect('check.list', ['check', 'list'])
+  expect('check.tasks', ['check', 'tasks'])
+  expect('check.experiments', ['check', 'experiments'])
+  expect('check.decisions', ['check', 'decisions'])
+  expectErrorRun('check.description', ['check', 'description'])
+  expectErrorRun('gate.rules', ['gate', 'rules'], ['check', 'exitCode'])
+  fs.writeFileSync(path.join(root, 'b.txt'), 'y\n')
+  git(['add', 'b.txt'])
+  expect('check.staged', ['check', 'staged', '--allow', 'b.txt'])
+  expectErrorRun('check.release-baseline', ['check', 'release-baseline', '--marker', 'RELEASE'])
+  expectErrorRun('check.state', ['check', 'state'])
+  expectErrorRun('check.doc', ['check', 'doc', '--file', 'lib/a.mjs', '--type', 'task'])
+
+  // productize 需要 release 门禁有一次通过运行，且 finished_at 晚于实验进入 confirmed 的时刻。
+  run(root, ['gate', 'update', 'release', '--step', 'pass=exit 0', '--json'])
+  run(root, ['gate', 'run', 'release', '--force', '--json'])
+  const productized = run(root, ['exp', 'productize', expId, '--json'])
+  covered.add('exp.productize')
+  for (const error of validateInvocation('exp.productize', productized.json)) problems.push('exp.productize → ' + error)
+  expect('exp.rm', ['exp', 'rm', expId, '--yes'])
+  expect('task.rm', ['task', 'rm', taskId, '--yes'])
+
+  assert.deepEqual(problems, [], '契约形状不符：\n' + problems.join('\n'))
+
+  // 覆盖守卫：SPEC 的每个命令键都被真实执行过一次（正例），否则上面的循环会假绿。
+  const spec = specCommandKeys()
+  const uncovered = spec.filter((key) => covered.has(key) === false)
+  assert.deepEqual(uncovered, [], '这些命令没有真实执行过（覆盖缺口）：' + uncovered.join(', '))
+})
+
+// ---------------------------------------------------------------- 自证有效
+
+test('自证：改名/加字段/错类型/错枚举/错版本都必须被校验器抓住', () => {
+  const root = tempRoot('selfproof')
+  initProject(root, { name: 'sp' })
+  const payload = run(root, ['status', '--json']).json
+  assert.deepEqual(validateInvocation('status', payload), [], '基线必须先通过')
+
+  const clone = () => JSON.parse(JSON.stringify(payload))
+
+  // 1) 字段改名：真实输出里的 initialized 改成 initialised
+  const renamed = clone()
+  renamed.data.initialised = renamed.data.initialized
+  delete renamed.data.initialized
+  const renameErrors = validateCommandData('status', renamed.data)
+  assert.ok(
+    renameErrors.some((error) => error.includes('data.initialized') && error.includes('缺少必填字段')),
+    '字段改名必须报缺失：' + renameErrors.join('；'),
+  )
+  assert.ok(
+    renameErrors.some((error) => error.includes('data.initialised') && error.includes('未登记字段')),
+    '字段改名必须报未登记：' + renameErrors.join('；'),
+  )
+
+  // 2) 多出未登记字段（字段增删必须同步契约）
+  const extended = clone()
+  extended.data.surprise = 1
+  assert.ok(validateCommandData('status', extended.data).some((error) => error.includes('data.surprise')))
+
+  // 3) 类型改变
+  const retyped = clone()
+  retyped.data.schema = '2'
+  assert.ok(validateCommandData('status', retyped.data).some((error) => error.includes('data.schema')))
+
+  // 4) 枚举越界（任务状态）
+  const badEnum = { ...payload.data.recent.tasks[0] }
+  const taskPayload = run(root, ['task', 'add', '--title', 'x', '--type', 'feat', '--json']).json
+  assert.deepEqual(validateInvocation('task.add', taskPayload), [])
+  const badTask = JSON.parse(JSON.stringify(taskPayload))
+  badTask.data.status = 'doing'
+  assert.ok(validateCommandData('task.add', badTask.data).some((error) => error.includes('不在枚举')))
+
+  // 5) 信封版本不符（前端据此判断兼容性）
+  const future = clone()
+  future.schemaVersion = CLI_CONTRACT_VERSION + 1
+  assert.ok(validateEnvelope(future).some((error) => error.includes('schemaVersion')))
+
+  // 6) 信封顶层多字段
+  const extra = clone()
+  extra.meta = {}
+  assert.ok(validateEnvelope(extra).some((error) => error.includes('未登记字段')))
+
+  // 7) 失败信封带 data / 成功信封带 error 都是违约
+  const both = clone()
+  both.error = { code: 'usage', message: 'x' }
+  assert.ok(validateEnvelope(both).some((error) => error.includes('不得带 error')))
+  const failure = { schemaVersion: CLI_CONTRACT_VERSION, ok: false, data: {}, warnings: [] }
+  assert.ok(validateEnvelope(failure).some((error) => error.includes('失败信封')))
+
+  // 8) 未登记的命令键
+  assert.ok(validateCommandData('nope.command', {}).some((error) => error.includes('未登记')))
+})
+
+test('契约文档：contractDocument() 可序列化且与注册表一致', () => {
+  const doc = contractDocument()
+  const text = JSON.stringify(doc)
+  assert.equal(typeof text, 'string')
+  const parsed = JSON.parse(text)
+  assert.equal(parsed.schemaVersion, CLI_CONTRACT_VERSION)
+  assert.deepEqual(Object.keys(parsed.commands).sort(), commandKeys())
+  for (const key of Object.keys(parsed.records)) {
+    assert.equal(typeof parsed.records[key].kind, 'string', '记录形状 ' + key + ' 必须是合法形状')
+  }
+  for (const [name, shape] of Object.entries(parsed.commands)) {
+    assert.ok(shape !== null && typeof shape === 'object', name + ' 的形状必须是对象')
+    assert.equal(typeof shape.kind, 'string', name + ' 的形状必须有 kind')
+  }
+  // 信封字段集与契约文件一致
+  assert.deepEqual(parsed.envelope.success.shape, ['schemaVersion', 'ok', 'data', 'warnings'])
+  assert.deepEqual(parsed.envelope.failure.shape, ['schemaVersion', 'ok', 'error', 'warnings'])
+})
+
+test('信封规范化：canonicalEnvelope 补版本并把 warnings 归成数组', () => {
+  const ok = canonicalEnvelope({ ok: true, data: { a: 1 }, warnings: ['w'] })
+  assert.deepEqual(Object.keys(ok), ['schemaVersion', 'ok', 'data', 'warnings'])
+  assert.equal(ok.schemaVersion, CLI_CONTRACT_VERSION)
+  const fixed = canonicalEnvelope({ ok: false, error: { code: 'usage', message: 'm' } })
+  assert.deepEqual(fixed.warnings, [])
+  // 非信封载荷原样返回（emitJson 仍是通用出口）
+  const raw = { anything: 1 }
+  assert.equal(canonicalEnvelope(raw), raw)
+})
+
+// ---------------------------------------------------------------- 人类/机器分工
+
+test('--json 与人类输出分工：默认输出不掺信封，--json 不掺人类文案', () => {
+  const root = tempRoot('split')
+  initProject(root, { name: 'split' })
+  const human = run(root, ['status'])
+  assert.equal(human.code, 0)
+  assert.notEqual(human.stdout.trim().startsWith('{'), true, '人类输出不得以 JSON 信封开头')
+  assert.equal(human.stdout.includes('"schemaVersion"'), false)
+
+  const machine = run(root, ['status', '--json'])
+  assert.equal(machine.code, 0)
+  assert.equal(machine.stderr, '')
+  const lines = machine.stdout.trimEnd().split('\n')
+  assert.equal(lines.length, 1, '--json 只允许一行 JSON')
+  assert.doesNotThrow(() => JSON.parse(lines[0]))
+})
+
+test('形状校验器：union / ref / any 的边界行为', () => {
+  // union 取第一个匹配分支；ref 解析记录形状；any 放行一切
+  const shape = { kind: 'union', of: [{ kind: 'object', fields: { a: { kind: 'string' } }, required: ['a'] }, { kind: 'null' }] }
+  assert.deepEqual(validateShape(shape, null, '$'), [])
+  assert.deepEqual(validateShape(shape, { a: 'x' }, '$'), [])
+  assert.notDeepEqual(validateShape(shape, { a: 1 }, '$'), [])
+  assert.deepEqual(validateShape({ kind: 'any' }, { whatever: [1, 2] }, '$'), [])
+  assert.notDeepEqual(validateShape({ kind: 'ref', name: 'nope' }, {}, '$'), [])
+  // 记录形状递归引用（status 里的 recent.tasks）能被解析
+  const statusShape = DATA_SHAPES.status
+  assert.deepEqual(
+    validateShape(statusShape.fields.counts, [1, 2, 3], '$.data.counts').length > 0,
+    true,
+    '数组不是 object，必须报错',
+  )
+})
