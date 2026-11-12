@@ -430,7 +430,42 @@ async function runMcpServe(argv) {
   } catch (error) {
     throw new CliError('io', `无法加载 MCP 服务端（lib/cli/mcp-server.mjs）：${error?.message || String(error)}`)
   }
+  // 帮助文案单源在 lib/cli/mcp-server.mjs（cli 写域）；那一行还写着 `node bin/mcp.mjs`。
+  // 从 `flow mcp-serve` 进来时必须把入口名改成用户实际敲的命令，否则帮助在教旧用法。
+  // 只替换入口名，正文（协议/能力/参数）仍来自同一份 USAGE。
+  const wantsHelp = argv.includes('--help') || argv.includes('-h')
+  if (wantsHelp) {
+    out(server.USAGE.replace('node bin/mcp.mjs', 'flow mcp-serve'))
+    return 0
+  }
   return await server.main(argv)
+}
+
+/**
+ * `flow [--root <dir>] mcp-serve [options]`：全局参数可以前置，命令名必须出现在
+ * 第一个非全局 token 位置（`--help` 前置时仍按 CLI 帮助处理，不吞掉用户要看的总览）。
+ * 返回交给 MCP 服务端解析的 argv；不是 mcp-serve 形式时返回 null。
+ */
+function mcpServeInvocation(argv) {
+  const globals = []
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]
+    if (token === 'mcp-serve') return { args: [...globals, ...argv.slice(index + 1)] }
+    if (token === '--help' || token === '-h') return null
+    if (token === '--root') {
+      const value = argv[index + 1]
+      if (value === undefined || value.startsWith('--')) return null
+      globals.push(token, value)
+      index += 1
+      continue
+    }
+    if (token.startsWith('--root=')) {
+      globals.push(token)
+      continue
+    }
+    return null
+  }
+  return null
 }
 
 // 面板状态快照（T-20261112154725）：前端唯一允许读的台账面。实现放
@@ -467,9 +502,10 @@ function exitCodeOf(code) {
 }
 
 async function main() {
-  // `flow mcp-serve` 先于一切 cli 输出装置分流：这条通道的 stdout 是 JSON-RPC，
-  // 不能出现 usage / 信封 / 警告。参数原样交给 MCP 服务端解析。
-  if (process.argv[2] === 'mcp-serve') return await runMcpServe(process.argv.slice(3))
+  // `flow [--root <dir>] mcp-serve` 先于一切 cli 输出装置分流：这条通道的 stdout 是
+  // JSON-RPC，不能出现 usage / 信封 / 警告。前置的全局参数原样转给 MCP 服务端解析。
+  const mcpServe = mcpServeInvocation(process.argv.slice(2))
+  if (mcpServe !== null) return await runMcpServe(mcpServe.args)
 
   const parsed = parseArgv(process.argv.slice(2))
   setJsonMode(parsed.flags.json === true)

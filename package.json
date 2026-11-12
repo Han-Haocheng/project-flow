@@ -10,7 +10,8 @@
     "url": "https://github.com/Han-Haocheng/project-flow.git"
   },
   "bin": {
-    "flow": "./bin/flow.mjs"
+    "flow": "./bin/flow.mjs",
+    "flow-mcp": "./bin/mcp.mjs"
   },
   "exports": {
     ".": "./index.js",
