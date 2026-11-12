@@ -218,8 +218,8 @@ test('auto + 无记录：三条目标边全部放行（守住现有大量 update
 
 test('queued-implementation：auto + 有记录 + 无计划 → 拒绝，且盘上零残留', () => {
   const { root, contract } = describedProject('gate-qi-noplan')
-  const task = addTask(root, contract, { title: '无计划', type: 'feat' })
-  updateTask(root, contract, task.id, { stage: 'analyzing' })
+  /* 直接建在 analyzing：created → analyzing 不是合约边，本卡只接管 update 的写入。 */
+  const task = addTask(root, contract, { title: '无计划', type: 'feat', stage: 'analyzing' })
 
   expectGateError(
     () => updateTask(root, contract, task.id, { stage: 'queued-implementation' }),
@@ -403,7 +403,8 @@ test('done 时间边界：绿记录早于 implemented_at → 仍拒绝；失败�
 test('豁免：parent 非空的子任务推 done 放行（auto + 有记录条件下）', () => {
   const { root, contract } = describedProject('gate-exempt-subtask')
   const parent = addTask(root, contract, { title: '父任务', type: 'feat', stage: 'analyzing' })
-  const child = addTask(root, contract, { title: '子任务', type: 'feat', parent: parent.id })
+  /* 子任务建在 analyzing：analyzing → done 才是汇总收口边（created → done 不在边表里）。 */
+  const child = addTask(root, contract, { title: '子任务', type: 'feat', parent: parent.id, stage: 'analyzing' })
   assert.equal(updateTask(root, contract, child.id, { stage: 'done' }).stage, 'done')
   // 父任务走同一路径 → 被拦（证明豁免只对子任务生效）。
   const sibling = addTask(root, contract, { title: '根任务', type: 'feat', stage: 'analyzing' })
@@ -457,7 +458,7 @@ test('豁免：只写 status/notes 的补丁不触发门禁（即使台账里有
   assert.equal(again.notes, '描述目录都没了')
 })
 
-test('存量盘上无 stage 的记录：from 走 projectTaskStage 投影（同阶重写视为幂等）', () => {
+test('存量盘上无 stage 的记录：from 走 projectTaskStage 投影（同阶重写幂等／跳级文案用投影起点）', () => {
   const { root, contract } = describedProject('gate-legacy')
   // status=active → 投影成 queued-analysis；盘上没有 stage 字段。
   writeLegacyTask(root, 'T-20260101000000', 'active')
@@ -470,11 +471,16 @@ test('存量盘上无 stage 的记录：from 走 projectTaskStage 投影（同�
     'queued-analysis'
   )
 
-  // 换一条真的迁移 → 照常拦（有记录、无计划）。
+  // 换一条真的迁移 → 阶段边先拒（T-20261112151328）。文案里的 from 必须是**投影**出来的
+  // queued-analysis：若实现直接读 `current.stage`（undefined），会变成 unknown stage。
   writeLegacyTask(root, 'T-20260101000001', 'active')
-  expectGateError(
+  assert.throws(
     () => updateTask(root, contract, 'T-20260101000001', { stage: 'queued-implementation' }),
-    'queued-implementation'
+    (error) =>
+      error instanceof FlowError &&
+      error.code === 'invalid' &&
+      /stage queued-analysis cannot move to "queued-implementation"/.test(error.message),
+    'legacy 记录的 from 必须是 projectTaskStage 投影'
   )
 })
 

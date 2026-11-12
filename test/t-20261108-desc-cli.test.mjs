@@ -389,6 +389,8 @@ test('desc apply：non-implementing 退 2；--dry-run 零写盘；apply 幂等�
   assert.equal(early.code, 2, early.stdout + early.stderr)
   assert.equal(early.json.error.code, 'invalid')
 
+  /* 阶段边由 core 校验：analyzing → implementing 没有直接边，先过待实现。 */
+  setStage(root, task.id, 'queued-implementation')
   setStage(root, task.id, 'implementing')
   const before = snapshotTree(descDir(root))
   const dry = runCli(root, ['desc', 'apply', task.id, '--dry-run', '--json'])

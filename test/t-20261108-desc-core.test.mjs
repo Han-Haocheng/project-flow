@@ -743,12 +743,20 @@ test('setDescriptionPlan：阶段窗口（queued-analysis/analyzing/implementing
   // created：太早。
   expectFlowError(() => setDescriptionPlan(root, contract, task.id, body), 'invalid', /只允许 queued-analysis \/ analyzing \/ implementing/)
 
-  for (const stage of ['queued-analysis', 'analyzing', 'implementing']) {
+  for (const stage of ['queued-analysis', 'analyzing']) {
     updateTask(root, contract, task.id, { stage })
     const result = setDescriptionPlan(root, contract, task.id, body)
     assert.equal(result.plan.task, task.id)
     assert.equal(result.plan.status, 'planned')
   }
+
+  /* implementing 不是 analyzing 的直接后继（阶段边由 core 校验）：先过 queued-implementation。
+     计划在上一轮已写入，queued-implementation 的计划门因此放行。 */
+  updateTask(root, contract, task.id, { stage: 'queued-implementation' })
+  updateTask(root, contract, task.id, { stage: 'implementing' })
+  const implemented = setDescriptionPlan(root, contract, task.id, body)
+  assert.equal(implemented.plan.task, task.id)
+  assert.equal(implemented.plan.status, 'planned')
 
   // done：太晚。
   updateTask(root, contract, task.id, { stage: 'queued-review' })

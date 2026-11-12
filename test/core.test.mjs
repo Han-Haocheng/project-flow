@@ -3497,19 +3497,23 @@ test('T-09 done_at：进入 done 写入、重复 done 不覆盖、回 active/dra
   const task = addTask(root, contract, { title: '时刻任务' })
   assert.equal(Object.hasOwn(task, 'done_at'), false, '可选字段：active 任务不预置')
 
-  const first = updateTask(root, contract, task.id, { status: 'done' })
+  /* 这些是**兼容 status 视图**的写入（本夹具的记录是 legacy 形状，盘上没有 stage）：
+     阶段机接管写入后，status 派生出的阶段迁移不在边表里（done→active 这类「恢复」
+     没有合约边），所以按 T-20261112151328 的豁免口径显式标成 `source: 'internal'`
+     （插件/迁移记账档）。会话面向的「恢复」需要自己的边，属于后续卡，不在这里放宽。 */
+  const first = updateTask(root, contract, task.id, { status: 'done' }, { source: 'internal' })
   assert.match(first.done_at, TASK_STAMP_RE)
   assert.equal(first.archived_at, null)
   const second = updateTask(root, contract, task.id, { notes: '补一句' })
   assert.equal(second.done_at, first.done_at, 'done 之后普通 patch 不覆盖完成时刻')
 
-  const active = updateTask(root, contract, task.id, { status: 'active' })
+  const active = updateTask(root, contract, task.id, { status: 'active' }, { source: 'internal' })
   assert.equal(active.done_at, null, '回 active 清空 done_at')
   assert.equal(active.archived_at, null)
 
-  const again = updateTask(root, contract, task.id, { status: 'done' })
+  const again = updateTask(root, contract, task.id, { status: 'done' }, { source: 'internal' })
   assert.ok(Date.parse(again.done_at) >= Date.parse(first.done_at))
-  const draft = updateTask(root, contract, task.id, { status: 'draft' })
+  const draft = updateTask(root, contract, task.id, { status: 'draft' }, { source: 'internal' })
   assert.equal(draft.done_at, null, 'draft 也不保留完成时刻')
 })
 
@@ -3539,13 +3543,14 @@ test('T-09 archiveTasks：archived_at=now 且保留 10 天前的 done_at（不�
 test('T-09 archived_at：直接归档写入、重复归档不覆盖、反向恢复清空两字段', () => {
   const { root, contract } = freshProject('t09-direct')
   const task = addTask(root, contract, { title: '直接归档' })
-  const done = updateTask(root, contract, task.id, { status: 'done' })
-  const archived = updateTask(root, contract, task.id, { status: 'archived' })
+  /* 同上：legacy status 视图的写入，含没有合约边的「恢复」，显式标 internal。 */
+  const done = updateTask(root, contract, task.id, { status: 'done' }, { source: 'internal' })
+  const archived = updateTask(root, contract, task.id, { status: 'archived' }, { source: 'internal' })
   assert.equal(archived.done_at, done.done_at, '归档保留 done_at')
   assert.match(archived.archived_at, TASK_STAMP_RE)
   const repeated = updateTask(root, contract, task.id, { notes: '再改' })
   assert.equal(repeated.archived_at, archived.archived_at, '重复归档/patch 不覆盖归档时刻')
-  const restored = updateTask(root, contract, task.id, { status: 'active' })
+  const restored = updateTask(root, contract, task.id, { status: 'active' }, { source: 'internal' })
   assert.equal(restored.done_at, null)
   assert.equal(restored.archived_at, null)
 })

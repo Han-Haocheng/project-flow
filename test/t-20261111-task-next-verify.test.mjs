@@ -337,11 +337,13 @@ test('阶段门：有可执行验收但没验证过 → 拒绝进入 reviewing�
   const { root, contract } = freshProject('gate-block')
   const task = addTask(root, contract, { type: 'feat', title: '门', stage: 'implementing' })
   setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(0)"'])
+  /* implementing → reviewing 不是直接边（T-20261112151328）：先过 queued-review。 */
+  assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'queued-review']).code, 0)
   const result = runCli(root, ['task', 'update', task.id, '--stage', 'reviewing'])
   assert.equal(result.code, 2, '应被 acceptance gate 拒绝（invalid → 2）')
   assert.match(result.stderr, /acceptance gate: reviewing/)
   assert.match(result.stderr, new RegExp(`flow task verify ${task.id}`))
-  assert.equal(readTaskOnDisk(root, task.id).stage, 'implementing', '被拒的写入不得落盘')
+  assert.equal(readTaskOnDisk(root, task.id).stage, 'queued-review', '被拒的写入不得落盘')
 })
 
 test('阶段门：verify 通过后放行；验收被改动后记录失效（必须重跑）', () => {
@@ -349,6 +351,7 @@ test('阶段门：verify 通过后放行；验收被改动后记录失效（必�
   const task = addTask(root, contract, { type: 'feat', title: '放行', stage: 'implementing' })
   setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(0)"'])
   assert.equal(runCli(root, ['task', 'verify', task.id]).code, 0)
+  assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'queued-review']).code, 0)
   assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'reviewing']).code, 0)
 
   // 改验收 → 签名变了 → done 被拒（拿旧结果当新证据是假绿）
@@ -366,6 +369,7 @@ test('阶段门：没有可执行验收项时默认只警告（放行 + 一条 w
   drainWarnings()
   const task = addTask(root, contract, { type: 'feat', title: '纯文本', stage: 'implementing' })
   setAcceptance(root, contract, task.id, ['人能看懂的验收标准'])
+  updateTask(root, contract, task.id, { stage: 'queued-review' })
   const moved = updateTask(root, contract, task.id, { stage: 'reviewing' })
   assert.equal(moved.stage, 'reviewing', '默认策略是警告放行，不是拒绝')
   assert.match(drainWarnings().join('\n'), /task-acceptance-none: .*: 进入 reviewing 但没有可执行验收项/)
@@ -380,6 +384,7 @@ test('阶段门：tasks.requireAcceptance=strict 时，没有可执行验收项 
   const contract = loadContract(root).contract
   const task = addTask(root, contract, { type: 'feat', title: '严格', stage: 'implementing' })
   setAcceptance(root, contract, task.id, ['人来判定的验收'])
+  updateTask(root, contract, task.id, { stage: 'queued-review' })
   assert.throws(
     () => updateTask(root, contract, task.id, { stage: 'reviewing' }),
     (error) => error.code === 'invalid' && /没有可执行验收项/.test(error.message),

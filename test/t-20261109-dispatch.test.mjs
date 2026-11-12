@@ -752,11 +752,17 @@ test('汇总轮 ①：子任务全部 done → 父任务经 flow_task update 推
   const host = makeHost(root, { subagents })
   const taskTool = host.tool
 
-  const main = await taskTool.execute({ action: 'add', title: '父任务', type: 'feat', root, stage: 'queued-analysis' }, host.exec)
+  /* 父任务直接建在 analyzing：本用例从「分析者已进来」开始（created → analyzing 不是合约边）。 */
+  const main = await taskTool.execute({ action: 'add', title: '父任务', type: 'feat', root, stage: 'analyzing' }, host.exec)
   const parentId = main.task.id
   /* 首轮分析者：拆任务（flow_subtask add）后从 analyzing 推到 queued-implementation。 */
   const subtaskTool = host.tool
-  const child = await subtaskTool.execute({ action: 'add', parent: parentId, title: '子任务一', type: 'feat' }, host.exec)
+  /* 子任务建在 queued-implementation（与 flow_subtask add 的默认起点一致）：
+     阶段边接管后 created → queued-review 不再可写。 */
+  const child = await subtaskTool.execute(
+    { action: 'add', parent: parentId, title: '子任务一', type: 'feat', stage: 'queued-implementation' },
+    host.exec,
+  )
   await taskTool.execute({ action: 'update', id: parentId, root, stage: 'queued-implementation' }, host.exec)
   /* 子任务实现/审查完成 → 父任务被聚合回待分析并重新派分析者（汇总轮）。 */
   for (const stage of ['queued-review', 'done']) {

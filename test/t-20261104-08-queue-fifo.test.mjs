@@ -114,8 +114,9 @@ test('tasks.current：manifest 未声明时派生为队列头；声明时优先�
 
   // 没有 active 时退化为 null（manifest 未声明）。
   saveContract(root, { ...contract, tasks: { ...contract.tasks, current: null } })
-  updateTask(root, contract, 'T-20260101-08', { status: 'done' })
-  updateTask(root, contract, 'T-20260101-09', { status: 'done' })
+  /* legacy status 视图写入（盘上无 stage）：派生迁移不在边表里，按插件记账口径标 internal。 */
+  updateTask(root, contract, 'T-20260101-08', { status: 'done' }, { source: 'internal' })
+  updateTask(root, contract, 'T-20260101-09', { status: 'done' }, { source: 'internal' })
   const none = await snapshotOf(root)
   assert.equal(none.tasks.current, null)
 })

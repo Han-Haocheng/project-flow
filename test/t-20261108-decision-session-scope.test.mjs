@@ -150,8 +150,12 @@ function decisionFiles(root, contract) {
 }
 
 function seedUnfinishedTask(root, contract, title = '待处理任务') {
-  const task = addTask(root, contract, { type: 'feat', title })
-  return updateTask(root, contract, task.id, { stage: 'implementing' })
+  // 阶段边由 core 校验（T-20261112151328）：夹具按合法链从 created 走到 implementing。
+  let task = addTask(root, contract, { type: 'feat', title })
+  for (const stage of ['queued-analysis', 'analyzing', 'queued-implementation', 'implementing']) {
+    task = updateTask(root, contract, task.id, { stage })
+  }
+  return task
 }
 
 // ---------------------------------------------------------------- core read model
@@ -207,8 +211,8 @@ test('归档清理：只删归档会话的记录（含已关闭），幂等，dr
 
 test('归档清理清空指向被删决策的任务指针（否决不遗留）', () => {
   const { root, contract } = freshProject('veto-pointer')
-  const task = addTask(root, contract, { type: 'feat', title: '被否决的任务' })
-  updateTask(root, contract, task.id, { stage: 'analyzing' })
+  /* 建在 analyzing（主任务否决只允许该阶段；add 不校验起点，created → analyzing 不是合约边）。 */
+  const task = addTask(root, contract, { type: 'feat', title: '被否决的任务', stage: 'analyzing' })
   const veto = vetoTask(root, contract, {
     taskId: task.id,
     reason: '方案不成立',

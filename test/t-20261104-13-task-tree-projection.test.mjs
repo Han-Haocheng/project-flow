@@ -147,7 +147,8 @@ test('队列头取根：父不在 active 集合时子任务算根', async () => 
   const { root, contract } = freshProject('cross-group')
   task(root, contract, 'T-20260101-51', '父（稍后完成）', 'active', AT(1))
   task(root, contract, 'T-20260101-52', '子 active', 'active', AT(2), 'T-20260101-51')
-  updateTask(root, contract, 'T-20260101-51', { status: 'done' })
+  /* legacy status 视图写入（盘上无 stage）：派生迁移不在边表里，按插件记账口径标 internal。 */
+  updateTask(root, contract, 'T-20260101-51', { status: 'done' }, { source: 'internal' })
 
   const payload = await snapshotOf(root)
   const child = payload.tasks.active.find((row) => row.id === 'T-20260101-52')

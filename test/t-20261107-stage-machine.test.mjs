@@ -296,7 +296,9 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
   assert.equal(queued.status, 'active')
   assert.equal(readTaskFile(root, created.id).stage, 'queued-review')
 
-  // 进入 done 阶段：status=done，且 done_at 由 stampTaskTimes 正常写入（未被派生逻辑绕过）
+  // 进入 done 阶段：status=done，且 done_at 由 stampTaskTimes 正常写入（未被派生逻辑绕过）。
+  // 阶段边由 core 校验（T-20261112151328）：queued-review → done 不是合法边，先经 reviewing。
+  updateTask(root, contract, created.id, { stage: 'reviewing' })
   const done = updateTask(root, contract, created.id, { stage: 'done' })
   assert.equal(done.status, 'done')
   assert.match(String(done.done_at), /\d{4}-\d{2}-\d{2}T/)
@@ -306,8 +308,9 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
   const archived = updateTask(root, contract, created.id, { stage: 'archived' })
   assert.equal(archived.status, 'archived')
 
-  // 两者同给且一致 → 允许
-  const consistent = updateTask(root, contract, created.id, { stage: 'implementing', status: 'active' })
+  // 两者同给且一致 → 允许（archived 是终态，另起一张停在 queued-implementation 的卡）
+  const staged = addTask(root, contract, { type: 'feat', title: '同给一致', stage: 'queued-implementation' })
+  const consistent = updateTask(root, contract, staged.id, { stage: 'implementing', status: 'active' })
   assert.equal(consistent.status, 'active')
 
   // 两者同给且矛盾 → invalid（文案点明派生值与给定值）
@@ -322,11 +325,105 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
   // 只写 status 仍然可用（既有调用方：归档 sweep / 心跳认领）。
   // 磁盘上不得补写 stage 键；**读投影按 status 反推**（task-68：done → done，
   // 否则 done 任务会被当成未完成、进待办栈顶）。
-  const statusOnly = updateTask(root, contract, other.id, { status: 'done' })
+  // 注意：记录盘上没有 stage 时，status 派生出的阶段迁移（created → done）不在边表里。
+  // 这类兼容写现在只有 internal 档可用；普通会话写会被阶段边拒绝（已报本卡，另卡处理）。
+  const statusOnly = updateTask(root, contract, other.id, { status: 'done' }, { source: 'internal' })
   assert.equal(statusOnly.status, 'done')
   assert.equal(statusOnly.stage, 'done', '只写 status 时投影按 status 反推')
   assert.equal(Object.hasOwn(readTaskFile(root, other.id), 'stage'), false, '只写 status 不得在磁盘补 stage 键')
   assert.equal(Object.hasOwn(readTaskFile(root, other.id), 'stage'), false, '只写 status 也不得补写 stage 键')
+})
+
+
+// ================ 5b. 写入口接管阶段边（T-20261112151328 S1；紧邻 ⑤ 的阶段写入测试）
+//
+// 本卡要修的病：`assertTransition` 原先只在 MCP 那一条调用链上跑，CLI（`--stage`）与
+// 直接 core 调用都能把任务写到任意阶段——事故卡 T-20261108154945 就是一次无校验的
+// `--stage implementing` 写出来的。现在 `updateTask`（唯一写入口）在锁内、两道门之前
+// 校验 `from → to`：非法边 invalid（文案就是 lib/stage.mjs 的那句，含合法后继），
+// 同阶段重写幂等，`source:'internal'` 的插件记账豁免。
+
+test('5b-1 core 写入口：非法跳级 invalid 且文案列出合法后继，盘上零残留', () => {
+  const { root, contract } = freshProject('edge-illegal')
+  const task = addTask(root, contract, { type: 'feat', title: '边校验' })
+
+  expectInvalid(
+    () => updateTask(root, contract, task.id, { stage: 'implementing' }),
+    /^stage created cannot move to "implementing"; allowed next: queued-analysis$/,
+  )
+  assert.equal(getTask(root, contract, task.id).stage, 'created', '被拒的写入不得落盘')
+
+  // 合法边照常通过：created → queued-analysis → analyzing → done（分析者汇总收口边）
+  assert.equal(updateTask(root, contract, task.id, { stage: 'queued-analysis' }).stage, 'queued-analysis')
+  assert.equal(updateTask(root, contract, task.id, { stage: 'analyzing' }).stage, 'analyzing')
+  assert.equal(updateTask(root, contract, task.id, { stage: 'done' }).stage, 'done')
+})
+
+test('5b-2 core 写入口：同阶段重写与只改 notes 幂等（不因边校验变红）', () => {
+  const { root, contract } = freshProject('edge-idempotent')
+  const task = addTask(root, contract, { type: 'feat', title: '幂等', stage: 'analyzing' })
+
+  assert.equal(updateTask(root, contract, task.id, { stage: 'analyzing' }).stage, 'analyzing')
+  const patched = updateTask(root, contract, task.id, { notes: '只改备注' })
+  assert.equal(patched.notes, '只改备注')
+  assert.equal(patched.stage, 'analyzing')
+})
+
+test("5b-3 core 写入口：source:'internal' 豁免（插件记账写非合约迁移）", () => {
+  const { root, contract } = freshProject('edge-internal')
+  const task = addTask(root, contract, { type: 'feat', title: '内部写' })
+
+  // created → done 不在边表里，session 写会被拒……
+  expectInvalid(() => updateTask(root, contract, task.id, { stage: 'done' }), /cannot move to "done"/)
+  // ……internal（sweep/veto/迁移）照旧可以收口。
+  assert.equal(updateTask(root, contract, task.id, { stage: 'done' }, { source: 'internal' }).stage, 'done')
+})
+
+test('5b-4 core 写入口：reviewing → queued-implementation 打回边不得被收紧', () => {
+  const { root, contract } = freshProject('edge-back')
+  const task = addTask(root, contract, { type: 'feat', title: '打回', stage: 'queued-analysis' })
+  for (const stage of ['analyzing', 'queued-implementation', 'implementing', 'queued-review', 'reviewing']) {
+    updateTask(root, contract, task.id, { stage })
+  }
+  assert.equal(updateTask(root, contract, task.id, { stage: 'queued-implementation' }).stage, 'queued-implementation')
+})
+
+test('5b-5 CLI --stage：非法边 exit 2，文案与 core 同源（CLI 走的是同一道门）', () => {
+  const { root, contract } = freshProject('edge-cli-illegal')
+  const added = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'CLI 非法边', '--json'])
+  assert.equal(added.code, 0, added.stdout + added.stderr)
+  const id = added.json.data.id
+
+  // 先走到 analyzing（合法路径），再试事故里的那一步 → implementing。
+  for (const stage of ['queued-analysis', 'analyzing']) {
+    assert.equal(runCli(root, ['task', 'update', id, '--stage', stage, '--json']).code, 0)
+  }
+  const rejected = runCli(root, ['task', 'update', id, '--stage', 'implementing', '--json'])
+  assert.equal(rejected.code, 2, rejected.stdout + rejected.stderr)
+  assert.equal(rejected.json?.error?.code, 'invalid')
+  assert.match(
+    rejected.json?.error?.message ?? '',
+    /stage analyzing cannot move to "implementing"; allowed next: queued-implementation, done/,
+    'CLI 报错必须就是 assertTransition 的那句话（同一道门）',
+  )
+  assert.equal(getTask(root, contract, id).stage, 'analyzing', 'CLI 被拒的写入不得落盘')
+  assert.equal(runCli(root, ['task', 'show', id, '--json']).json?.data?.stage, 'analyzing', '重新读取仍是原阶段')
+})
+
+test('5b-6 CLI --stage：合法边（含 analyzing → done 汇总收口）照常写入', () => {
+  const { root, contract } = freshProject('edge-cli-legal')
+  const added = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'CLI 合法边', '--json'])
+  const id = added.json.data.id
+  for (const stage of ['queued-analysis', 'analyzing']) {
+    const step = runCli(root, ['task', 'update', id, '--stage', stage, '--json'])
+    assert.equal(step.code, 0, step.stdout + step.stderr)
+    assert.equal(step.json.data.stage, stage)
+  }
+  const done = runCli(root, ['task', 'update', id, '--stage', 'done', '--json'])
+  assert.equal(done.code, 0, done.stdout + done.stderr)
+  assert.equal(done.json.data.stage, 'done')
+  assert.equal(done.json.data.status, 'done', 'status 由 stage 派生')
+  assert.equal(getTask(root, contract, id).stage, 'done')
 })
 
 // ------------------- 6. 存量无 stage：读投影补 created 且磁盘指纹不变（零写盘）

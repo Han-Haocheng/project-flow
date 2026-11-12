@@ -89,15 +89,23 @@ test('D4-3：--stage 真能写入（add 与 update），且**不是**「未知�
   assert.equal(readTask(root, created.id).stage, 'analyzing', 'add 的 stage 必须落盘')
 
   // update 带 stage：**这条就是本卡最容易漏的白名单路径**
-  const updated = runCli(root, ['task', 'update', created.id, '--stage', 'queued-review', '--json'])
+  // 目标取 analyzing 的合法后继（阶段边由 core 校验，T-20261112151328）。
+  const updated = runCli(root, ['task', 'update', created.id, '--stage', 'queued-implementation', '--json'])
   assert.equal(updated.code, 0, updated.stdout + updated.stderr)
   // 白名单漏登记时这里是 usage/「未知参数 --stage」——专门钉住这个反向排查陷阱
   assert.equal(updated.json?.error, undefined, 'update --stage 不得报错')
   assert.doesNotMatch(updated.stderr ?? '', /未知参数/)
   assert.doesNotMatch(JSON.stringify(updated.json ?? {}), /未知参数/)
-  assert.equal(updated.json?.data?.stage, 'queued-review')
-  assert.equal(readTask(root, created.id).stage, 'queued-review', 'update 的 stage 必须落盘')
+  assert.equal(updated.json?.data?.stage, 'queued-implementation')
+  assert.equal(readTask(root, created.id).stage, 'queued-implementation', 'update 的 stage 必须落盘')
   assert.equal(readTask(root, created.id).status, 'active')
+
+  // 同一道门：CLI 写非后继阶段必须被 core 拒（queued-implementation → reviewing 没有合约边）
+  const illegal = runCli(root, ['task', 'update', created.id, '--stage', 'reviewing', '--json'])
+  assert.equal(illegal.code, 2, illegal.stdout + illegal.stderr)
+  assert.equal(illegal.json?.error?.code, 'invalid')
+  assert.match(illegal.json?.error?.message ?? '', /cannot move to "reviewing"/)
+  assert.equal(readTask(root, created.id).stage, 'queued-implementation', '被拒的写入不得落盘')
 
   // --help 必须列出它（SPEC → describeFlags 的同一张表）
   const help = runCli(root, ['task', 'update', '--help'])
@@ -131,6 +139,11 @@ test('D4-6：--stage done → status=done **且** done_at 有值（stampTaskTime
   const task = addTaskCli(root, '走到完成')
   assert.equal(Object.hasOwn(readTask(root, task.id), 'stage'), false, '没给 stage 时不写该键')
 
+  // 阶段边由 core 校验（T-20261112151328）：created 不能直接跳 done，按合法路径走完。
+  for (const stage of ['queued-analysis', 'analyzing']) {
+    const step = runCli(root, ['task', 'update', task.id, '--stage', stage, '--json'])
+    assert.equal(step.code, 0, step.stdout + step.stderr)
+  }
   const done = runCli(root, ['task', 'update', task.id, '--stage', 'done', '--json'])
   assert.equal(done.code, 0, done.stdout + done.stderr)
   const onDisk = readTask(root, task.id)
@@ -147,17 +160,21 @@ test('D4-6：--stage done → status=done **且** done_at 有值（stampTaskTime
   assert.match(String(afterArchive.archived_at), /^\d{4}-\d{2}-\d{2}T/)
   assert.equal(afterArchive.done_at, onDisk.done_at, '归档保留原 done_at')
 
-  // 回到流水线：status 派生 active，done_at 被 stampTaskTimes 清空
+  // 阶段机没有反向边：archived 是终态，「回流水线」这条写入必须被拒（不静默改阶段）。
+  // 会话面向的「恢复」需要自己的合约边，属于后续卡（本卡只接管写入口，不新造边）。
   const back = runCli(root, ['task', 'update', task.id, '--stage', 'implementing', '--json'])
-  assert.equal(back.code, 0, back.stdout + back.stderr)
-  const afterBack = readTask(root, task.id)
-  assert.equal(afterBack.status, 'active')
-  assert.equal(afterBack.done_at, null, '离开 done/archived 必须清空完成时刻')
+  assert.equal(back.code, 2, back.stdout + back.stderr)
+  assert.match(
+    String(back.json?.error?.message ?? back.stderr),
+    /terminal|cannot move to/,
+    '终态必须给出「没有后继」的拒绝文案',
+  )
+  assert.equal(readTask(root, task.id).stage, 'archived', '被拒的写入不得落盘')
 
   // 只给 --status 仍然可用（既有调用方），stage 原样不动
   const statusOnly = runCli(root, ['task', 'update', task.id, '--status', 'done', '--json'])
   assert.equal(statusOnly.code, 0, statusOnly.stdout + statusOnly.stderr)
-  assert.equal(readTask(root, task.id).stage, 'implementing', '只写 status 不得改 stage')
+  assert.equal(readTask(root, task.id).stage, 'archived', '只写 status 不得改 stage')
 
   // 两者同给且矛盾 → invalid（派生冲突，不能写入）
   const conflict = runCli(root, ['task', 'update', task.id, '--stage', 'implementing', '--status', 'done', '--json'])
