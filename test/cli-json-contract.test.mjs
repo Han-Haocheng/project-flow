@@ -149,6 +149,19 @@ test('信封：失败路径只带 error，退出码按 error.code 映射', () =>
   }
 })
 
+test('信封：gate run 的门禁失败仍是 ok:true / exit 0，用 data.ok 表达', () => {
+  const root = tempRoot('gate-ok')
+  initProject(root, { name: 'gok' })
+  const added = run(root, ['gate', 'add', '--id', 'boom', '--title', 'B', '--phase', 'manual', '--step', 'fail=exit 3', '--json'])
+  assert.equal(added.code, 0, added.stderr)
+  const result = run(root, ['gate', 'run', 'boom', '--json'])
+  assert.equal(result.code, 0, '门禁失败不改变退出码：' + result.stderr)
+  assert.deepEqual(validateInvocation('gate.run', result.json), [])
+  assert.equal(result.json.ok, true, '命令本身成功')
+  assert.equal(result.json.data.ok, false, '门禁结果用 data.ok 表达')
+  assert.equal(result.json.data.steps[0].exit, 3)
+})
+
 test('信封：Warnings 恒为数组，且 --json 下不重复写 stderr', () => {
   const root = tempRoot('envelope-warn')
   initProject(root, { name: 'envw', noGates: true })
