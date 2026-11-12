@@ -82,7 +82,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | 命令 | data 顶层形状 |
 |---|---|
 | flow init | 对象（必填 root·created·warnings） |
-| flow status | 对象（必填 root·name·initialized·contractSource·schema·store·counts·heartbeats·decisions·recent） |
+| flow status | 对象（必填 root·name·initialized·contractSource·schema·store·counts·heartbeats·decisions·recent；可选 intents·status） |
 | flow state | 开放对象（必填 ok·generatedAt·root·roots；面板状态快照载荷） |
 | flow backup | 对象（必填 name·path·files·bytes·pruned） |
 | flow doctor | 对象（必填 ok·root·findings） |
@@ -146,6 +146,13 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow check experiments | 对象（必填 check·exitCode·stdout·stderr·durationMs·enabled·checked·legacy·failed·warnings） |
 | flow check tasks | 对象（必填 check·exitCode·stdout·stderr·durationMs·ok·counts·issues·typeMap） |
 | flow check description | 对象（必填 check·exitCode·stdout·stderr·durationMs·mode·counts·failed·warnings） |
+
+**`status.intents`（未完成 saga intent，T-20261112183138-02）**：仅当 `data.initialized===true` 时出现，
+是可选项（可缺席，**从不为 null**）。读不到时整键缺席并在顶层 `warnings` 里给 `intents-unavailable: ...`
+（「读不到」与「很干净」必须可区分）。形状：
+`{ open: number, items: [{ id, kind, target, steps[], done[], missing[], updated_at: string|null }] }`；
+`open` 是在途（state=open）intent 总数，`items` 最多 10 条、按 `updated_at` 倒序，
+`missing = steps - done`。派工这类多步写（spawn → 写回执）崩溃后，这是唯一线索，所以必须可读。
 
 `flow desc ...` 的载荷里有 core 自有的记录/骨架（`plan`、`record`、`records`、`files`），
 它们被登记为**开放对象**：契约保证外层字段，内层按 CONTRACT §3.7 的记录格式演进。

@@ -162,6 +162,38 @@ test('信封：Warnings 恒为数组，且 --json 下不重复写 stderr', () =>
   assert.equal(result.stderr, '')
 })
 
+test('status.intents：未完成 saga intent 在 status 里可读，形状与登记一致', () => {
+  const root = tempRoot('intents')
+  initProject(root, { name: 'it' })
+  const dir = path.join(root, '.agents', 'intents')
+  fs.mkdirSync(dir, { recursive: true })
+  const intent = {
+    schema: 1,
+    id: 'I-20261112-01',
+    kind: 'dispatch',
+    target: { task: 'T-1', role: 'implementer' },
+    steps: ['spawn', 'receipt'],
+    done: ['spawn'],
+    state: 'open',
+    session: 's1',
+    pid: null,
+    host: 'test',
+    note: '',
+    data: {},
+    started_at: '2026-11-12T20:00:00+08:00',
+    updated_at: '2026-11-12T20:00:00+08:00',
+  }
+  fs.writeFileSync(path.join(dir, intent.id + '.json'), JSON.stringify(intent))
+  const result = run(root, ['status', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(validateInvocation('status', result.json), [])
+  assert.equal(result.json.data.intents.open, 1)
+  const row = result.json.data.intents.items[0]
+  assert.equal(row.id, intent.id)
+  assert.deepEqual(row.missing, ['receipt'])
+  assert.deepEqual(Object.keys(row).sort(), ['done', 'id', 'kind', 'missing', 'steps', 'target', 'updated_at'])
+})
+
 // ---------------------------------------------------------------- 覆盖
 
 test('契约覆盖：SPEC 的每个命令键都有 data 形状，且没有幽灵形状', () => {

@@ -606,12 +606,16 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "title": "提交前检查",
   "phase": "commit",                    // commit | release | manual
   "enabled": true,
+  "kind": "behavior",                   // structure | behavior，默认 behavior（见下方分类规则）
+  "mount": { "level": "feature" },      // level: layer|module|feature|aspect；module/aspect 必须带 target
+  "failFast": false,                    // 默认 false = 分段执行（结构红了也把行为步骤跑完）
   "steps": [
     {
       "id": "tests",                    // 步骤内唯一；缺省 step-N
       "run": "ctest --test-dir build/x --output-on-failure",
       "expect": "exit 0",               // exit 0 | exit N | contains:文本
       "timeoutSeconds": 600,            // 整数 >= 1，默认 600
+      "kind": "behavior",               // 可覆盖门禁的分类；默认继承 gate.kind
       "allowUnknownExpect": false       // 仅显式容错时为 true；见下方 expect 规则
     }
   ],
@@ -621,6 +625,17 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 ```
 
 - 未指定 id 时用标题推导 slug（小写、非字母数字转 `-`，截 40），推不出则要求显式 `--id`。
+- **分类（`kind`）与挂载（`mount`）**：`structure` 门禁验证「结构/归属没被破坏」，可挂四层
+  `layer|module|feature|aspect`；`behavior` 门禁验证「功能被做出来没有」，**只准挂
+  `mount.level=feature`**。挂 `module`/`aspect` 时必须给 `mount.target`
+  （`^[a-z0-9][a-z0-9-]{1,40}$`），否则 `invalid`；行为门禁挂错层同样在**定义期**直接
+  `invalid`（退出 2，不落盘），不是运行期警告——分类错了不会让门禁红，只会让「结构绿」
+  被误当成「功能可用」。缺省 `kind='behavior'`、`mount={level:'feature'}`。
+  CLI 对应 `--kind structure|behavior`、`--mount-level`、`--mount-target`、`--fail-fast`；
+  `flow_gate` 工具用同名参数 `kind` / `mount` / `failFast`。
+- **`failFast` 默认 `false`（分段执行）**：某一步失败后仍继续跑剩下的步骤（这样结构失败
+  时行为结果仍然可见，两类问题一次跑完）；`failFast: true` 才回到「首败即停」。单步的
+  `kind` 可覆盖门禁分类，允许同一条链里结构步骤与行为步骤并存。
 - 步骤未写 `expect` 时统一落盘为 `exit 0`（core 与 CLI 一致）。**未知写法在定义期直接拒绝**
   （`invalid`，退出 2，不落盘）：错误消息点名步骤 id、原始 `expect` 与合法写法
   `exit N` / `contains: TEXT`。确需容错时显式传 `--allow-unknown-expect`（core 选项
@@ -692,13 +707,21 @@ flow gate update release --step '<原步骤>' \
 {
   "gate": "precommit",
   "title": "提交前检查",
+  "kind": "behavior",                  // 本次运行沿用的门禁分类
+  "mount": { "level": "feature" },     // 本次运行沿用的挂载点
+  "failFast": false,                   // 本次运行实际采用的策略
   "started_at": "2026-10-28T16:00:00+08:00",
   "finished_at": "2026-10-28T16:00:12+08:00",
   "durationMs": 12000,
   "ok": false,
+  "segments": {                        // 分类计分：只统计**已执行**的步骤
+    "structure": { "kind": "structure", "total": 1, "passed": 1, "failed": 0, "ok": true, "steps": ["module-domain"] },
+    "behavior":  { "kind": "behavior",  "total": 2, "passed": 1, "failed": 1, "ok": false, "steps": ["decision", "description"] }
+  },
   "steps": [
     {
       "id": "tests", "run": "...", "expect": "exit 0",
+      "kind": "behavior",             // 实际生效的分类（单步覆盖或继承门禁）
       "exit": 1,                       // 被信号杀死 / 启动失败时为 null
       "ok": false, "durationMs": 11000,
       "tail": "最后 40 行，每行截 400 字符"
@@ -707,7 +730,12 @@ flow gate update release --step '<原步骤>' \
 }
 ```
 
-- 步骤顺序执行，**首个失败即停**，后续步骤不执行也不进记录。
+- 步骤顺序执行。**`failFast: false`（默认）时分段执行**：一步失败后继续跑后续步骤，
+  直到跑完；`failFast: true` 才「首个失败即停」（没跑到的步骤不执行、不进记录）。
+- `segments.structure` / `segments.behavior` 是**已执行**步骤的分类计分
+  （`{kind,total,passed,failed,ok,steps[]}`，`steps` 是步骤 id）。`failFast` 下没跑到的
+  步骤不计入任何一段——把「没跑」算成「通过」就是假绿。整体 `ok` 仍是「所有已执行步骤
+  都通过」，与分段 `ok` 分开表达。
 - `tail` 合并 stdout+stderr，默认取最后 40 行（`options.tailLines` 可调），每行截 400；
   输出总量截到 512 KiB。
 - 文件名由 `started_at` 生成（冒号/点替换为 `-`）；同一秒内两次运行会写同一个文件名
@@ -1155,6 +1183,12 @@ claim、出现两个 claim 持有者」的窗口。接管者在破坏性 `rename
 （`total` 语义不变，仍是可读记录数），人类 `flow status` 追加 ` · +N 无法读取`。
 
 ## 5 CLI 参考（`bin/flow.mjs`）
+
+> **机器契约（--json）已单独冻结**：命令行的 `--json` 输出是前后端唯一接口，
+> 信封、schemaVersion、每条命令的 data 形状、退出码与兼容性纪律见
+> [`docs/cli-contract.md`](docs/cli-contract.md)（机器可读单一真源 `lib/cli/contract.mjs`，
+> 契约测试 `test/cli-json-contract.test.mjs`）。本节与下文描述的是**人类输出与命令语义**；
+> `--json` 的形状以那份契约为准，不得为了好看而改。
 
 全局：
 
@@ -1966,13 +2000,13 @@ warning（不影响退出码，`--json` 给 `warnings[]`）：`status === 'open'
 成功：
 
 ```json
-{"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9},"warnings":[]}
+{"schemaVersion":1,"ok":true,"data":{"check":"staged","exitCode":0,"stdout":"…","stderr":"","durationMs":9},"warnings":[]}
 ```
 
 失败：
 
 ```json
-{"ok":false,"error":{"code":"check-failed","message":"检查未通过：staged（exit 1）",
+{"schemaVersion":1,"ok":false,"error":{"code":"check-failed","message":"检查未通过：staged（exit 1）",
  "check":"staged","exitCode":1,"stdout":"","stderr":"[FAIL] 暂存区包含归属外文件：…"},"warnings":[]}
 ```
 
@@ -1999,6 +2033,85 @@ flow gate add --id precommit --title 提交前检查 --phase commit \
 
 `gate run` 只记录步骤退出码与输出尾部；`flow check` 自身不写任何 store，门禁失败不会
 污染台账。
+
+### 6.5 规则文件防篡改（`flow gate rules`，rule-guard）
+
+**背景**：有人提议把规则文件（写域真源、契约锚点区段、流程契约开关）挪到 `~/.project-flow` 藏起来
+防 agent 篡改。**用户已否决**：藏路径 ≠ 权限，还会让台账与项目脱钩。替代方案是**可审计**——
+给规则文件记校验和基线；没有留痕的改动让门禁红；要改规则必须显式留一条带理由的记录才能推进基线。
+**规则文件不离开项目根**，这一条是硬约束，不是实现细节。
+
+#### 监视对象（顺序即输出顺序）
+
+| # | 路径 | scope | 校验范围 | 缺失时 |
+|---|---|---|---|---|
+| 1 | `docs/module-domain.json` | `file` | 全文 sha256（写域单一真源） | issue `rule-file-missing` |
+| 2 | `CONTRACT.md` | `sections` | 只算锚点区段（定义读 `docs/module-domain.json` 的 `sections['CONTRACT.md']`，每个 `from..to` 闭区间一段 sha256，含首尾行） | issue `rule-file-missing`；区段定义缺失 → `section-source-missing` |
+| 3 | `.agents/flow/flow.json` | `file` | 全文 sha256（流程契约开关） | **跳过**（`optional`：干净克隆里 `.agents/` 被 gitignore） |
+
+锚点语义与 `scripts/module-domain.mjs verify` 同一套：行 trim 后全等；`from` 必须全局唯一；
+`to` 必须全局唯一且位于 `from` 之后；`to: null` 表示到文件末尾。**定位失败不是跳过而是 issue**
+（`anchor-missing` / `anchor-invalid` / `anchor-order`）——锚点找不到就静默跳过等于给篡改开后门。
+区段**外**的正常编辑（例如在 §7 后面加一节）不需要留痕。
+
+#### 基线与 trail：`<store>/rule-guard.json`
+
+默认 `.agents/flow/rule-guard.json`（跟着 `store.root` 走），在 `.agents/` 里、**不进 git**：
+和决策台账同一处境，审计口径是「台账内可查」而不是「git 历史可查」。真正进 git 的是受保护的
+规则文件本身——改它们必然出现在 `git diff` 里。
+
+```jsonc
+{
+  "schema": 1,
+  "created_at": "...",
+  "updated_at": "...",
+  "initialized_by": "agent",             // --by，默认 agent
+  "initialized_reason": "初始化规则文件校验和基线",
+  "baseline": { "at": "...", "files": { "docs/module-domain.json": {"scope":"file","sha256":"..."}, "CONTRACT.md": {"scope":"sections","sections":{"c3.3":"..."},"anchors":12} } },
+  "trail": [                             // 最多保留 200 条（RULE_TRAIL_LIMIT），老的滚出
+    { "at": "...", "by": "agent|user", "reason": "至少 4 个字，要能独立看懂",
+      "changes": [ {"path":"CONTRACT.md","scope":"sections","section":"c3.3","from":"<旧 sha256>","to":"<新 sha256>"},
+                   {"path":"docs/module-domain.json","scope":"file","from":"<旧>","to":"<新>"} ] }
+  ]
+}
+```
+
+#### 命令面（`flow gate rules`）
+
+```bash
+flow gate rules --json                          # 默认：校验，未留痕的改动 → check-failed（exit 1）
+flow gate rules --init [--reason R] [--by agent|user]   # 建基线；已有基线 → conflict（exit 2）
+flow gate rules --record --reason R [--by agent|user]   # 留痕并推进基线（改规则的唯一正路）
+```
+
+- `--init` 与 `--record` 互斥（用法错误）；规则文件当前状态不干净（锚点坏/文件缺）时两者都 `invalid`（退出 2）。
+- `--record`：**理由必填且 ≥4 字**（`MIN_REASON_CHARS`），不足 `usage`；
+  没有实际变化时返回 `changed:false` 且**不写盘**（不算一次留痕）；基线不存在时 `usage`（先 `init`）。
+- `--by` 只接受 `user|agent`（缺省 `agent`）；写进 trail 的每条记录。
+- 校验结果码（`error.guardCode` / 人类输出）：
+
+| code | 含义 | 修复 |
+|---|---|---|
+| `unchanged` | 与基线一致（`ok:true`） | — |
+| `guard-missing` | 还没建基线 | `flow gate rules --init` |
+| `unrecorded-change` | 规则文件被改但没留痕 | 确认改动后 `flow gate rules --record --reason ...` |
+| `rule-anchor` | 锚点定位失败（先修 `module-domain.json` 的 sections 或 `CONTRACT.md` 锚点行） | 修锚点，不是留痕 |
+
+- 失败一律走检查词汇：退出码 **1**（`check-failed`），`--json` 的 `error` 额外带 `check:'rules'`、
+  `exitCode`、被监视清单 `watched`、改动清单 `changed`（或锚点问题 `issues`）与 `hint`。
+  它**不跑子进程**，所以失败载荷没有 `stdout/stderr/durationMs`（与脚本检查不同）。
+- 可以把`flow gate rules` 挂进 `precommit`（`expect exit 0`）：这样「改规则没留痕」会直接拦提交。
+  注意它本身会读到 `flow.json`（可选监视对象），所以门禁的 cwd 必须是项目根。
+
+#### 与其它约束的关系
+
+- 监视清单是**代码里的常量**（`lib/gates/rules.mjs` 的 `RULE_WATCH`），不读项目配置：
+  否则「改配置就可放宽监视」等于没有监视。要改清单先改代码 + 契约（本节的表）。
+- `docs/module-domain.json` 与 `CONTRACT.md` 的锚点区段同时被 `scripts/module-domain.mjs verify` 与
+  rule-guard 使用；两边锚点语义必须一致（`test/t-20261112-rule-guard.test.mjs` 守着）。
+- 契约测试（`test/cli-json-contract.test.mjs`）把 `gate.rules` 的三种载荷登记为开放对象；
+  失败载荷的形状（`check/exitCode`）在上面这条里已写明。
+
 
 #### 6.4.1 门禁的覆盖层次（哪层测什么，别把层次当缺陷）
 
