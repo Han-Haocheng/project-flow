@@ -63,6 +63,9 @@ const BOOL_FLAGS = new Set([
   'strict', 'show', 'rebase', 'no-semantic-change', 'check',
   // T-20261111155622：门禁步骤 expect 手误默认拒绝，只有显式开这个开关才容错
   'allow-unknown-expect',
+  // 2026-11-12 裁定 3：门禁分结构/行为；门禁运行默认跑完全部步骤，--fail-fast 才首败即停。
+  // `gate rules --init/--record` 是规则文件防篡改的写命令（裁定 1），都是纯开关。
+  'fail-fast', 'init', 'record',
 ])
 const VALUE_FLAGS = new Set([
   'root', 'name', 'keep', 'stale-hours',
@@ -80,6 +83,8 @@ const VALUE_FLAGS = new Set([
   'learned', 'experiment', 'gate', 'flag', 'code', 'data',
   // T-20261108 D4：描述台账的取值参数
   'path', 'graph', 'input', 'template', 'out', 'project-semantics',
+  // 2026-11-12 裁定 3：门禁挂载点（layer/module/feature/aspect + module/aspect 的 target）。
+  'mount-level', 'mount-target',
 ])
 const REPEAT_FLAGS = new Set([
   'step', 'allow', 'claim', 'option', 'blocks', 'affects',
@@ -139,13 +144,23 @@ export const SPEC = Object.freeze({
   gate: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
-    add: { flags: ['id', 'title', 'phase', 'allow-unknown-expect'], repeat: ['step'] },
-    update: { flags: ['id', 'title', 'phase', 'enabled', 'allow-unknown-expect'], repeat: ['step'] },
+    // 2026-11-12 裁定 3：结构门禁可挂四层（layer/module/feature/aspect），行为门禁
+    // 只准挂 feature；`--fail-fast` 传进 runGate 决定首败即停还是跑完再汇总。
+    add: {
+      flags: ['id', 'title', 'phase', 'kind', 'mount-level', 'mount-target', 'fail-fast', 'allow-unknown-expect'],
+      repeat: ['step'],
+    },
+    update: {
+      flags: ['id', 'title', 'phase', 'enabled', 'kind', 'mount-level', 'mount-target', 'fail-fast', 'allow-unknown-expect'],
+      repeat: ['step'],
+    },
     enable: { flags: ['id'] },
     disable: { flags: ['id'] },
     rm: { flags: ['id', 'yes'] },
-    run: { flags: ['id', 'phase', 'timeout', 'force'] },
+    run: { flags: ['id', 'phase', 'timeout', 'force', 'fail-fast'] },
     logs: { flags: ['id', 'limit'] },
+    // 2026-11-12 裁定 1：规则文件校验和的初始化与「改规则必须留痕」。
+    rules: { flags: ['init', 'record', 'reason', 'by'] },
   }),
   heartbeat: Object.freeze({
     start: { flags: ['goal', 'task', 'agent', 'session', 'note'], repeat: ['claim'] },
