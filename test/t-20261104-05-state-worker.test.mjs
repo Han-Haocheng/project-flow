@@ -20,6 +20,9 @@ import { monitorEventLoopDelay } from 'node:perf_hooks'
 import * as core from '../lib/core.mjs'
 
 const plugin = await import('../index.js')
+// The pool is reachable through `statePoolOf(ctx)`; the crash-vs-cap case inspects a
+// live pool (slot states) instead of only watching the HTTP answer.
+const { statePoolOf } = await import('../lib/host/state.mjs')
 
 const POSIX = process.platform !== 'win32'
 const LINUX = process.platform === 'linux'
@@ -365,23 +368,106 @@ test('假死 root（FIFO）：200 + state-timeout ≤2s，主线程同步 fs = 0
   assert.equal(gone, true, `超时后子进程 ${warm} 应在 300ms 内消失`)
 })
 
-test('假死期间事件循环不被阻塞：monitorEventLoopDelay max < 50ms', { skip: POSIX === false }, async () => {
-  const root = makeProject('hung-loop', { fifoTask: true })
-  const { routes } = await mount([root])
-  await warmWorker()
-
+/**
+ * 事件循环延迟直方图（毫秒）：只读等待，**不注入任何自己制造的事件**，所以测到的
+ * 是「本机此刻的调度抖动」，而不是被测路径。
+ *
+ * 用 p99 而不是 `max`：`max` 是**单次最大采样**，OS 抢走 >50ms 的时间片就超标，与
+ * 主线程有没有阻塞无关（共享机空载 load 就有十几）。真实回归——同步 fs 放回读路径、
+ * 假死 root 在主线程读——会把**持续**数百毫秒的阻塞摊进几十上百个采样，p99 必然抬高，
+ * 零散的调度尖峰则被分位数让掉。
+ */
+function sampleLoopDelay(ms) {
   const histogram = monitorEventLoopDelay({ resolution: 5 })
   histogram.enable()
+  return sleep(ms).then(() => {
+    histogram.disable()
+    const ms2 = (value) => value / 1e6
+    return {
+      max: ms2(histogram.max),
+      p50: ms2(histogram.percentile(50)),
+      p99: ms2(histogram.percentile(99)),
+      samples: histogram.count,
+    }
+  })
+}
+
+/** 事件循环延迟的判据（毫秒）：p99 主判据 + 同轮空载基线 + 绝对保底。 */
+const LOOP_P99_MAX_MS = 50
+const LOOP_BASELINE_RATIO_MAX = 4
+const LOOP_P99_FLOOR_MS = 5
+
+test('假死期间事件循环不被阻塞：state-timeout + 主线程同步 fs = 0 + 子进程 300ms 内消失（p99 vs 同轮基线）', { skip: POSIX === false }, async () => {
+  /* 本轮之前这条用 `monitorEventLoopDelay().max < 50ms`。`max` 是**单次最大采样**：
+     OS 抢走 >50ms 时间片就超，与主线程是否阻塞无关（共享机空载 load 就有 11+），
+     这是间歇红的噪声源，不是被测路径退化。改为 p99（持续阻塞才会抬高它），并与
+     **同轮空载基线**（健康 root 上什么都不做）取较大者——只有当假死请求把延迟抬到
+     显著高于本机常态时才红。
+
+     真正防回归的是三条结构判据：`error.code === 'state-timeout'`、宿主同步 fs
+     命中 0 次、忙子进程 300ms 内消失。它们与负载无关，是主判据。 */
+  const root = makeProject('hung-loop', { fifoTask: true })
+  const warmRoot = makeProject('hung-loop-warm')
+  const { routes } = await mount([root, warmRoot])
+  await warmWorker()
+  // 先烤热子进程：空载基线必须是「稳态」，不能把首次 fork 算进去。
+  const warmRes = await startState(routes, warmRoot).done
+  assert.equal(json(warmRes).ok, true, `预热请求应成功：${warmRes.body}`)
+  const busyPid = workerPids()[0]
+  assert.ok(busyPid, '预热后应存在一个子进程')
+
+  // 同轮空载基线：同一进程、当下、没有任何在途请求。
+  const quiet = await sampleLoopDelay(600)
+
+  // 主线程同步 fs 探针：假死请求期间宿主不得同步碰 store。
+  const names = ['realpathSync', 'statSync', 'lstatSync', 'readFileSync', 'readdirSync', 'existsSync']
+  const originals = Object.fromEntries(names.map((name) => [name, fs[name]]))
+  const seen = []
+  const histogram = monitorEventLoopDelay({ resolution: 5 })
+  let during
+  let res
   try {
+    for (const name of names) {
+      fs[name] = function probed(target, ...rest) {
+        seen.push(`${name}\t${String(target)}`)
+        return originals[name].call(this, target, ...rest)
+      }
+    }
+    syncBuiltinESMExports()
+    histogram.enable()
     const pending = startState(routes, root).done
     await sleep(600)
-    const maxDuring = histogram.max / 1e6
-    const res = await pending
-    assert.equal(json(res).error.code, 'state-timeout')
-    assert.ok(maxDuring < 50, `假死期间事件循环最大延迟 ${maxDuring.toFixed(1)}ms，应 <50ms`)
+    during = {
+      max: histogram.max / 1e6,
+      p50: histogram.percentile(50) / 1e6,
+      p99: histogram.percentile(99) / 1e6,
+      samples: histogram.count,
+    }
+    res = await pending
   } finally {
     histogram.disable()
+    for (const name of names) fs[name] = originals[name]
+    syncBuiltinESMExports()
   }
+
+  // ---- 结构判据（主判据，与负载无关）
+  assert.equal(json(res).error.code, 'state-timeout', JSON.stringify(json(res).error))
+  assert.deepEqual(
+    seen.filter((line) => line.includes(root)),
+    [],
+    `假死请求期间宿主不得同步访问假死 root：${JSON.stringify(seen.slice(0, 5))}`,
+  )
+  const gone = await waitUntil(() => alive(busyPid) === false, 300)
+  assert.equal(gone, true, `超时后忙子进程 ${busyPid} 应在 300ms 内消失`)
+
+  // ---- 事件循环判据（p99 vs 同轮基线；max 只打印不判定）
+  const budget = Math.max(LOOP_P99_MAX_MS, quiet.p99 * LOOP_BASELINE_RATIO_MAX, LOOP_P99_FLOOR_MS)
+  const detail = `假死 p99=${during.p99.toFixed(1)}ms / 空载 p99=${quiet.p99.toFixed(1)}ms / 空载 max=${quiet.max.toFixed(1)}ms / 假死 max=${during.max.toFixed(1)}ms / 预算 ${budget.toFixed(1)}ms / samples ${during.samples}`
+  assert.ok(during.samples > 20, `直方图采样过少，分位数不可信：${detail}`)
+  assert.ok(
+    during.p99 <= budget,
+    `假死期间主线程 p99 延迟应 ≤${budget.toFixed(1)}ms（同轮空载 p99 × ${LOOP_BASELINE_RATIO_MAX}，下限 ${LOOP_P99_MAX_MS}ms）：${detail}`,
+  )
 })
 
 test('正常 root：预热后延迟 <100ms，payload 正常', async () => {
@@ -558,6 +644,66 @@ test('崩溃自愈：忙子进程被 SIGKILL → state-worker-crashed；下一�
   assert.equal(rebuilt, true, '崩溃后应自动重建 worker')
   const recovered = json(await startState(routes, root).done)
   assert.equal(recovered.ok, true, JSON.stringify(recovered.error ?? recovered.warnings ?? null))
+})
+
+test('崩溃 vs 饱和的判别边界：已死/未就绪槽位不计入上限，真饱和的语义不变', { skip: LINUX === false }, async (t) => {
+  /* 2026-11-11 间歇红：`崩溃自愈` 在单 root、单请求、唯一存活池下偶尔返回
+     `state-worker-unavailable` + "saturated (max 8)"，耗时只有 ~269ms —— `crashed`
+     码根本轮不到。根因不是负载，是判别本身：`acquire()` 只看 `children.size`，
+     而 SIGKILL 到 `exit` 事件之间被杀的子进程仍留在集合里；`busy=false` 的死槽位既
+     不能被取用，又被算成「上限已满」。前面每条冷池用例（突发 5 路、上限 2 饱和、假死）
+     都会 dispose/SIGKILL 旧池，死槽位若被算成忙，单请求也会被判饱和。
+
+     判据一（本用例）：把那个窗口确定性地造出来 —— 唯一槽位「已崩、exit 未处理」且
+     池上限 1、集合里恰有 1 个元素。旧判别在这里**只能**回 `state-worker-unavailable`：
+     死槽位取不出来（`busy=false` 的死子进程不能被派活），集合里有 1 个 → 判满。修复后
+     它不占容量，池补位一个新子进程并正常回答。
+
+     判据二（同文件 `冷池饱和（上限 2）` 用例）：上限真满、子进程都活着且都忙时，仍必须
+     回 `state-worker-unavailable` + "saturated … retry" —— 那是正确行为，本用例不放开它。
+
+     两条判据都是结构性的（错码、活槽位计数、子进程数），与机器负载无关；耗时不断言。 */
+  const root = makeProject('cap-crash')
+  const other = makeProject('cap-other')
+  const { ctx } = await mount([root])
+  const pool = statePoolOf(ctx)
+  assert.ok(pool, 'mount 后 ctx 必须挂着一个池')
+  // 本用例把上限压到 1 来构造窗口；收尾用生产默认值（env 未设）还原。
+  const productionCap = pool.maxChildren
+  const warm = await waitUntil(() => pool.idleCount() === 1, 6000)
+  assert.equal(warm, true, `预热失败：池内 idle=${pool.idleCount()}`)
+  if (typeof t.diagnostic === 'function') t.diagnostic(`pool max=${pool.maxChildren} idle=${pool.idleCount()}`)
+
+  // 唯一槽位：已崩（SIGKILL 已经发生），exit 事件还在队列里；上限压到 1。
+  const forged = [...pool.children].find((slot) => slot.state === 'idle')
+  forged.ready = false
+  forged.state = 'dead'
+  pool.maxChildren = 1
+  process.kill(forged.child.pid, 'SIGKILL')
+  assert.equal(pool.children.size, 1, `集合里必须恰有 1 个（已死的）槽位，实际 ${pool.children.size}`)
+  assert.ok(pool.liveCount() <= 1, `活槽位计数 ${pool.liveCount()} 不得超过上限 1`)
+
+  const answer = await pool.snapshot({ root })
+  assert.notEqual(
+    answer.code,
+    'state-worker-unavailable',
+    `死槽位不得被算成饱和（${answer.code}: ${answer.message}）——这会让崩溃/超时之后的正常请求拿到 retry 提示而不是数据`,
+  )
+  if (answer.ok === true) {
+    assert.equal(answer.payload.root, fs.realpathSync(root), '补位后的子进程必须真正读本 root')
+    assert.equal(answer.payload.tasks.total, 1)
+  } else {
+    // 极端调度下补位可能超时，但只能报崩溃/超时，仍然不能是「池满」。
+    assert.equal(answer.code, 'state-worker-crashed', JSON.stringify(answer))
+  }
+
+  // 池没有卡死：上限恢复后，新请求照样能从补位的子进程拿到数据。
+  pool.maxChildren = productionCap
+  const rewarm = await waitUntil(() => pool.idleCount() === 1, 6000)
+  assert.equal(rewarm, true, '死槽位被回收后池应补位')
+  const again = await pool.snapshot({ root: other })
+  assert.equal(again.ok, true, JSON.stringify(again.code ?? null))
+  assert.equal(again.payload.root, fs.realpathSync(other), 'payload.root 必须归各自 root')
 })
 
 test('启动失败：worker 脚本不可用 → state-worker-unavailable；写路径（init）不受影响', async () => {

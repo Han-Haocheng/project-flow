@@ -41,6 +41,25 @@ const SLOW_DELAY_MS = 150
  * 之上，而负载下基线自己就涨到百毫秒级，下限自然失效。
  */
 const BASELINE_FLOOR_MS = 4
+/**
+ * 同比值上限（对齐 `带最小 flow.json 契约` 用例的口径）：两者都是**同一端点、同一
+ * not-initialized 分支**，稳态比值正常在 1–2 倍。
+ */
+const LATENCY_RATIO_MAX = 8
+/**
+ * 超比值后的重测轮数。比值在这条用例里只是**筛查**：分母是同一循环里紧挨着的请求，
+ * 而调度器把一个 >100ms 的时间片给不给某个具体请求，是随机的——整轮被抬高时分子和
+ * 分母一起抬高，比值失效（实测整轮 120ms 注入时比值 30×）。所以超了就重测一轮（最多
+ * `LATENCY_RETRY_ROUNDS` 次），只有**持续**超比值才进判据。
+ */
+const LATENCY_RETRY_ROUNDS = 2
+/**
+ * 绝对下限（毫秒，唯一与负载无关的硬线）：捕获一次失联挂载会同步阻塞 `DEAD_DELAY_MS`
+ * （3200ms/次，本用例两条失联行 → ≥6.4s）。任何**由读路径造成的**慢都来自这类阻塞，
+ * 且一次就是数秒；而本机的调度噪声（实测 16 个忙进程下中位 168ms）离它有一个数量级，
+ * 不可能偶然越线。用「离事故量级一个数量级」的下限替代原来的 100ms 硬线。
+ */
+const LATENCY_FLOOR_MS = 1000
 // 探针命中失联路径时模拟的挂载超时。
 const DEAD_DELAY_MS = 3200
 
@@ -310,30 +329,77 @@ test('stub ctx 通过 ctx.effect + webServer.register 注册出 state 路由', (
   assert.equal(disposers.length >= 1, true, '路由必须以 effect 形式挂载')
 })
 
-test('失联挂载行零命中：state 请求 <100ms 且一次只枚举注册表一次（not-initialized）', async () => {
-  const result = await withProbes(async () => {
-    listCalls = 0
-    const started = performance.now()
-    const response = startStateRequest(PROJECT_REAL)
-    await settled(response)
-    return {
-      response,
-      elapsed: performance.now() - started,
-      dead: deadTotal(),
-      hits: [...stats.deadHits],
-      listCalls,
-    }
-  })
+test('失联挂载行零命中：一次只枚举注册表一次、零失联命中（not-initialized，耗时对齐同文件的比值+保底口径）', async () => {
+  /* 这条原本是 `handler 耗时 < 100ms` 的硬线，和同文件下面 `带最小 flow.json 契约`
+     那条自相矛盾：后者早已把绝对阈值降级成「同轮比值 + 1000ms 保底」，注释写明了
+     理由（16 个忙进程下中位 168ms / 阈值 100ms，绝对阈值不该保留）。同一个端点、同一
+     类请求，一条留硬线一条不留，结果就是并行跑全量时随机红。
 
+     口径对齐后有三层：
+       1. **结构判据**（主判据，与负载无关）：`dead === 0`、`hits` 为空、`listCalls === 1`、
+          错码仍是 `not-initialized`。它们才是防 T-20261104-01 的那部分。
+       2. **同轮比值筛查**（≤8× 紧邻基线）：超了就重测一轮，只有**持续**超才进判据。
+          分母是同一循环里紧挨着的同类请求，正常 1–2×；失联挂载一旦被命中，会额外付
+          每次 3.2s 的同步阻塞，比值会稳定爆表。
+       3. **绝对下限 1000ms**：噪声离事故量级一个数量级，这是唯一不必看负载的硬线。 */
+  const measure = () =>
+    withProbes(async () => {
+      listCalls = 0
+      const started = performance.now()
+      const response = startStateRequest(PROJECT_REAL)
+      await settled(response)
+      return {
+        response,
+        elapsed: performance.now() - started,
+        dead: deadTotal(),
+        hits: [...stats.deadHits],
+        listCalls,
+      }
+    })
+  // 同轮基线在探针**之外**采样：分母衡量的是本机此刻的调度开销，不掺被测分支。
+  const baselineSamples = []
+  for (let index = 0; index < 3; index += 1) {
+    const started = performance.now()
+    await settled(startStateRequest(PROJECT_REAL))
+    baselineSamples.push(performance.now() - started)
+  }
+  const baseline = baselineSamples.slice().sort((left, right) => left - right)[1]
+  const denominator = Math.max(baseline, BASELINE_FLOOR_MS)
+
+  let round = 0
+  let result = await measure()
+  // 第一轮就按结构判据收口：探针期间错码/命中数不对时，重测没有意义。
   assert.equal(result.response.statusCode, 200)
-  const payload = jsonOf(result.response)
-  assert.equal(payload.ok, false)
-  assert.equal(payload.error.code, 'not-initialized')
-  assert.equal(payload.root, PROJECT_REAL)
+  const firstPayload = jsonOf(result.response)
+  assert.equal(firstPayload.ok, false)
+  assert.equal(firstPayload.error.code, 'not-initialized')
+  assert.equal(firstPayload.root, PROJECT_REAL)
   assert.deepEqual(result.hits, [], '不得命中任何失联挂载（同步 realpathSync/statSync 或异步 fs/promises）')
   assert.equal(result.dead, 0)
   assert.equal(result.listCalls, 1, '一次请求只能枚举一次 registry')
-  assert.ok(result.elapsed < 100, `handler 耗时 ${result.elapsed.toFixed(1)}ms，应 <100ms`)
+
+  // 重测只针对「整轮被抬高的调度噪声」：比值超了，但同时**没越过绝对下限**，而且基线
+  // 自己也被抬高过（基线采样里出现过 ≥8× 中位的样本）。两个条件合起来才说明这是整轮的
+  // 调度抖动；其中任何一条不成立（比如只有被测请求中招，分母不动）就直接判——那恰恰是
+  // 读路径回归的形状。
+  const retryable = () =>
+    result.elapsed > denominator * LATENCY_RATIO_MAX &&
+    result.elapsed < LATENCY_FLOOR_MS &&
+    baselineSamples.some((sample) => sample > baseline * LATENCY_RATIO_MAX)
+  while (retryable() && round < LATENCY_RETRY_ROUNDS) {
+    // 这一轮整轮偏慢（分子分母一起抬高，比值本身已不可信）：重测，不判。
+    round += 1
+    result = await measure()
+    assert.deepEqual(result.hits, [], '不得命中任何失联挂载（重测轮同样适用）')
+    assert.equal(result.dead, 0)
+    assert.equal(result.listCalls, 1, '一次请求只能枚举一次 registry（重测轮同样适用）')
+  }
+
+  const ratio = result.elapsed / denominator
+  assert.ok(
+    ratio <= LATENCY_RATIO_MAX || result.elapsed < LATENCY_FLOOR_MS,
+    `handler 耗时持续超过同轮比值（${round} 次重测后仍 ${result.elapsed.toFixed(1)}ms / 基线 ${baseline.toFixed(1)}ms = ${ratio.toFixed(1)}×，上限 ${LATENCY_RATIO_MAX}×）且越过保底下限 ${LATENCY_FLOOR_MS}ms——疑似读路径回归为同步 IO（失联挂载命中 = 每次 ${DEAD_DELAY_MS}ms 阻塞）`,
+  )
 })
 
 test('带最小 flow.json 契约的真实 root：200 ok、注册表仍恰好枚举 1 次、零失联命中', async () => {
