@@ -483,6 +483,78 @@ test('decision.answer：否决决策答 modify 后自动把任务退回 queued-a
   assert.equal(task.json.data.veto.reason, '测试否决', 'veto 是历史，答案不清它')
 })
 
+test('字段出现条件：变体路径的形状（archive closed / heartbeat createdTask / desc 变体 / productize 幂等）', () => {
+  const root = tempRoot('variants')
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), 'export const a = 1\n')
+  fs.writeFileSync(path.join(root, '.gitignore'), '.agents/\n')
+  const git = (args) => {
+    const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' })
+    assert.equal(result.status, 0, 'git ' + args.join(' ') + ': ' + result.stderr)
+  }
+  git(['init', '-q'])
+  git(['add', '-A'])
+  git(['-c', 'user.email=contract@test', '-c', 'user.name=contract', 'commit', '-qm', 'init'])
+  const init = run(root, ['init', '--name', 'var', '--json'])
+  assert.equal(init.code, 0, init.stderr)
+
+  // 1) task.archive：archiveAfterDays=0 → closed:true 且 cutoff=null（不归档时没有阈值时间）
+  const flowFile = path.join(root, '.agents', 'flow', 'flow.json')
+  const manifest = JSON.parse(fs.readFileSync(flowFile, 'utf8'))
+  manifest.tasks.archiveAfterDays = 0
+  fs.writeFileSync(flowFile, JSON.stringify(manifest, null, 1))
+  const closed = run(root, ['task', 'archive', '--json'])
+  assert.equal(closed.code, 0, closed.stderr)
+  assert.deepEqual(validateInvocation('task.archive', closed.json), [])
+  assert.equal(closed.json.data.closed, true)
+  assert.equal(closed.json.data.cutoff, null)
+
+  // 2) heartbeat.start --task <显式任务>：createdTask 键存在但为 null（只在自动建卡时有值）
+  const task = run(root, ['task', 'add', '--title', 'HT', '--type', 'feat', '--json'])
+  const taskId = task.json.data.id
+  const started = run(root, ['heartbeat', 'start', '--session', 'vs', '--task', taskId, '--json'])
+  assert.equal(started.code, 0, started.stderr)
+  assert.deepEqual(validateInvocation('heartbeat.start', started.json), [])
+  assert.equal(Object.hasOwn(started.json.data, 'createdTask'), true, 'createdTask 键恒在')
+  assert.equal(started.json.data.createdTask, null)
+
+  // 3) desc 变体：set --input 单补丁 → {records, changed}；show --path 命中 → 文件记录本身
+  const built = run(root, ['desc', 'build', '--json'])
+  assert.equal(built.code, 0, built.stderr)
+  const patch = JSON.stringify({ path: 'lib/a.mjs', semantics: '这是一个足够长的文件语义描述文本' })
+  const setResult = run(root, ['desc', 'set', '--input', patch, '--json'])
+  assert.equal(setResult.code, 0, setResult.stderr)
+  assert.deepEqual(validateInvocation('desc.set', setResult.json), [])
+  assert.equal(setResult.json.data.changed, true)
+  assert.equal(Array.isArray(setResult.json.data.records), true)
+  const shown = run(root, ['desc', 'show', '--path', 'lib/a.mjs', '--json'])
+  assert.equal(shown.code, 0, shown.stderr)
+  assert.deepEqual(validateInvocation('desc.show', shown.json), [])
+  assert.equal(shown.json.data.path, 'lib/a.mjs')
+  assert.equal(typeof shown.json.data.semantics, 'string')
+
+  // 4) exp.productize 幂等：第二次 already:true（首调 already:false）
+  const exp = run(root, ['exp', 'add', '--title', 'T1', '--hypothesis', 'H', '--direction', 'D', '--expected', 'E',
+    '--primary-metric', 'M', '--guardrail', 'G', '--falsify', 'F', '--window-days', '7', '--stop-loss', 'S', '--json'])
+  const expId = exp.json.data.id
+  run(root, ['exp', 'update', expId, '--status', 'confirmed', '--measured', 'm', '--metrics', '{"x":1}', '--json'])
+  run(root, ['gate', 'update', 'release', '--step', 'pass=exit 0', '--json'])
+  run(root, ['gate', 'run', 'release', '--force', '--json'])
+  const first = run(root, ['exp', 'productize', expId, '--json'])
+  assert.equal(first.code, 0, first.stderr)
+  assert.deepEqual(validateInvocation('exp.productize', first.json), [])
+  assert.equal(first.json.data.already, false)
+  const second = run(root, ['exp', 'productize', expId, '--json'])
+  assert.equal(second.code, 0, second.stderr)
+  assert.deepEqual(validateInvocation('exp.productize', second.json), [])
+  assert.equal(second.json.data.already, true, '重复产品化必须幂等')
+
+  // 5) gate add --allow-unknown-expect：落盘记录仍过 shape，且 unknown expect 不炸
+  const gate = run(root, ['gate', 'add', '--id', 'uk', '--title', 'UK', '--phase', 'manual', '--step', 'x=exit:1', '--allow-unknown-expect', '--json'])
+  assert.equal(gate.code, 0, gate.stderr)
+  assert.deepEqual(validateInvocation('gate.add', gate.json), [])
+})
+
 // ---------------------------------------------------------------- 自证有效
 
 test('自证：改名/加字段/错类型/错枚举/错版本都必须被校验器抓住', () => {

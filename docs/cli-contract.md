@@ -101,7 +101,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task update | 记录 task |
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |
-| flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked） |
+| flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked；可选 closed —— archiveAfterDays=0 时 closed:true 且 cutoff 为 null） |
 | flow task sweep | 对象（必填 olderThanHours·scanned·closed·skipped·dryRun·locked） |
 | flow task normalize | 对象（必填 fix·dryRun·ok·issues·fixed·counts·remaining·longTitles·typeMap） |
 | flow task next | 对象（必填 id·title·stage·stageZh·owner·terminal·actor·next·alternatives·acceptance） |
@@ -132,7 +132,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow decision gc | 对象（必填 removed·kept·dryRun） |
 | flow desc status | 对象（必填 established·name·semantics·files·modules·missingSemantics·plans·described·enabled·enforce） |
 | flow desc build | 对象（必填 created·updated·unchanged·pruned·warnings） |
-| flow desc show | 联合（对象（必填 counts·files） / 对象（必填 path·record） / 对象（必填 graph）） |
+| flow desc show | 联合（对象（必填 counts·files） / 描述文件记录（--path 命中，直接返回记录本身） / 对象（必填 path·record） / 对象（必填 graph）） |
 | flow desc set | 联合（对象（必填 schema·name·semantics·revision·generated_at·updated_at·counts） / 开放对象（必填 records·changed）） |
 | flow desc plan | 联合（开放对象（必填 plan·amended） / 开放对象（必填 files）） |
 | flow desc apply | 对象（必填 plan·applied·warnings） |
