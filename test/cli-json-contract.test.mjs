@@ -206,6 +206,21 @@ test('契约覆盖：SPEC 的每个命令键都有 data 形状，且没有幽灵
   assert.deepEqual(ghosts, [], '契约里登记了 SPEC 中不存在的命令（幽灵形状）：' + ghosts.join(', '))
 })
 
+test('契约文档：A 命令索引表与注册表逐行一致，且命令总数文字准确', () => {
+  const doc = fs.readFileSync(DOC, 'utf8')
+  const start = doc.indexOf('### A 命令索引')
+  const end = doc.indexOf('## 5 记录形状')
+  assert.ok(start > 0 && end > start, '文档里找不到 A 命令索引表')
+  const table = doc.slice(start, end)
+  const rows = [...table.matchAll(/^\| (flow [a-z0-9.-]+(?: [a-z0-9-]+)*) \|/gm)].map((match) =>
+    match[1].replace(/^flow /, '').replace(/ /g, '.'),
+  )
+  assert.deepEqual(rows.slice().sort(), commandKeys(), 'A 表与注册表必须一一对应（不多不少）')
+  const declared = /当前 (\d+) 条/.exec(doc)
+  assert.ok(declared !== null, '变更记录/正文必须写明当前命令总数')
+  assert.equal(Number(declared[1]), commandKeys().length, '命令总数的文字必须与注册表一致')
+})
+
 test('契约覆盖：docs/cli-contract.md 逐个登记了全部命令键', () => {
   const doc = fs.readFileSync(DOC, 'utf8')
   const missing = commandKeys().filter((key) => doc.includes('flow ' + key.replace('.', ' ')) === false)
