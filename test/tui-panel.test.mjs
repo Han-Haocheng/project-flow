@@ -798,3 +798,54 @@ test(
     assert.equal(Object.hasOwn(healthy, 'degradedNote'), false)
   },
 )
+
+// ------------------------------------------ aspect 锁段（T-20261112211817）
+
+test('aspect 段：有锁时渲染占用方/租约/ttl-only/排队，无锁或缺键时整块不出现', () => {
+  const payload = fixture()
+  payload.aspects = {
+    available: true,
+    livenessEvidence: 'ttl-only',
+    counts: { total: 2, held: 1, releasable: 1 },
+    items: [
+      {
+        aspect: 'semantics',
+        state: 'held',
+        releasable: false,
+        evidence: 'ttl-only',
+        leaseExpiresAt: new Date(NOW + 5 * 60_000).toISOString(),
+        owner: { session: 'session-abcdef123456' },
+        waiters: [{ session: 'session-waiting', since: new Date(NOW - 90_000).toISOString() }],
+      },
+      {
+        aspect: 'cli',
+        state: 'expired',
+        releasable: true,
+        evidence: 'registry',
+        leaseExpiresAt: new Date(NOW - 60_000).toISOString(),
+        owner: { session: 'old-session' },
+        waiters: [],
+      },
+    ],
+  }
+  const model = panelModel(payload, { width: 80, height: 40, now: NOW })
+  const section = model.sections.find((entry) => entry.title === 'aspect')
+  assert.ok(section, '有锁时必须有 aspect 段')
+  assert.match(section.rows[0].text, /占用 1 · 可回收 1 \/ 共 2/)
+  const held = section.rows.find((row) => row.text.includes('semantics'))
+  assert.match(held.text, /sess…123456|session-ab/, '占用方短 id')
+  assert.match(held.text, /到期 5m/, '租约剩余')
+  assert.match(held.text, /ttl-only/, 'ttl-only 必须标出')
+  assert.match(held.text, /排队 1（最早 1m 前）/, '排队人数与最早等待')
+  const expired = section.rows.find((row) => row.text.includes('cli'))
+  assert.match(expired.text, /expired/, '非 held 状态直接标出')
+  assert.match(expired.text, /已过期/, '过期租约与「没有租约」区分')
+
+  /* 缺键 / 空 items 都整块隐藏（不画空态错误行）。 */
+  const noKey = panelModel(fixture(), { width: 80, height: 40, now: NOW })
+  assert.equal(noKey.sections.some((entry) => entry.title === 'aspect'), false)
+  const empty = fixture()
+  empty.aspects = { available: true, counts: { total: 0, held: 0, releasable: 0 }, items: [] }
+  const emptyModel = panelModel(empty, { width: 80, height: 40, now: NOW })
+  assert.equal(emptyModel.sections.some((entry) => entry.title === 'aspect'), false)
+})

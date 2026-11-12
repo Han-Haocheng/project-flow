@@ -190,6 +190,10 @@ export { panelStateReader }
 // 宿主服务而不是 store，CLI 进程拿不到。这三项不读台账，不算「直连」。
 const CLI_STATE_TIMEOUT_MS = 5000
 const CLI_STATE_MAX_BYTES = 2 * 1024 * 1024
+/** `flow aspect list` 的富化预算：只读展示，超时就整块隐藏（绝不拖垮 state 读）。 */
+const ASPECT_LIST_TIMEOUT_MS = 900
+const ASPECT_LIST_MAX_BYTES = 1024 * 1024
+const ASPECT_MAX_ITEMS = 50
 
 /** The CLI entry this package ships (same package root as the `bin` map). */
 function cliStateEntry() {
@@ -234,7 +238,116 @@ function runCliState(root, deadlineMs = CLI_STATE_TIMEOUT_MS) {
 }
 
 /** Host-side enrichment the CLI cannot compute (needs host services, not the store). */
-async function enrichHostState(ctx, payload) {
+/**
+ * Spawn `flow aspect list --json` for the panel's aspect-lock card (T-20261112211817).
+ *
+ * The panel must never read `.agents/aspect-locks/` itself (the boundary
+ * T-20261112154725 established): the backend CLI is the only reader. `run` is
+ * injectable for tests; a failure is never thrown at the panel, it hides the block.
+ */
+function runAspectList(root, deadlineMs = ASPECT_LIST_TIMEOUT_MS) {
+  const timeout = Number.isFinite(deadlineMs) && deadlineMs > 0 ? Math.floor(deadlineMs) : ASPECT_LIST_TIMEOUT_MS
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      process.execPath,
+      [cliStateEntry(), 'aspect', 'list', '--json', '--root', root],
+      { cwd: PACKAGE_ROOT, timeout, maxBuffer: ASPECT_LIST_MAX_BYTES, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error !== null && error !== undefined) {
+          rejectPromise(new Error(`flow aspect list failed: ${String(stderr || '').trim() || brief(error)}`))
+          return
+        }
+        let envelope
+        try {
+          envelope = JSON.parse(String(stdout))
+        } catch (parseError) {
+          rejectPromise(new Error(`flow aspect list returned non-JSON: ${brief(parseError)}`))
+          return
+        }
+        if (envelope === null || typeof envelope !== 'object' || envelope.ok !== true || envelope.data === null || typeof envelope.data !== 'object') {
+          rejectPromise(new Error(`flow aspect list returned an error envelope: ${brief(envelope && envelope.error)}`))
+          return
+        }
+        resolvePromise(envelope.data)
+      },
+    )
+  })
+}
+
+/**
+ * Normalise `flow aspect list --json` into the panel's `aspects` section, or
+ * `undefined` when the CLI is unavailable — the caller then omits the key and
+ * every panel hides the whole block (never an error card).
+ */
+export async function readAspectSection(root, run = runAspectList) {
+  let data
+  try {
+    data = await run(root, ASPECT_LIST_TIMEOUT_MS)
+  } catch {
+    return undefined
+  }
+  if (data === null || typeof data !== 'object') return undefined
+  const definitions = Array.isArray(data.aspects) ? data.aspects : []
+  const titles = new Map()
+  for (const definition of definitions) {
+    if (definition !== null && typeof definition === 'object' && typeof definition.id === 'string' && typeof definition.title === 'string') {
+      titles.set(definition.id, definition.title)
+    }
+  }
+  const locks = Array.isArray(data.locks) ? data.locks : []
+  const items = locks
+    .filter((lock) => lock !== null && typeof lock === 'object')
+    .slice(0, ASPECT_MAX_ITEMS)
+    .map((lock) => {
+      const owner = lock.owner !== null && typeof lock.owner === 'object' ? lock.owner : {}
+      const waiters = Array.isArray(lock.waiters) ? lock.waiters : []
+      return {
+        aspect: typeof lock.aspect === 'string' ? lock.aspect : '',
+        // CLI 的 locks[] 将来可能自带 title（契约已登记）；没有时用 definitions 回填。
+        title:
+          typeof lock.title === 'string' && lock.title !== ''
+            ? lock.title
+            : typeof lock.aspect === 'string'
+              ? titles.get(lock.aspect) ?? ''
+              : '',
+        state: typeof lock.state === 'string' ? lock.state : '',
+        releasable: lock.releasable === true,
+        evidence: typeof lock.evidence === 'string' ? lock.evidence : '',
+        reason: typeof lock.reason === 'string' ? lock.reason : '',
+        leaseExpiresAt: typeof lock.leaseExpiresAt === 'string' ? lock.leaseExpiresAt : null,
+        ttlSeconds: Number.isFinite(lock.ttlSeconds) ? lock.ttlSeconds : null,
+        owner: {
+          session: typeof owner.session === 'string' ? owner.session : '',
+          pid: Number.isFinite(owner.pid) ? owner.pid : null,
+          acquired_at: typeof owner.acquired_at === 'string' ? owner.acquired_at : null,
+          renewed_at: typeof owner.renewed_at === 'string' ? owner.renewed_at : null,
+        },
+        files: Array.isArray(lock.files) ? lock.files.filter((file) => typeof file === 'string').slice(0, 10) : [],
+        waiters: waiters
+          .filter((waiter) => waiter !== null && typeof waiter === 'object' && typeof waiter.session === 'string')
+          .slice(0, 10)
+          .map((waiter) => ({ session: waiter.session, since: typeof waiter.since === 'string' ? waiter.since : null })),
+      }
+    })
+  const rawCounts = data.counts !== null && typeof data.counts === 'object' ? data.counts : {}
+  const countOf = (value, fallback) => (Number.isFinite(value) ? value : fallback)
+  // 宿主没有注册表能力时，每条锁自己会带 evidence:'ttl-only'；整段只有全 ttl-only
+  // 才标 'ttl-only'，否则至少有一条走注册表判活。
+  const livenessEvidence = items.length > 0 && items.every((item) => item.evidence === 'ttl-only') ? 'ttl-only' : 'registry'
+  return {
+    available: true,
+    livenessEvidence,
+    source: typeof data.source === 'string' ? data.source : null,
+    counts: {
+      total: countOf(rawCounts.total, items.length),
+      held: countOf(rawCounts.held, items.filter((item) => item.state === 'held').length),
+      releasable: countOf(rawCounts.releasable, items.filter((item) => item.releasable === true).length),
+      aspects: countOf(rawCounts.aspects, definitions.length),
+    },
+    items,
+  }
+}
+async function enrichHostState(ctx, payload, root, aspectRun) {
   if (payload === null || typeof payload !== 'object') return payload
   try {
     applyAgentLiveness(ctx, payload)
@@ -251,11 +364,15 @@ async function enrichHostState(ctx, payload) {
   } catch {
     // Idem.
   }
+  // aspect 锁状态（T-20261112211817）：数据只能来自 `flow aspect list --json`，
+  // 拿不到就**不写这个键**——面板据此整块隐藏，而不是报错/白屏。
+  const aspects = await readAspectSection(root, aspectRun)
+  if (aspects !== undefined) payload.aspects = aspects
   return payload
 }
 
 /** CLI payload + host enrichment; throws when the CLI is unavailable. */
-export async function readStateViaCliEnriched(ctx, root, run = runCliState) {
+export async function readStateViaCliEnriched(ctx, root, run = runCliState, aspectRun = runAspectList) {
   const payload = await run(root)
   // A runner that answers with a non-object is as unusable as a failed spawn:
   // the caller must fall back to the in-process read instead of handing the
@@ -264,7 +381,7 @@ export async function readStateViaCliEnriched(ctx, root, run = runCliState) {
     throw new Error('flow state returned a non-object payload')
   }
   payload.readPath = 'cli'
-  return await enrichHostState(ctx, payload)
+  return await enrichHostState(ctx, payload, root, aspectRun)
 }
 
 /** Mark one in-process payload as the degraded path (never mutates a null). */
@@ -325,6 +442,7 @@ export function cliPanelStateReader(ctx, options = {}) {
  */
 export function cliStateSnapshotReader(ctx, options = {}) {
   const run = typeof options.runCliState === 'function' ? options.runCliState : runCliState
+  const aspectRun = typeof options.runAspectList === 'function' ? options.runAspectList : runAspectList
   const fallbackSnapshot = typeof options.fallbackSnapshot === 'function'
     ? options.fallbackSnapshot
     : async (request) => {
@@ -344,7 +462,7 @@ export function cliStateSnapshotReader(ctx, options = {}) {
         throw new Error('flow state returned a non-object payload')
       }
       payload.readPath = 'cli'
-      return { ok: true, payload }
+      return { ok: true, payload: await enrichHostState(ctx, payload, root, aspectRun) }
     } catch (error) {
       const remaining = Math.max(200, deadlineMs - (Date.now() - started))
       const fallback = await fallbackSnapshot(request, { deadlineMs: remaining })

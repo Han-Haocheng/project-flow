@@ -26,7 +26,7 @@ import { addTask as addTaskCore, archiveTasks, getTask, initProject, loadContrac
 function addTask(root, contract, input = {}, options) {
   return addTaskCore(root, contract, { type: 'feat', ...input }, options)
 }
-import { cliPanelStateReader, cliStateSnapshotReader, panelStateReader } from '../index.js'
+import { cliPanelStateReader, cliStateSnapshotReader, panelStateReader, readAspectSection } from '../index.js'
 
 const DAY = 86_400_000
 /** 面板行对象字段（`lib/state-snapshot.mjs:panelTaskRow` 的投影面，顺序即契约）。 */
@@ -383,6 +383,23 @@ test('前端包结构：四个前端文件没有直读 .agents 的 store 调用�
   assert.ok(client.includes("'top.degraded'"), 'client 必须有降级文案 key')
   assert.ok(client.includes('project-flow-degraded'), 'client 必须渲染降级 pill 类名')
   assert.ok(client.includes('.project-flow-degraded{'), '降级 pill 必须有样式，不能裸 span')
+
+  // T-20261112211817：aspect 锁卡的数据来自宿主富化段（不是浏览器直读），
+  // 无锁/键缺席时整卡不挂载；样式只用主题 token。
+  assert.ok(client.includes('function normalizeAspects'), 'client 必须归一宿主富化的 aspects 段')
+  assert.ok(client.includes('aspects: normalizeAspects(src.aspects)'), 'aspects 必须在 normalize 里接入')
+  assert.ok(client.includes('function AspectCard'), 'client 必须有 aspect 锁卡组件')
+  assert.ok(client.includes("view.aspects\n              ? foldCard('aspects'"), 'aspect 卡只在有段且非空时挂载')
+  for (const rule of ['.project-flow-aspects{', '.project-flow-aspectRow{', '.project-flow-aspectWaiters{']) {
+    assert.ok(client.includes(rule), 'aspect 锁卡缺样式：' + rule)
+  }
+  const aspectCss = client
+    .split('T-20261112211817')
+    .filter((part) => part.includes('.project-flow-aspects{'))
+    .join('\n')
+    .split('.project-flow-aspectWaiters{')[1]
+    .split('}')[0]
+  assert.equal(/#[0-9a-fA-F]{3,8}|rgb\(/.test(aspectCss), false, 'aspect 卡样式只准用 --dsw-alias-* token（不许硬编码颜色）')
 })
 // ------------------- seam 形状的路由读（准备好、尚未接线）：CLI 优先 + 进程内兜底
 //
@@ -431,4 +448,70 @@ test('cliStateSnapshotReader（seam 形状）：CLI 给非对象载荷 → 同�
   assert.equal(result.ok, true)
   assert.equal(result.payload.degraded, true)
   assert.match(result.payload.degradedReason, /non-object payload/)
+})
+// ----------------------------------- aspect 锁段富化（T-20261112211817）
+//
+// 数据只能来自 `flow aspect list --json`（不直读 .agents/aspect-locks/），宿主富化一次、
+// web 与 TUI 共用；CLI 不可用时**不写 aspects 键**（面板据此整块隐藏）。
+
+test('readAspectSection：正常数据归一（title 回填、ttl-only 段级标记、waiters 透传）', async () => {
+  const data = {
+    source: 'docs/module-domain.json',
+    aspects: [{ id: 'semantics', title: '语义层', files: ['lib/stage.mjs'], ownerRole: 'semantics' }],
+    locks: [{
+      aspect: 'semantics',
+      state: 'held',
+      releasable: false,
+      evidence: 'ttl-only',
+      reason: 'ttl-fresh',
+      leaseExpiresAt: '2026-11-12T21:40:00+08:00',
+      ttlSeconds: 900,
+      owner: { session: 'sess-1', pid: 42, acquired_at: '2026-11-12T21:25:00+08:00', renewed_at: '2026-11-12T21:30:00+08:00' },
+      waiters: [{ session: 'sess-2', since: '2026-11-12T21:26:00+08:00' }],
+      files: ['lib/stage.mjs'],
+    }],
+    counts: { total: 1, held: 1, releasable: 0, aspects: 1 },
+  }
+  const section = await readAspectSection('/tmp/does-not-matter', async () => data)
+  assert.equal(section.available, true)
+  assert.equal(section.livenessEvidence, 'ttl-only')
+  assert.equal(section.source, 'docs/module-domain.json')
+  assert.deepEqual(section.counts, { total: 1, held: 1, releasable: 0, aspects: 1 })
+  const lock = section.items[0]
+  assert.equal(lock.aspect, 'semantics')
+  assert.equal(lock.title, '语义层', 'definitions 的 title 按 id 回填到行')
+  assert.equal(lock.owner.session, 'sess-1')
+  assert.equal(lock.evidence, 'ttl-only')
+  assert.equal(lock.reason, 'ttl-fresh')
+  assert.equal(lock.waiters.length, 1)
+  assert.equal(lock.waiters[0].session, 'sess-2')
+})
+
+test('readAspectSection：CLI 不可用 / 坏载荷 → undefined（调用方不写 aspects 键）', async () => {
+  const thrower = async () => {
+    throw new Error('spawn ENOENT')
+  }
+  assert.equal(await readAspectSection('/tmp/x', thrower), undefined)
+  assert.equal(await readAspectSection('/tmp/x', async () => null), undefined)
+})
+
+test('cliStateSnapshotReader：CLI state 成功时附带 aspects 段；aspect CLI 失败时整键缺席', async () => {
+  const { root } = freshProject('aspect-enrich')
+  const runCliState = async () => ({ ok: true, generatedAt: 'now', root, tasks: { total: 0 } })
+  const withAspect = cliStateSnapshotReader(fixtureCtx(), {
+    runCliState,
+    runAspectList: async () => ({ locks: [], counts: { total: 0, held: 0, releasable: 0, aspects: 0 }, aspects: [] }),
+  })
+  const enriched = await withAspect({ root }, { deadlineMs: 1800 })
+  assert.equal(enriched.ok, true)
+  assert.equal(enriched.payload.aspects.available, true)
+  assert.equal(enriched.payload.aspects.items.length, 0)
+
+  const withoutAspect = cliStateSnapshotReader(fixtureCtx(), {
+    runCliState,
+    runAspectList: async () => { throw new Error('aspect cli down') },
+  })
+  const bare = await withoutAspect({ root }, { deadlineMs: 1800 })
+  assert.equal(bare.ok, true)
+  assert.equal(Object.hasOwn(bare.payload, 'aspects'), false, '族化失败必须整键缺席，不是 available:false')
 })

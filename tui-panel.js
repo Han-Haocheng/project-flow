@@ -14,6 +14,7 @@ const MAX_EXP_ROWS = 3
 const MAX_GATE_ROWS = 6
 const MAX_BEAT_ROWS = 3
 const MAX_DECISION_ROWS = 4
+const MAX_ASPECT_ROWS = 4
 const MAX_WARNING_ROWS = 5
 
 function isObject(value) {
@@ -313,6 +314,62 @@ function decisionTone(item) {
   return 'normal'
 }
 
+/** aspect 锁段（T-20261112211817）：只读展示，键缺席/空列表都返回 null（整块隐藏）。 */
+function buildAspectSection(aspects, now) {
+  const value = asObject(aspects)
+  if (value === null) return null
+  const items = asArray(value.items).filter(isObject)
+  if (items.length === 0) return null
+  const counts = asObject(value.counts) || {}
+  const held = asNumber(counts.held, items.filter((item) => asText(item.state) === 'held').length)
+  const releasable = asNumber(counts.releasable, items.filter((item) => item.releasable === true).length)
+  const total = asNumber(counts.total, items.length)
+  const header = '占用 ' + held + (releasable > 0 ? ' · 可回收 ' + releasable : '') + ' / 共 ' + total
+  const rows = [row(header, held > 0 ? 'normal' : 'dim')]
+  for (const item of items.slice(0, MAX_ASPECT_ROWS)) {
+    const owner = asObject(item.owner) || {}
+    const state = asText(item.state) || 'held'
+    const parts = [asText(item.aspect) || '-', sessionShort(owner.session) || '-']
+    if (state !== 'held') parts.push(state)
+    const lease = leaseText(item.leaseExpiresAt, now)
+    if (lease !== '') parts.push(lease)
+    if (asText(item.evidence) === 'ttl-only') parts.push('ttl-only')
+    const waiters = asArray(item.waiters).filter(isObject)
+    if (waiters.length > 0) parts.push('排队 ' + waiters.length + oldestWaitText(waiters, now))
+    rows.push(row(parts.join(' · '), state === 'held' ? 'normal' : 'warning'))
+  }
+  if (items.length > MAX_ASPECT_ROWS) rows.push(row('……还有 ' + (items.length - MAX_ASPECT_ROWS) + ' 条', 'dim'))
+  return section('aspect', rows)
+}
+
+/** 会话 id 的短形态：太长时保留头 4 + 尾 6，窄栏也读得出是谁。 */
+function sessionShort(value) {
+  const text = asText(value)
+  if (text === '') return ''
+  return text.length <= 12 ? text : text.slice(0, 4) + '…' + text.slice(-6)
+}
+
+/** 租约到期：未来时间显示相对剩余，已过期单独标出（不混淆「没租约」与「已过期」）。 */
+function leaseText(value, now) {
+  const stamp = Date.parse(asText(value))
+  if (Number.isFinite(stamp) === false) return ''
+  const delta = stamp - now
+  if (delta <= 0) return '已过期'
+  return '到期 ' + shortAgo(delta / 1000)
+}
+
+/** 最老的排队者等了多久（面板只看「最早」这一个数，避免行太长）。 */
+function oldestWaitText(waiters, now) {
+  let oldest = null
+  for (const waiter of waiters) {
+    const stamp = Date.parse(asText(waiter.since))
+    if (Number.isFinite(stamp) === false) continue
+    oldest = oldest === null ? stamp : Math.min(oldest, stamp)
+  }
+  if (oldest === null) return ''
+  return '（最早 ' + shortAgo(Math.max(0, (now - oldest) / 1000)) + ' 前）'
+}
+
 function buildDecisionSection(decisions) {
   const counts = asObject(decisions.counts) || {}
   const open = asNumber(counts.open, 0)
@@ -369,7 +426,12 @@ function readyModel(payload, now) {
 
   const sections = [section('任务', buildTaskRows(tasks))]
   if (expEnabled) sections.push(section('实验', buildExperimentRows(experiments)))
-  sections.push(section('门禁', buildGateRows(gates, now)), section('心跳', buildHeartbeatRows(payload.heartbeats, payload.heartbeatsHidden)))
+  sections.push(section('门禁', buildGateRows(gates, now)))
+  /* T-20261112211817：aspect 锁段是宿主富化产物（`flow aspect list --json`）；
+     键缺席 = 后端不可用/没有可展示数据 → 整块不出现，不画错误行。 */
+  const aspectSection = buildAspectSection(payload.aspects, now)
+  if (aspectSection !== null) sections.push(aspectSection)
+  sections.push(section('心跳', buildHeartbeatRows(payload.heartbeats, payload.heartbeatsHidden)))
   const decisionSection = buildDecisionSection(decisions)
   if (decisionSection !== null) sections.push(decisionSection)
   const warningSection = buildWarningSection(payload.warnings)

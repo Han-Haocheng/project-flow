@@ -264,6 +264,16 @@ window.__ModuleLoader__.load({
       'framework.summary': '文件 {files} · 模块 {modules} · 缺语义 {missing} · 计划 {plans}',
       'framework.plans': '最近语义变更',
       'framework.plansEmpty': '还没有已实现的语义变更计划。',
+      'aspect.title': 'aspect 锁',
+      'aspect.summary': '占用 {held} / 共 {total}',
+      'aspect.releasable': '可回收 {n}',
+      'aspect.leaseSeconds': '{n} 秒后到期',
+      'aspect.leaseMinutes': '{n} 分钟后到期',
+      'aspect.leaseHours': '{n} 小时后到期',
+      'aspect.leaseDays': '{n} 天后到期',
+      'aspect.leaseExpired': '已过期',
+      'aspect.ttlOnly': 'ttl-only',
+      'aspect.waiters': '排队 {n}（最早 {age}）',
       'gates.title': '门禁',
       'gates.empty': '还没有门禁定义；用 flow gate add 创建',
       'gates.phase.commit': '提交',
@@ -445,6 +455,16 @@ window.__ModuleLoader__.load({
       'framework.summary': '{files} files · {modules} modules · {missing} missing semantics · {plans} plans',
       'framework.plans': 'Recent semantic changes',
       'framework.plansEmpty': 'No implemented semantic-change plans yet.',
+      'aspect.title': 'Aspect locks',
+      'aspect.summary': '{held} held / {total} total',
+      'aspect.releasable': '{n} releasable',
+      'aspect.leaseSeconds': 'expires in {n}s',
+      'aspect.leaseMinutes': 'expires in {n}m',
+      'aspect.leaseHours': 'expires in {n}h',
+      'aspect.leaseDays': 'expires in {n}d',
+      'aspect.leaseExpired': 'expired',
+      'aspect.ttlOnly': 'ttl-only',
+      'aspect.waiters': 'queued {n} (oldest {age})',
       'gates.title': 'Gates',
       'gates.empty': 'No gate definitions yet; create one with flow gate add',
       'gates.phase.commit': 'commit',
@@ -1047,6 +1067,48 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /**
+     * aspect 锁段（T-20261112211817）：宿主富化产物（数据来自 `flow aspect list --json`）。
+     * 键缺席、available!==true 或没有锁 → null，PanelView 不挂载整张卡（隐藏而不是报错）。
+     */
+    function normalizeAspects(value) {
+      const src = asObject(value);
+      if (src === null || src.available !== true) return null;
+      const items = asArray(src.items)
+        .map((entry) => asObject(entry))
+        .map((entry) => {
+          const owner = asObject(entry.owner);
+          const leaseAt = asText(entry.leaseExpiresAt);
+          const leaseMs = Date.parse(leaseAt);
+          return {
+            aspect: asText(entry.aspect),
+            title: asText(entry.title),
+            state: asText(entry.state) || 'held',
+            releasable: entry.releasable === true,
+            evidence: asText(entry.evidence),
+            reason: asText(entry.reason),
+            leaseMs: Number.isFinite(leaseMs) ? leaseMs : null,
+            ownerSession: asText(owner.session),
+            waiters: asArray(entry.waiters)
+              .map((waiter) => asObject(waiter))
+              .map((waiter) => ({ session: asText(waiter.session), since: asText(waiter.since) }))
+              .filter((waiter) => waiter.session !== ''),
+          };
+        })
+        .filter((entry) => entry.aspect !== '');
+      if (items.length === 0) return null;
+      const counts = asObject(src.counts);
+      return {
+        livenessEvidence: asText(src.livenessEvidence),
+        counts: {
+          total: Math.max(0, Math.floor(asNumber(counts.total, items.length))),
+          held: Math.max(0, Math.floor(asNumber(counts.held, items.filter((item) => item.state === 'held').length))),
+          releasable: Math.max(0, Math.floor(asNumber(counts.releasable, items.filter((item) => item.releasable === true).length))),
+        },
+        items,
+      };
+    }
+
     function normalize(payload) {
       const src = asObject(payload);
       const headSrc = asObject(src.head);
@@ -1170,6 +1232,8 @@ window.__ModuleLoader__.load({
         /* task-73: read-only Team-board summary. Absent on an older payload →
            available:false, so the panel hides the line instead of showing 0. */
         team: boardTeamStatus(src.team),
+        /* T-20261112211817：aspect 锁段；null = 后端不可用/没有锁，整卡隐藏。 */
+        aspects: normalizeAspects(src.aspects),
         gates,
         heartbeats: heartbeatSection.items,
         heartbeatCounts: heartbeatSection.counts,
@@ -3141,6 +3205,82 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * Aspect 锁卡（T-20261112211817）：只读展示宿主富化段。
+     * 段缺席（CLI 不可用）或没有锁时 normalize 已经给 null，本组件不会被挂载。
+     */
+    function AspectCard(props) {
+      const t = typeof props.t === 'function' ? props.t : (key) => key;
+      const now = Number.isFinite(props.now) ? props.now : Date.now();
+      const aspects = asObject(props.aspects);
+      if (aspects === null) return null;
+      const items = asArray(aspects.items).filter((item) => asObject(item) !== null && asText(item.aspect) !== '');
+      if (items.length === 0) return null;
+      const counts = asObject(aspects.counts);
+      const held = Math.max(0, Math.floor(asNumber(counts.held, 0)));
+      const total = Math.max(0, Math.floor(asNumber(counts.total, items.length)));
+      const releasable = Math.max(0, Math.floor(asNumber(counts.releasable, 0)));
+
+      /* 租约剩余：未来时间按秒/分/时/天分桶；已过期单独一个词，不与「没有租约」混淆。 */
+      const leaseTextOf = (item) => {
+        if (Number.isFinite(item.leaseMs) === false) return '';
+        const delta = item.leaseMs - now;
+        if (delta <= 0) return t('aspect.leaseExpired');
+        const seconds = Math.round(delta / 1000);
+        if (seconds < 60) return t('aspect.leaseSeconds', { n: seconds });
+        if (seconds < 3600) return t('aspect.leaseMinutes', { n: Math.round(seconds / 60) });
+        if (seconds < 86400) return t('aspect.leaseHours', { n: Math.round(seconds / 3600) });
+        return t('aspect.leaseDays', { n: Math.round(seconds / 86400) });
+      };
+
+      /* 排队：只报人数与最早等待时长（行太长会把窄栏挤爆）。 */
+      const waiterTextOf = (item) => {
+        const waiters = asArray(item.waiters);
+        if (waiters.length === 0) return '';
+        let oldest = null;
+        for (const waiter of waiters) {
+          const stamp = Date.parse(asText(waiter.since));
+          if (Number.isFinite(stamp) === false) continue;
+          oldest = oldest === null ? stamp : Math.min(oldest, stamp);
+        }
+        const age = oldest === null ? '' : relativeFromSeconds(Math.max(0, (now - oldest) / 1000), t);
+        return t('aspect.waiters', { n: waiters.length, age: age || t('misc.dash') });
+      };
+
+      return React.createElement(
+        'div',
+        { className: 'project-flow-aspects' },
+        React.createElement(
+          'div',
+          { className: 'project-flow-aspectSummary' },
+          t('aspect.summary', { held, total }),
+          releasable > 0 ? ' · ' + t('aspect.releasable', { n: releasable }) : ''
+        ),
+        items.map((item) =>
+          React.createElement(
+            'div',
+            { className: 'project-flow-aspectRow', key: item.aspect },
+            React.createElement('span', { className: 'project-flow-aspectId' }, item.aspect),
+            item.ownerSession
+              ? React.createElement('span', { className: 'project-flow-aspectOwner' }, item.ownerSession)
+              : null,
+            item.state !== 'held'
+              ? React.createElement(Chip, { tone: 'warning' }, item.state)
+              : null,
+            leaseTextOf(item) !== ''
+              ? React.createElement('span', { className: 'project-flow-aspectLease' }, leaseTextOf(item))
+              : null,
+            item.evidence === 'ttl-only'
+              ? React.createElement('span', { className: 'project-flow-aspectTtl' }, t('aspect.ttlOnly'))
+              : null,
+            waiterTextOf(item) !== ''
+              ? React.createElement('span', { className: 'project-flow-aspectWaiters' }, waiterTextOf(item))
+              : null
+          )
+        )
+      );
+    }
+
     function Footer(props) {
       const view = props.view;
       const t = props.t;
@@ -3639,6 +3779,10 @@ window.__ModuleLoader__.load({
                a write, so it targets the ledger root, not the session cwd. */
             view.gates
               ? foldCard('gates', 'gates.title', React.createElement(GatesCard, { gates: view.gates, t, now, workspaceRoot: ledgerWriteRoot, showTitle: false }))
+              : null,
+            /* T-20261112211817：aspect 锁段只在宿主富化成功且真有锁时出现。 */
+            view.aspects
+              ? foldCard('aspects', 'aspect.title', React.createElement(AspectCard, { aspects: view.aspects, t, now }))
               : null,
             heartbeatsVisible
               ? foldCard(
@@ -4174,6 +4318,15 @@ window.__ModuleLoader__.load({
 .project-flow-trendAxis{display:flex;justify-content:space-between;gap:6px;margin-top:2px;font-size:10px;color:var(--dsw-alias-label-secondary);}
 .project-flow-trendEmpty{margin:4px 0 0;font-size:11px;}
 .project-flow-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+/* T-20261112211817：aspect 锁卡。注意：样式表文本会被首屏断言采集，
+   注释里不要写任何页头才会出现的 UI 文案。 */
+.project-flow-aspects{display:flex;flex-direction:column;gap:6px;}
+.project-flow-aspectSummary{color:var(--dsw-alias-label-secondary);font-size:11px;font-variant-numeric:tabular-nums;}
+.project-flow-aspectRow{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:11px;line-height:18px;}
+.project-flow-aspectId{font-family:${MONO};font-weight:600;color:var(--dsw-alias-label-primary);}
+.project-flow-aspectOwner{font-family:${MONO};color:var(--dsw-alias-label-secondary);}
+.project-flow-aspectLease,.project-flow-aspectTtl{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;}
+.project-flow-aspectWaiters{color:var(--dsw-alias-state-warn-primary);font-variant-numeric:tabular-nums;}
 .project-flow-chip--ok{color:var(--project-flow-ok-text);}
 .project-flow-chip--error{color:var(--project-flow-error-text);}
 .project-flow-chip--warn{color:var(--project-flow-warn-text);}
