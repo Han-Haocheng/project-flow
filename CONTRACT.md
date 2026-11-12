@@ -45,7 +45,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
 | `lib/host/*.mjs` | Host 装配拆分（2026-11-08 框架会话）：`shared`=常量/工作区作用域/HTTP 助手；`session`=心跳/提醒/捕获/会话钩子；`state`=快照池与 HTTP 读路由；`team`=团队板读面；`routes`=init/gate 写路由；`enforce`=P2 权限面；`tools`=工具定义与注册；`skills`=技能注册。**`index.js` 只做 `apply` 装配** | `index.js` |
 | `bin/flow.mjs` | CLI **薄入口**（2026-11-11 拆分后 520 行）：SPEC/参数解析/dispatch/退出码；命令实现全部在 `lib/cli/` | 人、脚本、门禁 |
-| `lib/cli/*.mjs` | CLI 命令实现（Phase 1 第 4 期）：`shared` 信封与助手、`tasks`/`exp`/`gates`/`decisions`/`heartbeat`/`desc`/`check`/`misc` 按域拆分；`mcp-server` 暴露完整查询/写入工作流，`lib/mcp/orchestrator.mjs` 负责 queued 任务领取、本地 runner 派工与父子聚合；所有写盘仍经 core 门面与同一把 store 锁 | `bin/flow.mjs`、`bin/mcp.mjs` |
+| `lib/cli/*.mjs` | CLI 命令实现（Phase 1 第 4 期）：`shared` 信封与助手、`tasks`/`exp`/`gates`/`decisions`/`heartbeat`/`desc`/`check`/`state`/`misc` 按域拆分；`contract` 是 `--json` 契约的机器可读单一真源；`mcp-server` 暴露完整查询/写入工作流，`lib/mcp/orchestrator.mjs` 负责 queued 任务领取、本地 runner 派工与父子聚合；所有写盘仍经 core 门面与同一把 store 锁 | `bin/flow.mjs`（含 `mcp-serve` 子命令） |
 | `lib/core.mjs` | **契约装配与对外门面**（Phase 1 后 501 行）：gate seeds、`initProject`、只读聚合 `readStoreState`，其余 97 个 API 从各域 import 后原样 re-export；域模块之间不 import core，全部写盘仍经同一把 store 锁 | 工具层、CLI、快照 |
 | `lib/desc.mjs` | **描述台账模型**（纯函数）：`description/` 三族记录的校验、build 回填（哈希/import）、模块图推导（`moduleEdges`）、漂移检查（`checkDescription`）、确定性渲染。**不 import core**（与 `checks.mjs` 同一策略：模型只算，锁内编排与写盘在 core） | core |
 | `lib/source-scan.mjs` | 零依赖源码扫描器（仅 import `./util.mjs` 的 `FlowError` 用于非法入参）：JS/TS/JSX 的注释剥离与顶层声明、Python 的 `def`/`class`/顶层赋值/import；产出 `declarations`（含 `identifiers`）供模块归属推导。**不 import 其它 lib 模块**（扫描器不认识项目，只认识文本） | `lib/desc.mjs` |
@@ -103,6 +103,20 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 前置条件：`core-unavailable` 降级路径先有测试覆盖、`index.js` 空闲。
 ⚠ 搬的时候**不要动** `clip`/`isoLocal`/`timeValue`/`toPosix`/`isPlainObject`——它们与
 `util` 同名不同契约，`index.js` 依赖的是快照变体。
+
+### 1.1.1 单一可执行与 MCP 兼容策略（T-20261112154655）
+
+后端只有**一个可执行**：`flow`（`bin/flow.mjs`）。它同时承载两件事——
+
+- `flow <command> [--json]`：人类与脚本的 CLI，也是**前后端唯一接口**（形状见 `docs/cli-contract.md`）；
+- `flow mcp-serve [--root <dir>] ...`：MCP stdio adapter，和 CLI **平级、共用同一份 core**
+  （实现在 `lib/cli/mcp-server.mjs`，不是第二份实现）。
+
+**兼容策略**：旧入口 `flow-mcp`（`bin/mcp.mjs`）保留为**兼容别名**——它直接复用
+`lib/cli/mcp-server.mjs` 的 `main`，不 spawn 子进程、不复制实现，只在 stderr 排一行弃用提示
+（stdout 全程留给 JSON-RPC）。理由：直接删除会让已有 MCP 客户端配置在升级后静默失效。
+`package.json` 的 `bin` 声明 `flow`（主入口）与 `flow-mcp`（向 `bin/mcp.mjs` 的弃用别名）；
+新配置一律写 `flow mcp-serve`，已有 `flow-mcp` 配置继续可用。
 
 ## 2 `flow.json`（schema 2）
 

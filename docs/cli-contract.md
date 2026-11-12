@@ -172,9 +172,9 @@ stderr 只在极少数非契约场景出现（见 §8）。
 
 **gateRun** — 必填：gate、title、started_at、finished_at、durationMs、ok、steps；可选：kind、mount、failFast、segments
 
-**heartbeat** — 必填：schema、session、agent、goal、task、claims、status、turn、last_action、started_at、updated_at、ended_at、host、stats；可选：title
+**heartbeat** — 必填：schema、session、agent、goal、task、claims、status、turn、last_action、started_at、updated_at、ended_at、host、stats；可选：title、boot_id、pid、pid_start、branch、worktree（判活证据与分支来源，有值时才出现）
 
-**heartbeatItem** — 必填：file、session、agent、legacy、hidden、goal、title、task、claims、status、last_action、started_at、updated_at、ended_at、ageSeconds、stale、turn、stats、mtime、liveness、reason、livenessEvidence、leaseExpiresAt、taskStage、taskStageZh
+**heartbeatItem** — 必填：file、session、agent、legacy、hidden、goal、title、task、claims、status、last_action、started_at、updated_at、ended_at、ageSeconds、stale、turn、stats、mtime、liveness、reason、livenessEvidence、leaseExpiresAt、taskStage、taskStageZh；可选：branch、worktree、pid（branch/worktree 只在有值时出现，pid 旧记录为 null；started_at/updated_at/ended_at/turn/stats 可为 null）
 
 **decision** — 必填：schema、id、question、kind、rationale、options、recommendation、default、status、blocks、affects、supersedes、answer、answered_at、withdraw、superseded_by、fingerprint、asked_at、created_at、updated_at、asked_session、asked_turn
 
