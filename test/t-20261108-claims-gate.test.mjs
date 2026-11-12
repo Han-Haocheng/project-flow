@@ -25,7 +25,7 @@ import { hostTag } from '../lib/lock.mjs'
 const TEMP_ROOTS = []
 const HARNESSES = []
 
-function makeHarness(root, config = {}, { agents: agentsCapable = true } = {}) {
+function makeHarness(root, config = {}, { agents: agentsCapable = true, enumerateChildren = true } = {}) {
   const handlers = new Map()
   const effects = []
   const live = new Map()
@@ -46,7 +46,11 @@ function makeHarness(root, config = {}, { agents: agentsCapable = true } = {}) {
     },
   }
   const agents = {
-    list: () => [...live.values()],
+    // 某些宿主的 list() 不穷举子会话（gatekeeper 审查场景）：get() 仍然认识它们。
+    list: () =>
+      enumerateChildren
+        ? [...live.values()]
+        : [...live.entries()].filter(([id]) => roots.has(id)).map(([, agent]) => agent),
     roots: () => [...live.entries()].filter(([id]) => roots.has(id)).map(([, agent]) => agent),
     get: (id) => live.get(id),
   }
@@ -632,3 +636,21 @@ test('验收④：注册表说死优先于 TTL（新鲜记录也立即释放）�
   assert.equal(owner.session, 'session-conflict')
 })
 
+
+// ------------------------------- agents.get 单会话探针（T-20261112202457 加固）
+//
+// 负证据如果只看 roots()+list() 的集合快照，某些宿主不穷举子会话时会把**活着的同进程
+// 子会话**判成 session-gone 并释放文件域。判定必须先用 agents.get(session) 单会话探针。
+
+test('判活加固：agents.list 不穷举子会话时，agents.get 仍证明子会话活着（不丢域）', () => {
+  const { root, contract } = freshProject('probe-get')
+  const harness = makeHarness(root, {}, { enumerateChildren: false })
+  const mine = harness.addAgent('session-probe-mine')
+  // 子会话：list() 看不到，但 get() 认识它 —— 这正是 gatekeeper 担心的宿主形状。
+  harness.addAgent('session-probe-child', { root: false })
+  withClaims(root, contract, 'session-probe-mine', ['CONTRACT.md'])
+  withClaims(root, contract, 'session-probe-child', ['CONTRACT.md'])
+  const reason = harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine))
+  assert.equal(typeof reason, 'string', '活着的子会话不因 list() 不穷举就被判 session-gone')
+  assert.match(reason, /session-probe-child/)
+})
