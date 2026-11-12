@@ -597,7 +597,7 @@
       "semantics": "台账备份与体检：本地快照、flow doctor 完整性报告与过期快照提醒。"
     },
     "cli": {
-      "title": "CLI 与 MCP（参数面 / 命令分发 / 输出 / 完整工作流与自动编排）",
+      "title": "CLI 与 MCP（单一可执行 flow / mcp-serve 子命令 / --json 契约 / 编排）",
       "owns": [
         "lib/cli/",
         "lib/mcp/",
@@ -621,7 +621,7 @@
         "test/t-20261111-mcp.test.mjs",
         "test/cli-json-contract.test.mjs"
       ],
-      "semantics": "CLI 与 MCP：参数面、命令分发、输出、完整工作流与自动编排。"
+      "semantics": "CLI 与 MCP：唯一可执行是 flow（mcp-serve 子命令承载 MCP，bin/mcp.mjs 仅为已弃用的兼容别名），负责参数面、命令分发、输出契约与完整工作流编排。"
     },
     "docs": {
       "title": "文档与技能（契约正文 / README / 内嵌技能）",
