@@ -131,10 +131,12 @@
         "test/t-20261107-subtask.test.mjs",
         "test/t-20261107-team-sync.test.mjs",
         "test/t-20261109-dispatch.test.mjs",
-        "test/t-20261111-task-next-verify.test.mjs",
         "test/t-20261111-03-pipeline-e2e.test.mjs",
         "test/t-20261111-04-task-cas-core.test.mjs",
-        "test/t-20261111-04-task-cas-tool.test.mjs"
+        "test/t-20261111-04-task-cas-tool.test.mjs",
+        "test/t-20261111-task-next-verify.test.mjs",
+        "test/t-20261112-tool-output-e2e.test.mjs",
+        "test/t-20261112-tool-output-render.test.mjs"
       ]
     },
     "decisions": {
@@ -358,10 +360,12 @@
       ]
     },
     "cli": {
-      "title": "CLI（参数面 / 命令分发 / 输出）",
+      "title": "CLI 与 MCP（参数面 / 命令分发 / 输出 / 完整工作流与自动编排）",
       "owns": [
         "lib/cli/",
-        "bin/flow.mjs"
+        "lib/mcp/",
+        "bin/flow.mjs",
+        "bin/mcp.mjs"
       ],
       "shared": [],
       "sections": {},
@@ -369,7 +373,8 @@
         "test/t-20261030-15-flag-spec.test.mjs",
         "test/t-20261104-12-b2-cli.test.mjs",
         "test/t-20261107-cli-status-block.test.mjs",
-        "test/t-20261107-stage-cli.test.mjs"
+        "test/t-20261107-stage-cli.test.mjs",
+        "test/t-20261111-mcp.test.mjs"
       ]
     },
     "docs": {

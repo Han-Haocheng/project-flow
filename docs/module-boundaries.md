@@ -30,7 +30,7 @@
 | `description` | 文件图/模块图/语义/漂移 | `lib/description/`、`lib/desc.mjs`、`lib/source-scan.mjs` | `lib/core.mjs`（description）、`lib/state-snapshot.mjs`、`index.js`、`bin/flow.mjs`、`CONTRACT.md`（c3.7/c6.1.4）、`README.md` | 5 |
 | `panel` | 只读快照投影、Web 面板、TUI 面板 | `lib/state-snapshot.mjs`、`client.js`、`tui-panel.js`、`locale/*` | `index.js`（state-read-isolation）、`CONTRACT.md`（c9） | 11 |
 | `backup` | 台账本地快照、`flow doctor` 完整性报告、过期快照提醒 | `lib/backup.mjs` | `bin/flow.mjs`（命令）、`lib/host/session.mjs`（挂载提醒）、`CONTRACT.md`（c8） | 1 |
-| `cli` | 参数面、命令分发、输出 | `lib/cli/`、`bin/flow.mjs`（薄入口） | — | 4 |
+| `cli` | 参数面、命令分发、输出、完整 MCP 工作流与自动编排 | `lib/cli/`、`lib/mcp/`、`bin/flow.mjs`（薄入口）、`bin/mcp.mjs`（MCP stdio） | — | 5 |
 | `docs` | 契约正文、README、内嵌技能 | `CONTRACT.md`、`README.md`、`skills/` | — | 3 |
 
 > 2026-11-11 Phase 1 起，`heartbeats` 也有独占目录 `lib/heartbeats/`（此前它的代码全在
