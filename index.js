@@ -363,6 +363,9 @@ function reconcileAspectLiveness(ctx, section) {
   if (live === null || live instanceof Set === false) return section
   const now = Date.now()
   for (const item of section.items) {
+    // `foreign` 是**另一台机器**写的锁：本机注册表即使有同名活会话也只说明 id 撞了，
+    // 不能证明那台机器的占用方还在。保留 CLI 的 foreign/ttl-only 结论（concurrency 提醒）。
+    if (item.state === 'foreign') continue
     const session = item.owner !== null && typeof item.owner === 'object' ? item.owner.session : ''
     if (typeof session !== 'string' || session === '' || live.has(session) === false) continue
     item.evidence = 'registry'
@@ -370,7 +373,7 @@ function reconcileAspectLiveness(ctx, section) {
     if (Number.isFinite(leaseMs) && leaseMs <= now) {
       item.state = 'expired'
       item.releasable = true
-    } else if (item.state === 'dead' || item.state === 'foreign') {
+    } else if (item.state === 'dead') {
       item.state = 'held'
       item.releasable = false
     }

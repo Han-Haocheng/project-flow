@@ -597,3 +597,36 @@ test('aspect 判活：活会话的租约真过期仍是 expired；注册表不�
   assert.equal(barePayload.aspects.items[0].state, 'dead', '无注册表时保留 CLI 判活结果')
   assert.equal(barePayload.aspects.livenessEvidence, 'ttl-only')
 })
+test('aspect 判活：foreign 锁不因本机同名活会话被纠正（跨机器 id 撞车不算证据）', async () => {
+  const { root } = freshProject('aspect-foreign')
+  const ctx = {
+    get(id) {
+      if (id === 'agents') return { list: () => [{ id: 'sess-live' }] }
+      if (id === 'workspaceRegistry') return { list: () => [] }
+      return undefined
+    },
+  }
+  const read = cliStateSnapshotReader(ctx, {
+    runCliState: async () => ({ ok: true, root, tasks: { total: 0 } }),
+    runAspectList: async () => ({
+      aspects: [],
+      locks: [{
+        aspect: 'semantics',
+        state: 'foreign',
+        releasable: true,
+        evidence: 'ttl-only',
+        leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+        owner: { session: 'sess-live', host: 'other-machine|linux' },
+        waiters: [],
+        files: [],
+      }],
+      counts: { total: 1, held: 0, releasable: 1, aspects: 0 },
+    }),
+  })
+  const payload = (await read({ root }, { deadlineMs: 1800 })).payload
+  const item = payload.aspects.items[0]
+  assert.equal(item.state, 'foreign', '另一台机器的锁不能按本机注册表改判')
+  assert.equal(item.evidence, 'ttl-only')
+  assert.equal(item.releasable, true)
+  assert.equal(payload.aspects.livenessEvidence, 'ttl-only')
+})
