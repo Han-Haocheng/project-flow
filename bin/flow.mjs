@@ -201,7 +201,7 @@ export const SPEC = Object.freeze({
   // 2026-11-12 裁定 6：aspect 锁（登记即串行，不阻断）。--file 是单值（补文件域），
   // 不重复；--aspect 只支持 flag 形式，位置参数暂不归一化。
   aspect: Object.freeze({
-    flags: ['session', 'ttl', 'wait', 'aspect', 'file', 'force', 'dry-run'],
+    flags: ['session', 'ttl', 'wait', 'aspect', 'file', 'force', 'dry-run', 'reason', 'by'],
   }),
   check: Object.freeze({
     list: { flags: [] },
