@@ -60,6 +60,15 @@
 | `right-column-cards` | panel 拥有；tasks / decisions / heartbeats / experiments 各自只改自己的卡片组件 |
 | `experiment-tree` | panel 拥有；experiments 可改 |
 
+### 3.1 数据为什么留在 `docs/module-domain.json`
+
+不迁到 `.agents/flow/`（那里是运行期台账），理由：
+
+1. **可追溯性**：`.agents/` 被 `.gitignore` 整目录忽略；写域图必须随代码 review、可 diff、可留痕；
+2. **随包分发**：`package.json` 的 `files` 明确发布 `docs/module-domain.json` 与本文；
+3. **构建期 vs 运行期**：本脚本是纯 FS、零依赖、不加锁、不要求 `flow init` 的**构建期门禁**，放进 store 会变成运行期台账，干净克隆上 precommit 就跑不了；
+4. **归属自洽**：`docs/` 是 framework 的 `owns`，放在这里不需要额外豁免。
+
 ## 4 `aspect`：改它要谁知道 / 谁复核
 
 `aspect` 是**横切关注面**：一句话不变量 + 指定复核角色（`ownerRole`）+ 显式文件清单 + 增删理由。
