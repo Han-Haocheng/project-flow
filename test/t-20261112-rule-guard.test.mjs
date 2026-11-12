@@ -253,6 +253,26 @@ test('CLI：gate rules --init/--record/check 的退出码与 --json 错误形状
   assert.equal(runCli(root, ['gate', 'rules', '--json']).code, 0)
 })
 
+test('自定义 store.root 不改变 manifest 位置：仍监视 .agents/flow/flow.json', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-rules-custom-store-'))
+  TEMP_ROOTS.push(root)
+  // 先落一份指向自定义 store 的 manifest，再 init（init 会沿用已有 manifest）。
+  fs.mkdirSync(path.join(root, '.agents/flow'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, '.agents/flow/flow.json'),
+    JSON.stringify({ schema: 2, name: 'custom-store', store: { root: '.agents/custom-store' } }, null, 2),
+  )
+  initProject(root, { name: 'custom-store', noGates: true })
+  writeRuleFiles(root)
+  const { contract } = loadContract(root)
+  const init = initRules(root, contract)
+  // storePaths 只重定向子目录；loadContract 始终读 <root>/.agents/flow/flow.json，
+  // 所以监视路径不能按 store.root 拼接（拼了会静默漏看真正的 manifest）。
+  assert.ok(init.files.includes('.agents/flow/flow.json'), `监视清单应含真实 manifest：${init.files.join(', ')}`)
+  assert.equal(init.files.includes('.agents/custom-store/flow.json'), false)
+  assert.equal(checkRules(root, contract).ok, true)
+})
+
 test('规则基线与 trail 落在 store 根，文件名固定（可被 flow doctor / 备份看见）', () => {
   const { root, contract } = freshRulesProject('path')
   assert.equal(path.basename(ruleGuardPath(root, contract)), RULE_GUARD_FILE)
