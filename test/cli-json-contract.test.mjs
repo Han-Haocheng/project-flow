@@ -25,6 +25,7 @@ import {
   CLI_CONTRACT_VERSION,
   DATA_SHAPES,
   RECORD_SHAPES,
+  TOOL_SHAPES,
   commandKeys,
   validateEnvelope,
   validateCommandData,
@@ -305,6 +306,7 @@ test('契约形状：每条命令真实 --json 输出都符合登记形状', () 
   expect('init', ['init', '--name', 'contract'])
   expect('status', ['status'])
   expect('state', ['state'])
+  expect('aspect', ['aspect', 'list'])
   expect('doctor', ['doctor'])
   expect('backup', ['backup'])
 
@@ -555,6 +557,88 @@ test('字段出现条件：变体路径的形状（archive closed / heartbeat cr
   assert.deepEqual(validateInvocation('gate.add', gate.json), [])
 })
 
+test('aspect 锁命令面：list/acquire/renew/release/sweep 五种 data 形状 + pending 与惰性清扫', () => {
+  const root = tempRoot('aspect')
+  initProject(root, { name: 'asp' })
+  const lockFile = (aspect) => path.join(root, '.agents', 'aspect-locks', aspect + '.json')
+
+  // 1) acquire 成功：锁投影（owner/files/state/releasable/...）
+  const acquired = run(root, ['aspect', 'acquire', '--aspect', 'state-machine', '--session', 's1', '--file', 'lib/x.mjs', '--json'])
+  assert.equal(acquired.code, 0, acquired.stderr)
+  assert.deepEqual(validateInvocation('aspect', acquired.json), [])
+  assert.equal(acquired.json.data.acquired, true)
+  assert.deepEqual(acquired.json.data.lock.files, ['lib/x.mjs'])
+  assert.equal(acquired.json.data.lock.state, 'held')
+  assert.equal(acquired.json.data.lock.owner.session, 's1')
+
+  // 一次性 CLI 进程结束后占用方 pid 就死了；把 pid 改成测试进程（活着的），
+  // 才能稳定验证「被活着占用方挡住」的 pending 分支。
+  const lock = JSON.parse(fs.readFileSync(lockFile('state-machine'), 'utf8'))
+  lock.owner.pid = process.pid
+  fs.writeFileSync(lockFile('state-machine'), JSON.stringify(lock, null, 1))
+
+  // 2) list：定义投影 + 锁 + 计数（held 1）；没有 module-domain 时无 source、无 swept
+  const listed = run(root, ['aspect', 'list', '--json'])
+  assert.equal(listed.code, 0, listed.stderr)
+  assert.deepEqual(validateInvocation('aspect', listed.json), [])
+  assert.equal(listed.json.data.counts.held, 1)
+  assert.equal(listed.json.data.counts.aspects, 0)
+  assert.equal(Object.hasOwn(listed.json.data, 'source'), false)
+  assert.equal(Object.hasOwn(listed.json.data, 'swept'), false)
+
+  // 3) acquire 被活着占用方挡住：pending 分支（不阻断，waitedMs 是数字）
+  const pending = run(root, ['aspect', 'acquire', '--aspect', 'state-machine', '--session', 's2', '--wait', '0', '--json'])
+  assert.equal(pending.code, 0, pending.stderr)
+  assert.deepEqual(validateInvocation('aspect', pending.json), [])
+  assert.equal(pending.json.data.acquired, false)
+  assert.equal(pending.json.data.holder.owner.session, 's1')
+  assert.equal(typeof pending.json.data.waitedMs, 'number')
+
+  // 4) renew 两种分支：非占用方 not-owner；占用方成功带新 lock
+  const renewFail = run(root, ['aspect', 'renew', '--aspect', 'state-machine', '--session', 's2', '--json'])
+  assert.equal(renewFail.code, 0, renewFail.stderr)
+  assert.deepEqual(validateInvocation('aspect', renewFail.json), [])
+  assert.equal(renewFail.json.data.renewed, false)
+  assert.equal(renewFail.json.data.reason, 'not-owner')
+  const renewOk = run(root, ['aspect', 'renew', '--aspect', 'state-machine', '--session', 's1', '--ttl', '60', '--json'])
+  assert.equal(renewOk.code, 0, renewOk.stderr)
+  assert.deepEqual(validateInvocation('aspect', renewOk.json), [])
+  assert.equal(renewOk.json.data.renewed, true)
+  assert.equal(renewOk.json.data.lock.ttlSeconds, 60)
+
+  // 5) release：force 分支带 forced + 审计 reason；释放后再释放是 no-lock
+  const forced = run(root, [
+    'aspect', 'release', '--aspect', 'state-machine', '--session', 's2', '--force', '--reason', '测试强制释放', '--json',
+  ])
+  assert.equal(forced.code, 0, forced.stderr)
+  assert.deepEqual(validateInvocation('aspect', forced.json), [])
+  assert.equal(forced.json.data.released, true)
+  assert.equal(forced.json.data.forced, true)
+  assert.equal(forced.json.data.aspect, 'state-machine')
+  const releaseAgain = run(root, ['aspect', 'release', '--aspect', 'state-machine', '--session', 's1', '--json'])
+  assert.equal(releaseAgain.code, 0, releaseAgain.stderr)
+  assert.deepEqual(validateInvocation('aspect', releaseAgain.json), [])
+  assert.equal(releaseAgain.json.data.released, false)
+  assert.equal(releaseAgain.json.data.reason, 'no-lock')
+
+  // 6) 惰性清扫：CLI acquire 留下的死占用方锁会被下一次 list 回收，并带可选 swept
+  const dead = run(root, ['aspect', 'acquire', '--aspect', 'ghost', '--session', 's9', '--json'])
+  assert.equal(dead.code, 0, dead.stderr)
+  const swept = run(root, ['aspect', 'list', '--json'])
+  assert.equal(swept.code, 0, swept.stderr)
+  assert.deepEqual(validateInvocation('aspect', swept.json), [])
+  assert.deepEqual(swept.json.data.swept, ['ghost'])
+  assert.deepEqual(swept.json.data.locks, [])
+
+  // 7) sweep：{root,dir,dryRun,released[],kept[]}（需要 --aspect 与 --session，当前实现如此）
+  const swept2 = run(root, ['aspect', 'sweep', '--aspect', 'ghost', '--session', 's1', '--dry-run', '--json'])
+  assert.equal(swept2.code, 0, swept2.stderr)
+  assert.deepEqual(validateInvocation('aspect', swept2.json), [])
+  assert.equal(swept2.json.data.dryRun, true)
+  assert.deepEqual(swept2.json.data.released, [])
+  assert.deepEqual(swept2.json.data.kept, [])
+})
+
 // ---------------------------------------------------------------- 自证有效
 
 test('自证：改名/加字段/错类型/错枚举/错版本都必须被校验器抓住', () => {
@@ -696,6 +780,7 @@ test('契约注册表自检：每个形状合法、ref 可解析、必填字段�
     }
   }
   for (const [key, shape] of Object.entries(DATA_SHAPES)) walk(shape, 'commands.' + key)
+  for (const [name, shape] of Object.entries(TOOL_SHAPES)) walk(shape, 'toolShapes.' + name)
   for (const [name, shape] of Object.entries(RECORD_SHAPES)) walk(shape, 'records.' + name)
   assert.deepEqual(problems, [], '契约注册表自身不合法：\n' + problems.join('\n'))
 

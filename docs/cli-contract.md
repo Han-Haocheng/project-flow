@@ -84,6 +84,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow init | 对象（必填 root·created·warnings） |
 | flow status | 对象（必填 root·name·initialized·contractSource·schema·store·counts·heartbeats·decisions·recent；可选 intents·status） |
 | flow state | 开放对象（必填 ok·generatedAt·root·roots；面板状态快照载荷） |
+| flow aspect | 联合（list：aspects/locks/counts + 可选 source·swept ；acquire：{acquired,lock} 或 {acquired,holder,waitedMs}；renew：{renewed,lock} 或 {renewed,reason}；release：{released,aspect,owner,forced?,reason?} 或 {released:false,reason}；sweep：{root,dir,dryRun,released,kept}） |
 | flow backup | 对象（必填 name·path·files·bytes·pruned） |
 | flow doctor | 对象（必填 ok·root·findings） |
 | flow exp list | 数组<记录 experiment> |
@@ -236,8 +237,44 @@ stderr 只在极少数非契约场景出现（见 §8）。
 - 因此「把工具输出改成中文可读文本」这类美化（T-20261112151914 的 `renderToolText`）**只能改默认输出**，
   不许动 `--json` 的 data 形状。契约测试会在形状变动时红。
 
-## 9 变更记录
+## 9 工具面形状（**不进** `--json` 信封）
+
+用户边界把契约面定为 CLI，所以下面这些字段**不在**上面的命令表里；但它们同样被前端/日志消费，
+统一登记在此，避免「某一侧的字段没人管」。消费方必须知道：它们来自宿主插件工具（`flow_*`），
+不是 `flow <cmd> --json` 的 data。
+
+### 9.1 `flow_task dispatch` / 自动派工的结果
+
+`dispatch` 是工具结果里的兄弟字段（`{root, task, dispatch}`），不是任务记录字段，也不出现在任何 CLI data 里。
+成功派工：
+
+```text
+{ childId, role, provider, model, degraded?, from, to, aspect?, auto? }
+```
+
+自动派工失败（台账已写成功，调用方决定重试）：`{ auto:true, ok:false, code, error }`。
+
+**`dispatch.aspect`（T-20261112183138，additive）**：只有该次派工经过 aspect 占用逻辑时出现，
+是可选键、**从不为 null**：
+
+```text
+{ aspects: string[], acquired: string[],
+  pending: Array<{ aspect: string, holder: string|null, waitedMs: number|null }>,
+  skipped?: 'no-session' | 'no-aspect-overlap' }
+```
+
+- `aspects`：任务 `scope.allow` 命中的全部 aspect（按 id 字典序）；`acquired`：本次真的拿到的；
+- `pending`：没拿到（被别的**活**会话占着）的 aspect + 占用方 + 等待毫秒；**非空不阻断派工**（裁定 6），
+  warnings 里会给 `aspect-pending: <aspect>（占用方 <session>）等不到锁，按裁定 6 放行派工`；
+- `skipped`：`no-session`（派工没有会话 id）/`no-aspect-overlap`（scope.allow 为空或不命中，no-op）。
+
+### 9.2 aspect 锁投影（`flow aspect list` 的 `locks[]` 行同源）
+
+`{aspect, files[], owner{session,pid,host,acquired_at,renewed_at,ttl_seconds}, waiters[], state, releasable, reason, evidence, leaseExpiresAt, ttlSeconds, updated_at}`；
+`state` 取 `held|dead|foreign|expired`，`releasable` 是「可以被清扫」的唯一判据。
+
+## 10 变更记录
 
 | 契约版本 | 日期 | 变更 |
 |---|---|---|
-| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 65 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |
+| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 66 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |
