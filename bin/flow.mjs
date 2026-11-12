@@ -395,6 +395,25 @@ async function dispatch(ctx, parsed) {
 // 顶层命令名：catch 里据此选择退出码词汇（`flow check` 用检查语义）。
 let topCommand = ''
 
+// ------------------------------------------- 单可执行：MCP 是 CLI 的子命令
+//
+// T-20261112154655：后端只有一个可执行 `flow`。MCP adapter 从「第二个 bin」
+// 降为 `flow mcp-serve` 子命令，与 `flow <command>` 平级、共用同一份 core
+// （协议与工具面全在 lib/cli/mcp-server.mjs，本文件只转发，不复制实现）。
+//
+// 这一支在参数解析与核心加载之前分流：stdio 协议期间 stdout 只属于 JSON-RPC，
+// 不能混入 usage / JSON 信封 / 警告；`--root`/`--timeout`/`--help` 等参数由
+// MCP 服务端自己的解析器消费（形状见 lib/cli/mcp-server.mjs 的 parseServerArgs）。
+async function runMcpServe(argv) {
+  let server
+  try {
+    server = await import(new URL('../lib/cli/mcp-server.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载 MCP 服务端（lib/cli/mcp-server.mjs）：${error?.message || String(error)}`)
+  }
+  return await server.main(argv)
+}
+
 async function loadCore() {
   try {
     return await import(new URL('../lib/core.mjs', import.meta.url).href)
@@ -416,12 +435,19 @@ function exitCodeOf(code) {
 }
 
 async function main() {
+  // `flow mcp-serve` 先于一切 cli 输出装置分流：这条通道的 stdout 是 JSON-RPC，
+  // 不能出现 usage / 信封 / 警告。参数原样交给 MCP 服务端解析。
+  if (process.argv[2] === 'mcp-serve') return await runMcpServe(process.argv.slice(3))
+
   const parsed = parseArgv(process.argv.slice(2))
   setJsonMode(parsed.flags.json === true)
   topCommand = parsed.positional[0] ?? ''
 
   if (parsed.flags.help === true) {
     out(USAGE)
+    // USAGE 由 lib/cli/misc.mjs 维护（CLI 域）；单可执行新增的 MCP 子命令在这里
+    // 补一行，避免为了一个入口去改另一个模块的文件。
+    out('  mcp-serve                  以 stdio 启动 MCP adapter（与 flow <command> 同一份 core）')
     return 0
   }
   if (parsed.errors.length > 0) throw new CliError('usage', parsed.errors.join('；'))

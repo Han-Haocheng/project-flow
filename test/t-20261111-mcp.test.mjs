@@ -243,3 +243,63 @@ test('MCP 帮助/版本：进程直接退出 0', () => {
     assert.ok(result.stdout.trim().length > 0)
   }
 })
+
+// ------------------------------------------------- 单可执行（T-20261112154655）
+//
+// 后端只保留一个可执行 `flow`；MCP 降为 `flow mcp-serve` 子命令，bin/mcp.mjs 只做
+// 兼容别名。这三条断言钉住：bin 面只有 flow、两个入口同源、子命令真的跑协议。
+
+const FLOW_BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+
+test('单可执行：package.json 只导出 flow，MCP 是 CLI 的 mcp-serve 子命令', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.resolve(HERE, '..', 'package.json'), 'utf8'))
+  assert.deepEqual(Object.keys(pkg.bin), ['flow'], 'bin 字段只准保留 flow')
+  assert.equal(pkg.bin.flow, './bin/flow.mjs')
+
+  const flowSource = fs.readFileSync(FLOW_BIN, 'utf8')
+  // 分流点在参数解析/核心加载之前：stdio 协议期间 stdout 不能混入 CLI 输出
+  assert.match(flowSource, /process\.argv\[2\] === 'mcp-serve'/)
+  assert.match(flowSource, /lib\/cli\/mcp-server\.mjs/, 'mcp-serve 必须复用现有 MCP 服务端')
+
+  // 兼容别名指向同一个模块：不是第二份协议实现
+  const aliasSource = fs.readFileSync(BIN, 'utf8')
+  assert.match(aliasSource, /lib\/cli\/mcp-server\.mjs/)
+  assert.match(aliasSource, /已弃用/, '兼容入口必须打印弃用提示')
+})
+
+test('单可执行：flow mcp-serve 与 flow-mcp 帮助同源，stdio 协议走同一服务端', () => {
+  const viaSub = spawnSync(process.execPath, [FLOW_BIN, 'mcp-serve', '--help'], { encoding: 'utf8' })
+  assert.equal(viaSub.status, 0, viaSub.stderr)
+  assert.match(viaSub.stdout, /MCP server/)
+
+  const viaAlias = spawnSync(process.execPath, [BIN, '--help'], { encoding: 'utf8' })
+  assert.equal(viaAlias.status, 0, viaAlias.stderr)
+  assert.equal(viaSub.stdout, viaAlias.stdout, '两个入口的帮助必须来自同一份 USAGE')
+  assert.match(viaAlias.stderr, /已弃用/, '旧入口的弃用提示只写 stderr')
+
+  // 真跑一遍 stdio 协议：initialize + tools/call，证明子命令不是空壳，且 --root 透传
+  const root = freshProject('single-exec')
+  const script = [
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'flow_status', arguments: {} } },
+  ].map((message) => JSON.stringify(message)).join('\n') + '\n'
+  const rpc = spawnSync(process.execPath, [FLOW_BIN, 'mcp-serve', '--root', root], {
+    encoding: 'utf8', input: script,
+  })
+  assert.equal(rpc.status, 0, rpc.stderr)
+  const replies = rpc.stdout.trim().split('\n').map((line) => JSON.parse(line))
+  assert.equal(replies.length, 2)
+  assert.equal(replies[0].result.serverInfo.name, 'project-flow')
+  assert.equal(JSON.parse(replies[1].result.content[0].text).initialized, true)
+
+  // 坏参数由 MCP 自己的解析器拒绝（exit 2），不落进 CLI 的未知命令路径
+  const bad = spawnSync(process.execPath, [FLOW_BIN, 'mcp-serve', '--bogus'], { encoding: 'utf8' })
+  assert.equal(bad.status, 2)
+  assert.match(bad.stderr, /unknown argument/)
+})
+
+test('单可执行：flow --help 列出 mcp-serve 入口', () => {
+  const result = spawnSync(process.execPath, [FLOW_BIN, '--help'], { encoding: 'utf8' })
+  assert.equal(result.status, 0)
+  assert.match(result.stdout, /mcp-serve/)
+})
