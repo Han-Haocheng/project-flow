@@ -24,6 +24,7 @@ import { initProject } from '../lib/core.mjs'
 import {
   CLI_CONTRACT_VERSION,
   DATA_SHAPES,
+  RECORD_SHAPES,
   commandKeys,
   validateEnvelope,
   validateCommandData,
@@ -495,6 +496,62 @@ test('信封规范化：canonicalEnvelope 补版本并把 warnings 归成数组'
   // 非信封载荷原样返回（emitJson 仍是通用出口）
   const raw = { anything: 1 }
   assert.equal(canonicalEnvelope(raw), raw)
+})
+
+test('契约注册表自检：每个形状合法、ref 可解析、必填字段都存在', () => {
+  const KINDS = new Set(['any', 'string', 'number', 'integer', 'boolean', 'null', 'array', 'object', 'ref', 'union'])
+  const seenRefs = new Set()
+  const problems = []
+  const walk = (shape, path) => {
+    if (shape === null || typeof shape !== 'object') {
+      problems.push(path + '：形状不是对象')
+      return
+    }
+    if (KINDS.has(shape.kind) === false) {
+      problems.push(path + '：未知 kind ' + JSON.stringify(shape.kind))
+      return
+    }
+    if (shape.kind === 'ref') {
+      if (typeof shape.name !== 'string' || Object.hasOwn(RECORD_SHAPES, shape.name) === false) {
+        problems.push(path + '：ref 指向未登记的记录 ' + JSON.stringify(shape.name))
+      } else {
+        seenRefs.add(shape.name)
+      }
+      return
+    }
+    if (shape.kind === 'array') {
+      walk(shape.items, path + '[]')
+      return
+    }
+    if (shape.kind === 'union') {
+      if (Array.isArray(shape.of) === false || shape.of.length === 0) problems.push(path + '：union 没有分支')
+      else shape.of.forEach((branch, index) => walk(branch, path + '|' + index))
+      return
+    }
+    if (shape.kind === 'object') {
+      if (shape.fields === null || typeof shape.fields !== 'object') {
+        problems.push(path + '：object 缺 fields')
+        return
+      }
+      for (const [name, field] of Object.entries(shape.fields)) walk(field, path + '.' + name)
+      const required = Array.isArray(shape.required) ? shape.required : Object.keys(shape.fields)
+      for (const name of required) {
+        if (Object.hasOwn(shape.fields, name) === false) problems.push(path + '：required 里的 ' + name + ' 没有登记形状')
+      }
+      if (new Set(required).size !== required.length) problems.push(path + '：required 有重复项')
+      return
+    }
+    if (shape.enum !== undefined) {
+      if (Array.isArray(shape.enum) === false || shape.enum.length === 0) problems.push(path + '：enum 必须是非空数组')
+    }
+  }
+  for (const [key, shape] of Object.entries(DATA_SHAPES)) walk(shape, 'commands.' + key)
+  for (const [name, shape] of Object.entries(RECORD_SHAPES)) walk(shape, 'records.' + name)
+  assert.deepEqual(problems, [], '契约注册表自身不合法：\n' + problems.join('\n'))
+
+  // 记录形状都得被至少一条命令引用，否则是死形状（改了也没人校验）。
+  const unreferenced = Object.keys(RECORD_SHAPES).filter((name) => seenRefs.has(name) === false)
+  assert.deepEqual(unreferenced, [], '这些记录形状没有被任何命令引用：' + unreferenced.join(', '))
 })
 
 // ---------------------------------------------------------------- 人类/机器分工
