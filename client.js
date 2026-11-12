@@ -4126,6 +4126,8 @@ window.__ModuleLoader__.load({
 .project-flow-muted{color:var(--dsw-alias-label-secondary);font-size:11px;}
 .project-flow-dirtyDot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-error-primary);flex:none;}
 .project-flow-live{color:var(--dsw-alias-label-secondary);}
+/* T-20261112154725：后端 CLI 不可用时的只读降级标记（页头可见，不依赖警告折叠区）。 */
+.project-flow-degraded{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary);}
 .project-flow-liveDot{width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-state-success-primary);flex:none;animation:project-flow-pulse 2.4s ease-in-out infinite;}
 .project-flow-liveDot--stale{background:var(--dsw-alias-state-warn-primary);animation:none;}
 @keyframes project-flow-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}

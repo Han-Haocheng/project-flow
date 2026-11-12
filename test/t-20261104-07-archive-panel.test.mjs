@@ -377,6 +377,12 @@ test('前端包结构：四个前端文件没有直读 .agents 的 store 调用�
   assert.ok(index.includes("'state', '--json'"), '主路径 must be flow state --json')
   assert.ok(index.includes('degraded = true'), '降级结果必须标 degraded')
   assert.ok(index.includes('cli-unavailable'), '降级原因必须写明是 CLI 不可用')
+
+  // Web 侧的降级状态标记：页头 pill 的 key + 样式类都必须真的存在（不是只加 payload 字段）。
+  const client = fs.readFileSync(path.join(REPO, 'client.js'), 'utf8')
+  assert.ok(client.includes("'top.degraded'"), 'client 必须有降级文案 key')
+  assert.ok(client.includes('project-flow-degraded'), 'client 必须渲染降级 pill 类名')
+  assert.ok(client.includes('.project-flow-degraded{'), '降级 pill 必须有样式，不能裸 span')
 })
 // ------------------- seam 形状的路由读（准备好、尚未接线）：CLI 优先 + 进程内兜底
 //
