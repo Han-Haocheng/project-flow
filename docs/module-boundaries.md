@@ -78,10 +78,10 @@
 
 | aspect | 一句话语义 | 复核角色 | 代表文件 |
 |---|---|---|---|
-| `state-machine` | 任务只能沿九阶段合法边迁移，写 stage 只有一处校验 | `tasks-owner` | `lib/stage.mjs`、`lib/tasks/records.mjs`、`CONTRACT.md`、`client.js` |
-| `liveness` | 心跳存活判定只有一套口径（面板/任务/claims 都从它读） | `heartbeats-owner` | `lib/heartbeats/records.mjs`、`lib/host/session.mjs`、`lib/state-snapshot.mjs` |
-| `contract-text` | 契约正文、README、技能文档、写域文档是同一套口径 | `docs-owner` | `CONTRACT.md`、`README.md`、`docs/`、`skills/` |
-| `concurrency` | 所有写盘走同一把锁与原子写，CAS/补偿不得绕过 | `store-owner` | `lib/lock.mjs`、`lib/atomic.mjs`、`lib/store/*`、`lib/backup.mjs` |
+| `state-machine` | 任务只能沿九阶段的合法边迁移；任何写 stage 的路径都必须过同一处校验。 | `tasks-owner` | `lib/stage.mjs`、`lib/tasks/records.mjs`、`CONTRACT.md`、`client.js` |
+| `liveness` | 心跳存活判定决定面板、任务与 claims 的「活」与「死」，只有一套口径。 | `heartbeats-owner` | `lib/heartbeats/records.mjs`、`lib/host/session.mjs`、`lib/state-snapshot.mjs` |
+| `contract-text` | 契约正文、README、技能文档与写域文档是同一套口径，改一处必须同步另一处。 | `docs-owner` | `CONTRACT.md`、`README.md`、`docs/`、`skills/` |
+| `concurrency` | 所有写盘走同一把锁与原子写；CAS / 补偿不得绕过这一层。 | `store-owner` | `lib/lock.mjs`、`lib/atomic.mjs`、`lib/store/*`、`lib/backup.mjs` |
 
 ### 4.1 `aspect` 与 `owns` 的区别（三句话）
 
