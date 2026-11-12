@@ -30,6 +30,7 @@ import { cmdHeartbeat } from '../lib/cli/heartbeat.mjs'
 import { cmdDecision } from '../lib/cli/decisions.mjs'
 import { cmdDesc } from '../lib/cli/desc.mjs'
 import { cmdCheck } from '../lib/cli/check.mjs'
+import { cmdAspect } from '../lib/cli/aspect.mjs'
 import { cmdBackup, cmdDoctor, cmdInit, cmdStatus, USAGE } from '../lib/cli/misc.mjs'
 
 // A closed downstream pipe (`flow status | head`) must end quietly, not throw.
@@ -85,6 +86,8 @@ const VALUE_FLAGS = new Set([
   'path', 'graph', 'input', 'template', 'out', 'project-semantics',
   // 2026-11-12 裁定 3：门禁挂载点（layer/module/feature/aspect + module/aspect 的 target）。
   'mount-level', 'mount-target',
+  // 2026-11-12 裁定 6：aspect 锁的租约参数（--ttl 秒 / --wait 毫秒）与占用对象。
+  'ttl', 'wait', 'aspect',
 ])
 const REPEAT_FLAGS = new Set([
   'step', 'allow', 'claim', 'option', 'blocks', 'affects',
@@ -194,6 +197,11 @@ export const SPEC = Object.freeze({
     plan: { flags: ['id', 'input', 'template', 'show', 'no-semantic-change', 'reason', 'rebase'] },
     apply: { flags: ['id', 'dry-run'] },
     render: { flags: ['out', 'check'] },
+  }),
+  // 2026-11-12 裁定 6：aspect 锁（登记即串行，不阻断）。--file 是单值（补文件域），
+  // 不重复；--aspect 只支持 flag 形式，位置参数暂不归一化。
+  aspect: Object.freeze({
+    flags: ['session', 'ttl', 'wait', 'aspect', 'file', 'force', 'dry-run'],
   }),
   check: Object.freeze({
     list: { flags: [] },
@@ -402,6 +410,8 @@ async function dispatch(ctx, parsed) {
       return cmdDesc(ctx, sub)
     case 'check':
       return cmdCheck(ctx, sub, BUILTIN_CHECKS)
+    case 'aspect':
+      return cmdAspect(ctx, sub)
     default:
       throw new CliError('usage', `未知命令 "${command}"（可用 init|status|exp|task|gate|heartbeat|decision|desc|check；-h 查看帮助）`)
   }
