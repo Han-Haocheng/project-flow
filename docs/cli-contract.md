@@ -105,7 +105,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task sweep | 对象（必填 olderThanHours·scanned·closed·skipped·dryRun·locked） |
 | flow task normalize | 对象（必填 fix·dryRun·ok·issues·fixed·counts·remaining·longTitles·typeMap） |
 | flow task next | 对象（必填 id·title·stage·stageZh·owner·terminal·actor·next·alternatives·acceptance） |
-| flow task verify | 对象（必填 id·ok·executed·passed·failed·steps·skipped·verification） |
+| flow task verify | 对象（必填 id·ok·executed·passed·failed·steps·verification；可选 skipped·repair） |
 | flow task rm | 对象（必填 id·removed） |
 | flow gate list | 数组<记录 gate> |
 | flow gate show | 记录 gate |
@@ -127,7 +127,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow decision ask | 对象（必填 decision·created） |
 | flow decision list | 对象（必填 items·counts） |
 | flow decision show | 记录 decision |
-| flow decision answer | 对象（必填 decision 全字段；答复触发否决时追加 vetoApplied/vetoWarning） |
+| flow decision answer | 对象（必填 decision 全字段；否决自动应用**失败**时追加 vetoApplied:false·vetoWarning，成功时不追加） |
 | flow decision withdraw | 记录 decision |
 | flow decision gc | 对象（必填 removed·kept·dryRun） |
 | flow desc status | 对象（必填 established·name·semantics·files·modules·missingSemantics·plans·described·enabled·enforce） |
@@ -146,6 +146,15 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow check experiments | 对象（必填 check·exitCode·stdout·stderr·durationMs·enabled·checked·legacy·failed·warnings） |
 | flow check tasks | 对象（必填 check·exitCode·stdout·stderr·durationMs·ok·counts·issues·typeMap） |
 | flow check description | 对象（必填 check·exitCode·stdout·stderr·durationMs·mode·counts·failed·warnings） |
+
+**`task.verify` 的两种形状**（`--json`）：
+
+- 有可执行验收项（`cmd:<shell>` / `gate:<id>`）：`{id, ok, executed, passed, failed[], steps[], verification, repair}`，
+  `failed` 是 `"<kind>:<target>"` 字符串数组，`steps[]` 每项带 `repair`（重跑命令），
+  `gate` 步骤跑不起来时额外带 `error{code,message}`；全通过时 `repair` 为 null。
+  验收失败 = 命令失败：退出码 1、`error.code='check-failed'`，明细挂在 `error.verification`（与成功 data 同形）。
+- 没有可执行验收项：返回 `{id, ok:true, executed:0, passed:0, failed:[], steps:[], skipped:'no-executable-acceptance', verification:null}`，
+  不跑命令、不写回执 —— 静默成功比失败更危险，所以显式给 `skipped`。
 
 **`status.intents`（未完成 saga intent，T-20261112183138-02）**：仅当 `data.initialized===true` 时出现，
 是可选项（可缺席，**从不为 null**）。读不到时整键缺席并在顶层 `warnings` 里给 `intents-unavailable: ...`

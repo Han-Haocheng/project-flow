@@ -405,6 +405,84 @@ test('契约形状：每条命令真实 --json 输出都符合登记形状', () 
   assert.deepEqual(uncovered, [], '这些命令没有真实执行过（覆盖缺口）：' + uncovered.join(', '))
 })
 
+// ---------------------------------------------------------------- 更深的 data 路径
+
+/** 直接改一条任务记录（验收/否决指针这类 CLI 没有写入口的字段，测试只能种数据）。 */
+function patchTaskRecord(root, id, patch) {
+  const file = path.join(root, '.agents', 'tasks', id + '.json')
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  Object.assign(record, patch)
+  fs.writeFileSync(file, JSON.stringify(record, null, 1))
+}
+
+test('task.verify：带可执行验收时返回执行明细 + verification 回执（通过/失败两种信封）', () => {
+  const root = tempRoot('verify')
+  initProject(root, { name: 'ver' })
+  const node = JSON.stringify(process.execPath)
+  const added = run(root, ['task', 'add', '--title', 'V', '--type', 'feat', '--stage', 'implementing', '--json'])
+  assert.equal(added.code, 0, added.stderr)
+  const id = added.json.data.id
+  patchTaskRecord(root, id, { acceptance: [{ cmd: node + ' -e "process.exit(0)"' }] })
+
+  const passed = run(root, ['task', 'verify', id, '--json'])
+  assert.equal(passed.code, 0, passed.stderr)
+  assert.deepEqual(validateInvocation('task.verify', passed.json), [])
+  assert.equal(passed.json.data.ok, true)
+  assert.equal(passed.json.data.executed, 1)
+  assert.equal(passed.json.data.passed, 1)
+  assert.deepEqual(passed.json.data.failed, [])
+  assert.equal(passed.json.data.repair, null, '全通过时 repair 为 null')
+  assert.equal(passed.json.data.verification.ok, true)
+  assert.equal(typeof passed.json.data.verification.signature, 'string')
+  assert.deepEqual(Object.keys(passed.json.data.steps[0]).sort(), [
+    'durationMs', 'exit', 'index', 'kind', 'ok', 'repair', 'tail', 'target',
+  ])
+
+  patchTaskRecord(root, id, { acceptance: [{ cmd: node + ' -e "process.exit(3)"' }] })
+  const failed = run(root, ['task', 'verify', id, '--json'])
+  assert.equal(failed.code, 1, '验收失败按 check-failed 退 1')
+  assert.equal(failed.json.ok, false)
+  assert.equal(failed.json.error.code, 'check-failed')
+  // 失败时验收明细挂在 error.verification（信封的 data 分支不出现）。
+  assert.deepEqual(validateCommandData('task.verify', failed.json.error.verification), [])
+  assert.equal(failed.json.error.verification.ok, false)
+  assert.deepEqual(failed.json.error.verification.failed, ['cmd:' + node + ' -e "process.exit(3)"'])
+})
+
+test('decision.answer：否决决策答 modify 后自动把任务退回 queued-analysis（data 仍是决策记录）', () => {
+  const root = tempRoot('veto')
+  initProject(root, { name: 'veto' })
+  const added = run(root, ['task', 'add', '--title', '被否决的任务', '--type', 'feat', '--stage', 'analyzing', '--json'])
+  assert.equal(added.code, 0, added.stderr)
+  const taskId = added.json.data.id
+  const asked = run(root, [
+    'decision', 'ask', '--question', '要修改后重新入栈，还是移到已完成？', '--kind', 'choice',
+    '--option', 'modify=修改>>回到 queued-analysis 重新分析',
+    '--option', 'delete=删除>>阶段置 done，交给 7 天归档',
+    '--recommendation', 'modify', '--rationale', '分析期否决', '--json',
+  ])
+  assert.equal(asked.code, 0, asked.stderr)
+  const decisionId = asked.json.data.decision.id
+  // 种上 core 侧的否决指针：CLI 没有写 veto/decision 字段的入口（由 flow_veto 工具写）。
+  patchTaskRecord(root, taskId, {
+    decision: decisionId,
+    veto: { by: 'analysis', reason: '测试否决', at: '2026-11-12T20:00:00+08:00' },
+  })
+
+  const answered = run(root, ['decision', 'answer', decisionId, '--choice', 'modify', '--json'])
+  assert.equal(answered.code, 0, answered.stderr)
+  assert.deepEqual(validateInvocation('decision.answer', answered.json), [])
+  assert.equal(answered.json.data.status, 'answered')
+  assert.equal(answered.json.data.answer.choice, 'modify')
+  assert.equal(Object.hasOwn(answered.json.data, 'vetoApplied'), false, '自动应用成功时不追加 vetoApplied')
+
+  const task = run(root, ['task', 'show', taskId, '--json'])
+  assert.equal(task.code, 0, task.stderr)
+  assert.equal(task.json.data.stage, 'queued-analysis', 'modify 必须把任务退回分析队列')
+  assert.equal(task.json.data.decision, null, '答完清空 decision 指针')
+  assert.equal(task.json.data.veto.reason, '测试否决', 'veto 是历史，答案不清它')
+})
+
 // ---------------------------------------------------------------- 自证有效
 
 test('自证：改名/加字段/错类型/错枚举/错版本都必须被校验器抓住', () => {
