@@ -354,10 +354,45 @@ for (const name of EXPECTED_TOOLS) {
   check(`${name}: execute is function`, typeof definition.execute === 'function')
   check(`${name}: render function`, typeof definition.output?.render === 'function')
   eq(`${name}: concurrency safety`, definition.isConcurrencySafe, name === 'flow_status')
+  // render 契约（T-20261112203449）：b00f033 起 output.render 走 renderToolText——
+  //   · 已登记形状 → 中文可读报告，首行「<工具名> — <摘要>」，失败态「<工具名> 失败：…」；
+  //   · 未登记形状 → 逐字节稳定的 JSON 兜底（不是"一律 JSON"，也不是"随便一段字符串"）。
+  // toolOutput(name) 没有 JSON 输出开关（lib/plugin/shared.mjs：render 只收 args/value），
+  // 所以这里钉住文本契约本身，同时保留兜底仍是合法 JSON 且规范值 .ok 未丢。
+  const textOf = (result) => {
+    if (Array.isArray(result) !== true || result.length !== 1) return null
+    const block = result[0]
+    if (block === null || typeof block !== 'object' || block.type !== 'text') return null
+    return typeof block.text === 'string' ? block.text : null
+  }
+  const reportOrJson = (text, toolName, expectOk) => {
+    if (text === null || text.trim() === '') return false
+    const trimmed = text.trimStart()
+    if (trimmed.startsWith(`${toolName} —`) || trimmed.startsWith(`${toolName} 失败：`)) return true
+    try {
+      return JSON.parse(text).ok === expectOk
+    } catch {
+      return false
+    }
+  }
+
   const rendered = definition.output.render({}, { ok: true })
+  const text = textOf(rendered)
+  check(`${name}: render returns single text block`, text !== null)
+  check(`${name}: render 文本非空`, text !== null && text.trim() !== '')
   check(
-    `${name}: render returns text block`,
-    Array.isArray(rendered) && rendered.length === 1 && rendered[0].type === 'text' && JSON.parse(rendered[0].text).ok === true,
+    `${name}: 成功值渲染为中文报告或合法 JSON 兜底`,
+    reportOrJson(text, name, true),
+    text === null ? 'no text block' : text.split('\n')[0],
+  )
+  // 失败形状对 8 个已登记渲染器是统一的中文报告；渲染器漏登记会在这里暴露，
+  // 而不是等用户在生产里看到英文 JSON 兜底。
+  const failed = definition.output.render({}, { ok: false, error: { code: 'check-failed', message: 'selftest: synthetic failure' } })
+  const failedText = textOf(failed)
+  check(
+    `${name}: 失败值渲染为中文报告（renderToolText 稳定标记）`,
+    failedText !== null && failedText.trimStart().startsWith(`${name} 失败：`),
+    failedText === null ? 'no text block' : failedText.split('\n')[0],
   )
 }
 
@@ -516,6 +551,25 @@ eq('flow_task list: active count', listedTask.counts.active, 1)
 
 const shownTask = await taskTool.execute({ action: 'show', id: taskId }, exec)
 eq('flow_task show: owner', shownTask.task?.owner, 'agent')
+
+/* 阶段机（T-20261112151328，唯一边表）：`status: active` 的任务投影在
+   queued-analysis，**不能**直跳 done。旧 selftest 直接 --status done 是过期契约，
+   不是产品回归：这里先钉住"跨级写被拒"，再走合法边 queued-analysis → analyzing → done。
+   （直跳若被放行，说明有人把阶段边校验摘掉了，这一条就会红。） */
+let crossedStage = null
+try {
+  await taskTool.execute({ action: 'update', id: taskId, status: 'done', commits: ['abc1234'] }, exec)
+} catch (error) {
+  crossedStage = error
+}
+check(
+  'flow_task update: queued-analysis → done 跨级被阶段机拒绝',
+  crossedStage !== null && crossedStage.code === 'invalid' && /cannot move to "done"/.test(String(crossedStage.message)),
+  crossedStage === null ? '跨级写竟然成功了' : crossedStage.message,
+)
+
+const analyzingTask = await taskTool.execute({ action: 'update', id: taskId, stage: 'analyzing' }, exec)
+eq('flow_task update: stage 沿合法边到 analyzing', analyzingTask.task?.stage, 'analyzing')
 
 const updatedTask = await taskTool.execute({ action: 'update', id: taskId, status: 'done', commits: ['abc1234'] }, exec)
 eq('flow_task update: status', updatedTask.task?.status, 'done')
