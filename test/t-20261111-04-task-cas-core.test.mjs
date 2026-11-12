@@ -438,3 +438,180 @@ test('并发：两个子进程带同一 revision 同时写，恰好一个成功�
     'no half-written task files',
   )
 })
+
+// ------------------------ saga intent + 恢复补偿（T-20261112183138-02，2026-11-12）
+//
+// 派工这类动作是多步写：起子代理 → 写回执+推进阶段。锁只保证单次写原子，所以多步
+// 动作崩在中间时，台账就停在半截。intent 是 saga 的第一段：动作开始前落一条记录，
+// 每完成一步打勾；恢复扫描按 kind 的补偿器收口（done/aborted），且补偿必须幂等。
+
+const INTENT_FUNCS = await import('../lib/tasks/intents.mjs')
+const { beginIntent, abortIntent, dispatchIntentCompensator, finishIntent, listIntents, pruneIntents, readIntent, recordIntentStep, recoverIntents } = INTENT_FUNCS
+
+test('intent ①：beginIntent 落盘动作类型/目标/预期步骤/会话证据，listIntents 可查', () => {
+  const { root, contract } = freshProject('intent-begin')
+  const task = addTask(root, contract, { type: 'feat', title: '被 saga 保护的任务' })
+  const intent = beginIntent(root, contract, {
+    kind: 'dispatch',
+    target: { task: task.id, role: 'implementer' },
+    steps: ['spawn', 'receipt'],
+    session: 'session-intent-1',
+    note: '派工 saga',
+  })
+  assert.equal(intent.state, 'open')
+  assert.deepEqual(intent.steps, ['spawn', 'receipt'])
+  assert.equal(intent.doneCount, 0, '刚落盘时没有步骤完成')
+  assert.equal(intent.session, 'session-intent-1')
+  assert.equal(intent.pid, process.pid, '宿主 pid 是恢复时的会话证据')
+  assert.ok(fs.existsSync(path.join(root, '.agents', 'intents', intent.id + '.json')), 'intent 落在 .agents/intents/')
+  const section = listIntents(root, contract)
+  assert.equal(section.counts.open, 1)
+  assert.equal(section.items[0].id, intent.id)
+  assert.equal(readIntent(root, contract, intent.id).kind, 'dispatch')
+  assert.equal(readIntent(root, contract, 'I-19700101-01'), null, '不存在的 intent 是 null')
+})
+
+test('intent ②：打勾幂等（重复打勾不重复写、附带 data 合并且不丢）', () => {
+  const { root, contract } = freshProject('intent-step')
+  const intent = beginIntent(root, contract, { kind: 'dispatch', target: {}, steps: ['spawn', 'receipt'] })
+  recordIntentStep(root, contract, intent.id, 'spawn', { data: { childId: 'child-9' } })
+  const twice = recordIntentStep(root, contract, intent.id, 'spawn', { data: { provider: 'spawn' } })
+  assert.deepEqual(twice.done, ['spawn'], '同一步重复打勾只留一条')
+  assert.equal(twice.data.childId, 'child-9', '第一次的线索不能丢')
+  assert.equal(twice.data.provider, 'spawn', '第二次的线索要合并进来')
+  assert.throws(() => recordIntentStep(root, contract, intent.id, 'nope'), /没有步骤/, '未知步骤 invalid')
+  assert.equal(readIntent(root, contract, intent.id).doneCount, 1, '失败的打勾零写入')
+})
+
+test('intent ③：finish 要求全部步骤完成（partial 才越权），收口后写操作是 no-op', () => {
+  const { root, contract } = freshProject('intent-finish')
+  const intent = beginIntent(root, contract, { kind: 'dispatch', target: {}, steps: ['spawn', 'receipt'] })
+  recordIntentStep(root, contract, intent.id, 'spawn')
+  assert.throws(() => finishIntent(root, contract, intent.id), /还有未完成的步骤/, '半截状态不得静默收口')
+  assert.equal(readIntent(root, contract, intent.id).state, 'open', '被拒的收口零写入')
+  const partial = finishIntent(root, contract, intent.id, { partial: true, result: { recovered: 'test' } })
+  assert.equal(partial.state, 'done')
+  assert.equal(partial.result.recovered, 'test')
+  // 收口后：打勾/再收口/abort 都是幂等 no-op（返回 null，不报错）。
+  assert.equal(recordIntentStep(root, contract, intent.id, 'receipt'), null)
+  assert.equal(finishIntent(root, contract, intent.id), null)
+  assert.equal(abortIntent(root, contract, intent.id, { reason: 'x' }), null)
+  assert.equal(readIntent(root, contract, intent.id).state, 'done', '终态不被改写')
+})
+
+test('intent ④：并发冲突策略——同 kind+同 target 互斥、不同 target 并行、allowParallel 显式放行', () => {
+  const { root, contract } = freshProject('intent-conflict')
+  const task = addTask(root, contract, { type: 'feat', title: '并发目标' })
+  const first = beginIntent(root, contract, { kind: 'dispatch', target: { task: task.id, role: 'implementer' }, steps: ['spawn', 'receipt'] })
+  assert.throws(
+    () => beginIntent(root, contract, { kind: 'dispatch', target: { task: task.id, role: 'implementer' }, steps: ['spawn', 'receipt'] }),
+    (error) => error.code === 'conflict' && error.message.includes(first.id),
+    '同一动作的第二份副本必须 conflict 并点名在途那条',
+  )
+  // 同一任务的不同角色是不同的动作：可以并行。
+  const reviewer = beginIntent(root, contract, { kind: 'dispatch', target: { task: task.id, role: 'reviewer' }, steps: ['spawn'] })
+  assert.notEqual(reviewer.id, first.id)
+  // 显式承认风险时放行（调用方自己负责两步不互相覆盖）。
+  const parallel = beginIntent(root, contract, {
+    kind: 'dispatch',
+    target: { task: task.id, role: 'implementer' },
+    steps: ['spawn', 'receipt'],
+    allowParallel: true,
+  })
+  assert.notEqual(parallel.id, first.id)
+})
+
+test('intent ⑤：恢复扫描——全部步骤已打勾的补记完成；spawn 未发生直接放弃', () => {
+  const { root, contract } = freshProject('intent-recover-basic')
+  const allDone = beginIntent(root, contract, { kind: 'custom', target: { job: 'a' }, steps: ['one', 'two'] })
+  recordIntentStep(root, contract, allDone.id, 'one')
+  recordIntentStep(root, contract, allDone.id, 'two')
+  const notStarted = beginIntent(root, contract, { kind: 'dispatch', target: { task: 'T-x' }, steps: ['spawn', 'receipt'] })
+  const result = recoverIntents(root, contract)
+  assert.equal(result.applied, true)
+  assert.equal(result.counts.completed, 1, '全部打勾 = 崩在收口前，补记完成')
+  assert.equal(result.counts.aborted, 1, 'spawn 未发生 = 台账没动，直接放弃')
+  assert.equal(readIntent(root, contract, allDone.id).state, 'done')
+  const aborted = readIntent(root, contract, notStarted.id)
+  assert.equal(aborted.state, 'aborted')
+  assert.match(aborted.error, /spawn 未发生/)
+  // 收口之后重复扫描是 no-op（幂等入口）。
+  assert.equal(recoverIntents(root, contract).scanned, 0)
+})
+
+test('intent ⑥：孤儿子代理——已 spawn 未写回执，恢复补一条 notes 线索且幂等', () => {
+  const { root, contract } = freshProject('intent-orphan')
+  const task = addTask(root, contract, { type: 'feat', title: '孤儿派工目标', stage: 'queued-implementation' })
+  const intent = beginIntent(root, contract, {
+    kind: 'dispatch',
+    target: { task: task.id, role: 'implementer' },
+    steps: ['spawn', 'receipt'],
+  })
+  recordIntentStep(root, contract, intent.id, 'spawn', { data: { childId: 'child-77' } })
+  const result = recoverIntents(root, contract)
+  assert.equal(result.counts.aborted, 1)
+  assert.match(result.items[0].detail, /孤儿子代理 child-77/)
+  assert.equal(readIntent(root, contract, intent.id).state, 'aborted')
+  const after = getTask(root, contract, task.id)
+  assert.match(after.notes, /孤儿派工 child-77/, '孤儿子代理要留痕，不能只活在错误消息里')
+  assert.equal(after.stage, 'queued-implementation', '恢复不得替人推进阶段')
+  assert.deepEqual(after.checkpoints, [], '恢复不得伪造派工回执')
+  // 补偿器本身必须幂等：直接再跑两次，notes 不重复、阶段不动。
+  const snapshot = readIntent(root, contract, intent.id)
+  const again = dispatchIntentCompensator(snapshot, { root, contract })
+  assert.match(again.detail, /幂等/)
+  assert.equal((getTask(root, contract, task.id).notes.match(/孤儿派工 child-77/g) || []).length, 1)
+})
+
+test('intent ⑦：dryRun 只报告不写；没有补偿器的 kind 保持 open（skipped）', () => {
+  const { root, contract } = freshProject('intent-dry')
+  const unknown = beginIntent(root, contract, { kind: 'no-compensator', target: { job: 'b' }, steps: ['one'] })
+  const dispatch = beginIntent(root, contract, { kind: 'dispatch', target: { task: 'T-y' }, steps: ['spawn'] })
+  const result = recoverIntents(root, contract, { dryRun: true })
+  assert.equal(result.applied, false)
+  assert.equal(result.counts.skipped, 1, '没有补偿器 → skipped')
+  assert.equal(result.items.find((item) => item.id === unknown.id).action, 'skipped')
+  assert.equal(readIntent(root, contract, unknown.id).state, 'open', 'dryRun 不改状态')
+  assert.equal(readIntent(root, contract, dispatch.id).state, 'open', 'dryRun 不改状态')
+})
+
+test('intent ⑧：pruneIntents 只清理已收口的旧记录，在途记录永不删', () => {
+  const { root, contract } = freshProject('intent-prune')
+  const closed = beginIntent(root, contract, { kind: 'custom', target: { job: 'old' }, steps: ['one'] })
+  recordIntentStep(root, contract, closed.id, 'one')
+  finishIntent(root, contract, closed.id)
+  const open = beginIntent(root, contract, { kind: 'custom', target: { job: 'open' }, steps: ['one'] })
+  // 把已收口记录的 ended_at 改成 30 天前：只有够旧的终态才可回收。
+  const file = path.join(root, '.agents', 'intents', closed.id + '.json')
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.ended_at = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  fs.writeFileSync(file, JSON.stringify(record, null, 2))
+  const pruned = pruneIntents(root, contract, { dryRun: true })
+  assert.deepEqual(pruned.removed, [closed.id], 'dryRun 报告可回收的旧记录')
+  assert.ok(fs.existsSync(file), 'dryRun 不删文件')
+  const applied = pruneIntents(root, contract)
+  assert.deepEqual(applied.removed, [closed.id])
+  assert.equal(fs.existsSync(file), false)
+  assert.equal(readIntent(root, contract, open.id).state, 'open', '在途记录不动')
+})
+
+test('intent ⑨：flow status 能看到未完成 intent（文本一行 + --json data.intents）', async () => {
+  const { execFileSync } = await import('node:child_process')
+  const { root, contract } = freshProject('intent-status')
+  const task = addTask(root, contract, { type: 'feat', title: 'status 可见性' })
+  const intent = beginIntent(root, contract, {
+    kind: 'dispatch',
+    target: { task: task.id, role: 'implementer' },
+    steps: ['spawn', 'receipt'],
+  })
+  recordIntentStep(root, contract, intent.id, 'spawn', { data: { childId: 'child-status' } })
+  const bin = path.resolve(HERE, '..', 'bin', 'flow.mjs')
+  const json = JSON.parse(execFileSync(process.execPath, [bin, 'status', '--json'], { cwd: root, encoding: 'utf8' }))
+  assert.equal(json.data.intents.open, 1, '未完成 intent 必须出现在 status --json')
+  assert.equal(json.data.intents.items[0].id, intent.id)
+  assert.deepEqual(json.data.intents.items[0].missing, ['receipt'])
+  const text = execFileSync(process.execPath, [bin, 'status'], { cwd: root, encoding: 'utf8' })
+  assert.match(text, /未完成动作/, '文本模式也要给一行，别只藏在 JSON 里')
+  assert.match(text, /1 条/)
+  assert.match(text, /dispatch/, '要点出动作类型')
+})

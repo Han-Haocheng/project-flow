@@ -1138,3 +1138,50 @@ test('派工模型：阶段入口自动派工也按角色透传模型（autoDisp
   assert.equal(bad.task.stage, 'queued-analysis', '台账已写成功，阶段停在入口')
 })
 
+
+// ------------------------ 派工 saga intent（T-20261112183138-02，2026-11-12）
+//
+// 派工两步写：起子代理（spawn）→ 写回执+推进阶段（receipt）。intent 在 spawn 之前落盘，
+// 正常路径收口为 done；中途被 CAS 拦住时保持 open（spawn 已打勾），恢复扫描能发现
+// 孤儿子代理并留痕——而不是只把 childId 写进抛出的错误消息里。
+
+const { listIntents, readIntent, recoverIntents } = await import('../lib/tasks/intents.mjs')
+
+test('saga intent ①：派工成功 → intent 收口 done 且带 childId/stage', async () => {
+  const { root, contract } = freshProject('intent-dispatch-ok')
+  const task = addTask(root, contract, { type: 'feat', title: '派工 saga', stage: 'queued-implementation' })
+  const subagents = fakeSubagents()
+  const { deps } = recordDeps(root, contract, subagents, getTask(root, contract, task.id))
+  await dispatchTaskRecord(deps)
+  const section = listIntents(root, contract)
+  assert.equal(section.counts.open, 0, '正常路径不留 open intent')
+  assert.equal(section.counts.done, 1, '派工成功 = intent 收口 done')
+  const intent = section.items.find((item) => item.kind === 'dispatch')
+  assert.deepEqual(intent.done, ['spawn', 'receipt'])
+  assert.equal(intent.data.childId, 'child-1')
+  assert.equal(intent.result.stage, 'implementing')
+})
+
+test('saga intent ②：spawn 成功后写回执被 CAS 拦住 → intent 留在 open，恢复扫描记孤儿', async () => {
+  const { root, contract } = freshProject('intent-dispatch-conflict')
+  const task = addTask(root, contract, { type: 'docs', title: '派工冲突', stage: 'queued-review' })
+  /* 子代理刚起来就被邻人推到 done：CAS 会让写回执失败，只剩 spawn 打勾。 */
+  const subagents = racingSubagents(() => {
+    updateTask(root, contract, task.id, { stage: 'done', notes: '他人写入' }, { source: 'internal' })
+  })
+  const { deps } = recordDeps(root, contract, subagents, getTask(root, contract, task.id))
+  const error = await dispatchTaskRecord(deps).then(() => null, (caught) => caught)
+  assert.equal(error.code, 'conflict')
+  const open = listIntents(root, contract, { state: 'open' }).items
+  assert.equal(open.length, 1, '崩在中间的多步写必须留下可恢复线索')
+  assert.deepEqual(open[0].done, ['spawn'], 'spawn 已发生、receipt 未写')
+  assert.equal(open[0].data.childId, 'child-race-1')
+  /* 恢复扫描：补一条孤儿留痕，intent 收口 aborted（不替人推进阶段）。 */
+  const recovered = recoverIntents(root, contract)
+  assert.equal(recovered.counts.aborted, 1)
+  assert.equal(readIntent(root, contract, open[0].id).state, 'aborted')
+  const after = getTask(root, contract, task.id)
+  assert.match(after.notes, /孤儿派工 child-race-1/)
+  assert.match(after.notes, /他人写入/, '恢复不得覆盖他人写入的 notes')
+  assert.equal(after.stage, 'done', '恢复不得改阶段')
+})
