@@ -937,7 +937,7 @@ test('runGate 成功：逐步执行、tail 截取、日志落盘', async () => {
   assert.deepEqual(listGateRuns(root, contract, 'ok-gate', 0), [])
 })
 
-test('runGate 失败：首个失败即停，失败步骤 tail 保留输出', async () => {
+test('runGate 失败默认不首败即停（结构红也要看到后面的行为结果），failFast 才停', async () => {
   const { root, contract } = freshProject('gate-fail')
   addGate(root, contract, {
     id: 'fail-gate',
@@ -945,17 +945,26 @@ test('runGate 失败：首个失败即停，失败步骤 tail 保留输出', asy
     phase: 'manual',
     steps: [
       { id: 'bad', run: 'echo boom >&2; exit 3', expect: 'exit 0' },
-      { id: 'never', run: 'echo never', expect: 'exit 0' },
+      { id: 'after', run: 'echo after', expect: 'exit 0' },
     ],
   })
 
+  // 2026-11-12 裁定 3：默认分段执行——结构失败不阻断后面步骤。
   const record = await runGate(root, contract, 'fail-gate')
   assert.equal(record.ok, false)
-  assert.equal(record.steps.length, 1, '首个步骤失败后不再执行后续步骤')
+  assert.equal(record.failFast, false)
+  assert.equal(record.steps.length, 2, '默认跑完全部步骤，不首败即停')
   assert.equal(record.steps[0].id, 'bad')
   assert.equal(record.steps[0].exit, 3)
   assert.equal(record.steps[0].ok, false)
   assert.match(record.steps[0].tail, /boom/)
+  assert.equal(record.steps[1].ok, true, '失败步骤之后的行为步骤仍然执行')
+
+  // 显式 failFast 才回到首败即停。
+  const strict = await runGate(root, contract, 'fail-gate', { failFast: true })
+  assert.equal(strict.ok, false)
+  assert.equal(strict.failFast, true)
+  assert.equal(strict.steps.length, 1, 'failFast=true 时首个失败后不再执行')
 
   const runs = listGateRuns(root, contract, 'fail-gate', 1)
   assert.equal(runs[0].ok, false)

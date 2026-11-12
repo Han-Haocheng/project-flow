@@ -71,6 +71,33 @@ jobs:
         # 红在这里 = README 声明的用例数/文件数与 test/ 实测不符。
         # 本地修复：node scripts/doc-counts.mjs --fix（**不要手抄数字**）
 
+      # 规则文件监视面（T-20261112183139）：
+      #   · 本地 `flow gate rules` 用 store 里的校验和基线判定「改了规则没留痕」；
+      #   · CI 没有 .agents/ 台账，所以这里只验证**纯文件层**：监视清单仍能解析
+      #     （docs/module-domain.json 存在、CONTRACT.md 的每个锚点区段能定位且唯一）。
+      #     锚点漂移会让本地基线比对失效，这一层是它的地基，不依赖任何台账。
+      - name: structure (规则文件监视面可解析)
+        run: |
+          node --input-type=module -e "
+            import { snapshotRules } from './lib/gates/rules.mjs'
+            import { loadContract } from './lib/store/contract.mjs'
+            const root = process.cwd()
+            const { contract } = loadContract(root)
+            const snapshot = snapshotRules(root, contract)
+            if (!snapshot.ok) {
+              for (const issue of snapshot.issues) console.error('::error::' + issue.kind + ' ' + issue.path + ' — ' + issue.detail)
+              process.exit(1)
+            }
+            const files = Object.keys(snapshot.files)
+            console.log('watched: ' + files.join(', '))
+            // 守卫：监视面塌缩成 0/1 个文件时，这一步其实什么也没保护（假绿）。
+            if (files.length < 2) {
+              console.error('::error::rule watch list collapsed to ' + files.length + ' file(s) - false green')
+              process.exit(1)
+            }
+          "
+        # 红在这里 = 锚点被改（from/to 不唯一或顺序不对）或受保护的规则文件不见了。
+
       # 只用语法检查，不执行任何模块：bin/flow.mjs 顶层会跑 main()，import 它会真的调 CLI。
       # 文件用 find 自动发现（不硬编码清单），新增模块不会静默漏检。
       #
