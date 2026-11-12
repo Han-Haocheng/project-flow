@@ -900,3 +900,85 @@ test('心跳行透传 branch/worktree：面板分支徽标的数据前提（旧�
   assert.equal(Object.prototype.hasOwnProperty.call(legacy, 'branch'), false, '旧记录的行使形状不受影响')
   assert.equal(Object.prototype.hasOwnProperty.call(legacy, 'worktree'), false)
 })
+
+// --------------------------- 可注入读 seam（T-20261112202457，concurrency）
+//
+// 前端 web 路由要切「先 flow state --json、失败回落」，需要宿主侧有一个**可注入**
+// 的读入口，且默认行为（fork worker + 1800ms）逐字节不变：
+//   - stateSnapshot(ctx, request, { deadlineMs, readSnapshot })
+//   - handleState / collectPanelState 原样透传 options
+// 注入实现契约：返回 {ok:true,payload} 或 {ok:false,code,message}，自己按 deadlineMs
+// 限时；**抛错**时宿主回退默认读并在 payload 上标 degraded（不白屏）。
+
+const seamModule = await import('../lib/host/state.mjs')
+const { STATE_DEADLINE_MS, stateSnapshot } = seamModule
+
+/** 不挂 pool 的最小 ctx：默认路径退化为进程内 buildSnapshot（与旧 unit double 一致）。 */
+const bareCtx = { get: () => undefined }
+
+function snapshotRequest(root) {
+  return {
+    root,
+    realRoot: root,
+    ledgerRoot: root,
+    entry: { path: root, name: path.basename(root) },
+    hostWarnings: [],
+    now: Date.now(),
+  }
+}
+
+test('seam：默认路径行为不变（无 options = 进程内/worker 读，无降级标记）', async () => {
+  const root = makeProject('seam-default')
+  const result = await stateSnapshot(bareCtx, snapshotRequest(root))
+  assert.equal(result.ok, true)
+  assert.equal(result.payload.root, root)
+  assert.equal(Object.hasOwn(result.payload, 'degraded'), false, '默认路径不得凭空多出降级标记')
+  assert.equal(Object.hasOwn(result.payload, 'readPath'), false, '默认路径不写 readPath')
+  assert.equal(STATE_DEADLINE_MS, 1800, '默认期限仍是 1800ms（既有时间断言的前提）')
+})
+
+test('seam：注入实现完全替代默认读，并收到 deadlineMs 预算', async () => {
+  const root = makeProject('seam-inject')
+  let seen
+  const result = await stateSnapshot(bareCtx, snapshotRequest(root), {
+    deadlineMs: 321,
+    readSnapshot: async (request, context) => {
+      seen = { request, context }
+      return { ok: true, payload: { injected: true, root: request.root } }
+    },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.payload.injected, true, '注入的 payload 原样返回')
+  assert.equal(seen.context.deadlineMs, 321, '注入实现拿到本次预算')
+  assert.equal(seen.request.root, root)
+})
+
+test('seam：注入实现抛错 → 回退默认读并标 degraded（不白屏）', async () => {
+  const root = makeProject('seam-fallback')
+  const result = await stateSnapshot(bareCtx, snapshotRequest(root), {
+    readSnapshot: async () => {
+      throw new Error('cli exploded')
+    },
+  })
+  assert.equal(result.ok, true, '注入失败不能让面板整体失败')
+  assert.equal(result.payload.root, root, '回退读的是默认实现')
+  assert.equal(result.payload.degraded, true)
+  assert.equal(result.payload.readPath, 'direct')
+  assert.match(result.payload.degradedReason, /state-reader-unavailable: .*cli exploded/)
+})
+
+test('seam：注入实现回答 ok:false 原样透传（它已做过自己的回落，不重复跑默认读）', async () => {
+  const root = makeProject('seam-passthrough')
+  const result = await stateSnapshot(bareCtx, snapshotRequest(root), {
+    readSnapshot: async () => ({ ok: false, code: 'state-reader-own', message: '自己兜底也失败了' }),
+  })
+  assert.deepEqual(result, { ok: false, code: 'state-reader-own', message: '自己兜底也失败了' })
+})
+
+test('seam：注入实现返回裸 payload 时规范成 {ok:true,payload}', async () => {
+  const root = makeProject('seam-bare')
+  const result = await stateSnapshot(bareCtx, snapshotRequest(root), {
+    readSnapshot: async () => ({ hello: 'world' }),
+  })
+  assert.deepEqual(result, { ok: true, payload: { hello: 'world' } })
+})
