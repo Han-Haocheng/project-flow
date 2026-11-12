@@ -442,6 +442,10 @@ function finish(model, width) {
   if (typeof model.staleNote === 'string' && model.staleNote !== '') {
     finished.staleNote = clip(model.staleNote, width)
   }
+  // T-20261112154725：降级模式标记同样只在存在时出现，旧 payload 的投影不变。
+  if (typeof model.degradedNote === 'string' && model.degradedNote !== '') {
+    finished.degradedNote = clip(model.degradedNote, width)
+  }
   return finished
 }
 
@@ -458,6 +462,17 @@ function staleNoteText(value, now) {
   const at = asNumber(note.at, 0)
   const time = at > 0 ? shortTime(at, now) : ''
   return '数据过期：' + message + '（上次成功 ' + (time || '未知') + '）'
+}
+
+/**
+ * One-line "degraded mode" marker: the host could not reach the backend CLI and
+ * fell back to a read-only in-process store read. The panel must say so — a
+ * silent fallback looks identical to a healthy read.
+ */
+function degradedNoteText(state) {
+  if (state === null || typeof state !== 'object' || state.degraded !== true) return ''
+  const reason = asText(state.degradedReason).slice(0, 160)
+  return '降级模式：后端 CLI 不可用，已退回只读直连' + (reason === '' ? '' : '（' + reason + '）')
 }
 
 /**
@@ -493,6 +508,8 @@ export function panelModel(payload, options = {}) {
 
   const staleNote = staleNoteText(settings.staleNote, now)
   if (staleNote !== '') model.staleNote = staleNote
+  const degradedNote = degradedNoteText(state)
+  if (degradedNote !== '') model.degradedNote = degradedNote
   return finish(model, width)
 }
 
@@ -502,6 +519,9 @@ function panelLines(model) {
   if (model.meta !== '') lines.push({ text: model.meta, tone: 'dim' })
   if (typeof model.staleNote === 'string' && model.staleNote !== '') {
     lines.push({ text: model.staleNote, tone: 'warning' })
+  }
+  if (typeof model.degradedNote === 'string' && model.degradedNote !== '') {
+    lines.push({ text: model.degradedNote, tone: 'warning' })
   }
   for (const counter of model.counters) lines.push({ text: counter, tone: 'normal' })
   for (const item of model.sections) {

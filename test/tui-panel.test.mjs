@@ -783,3 +783,18 @@ test('worktree payload：meta 同时给出台账分支与当前分支，心跳�
   assert.equal(/当前/.test(legacy.meta), false)
   assert.equal(legacy.meta, 'main · 7bb0fe0 · 干净')
 })
+test(
+  '降级模式：CLI 不可用（payload.degraded）时模型给出可见标记，正常 payload 不多一个键',
+  () => {
+    const degraded = fixture()
+    degraded.degraded = true
+    degraded.degradedReason = 'cli-unavailable: spawn ENOENT'
+    const model = panelModel(degraded, { width: 80, height: 40, now: NOW })
+    assert.match(model.degradedNote, /降级模式/)
+    assert.match(model.degradedNote, /spawn ENOENT/)
+
+    /* 健康 payload 的投影必须保持原样：多出来的键会让 TUI 快照断言集体漂移。 */
+    const healthy = panelModel(fixture(), { width: 80, height: 40, now: NOW })
+    assert.equal(Object.hasOwn(healthy, 'degradedNote'), false)
+  },
+)

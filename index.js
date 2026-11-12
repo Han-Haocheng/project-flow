@@ -36,7 +36,7 @@
 // with an 1800ms deadline, so even a root parked in a syscall only costs that one
 // request. The host assembles no payload and performs no store filesystem call.
 
-import { fork } from 'node:child_process'
+import { execFile, fork } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -151,7 +151,7 @@ import {
   ROOT_SESSION_HEARTBEAT_ONLY,
 } from './lib/host/session.mjs'
 import { handleGate, handleInit } from './lib/host/routes.mjs'
-import { rememberTeamCaller, teamStatusFor } from './lib/host/team.mjs'
+import { applyTeamBoard, rememberTeamCaller, teamStatusFor } from './lib/host/team.mjs'
 import {
   DISPATCH_TOOL_DENY,
   TEAM_TOOL_DENY,
@@ -172,6 +172,136 @@ import {
 } from './lib/host/state.mjs'
 
 export { panelStateReader }
+
+// -------------------------------------- 前端读路径：CLI 契约 + 只读降级（T-20261112154725）
+//
+// 前端（Web 面板与 TUI）不再由宿主进程直接读 `.agents/`。主读路径是：
+//
+//     node bin/flow.mjs state --json --root <dir>
+//
+// 后端 CLI 是唯一真源，前端只解析 `--json` 信封；进程内的 `panelStateReader`
+// （fork worker + core）降级为**兜底**：CLI 起不来 / 超时 / 信封坏了时，前端退回
+// 只读直连，并在 payload 上标 `degraded:true` + `degradedReason`，界面显式显示
+// 「降级模式」，绝不白屏。
+//
+// 宿主侧富化（agent 存活标注 / 团队板摘要 / 心跳可见性）仍留在本进程：它们需要
+// 宿主服务而不是 store，CLI 进程拿不到。这三项不读台账，不算「直连」。
+const CLI_STATE_TIMEOUT_MS = 5000
+const CLI_STATE_MAX_BYTES = 2 * 1024 * 1024
+
+/** The CLI entry this package ships (same package root as the `bin` map). */
+function cliStateEntry() {
+  return join(PACKAGE_ROOT, 'bin', 'flow.mjs')
+}
+
+/**
+ * Run `flow state --json` and return its payload.
+ *
+ * `run` is injectable for tests only: the degradation path (CLI missing or
+ * failing) has to be exercised without breaking the real bin. Production always
+ * spawns `process.execPath`, so the plugin needs neither a shell nor a PATH.
+ */
+function runCliState(root) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      process.execPath,
+      [cliStateEntry(), 'state', '--json', '--root', root],
+      { cwd: PACKAGE_ROOT, timeout: CLI_STATE_TIMEOUT_MS, maxBuffer: CLI_STATE_MAX_BYTES, windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error !== null && error !== undefined) {
+          const detail = String(stderr || '').trim() || brief(error)
+          rejectPromise(new Error(`flow state failed: ${detail}`))
+          return
+        }
+        let envelope
+        try {
+          envelope = JSON.parse(String(stdout))
+        } catch (parseError) {
+          rejectPromise(new Error(`flow state returned non-JSON: ${brief(parseError)}`))
+          return
+        }
+        if (envelope === null || typeof envelope !== 'object' || envelope.ok !== true || envelope.data === null || typeof envelope.data !== 'object') {
+          rejectPromise(new Error(`flow state returned an error envelope: ${brief(envelope && envelope.error)}`))
+          return
+        }
+        resolvePromise(envelope.data)
+      },
+    )
+  })
+}
+
+/** Host-side enrichment the CLI cannot compute (needs host services, not the store). */
+async function enrichHostState(ctx, payload) {
+  if (payload === null || typeof payload !== 'object') return payload
+  try {
+    applyAgentLiveness(ctx, payload)
+  } catch {
+    // Enrichment must never fail a read.
+  }
+  try {
+    await applyTeamBoard(ctx, payload)
+  } catch {
+    // Idem.
+  }
+  try {
+    applyHeartbeatVisibility(payload)
+  } catch {
+    // Idem.
+  }
+  return payload
+}
+
+/** CLI payload + host enrichment; throws when the CLI is unavailable. */
+export async function readStateViaCliEnriched(ctx, root, run = runCliState) {
+  const payload = await run(root)
+  // A runner that answers with a non-object is as unusable as a failed spawn:
+  // the caller must fall back to the in-process read instead of handing the
+  // panel an empty payload.
+  if (payload === null || typeof payload !== 'object') {
+    throw new Error('flow state returned a non-object payload')
+  }
+  payload.readPath = 'cli'
+  return await enrichHostState(ctx, payload)
+}
+
+/** Mark one in-process payload as the degraded path (never mutates a null). */
+export function markDegraded(payload, error) {
+  if (payload === null || typeof payload !== 'object') return payload
+  payload.readPath = 'direct'
+  payload.degraded = true
+  payload.degradedReason = `cli-unavailable: ${brief(error)}`.slice(0, 300)
+  return payload
+}
+
+/**
+ * The TUI panel's read path: CLI contract first, in-process read-only fallback.
+ *
+ * A CLI failure is not an error for the panel — it is a *degraded* state the
+ * panel labels. Only when the fallback fails too does the legacy error shape
+ * come back, still flagged `degraded` so the panel can say `直连失败`.
+ */
+export function cliPanelStateReader(ctx, options = {}) {
+  const run = typeof options.runCliState === 'function' ? options.runCliState : runCliState
+  return async function readPanelState(cwd) {
+    let root
+    try {
+      root = await canonicalRoot(typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd())
+      return await readStateViaCliEnriched(ctx, root, run)
+    } catch (cliError) {
+      try {
+        return markDegraded(await panelStateReader(ctx)(cwd), cliError)
+      } catch (fallbackError) {
+        return {
+          ok: false,
+          error: brief(fallbackError),
+          readPath: 'direct',
+          degraded: true,
+          degradedReason: `cli-unavailable: ${brief(cliError)}`.slice(0, 300),
+        }
+      }
+    }
+  }
+}
 
 
 // ------------------------------------------------------------------- tools

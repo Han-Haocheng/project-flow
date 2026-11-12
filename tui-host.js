@@ -12,7 +12,9 @@
 // Component `project-flow`; once the scope inherits its activation identity the
 // id becomes `project-flow:flow` without touching this file.
 
-import { panelStateReader } from './index.js'
+// T-20261112154725：面板读路径走「后端 CLI --json」契约，CLI 不可用时由
+// cliPanelStateReader 自己降级为进程内只读并在 payload 上标 degraded。
+import { cliPanelStateReader } from './index.js'
 import { registerProjectFlowPanel } from './tui-panel.js'
 
 export const inject = ['tuiPanels']
@@ -23,7 +25,7 @@ export function apply(ctx) {
   let dispose
   try {
     dispose = registerProjectFlowPanel(ctx, {
-      readState: panelStateReader(ctx),
+      readState: cliPanelStateReader(ctx),
       refreshMs: PANEL_REFRESH_MS,
       log: (message) => {
         try {

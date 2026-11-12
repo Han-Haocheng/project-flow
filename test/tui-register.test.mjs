@@ -96,6 +96,8 @@ test('the host half exposes the shared state projection and does not mount the p
   assert.match(stateSource, /sendJson\(response, 200, await collectPanelState\(\w+, root, workspaces\)\)/)
   assert.match(stateSource, /return await collectPanelState\(ctx, root, workspaces\)/)
   assert.match(stateSource, /export function panelStateReader\(ctx\)/)
+  // T-20261112154725：前端主读路径走 CLI 契约，进程内读降级为兜底，两者都在入口。
+  assert.match(source, /export function cliPanelStateReader\(ctx, options = \{\}\)/)
   // tuiPanels is a hard dependency of the TUI row, so the host half must stay
   // free of it: web and desktop would otherwise wait forever.
   assert.equal(/tui-panel/.test(source), false)
@@ -121,9 +123,11 @@ test('the TUI row is a separate bundle entry with the tuiPanels dependency', () 
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
 
   assert.match(source, /export const inject = \['tuiPanels'\]/)
-  assert.match(source, /import { panelStateReader } from '\.\/index\.js'/)
+  // T-20261112154725：TUI 面板读「后端 CLI --json」契约，CLI 不可用时由
+  // cliPanelStateReader 自己降级为进程内只读并标 degraded（不再是裸 panelStateReader）。
+  assert.match(source, /import { cliPanelStateReader } from '\.\/index\.js'/)
   assert.match(source, /registerProjectFlowPanel\(ctx, {/)
-  assert.match(source, /readState: panelStateReader\(ctx\)/)
+  assert.match(source, /readState: cliPanelStateReader\(ctx\)/)
   assert.match(patch, /id: project-flow-tui/)
   assert.equal(pkg.exports['./tui-host'], './tui-host.js')
   assert.ok(pkg.files.includes('tui-host.js'))

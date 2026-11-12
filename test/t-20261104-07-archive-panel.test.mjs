@@ -19,13 +19,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { addTask as addTaskCore, archiveTasks, getTask, initProject, loadContract } from '../lib/core.mjs'
 
 /** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
 function addTask(root, contract, input = {}, options) {
   return addTaskCore(root, contract, { type: 'feat', ...input }, options)
 }
-import { panelStateReader } from '../index.js'
+import { cliPanelStateReader, panelStateReader } from '../index.js'
 
 const DAY = 86_400_000
 /** 面板行对象字段（`lib/state-snapshot.mjs:panelTaskRow` 的投影面，顺序即契约）。 */
@@ -308,4 +309,72 @@ test('P2-1 行 type 取值：按记录投影，两种 type 可区分，缺失/�
   // 2)/3) 降级契约：缺失或非字符串一律投影为 ''（不是 null、不是 '42'、不是 undefined）。
   assert.equal(legacyRow.type, '', `无 type 键的记录必须投影为 ''（got ${JSON.stringify(legacyRow.type)}）`)
   assert.equal(numericRow.type, '', `type:42 必须投影为 ''（got ${JSON.stringify(numericRow.type)}）`)
+})
+// --------------------------- 前端读路径：CLI 契约优先 + 只读降级（T-20261112154725）
+//
+// 前端不再由宿主进程直接读 `.agents/`：默认 spawn `flow state --json`（readPath=cli）；
+// CLI 不可用时退回进程内只读直连（readPath=direct）并标 degraded + 原因，界面显式
+// 显示「降级模式」。这两条把「主路径真的走了 CLI」和「降级真的被标注」钉住。
+
+test('cliPanelStateReader：默认走后端 CLI 契约（readPath=cli），payload 可用', async () => {
+  const { root, contract } = freshProject('cli-first')
+  addTask(root, contract, { title: 'CLI 契约任务', status: 'active' })
+  const payload = await cliPanelStateReader(fixtureCtx())(root)
+  assert.equal(payload.ok, true, JSON.stringify(payload).slice(0, 400))
+  assert.equal(payload.readPath, 'cli', '默认必须走 CLI，而不是进程内读')
+  assert.equal(payload.degraded, undefined, 'CLI 正常时不得标降级')
+  assert.equal(payload.root, root)
+  assert.equal(payload.tasks.total, 1)
+  assert.equal(payload.contract.name, 'cli-first')
+})
+
+test('cliPanelStateReader：CLI 失败时退回只读直连，并标 degraded + 原因', async () => {
+  const { root, contract } = freshProject('cli-degraded')
+  addTask(root, contract, { title: '降级仍在', status: 'active' })
+  const readState = cliPanelStateReader(fixtureCtx(), {
+    runCliState: async () => {
+      throw new Error('spawn ENOENT flow')
+    },
+  })
+  const payload = await readState(root)
+  assert.equal(payload.ok, true, JSON.stringify(payload).slice(0, 400))
+  assert.equal(payload.degraded, true, '降级必须被标注（否则界面看起来像正常）')
+  assert.equal(payload.readPath, 'direct')
+  assert.match(payload.degradedReason, /cli-unavailable/)
+  assert.match(payload.degradedReason, /spawn ENOENT/, '降级原因要能看出是 CLI 起不来')
+  assert.equal(payload.tasks.total, 1, '降级路径仍是只读直连，数据不能丢')
+})
+
+test('cliPanelStateReader：CLI 返回非对象信封同样降级，不把空 payload 交给面板', async () => {
+  const { root } = freshProject('cli-junk')
+  const payload = await cliPanelStateReader(fixtureCtx(), {
+    runCliState: async () => 'not-an-envelope',
+  })(root)
+  assert.equal(payload.degraded, true)
+  assert.equal(payload.readPath, 'direct')
+  assert.match(payload.degradedReason, /non-object payload/)
+})
+// 前端包路径：本测试文件在 <repo>/test/ 下。
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+test('前端包结构：四个前端文件没有直读 .agents 的 store 调用，主路径是 flow state --json', () => {
+  const frontEnd = ['client.js', 'index.js', 'tui-panel.js', 'tui-host.js']
+  const readCall = /\b(?:readFileSync|readFile|readdirSync|readdir)\s*\(/
+  const offenders = []
+  for (const name of frontEnd) {
+    const source = fs.readFileSync(path.join(REPO, name), 'utf8')
+    for (const line of source.split('\n')) {
+      if (readCall.test(line) && (line.includes('.agents') || line.includes('flow.json'))) {
+        offenders.push(name + ': ' + line.trim())
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], '前端不得再有未标注降级的台账直读（改成走 CLI 契约）')
+
+  // 主路径确实是后端 CLI 的 --json 契约，降级路径确实被标注。
+  const index = fs.readFileSync(path.join(REPO, 'index.js'), 'utf8')
+  assert.ok(index.includes("join(PACKAGE_ROOT, 'bin', 'flow.mjs')"), '必须 spawn 本包自带的 bin/flow.mjs')
+  assert.ok(index.includes("'state', '--json'"), '主路径 must be flow state --json')
+  assert.ok(index.includes('degraded = true'), '降级结果必须标 degraded')
+  assert.ok(index.includes('cli-unavailable'), '降级原因必须写明是 CLI 不可用')
 })

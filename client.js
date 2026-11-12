@@ -153,6 +153,9 @@ window.__ModuleLoader__.load({
       'top.dirty': '{n} 个未提交改动',
       'top.live': '实时',
       'top.liveStale': '已断开',
+      // T-20261112154725：后端 CLI 不可用时的只读降级，必须在页头可见。
+      'top.degraded': '降级模式',
+      'top.degradedHint': '后端 CLI 不可用，已退回只读直连台账',
       'refresh': '刷新',
       'refresh.aria': '刷新项目数据',
       'refresh.busy': '刷新中…',
@@ -332,6 +335,8 @@ window.__ModuleLoader__.load({
       'top.dirty': '{n} uncommitted',
       'top.live': 'live',
       'top.liveStale': 'disconnected',
+      'top.degraded': 'degraded',
+      'top.degradedHint': 'backend CLI unavailable — read-only direct store fallback',
       'refresh': 'Refresh',
       'refresh.aria': 'Refresh project data',
       'refresh.busy': 'Refreshing…',
@@ -1099,6 +1104,10 @@ window.__ModuleLoader__.load({
            asked for a linked worktree; keep both roots so the header can say so. */
         ledgerRoot: asText(src.ledgerRoot),
         worktree: src.worktree === true,
+        /* T-20261112154725：宿主读不到后端 CLI（spawn 失败/超时/坏信封）时退回只读直连，
+           payload 带 degraded + 原因；页头必须有一个可见标记，不能只塞进警告折叠区。 */
+        degraded: src.degraded === true,
+        degradedReason: asText(src.degradedReason),
         currentHead: {
           sha: asText(chSrc.sha),
           subject: asText(chSrc.subject),
@@ -3108,6 +3117,16 @@ window.__ModuleLoader__.load({
             React.createElement('span', null, failed ? t('top.liveStale') : t('top.live')),
             liveText ? React.createElement('span', { className: 'project-flow-muted' }, liveText) : null
           ),
+          view.degraded
+            ? React.createElement(
+                'span',
+                {
+                  className: 'project-flow-pill project-flow-degraded',
+                  title: view.degradedReason || t('top.degradedHint'),
+                },
+                t('top.degraded')
+              )
+            : null,
           React.createElement(
             'button',
             {
