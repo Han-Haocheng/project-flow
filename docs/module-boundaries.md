@@ -262,3 +262,15 @@ node scripts/module-domain.mjs owners --base main           # 反查 main...HEAD
 **当前并行编辑约定**：`client.js` 是 panel 的 `owns`，同时 shared 给 tasks / decisions / heartbeats /
 experiments——四个模块只能改各自在 §3 表里引用的 `#region` 区段。真正发生并行冲突时，优先方案是在
 `right column cards` 段内加更细的 `#region` 锚点并登记 `sections`，而不是引入构建。
+
+**2026-11-12 决策（D-20261112-01，用户裁定「A 可测性拆分」）**：
+
+- **采用**：把前四段纯逻辑按 `#region` 锚点抽到 `os.tmpdir()` 的临时 `.mjs`（补 export 与最小 stub）后 import，
+  由 `test/t-20261112-client-pure.test.mjs` 覆盖 locale / defensive helpers / state normalization / icon 的**行为**；
+  运行时零改动、无构建、无源码复制。
+- **不做**：不新建 `lib/panel/`、不写 `scripts/build-client.mjs`、不让 `client.js` 变生成物。
+- **局限（必须知道）**：`client.js` 仍是 4510 行，物理体量**没有**变小；A 只是让前四段第一次可被 Node 单测。
+  真正减行数只能走上面第 2 条的构建管线（已被否决），或等宿主支持多 client 文件。
+- **顺带修复**：原第 3038 行的畸形 `#region`+`#endregion` 同一行是合并残留，已**整行删除**。
+  任务书建议的「只删行尾 endregion」会让两行 `#region` 完全相同、锚点唯一性破坏，verify 直接红——
+  **代码事实优先于任务书**。
