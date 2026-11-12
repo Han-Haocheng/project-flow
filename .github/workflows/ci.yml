@@ -49,6 +49,28 @@ jobs:
           # 20 是安全下界。不锁小版本，跟随 20.x 最新补丁。
           node-version: '20'
 
+      # ── 结构门禁（2026-11-12 增补，用户指示「加」） ──
+      #
+      # 只跑**纯文件**检查，不跑任何 `flow` 台账门禁。理由（承接文件头原有 4 条，并补第 5 条）：
+      #   · `.agents/` 整目录被 gitignore，CI 检出后**根本没有台账**——precommit 的
+      #     decisions / tasks-archive / tasks-format 在 CI 里要么必红、要么恒绿（假断言）；
+      #   · precommit 的 tasks-archive 会**写盘**，CI 每次跑都在改台账，不可接受。
+      # 所以 CI 只承担「结构门禁」：下面两条都只读已提交文件，且各自对应一类真实事故：
+      #   · module-domain → 新增文件未登记归属、锚点被改。实测：CONTRACT.md 的 §6 标题
+      #     全角右括号被改成半角，锚点匹配 0 次，门禁红了两天没人查出是一个字符；
+      #   · doc-counts    → README 声明的用例数与实测不符。实测：三个实现者并发改
+      #     同一数字，955→966 来回漂移。
+      # 两者都是 scripts/ 下的零依赖脚本，不读 .agents/，检出即可跑。
+      - name: structure (module-domain 归属与锚点)
+        run: node scripts/module-domain.mjs verify
+        # 红在这里 = 有文件没登记到任何模块，或某个锚点在目标文件里不出现/出现多次/顺序不对。
+        # 本地复现：node scripts/module-domain.mjs verify
+
+      - name: structure (README 用例数一致性)
+        run: node scripts/doc-counts.mjs
+        # 红在这里 = README 声明的用例数/文件数与 test/ 实测不符。
+        # 本地修复：node scripts/doc-counts.mjs --fix（**不要手抄数字**）
+
       # 只用语法检查，不执行任何模块：bin/flow.mjs 顶层会跑 main()，import 它会真的调 CLI。
       # 文件用 find 自动发现（不硬编码清单），新增模块不会静默漏检。
       #
