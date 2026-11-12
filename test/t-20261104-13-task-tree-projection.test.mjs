@@ -147,6 +147,10 @@ test('队列头取根：父不在 active 集合时子任务算根', async () => 
   const { root, contract } = freshProject('cross-group')
   task(root, contract, 'T-20260101-51', '父（稍后完成）', 'active', AT(1))
   task(root, contract, 'T-20260101-52', '子 active', 'active', AT(2), 'T-20260101-51')
+  /* 这条用例测的是树投影/队首取根，不是噪声归档：给子卡一条 notes，让它在
+     T-20261112151422 新增的「父卡终态 → 级联归档空子卡」规则下仍算有进展的卡，
+     否则它会被级联归档、从 active 组消失，用例前提就不存在了。 */
+  updateTask(root, contract, 'T-20260101-52', { notes: '仍在进行' })
   /* legacy status 视图写入（盘上无 stage）：派生迁移不在边表里，按插件记账口径标 internal。 */
   updateTask(root, contract, 'T-20260101-51', { status: 'done' }, { source: 'internal' })
 

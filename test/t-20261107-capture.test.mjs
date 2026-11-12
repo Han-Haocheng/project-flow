@@ -992,8 +992,10 @@ test('消息卡收口：turn-stopping 捕获新卡时，自动完成过期且未
   await turnStopping(harness, agent)
 
   const oldStored = getTask(root, contract, old.id)
-  assert.equal(oldStored.stage, 'done', '过期未领取的旧卡应被自动收口')
-  assert.match(String(oldStored.notes), /\[auto-close\]/)
+  /* T-20261112151422 / M4（Lead 批准）：自动收口语义由 done 改为 archived，留痕标记
+     也随之从 [auto-close] 改为 [auto-archive] —— 同一张噪声卡不再进入完成统计。 */
+  assert.equal(oldStored.stage, 'archived', '过期未领取的旧卡应被自动归档')
+  assert.match(String(oldStored.notes), /\[auto-archive\]/)
   const created = tasksOf(root, contract).filter((task) => task.stage === 'queued-analysis')
   assert.equal(created.length, 1, '新捕获的卡留在待分析（本轮自己的卡不收）')
 })

@@ -11,7 +11,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { addTask as addTaskCore, endHeartbeat, initProject, loadContract, startHeartbeat } from '../lib/core.mjs'
+import { addTask as addTaskCore, endHeartbeat, getTask, initProject, loadContract, startHeartbeat, updateTask } from '../lib/core.mjs'
+import { archiveNoiseTasks } from '../lib/tasks/records.mjs'
+import { listTitle } from '../lib/cli/tasks.mjs'
+import { textWidth } from '../lib/cli/shared.mjs'
 
 /** T-15: `addTask` now requires `type`; fixtures default to feat (use addTaskCore to test the missing-type error). */
 function addTask(root, contract, input = {}, options) {
@@ -362,7 +365,7 @@ test('task sweep --dry-run：只列「过期+未领取+无进展」的捕获卡�
   }
 })
 
-test('task sweep：真跑把旧捕获卡标完成并留 auto-close 说明，其它卡不动', () => {
+test('task sweep：真跑把旧捕获卡归档并留 auto-archive 说明，其它卡不动', () => {
   const { root, contract } = initRoot('sweep-run')
   const old = seedUtterance(root, contract, { title: '旧消息', ageHours: 30 })
   const fresh = seedUtterance(root, contract, { title: '刚说的', ageHours: 1 })
@@ -372,10 +375,163 @@ test('task sweep：真跑把旧捕获卡标完成并留 auto-close 说明，其�
   assert.deepEqual(result.json.data.closed.map((row) => row.id), [old.id])
 
   const stored = readJson(taskFile(root, old.id))
-  assert.equal(stored.stage, 'done', '收口 = 阶段到 done（status 由 stage 派生）')
-  assert.equal(stored.status, 'done')
-  assert.match(stored.notes, /\[auto-close\]/)
+  /* T-20261112151422 / M4（Lead 2026-11-12 批准）：sweep 的收口语义由 done 改为
+     archived —— 噪声卡不该进入「完成」统计，归档后直接离开未完成栈，不必再等
+     tasks.archiveAfterDays 的 7 天窗口。这里断言的就是这个语义变更。 */
+  assert.equal(stored.stage, 'archived', '收口 = 阶段到 archived（status 由 stage 派生）')
+  assert.equal(stored.status, 'archived')
+  assert.match(stored.notes, /\[auto-archive\]/)
   assert.match(stored.notes, /24 小时/)
-  assert.match(stored.done_at, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(stored.done_at, null, '噪声卡从来没有完成过，不写 done_at')
+  assert.match(stored.archived_at, /^\d{4}-\d{2}-\d{2}T/)
   assert.equal(readJson(taskFile(root, fresh.id)).stage, 'queued-analysis', '年轻卡不动')
+})
+
+// --------------------------------------- 捕获噪声卡自动归档（T-20261112151422 S1）
+//
+// 判据：阶段还在队列最前端（queued-analysis / analyzing）、notes/commits/
+// checkpoints/acceptance 全空、无子卡、owner 空、达到年龄阈值；**根卡**还要求
+// source.kind === 'utterance'（手写空卡是人的意图，不是捕获噪声），子卡走父卡
+// 终态时的级联收口（豁免来源判据）。归档写入阶段/状态 archived 并在 notes 留
+// [auto-archive] 痕迹；重复 sweep / 重复 update 不重复写盘。
+
+/** 小时前的时间戳（噪声卡年龄由 created_at / source.at 决定）。 */
+function hoursAgo(hours) {
+  return new Date(Date.now() - hours * 3_600_000).toISOString()
+}
+
+/** 一张未领取的空卡（手写，无 source——根卡判据应挡住它）。 */
+function seedNoiseCard(root, contract, { title, stage = 'queued-analysis', ageHours = 30, ...rest }) {
+  return addTask(root, contract, { title, stage, created_at: hoursAgo(ageHours), ...rest })
+}
+
+/** 一张 capture 落盘的空卡（source.kind = utterance）。 */
+function seedCapturedCard(root, contract, { title, ageHours = 30, ...rest }) {
+  const at = hoursAgo(ageHours)
+  return addTask(root, contract, {
+    title,
+    stage: 'queued-analysis',
+    created_at: at,
+    source: { kind: 'utterance', key: `key-${title}`, at, text: title },
+    ...rest,
+  })
+}
+
+test('噪声归档 · 父卡到 done：同锁级联归档空的直接子卡，有内容/有子卡/刚建的不动', () => {
+  const { root, contract } = initRoot('noise-cascade')
+  const parent = addTask(root, contract, { title: '父卡', stage: 'analyzing' })
+  const emptyQueued = seedNoiseCard(root, contract, { title: '空-待分析', parent: parent.id, ageHours: 2 })
+  const emptyAnalyzing = seedNoiseCard(root, contract, { title: '空-分析中', stage: 'analyzing', parent: parent.id, ageHours: 3 })
+  const noted = seedNoiseCard(root, contract, { title: '有备注', parent: parent.id, notes: '有进展' })
+  const accepted = seedNoiseCard(root, contract, { title: '有验收', parent: parent.id, acceptance: ['人工验收：跑 node --test test/'] })
+  const owned = seedNoiseCard(root, contract, { title: '别人的待办', parent: parent.id, owner: 'session-x' })
+  const withChild = seedNoiseCard(root, contract, { title: '有子卡', parent: parent.id })
+  const grandchild = seedNoiseCard(root, contract, { title: '孙卡', parent: withChild.id })
+  // 与父卡同回合新建的空子卡（< 级联阈值 1 小时）不能被当场收掉。
+  const young = seedNoiseCard(root, contract, { title: '刚建的空子卡', parent: parent.id, ageHours: 5 / 60 })
+
+  assert.equal(updateTask(root, contract, parent.id, { stage: 'done' }).stage, 'done')
+
+  for (const card of [emptyQueued, emptyAnalyzing]) {
+    const stored = readJson(taskFile(root, card.id))
+    assert.equal(stored.stage, 'archived', `${card.id} 应被级联归档`)
+    assert.equal(stored.status, 'archived')
+    assert.match(stored.notes, /\[auto-archive\]/)
+    assert.match(stored.archived_at, /^\d{4}-\d{2}-\d{2}T/)
+    assert.equal(stored.done_at, null, '噪声卡没有完成过，不写 done_at')
+  }
+
+  assert.equal(getTask(root, contract, noted.id).stage, 'queued-analysis', '有 notes 的不误伤')
+  assert.equal(getTask(root, contract, accepted.id).stage, 'queued-analysis', '有 acceptance 的不误伤')
+  assert.equal(getTask(root, contract, owned.id).stage, 'queued-analysis', '有 owner 的不误伤')
+  assert.equal(getTask(root, contract, withChild.id).stage, 'queued-analysis', '有子卡的不误伤')
+  assert.equal(getTask(root, contract, grandchild.id).stage, 'queued-analysis', '孙卡不随祖父级联')
+  assert.equal(getTask(root, contract, young.id).stage, 'queued-analysis', '同回合新建的空子卡不动')
+})
+
+test('噪声归档 · 父卡到 archived：同样触发级联；手写子卡不被来源判据挡住', () => {
+  const { root, contract } = initRoot('noise-cascade-archived')
+  const parent = addTask(root, contract, { title: '父卡', stage: 'done' })
+  const manualChild = seedNoiseCard(root, contract, { title: '手写空子卡', parent: parent.id, ageHours: 5 })
+  updateTask(root, contract, parent.id, { stage: 'archived' })
+  assert.equal(getTask(root, contract, manualChild.id).stage, 'archived', '子卡豁免 source.kind 判据')
+})
+
+test('噪声归档 · 判据：根卡必须 source.kind=utterance——手写空卡不动，捕获空卡归档', () => {
+  const { root, contract } = initRoot('noise-root-source')
+  const manual = seedNoiseCard(root, contract, { title: '手写空卡' })
+  const captured = seedCapturedCard(root, contract, { title: '捕获空卡' })
+  const noted = seedCapturedCard(root, contract, { title: '捕获但有备注', notes: '已处理' })
+  const accepted = seedCapturedCard(root, contract, { title: '捕获但有验收', acceptance: ['人工验收'] })
+  const owned = seedCapturedCard(root, contract, { title: '捕获但被领取', owner: 'session-y' })
+  const young = seedCapturedCard(root, contract, { title: '捕获但太新', ageHours: 2 })
+  const done = addTask(root, contract, { title: '已完成', status: 'done', created_at: hoursAgo(30) })
+
+  const dry = archiveNoiseTasks(root, contract, { olderThanHours: 24, dryRun: true })
+  assert.deepEqual(dry.archived.map((row) => row.id), [captured.id], 'dry-run 只列出唯一合格的捕获空卡')
+  assert.equal(dry.dryRun, true)
+  assert.equal(readJson(taskFile(root, captured.id)).stage, 'queued-analysis', 'dry-run 不写盘')
+  assert.ok(dry.skipped['not-utterance'] >= 1, '手写空卡按 not-utterance 跳过')
+  assert.ok(dry.skipped.notes >= 1)
+
+  const run = archiveNoiseTasks(root, contract, { olderThanHours: 24 })
+  assert.deepEqual(run.archived.map((row) => row.id), [captured.id])
+  assert.equal(readJson(taskFile(root, captured.id)).stage, 'archived')
+  for (const card of [manual, noted, accepted, owned, young]) {
+    assert.notEqual(getTask(root, contract, card.id).stage, 'archived', `${card.id} 不该被归档`)
+  }
+  assert.equal(getTask(root, contract, done.id).stage, 'done', '已完成卡走 archiveAfterDays，不被本判据直接收')
+})
+
+test('噪声归档 · 幂等：重复 sweep 不重复写盘，重复 update 父卡不重复改写子卡', () => {
+  const { root, contract } = initRoot('noise-idempotent')
+  const old = seedCapturedCard(root, contract, { title: '旧捕获卡' })
+  assert.deepEqual(
+    archiveNoiseTasks(root, contract, { olderThanHours: 24 }).archived.map((row) => row.id),
+    [old.id],
+  )
+  const bytes = fs.readFileSync(taskFile(root, old.id), 'utf8')
+
+  assert.deepEqual(archiveNoiseTasks(root, contract, { olderThanHours: 24 }).archived, [], 'archived 卡不再命中')
+  assert.equal(fs.readFileSync(taskFile(root, old.id), 'utf8'), bytes, '第二次 sweep 不得改写文件')
+
+  const parent = addTask(root, contract, { title: '父卡', stage: 'analyzing' })
+  const child = seedNoiseCard(root, contract, { title: '空子卡', parent: parent.id, ageHours: 4 })
+  updateTask(root, contract, parent.id, { stage: 'done' })
+  const childBytes = fs.readFileSync(taskFile(root, child.id), 'utf8')
+  updateTask(root, contract, parent.id, { notes: '父卡备注' })
+  assert.equal(fs.readFileSync(taskFile(root, child.id), 'utf8'), childBytes, '重复 update 不改写已归档子卡')
+  assert.equal((childBytes.match(/\[auto-archive\]/g) ?? []).length, 1, '标记只写一次')
+})
+
+test('噪声归档 · flow task list：未终态的捕获卡标题列带 [capture]，手写卡/已归档卡不带', () => {
+  const { root, contract } = initRoot('noise-capture-marker')
+  const captured = seedCapturedCard(root, contract, { title: '来自聊天的一句话', ageHours: 2 })
+  const manual = addTask(root, contract, { title: '手写任务' })
+  const archivedCaptured = seedCapturedCard(root, contract, { title: '已归档的捕获卡', ageHours: 30 })
+  archiveNoiseTasks(root, contract, { olderThanHours: 24 })
+
+  const result = runCli(root, ['task', 'list'])
+  assert.equal(result.code, 0, result.stderr)
+  // 时间戳 id 互为前缀，按首列精确匹配。
+  const lineOf = (id) => result.stdout.split('\n').find((line) => line.startsWith(`${id} `)) ?? ''
+  assert.match(lineOf(captured.id), /\[capture\]$/, '未终态捕获卡应带标记')
+  assert.doesNotMatch(lineOf(manual.id), /\[capture\]/, '手写卡不带标记')
+  assert.doesNotMatch(lineOf(archivedCaptured.id), /\[capture\]/, '已归档的捕获卡不带标记（不是待办）')
+
+  const jsonResult = runCli(root, ['task', 'list', '--json'])
+  assert.equal(jsonResult.code, 0, jsonResult.stderr)
+  const row = jsonResult.json.data.find((item) => item.id === captured.id)
+  assert.equal(row.source.kind, 'utterance', 'source 原样保留')
+  assert.equal(row.title, '来自聊天的一句话', '标记只在文本列，不写进记录')
+  assert.equal(Object.hasOwn(row, 'capture'), false, '--json 不新增键')
+})
+
+test('噪声归档 · listTitle：标记占宽后标题列不超过 56 个显示宽度（宽字符）', () => {
+  const captured = { title: '中'.repeat(60), stage: 'queued-analysis', source: { kind: 'utterance' } }
+  const marked = listTitle(captured, ['done', 'archived'])
+  assert.ok(marked.endsWith(' [capture]'))
+  assert.ok(textWidth(marked) <= 56 && textWidth(marked) >= 54, `中文标题 + 标记不超列宽（实际 ${textWidth(marked)}）`)
+  assert.equal(textWidth(listTitle({ title: 'x'.repeat(100), stage: 'queued-analysis' }, [])), 56)
+  assert.doesNotMatch(listTitle({ ...captured, stage: 'archived' }, ['done', 'archived']), /\[capture\]/)
 })
