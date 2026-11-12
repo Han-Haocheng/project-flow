@@ -295,3 +295,16 @@ test('flow state 人读输出：给摘要，--json 与人读不互相掺', () =>
   assert.ok(json.json !== null, '--json 必须是可解析信封')
   assert.equal(json.json.data.ok, true)
 })
+test('flow state：坏 manifest 仍是有台账（ok:true + defaults + manifest-invalid warning）', () => {
+  const root = freshProject('state-broken')
+  fs.writeFileSync(path.join(root, '.agents', 'flow', 'flow.json'), '{ not json', 'utf8')
+  const result = runCli(root, ['state', '--json'])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const payload = result.json.data
+  assert.equal(payload.ok, true, '坏 manifest 不得伪装成未初始化')
+  assert.equal(payload.contract.source, 'defaults', '坏 manifest 回退默认脚手架')
+  assert.ok(
+    payload.warnings.some((warning) => String(warning).includes('manifest-invalid')),
+    '必须保留 manifest-invalid warning：这是配置错误，不是「后端不可达」的降级',
+  )
+})
