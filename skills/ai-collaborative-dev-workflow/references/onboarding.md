@@ -58,8 +58,8 @@
 
 需要准备：
 - `.agents/gate-config.json`：scope、版本/令牌/schema/API 同步项、命令；
-- `.agents/taskbook/`：任务 JSON（**协作技能自带的独立存储，flow 插件不读它**；用 project-flow 时
-  任务记在 `.agents/taskbook/`，两者互不相认）；
+- `.agents/taskbook/`：**协作技能自带的 Python 参考实现**（`scripts/task`）的任务 JSON 存储；flow 插件**不读**它。
+  用 project-flow 时任务记在 `.agents/tasks/`（CLI `flow task add`），两套互不相认；不要混用；
 - `.agents/doc-standard.json`：模糊词表与行数上限；
 - 参考实现：通用技能 `scripts/task`、`doc_check.py`、`gate.py`、`precision_common.py`；复制到 `.agents/scripts/`。
 

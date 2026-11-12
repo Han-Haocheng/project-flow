@@ -1680,6 +1680,72 @@ timestamp 时取 pre-step 捕获时刻。**残留**：`stale` 规则依赖消息
 - **两个入口共用同一实现**（工具与 CLI 各一行调用），CLI 的 `--json` 在失败时附带 `vetoWarning`。
 - `flow_veto` 仍保留 `answer` 动作，作为自动应用失败后的手动重试通道。
 
+### 5.6 `flow_*` 工具输出渲染（2026-11-12）
+
+**问题**：九个 `toolOutput()` 调用点原本把 `render` 写成 `JSON.stringify(value, null, 2)`，
+于是**人**在对话里看到的结果是一坨 JSON——清单里每行的 id/标题/阶段要靠肉眼在缩进里找。
+
+**结论**：只改 `render`，**不动 schema、不动规范值**。宿主契约（`dsh-tools` 的 Register a tool）
+规定 `output = { schema, render(args, value) => ContentBlock[] }`，且
+**「Canonical values belong to execution」**——`render` 只产给人看的文本，结构化值仍以
+`render` 之前的规范对象交给程序调用方。所以：
+
+| 项 | 变化 | 说明 |
+|---|---|---|
+| `output.render` 的返回值 | **变了** | 从整段 JSON 变成中文报告文本 |
+| `output.schema` | **不变** | 固定 `{type:'object'}`，一个字段都不动 |
+| 程序调用方拿到的值 | **不变** | 仍是 `execute` 返回的规范对象（含 `ok`/`code`/`nextAction` 等） |
+| 台账格式 | **不变** | 渲染发生在结果出工具之后，不碰任何读写 |
+
+**实现**（真源 `lib/plugin/shared.mjs`）：
+
+- `renderToolText(name, value, action)`：**纯函数**，不读宿主服务、不修改传入的 `value`；
+- `toolOutput(name)`：返回
+  `{ schema: {type:'object'}, render: (args, value) => [{type:'text', text: renderToolText(name, value, toolAction(args))}] }`；
+- **九条 `toolOutput()` 调用点**（对应**八条工具线**：`flow_task` 在 `tasks.js` 与
+  `lib/host/tools.mjs` 各一处，线名相同）——各调用点传自己的 `definition.name`：
+  `flow_status` / `flow_heartbeat` / `flow_decision` / `flow_veto`（`lib/host/tools.mjs` 四处）、
+  `flow_task` / `flow_subtask` / `flow_gate` / `flow_exp`（`lib/tools/*.mjs` 四条）。
+
+**四条渲染规则（可测）**：
+
+1. **首行一行式摘要**：`<name> [<action>] — <摘要>`（如 `flow_task list — 3 个任务（合计 3 · 活跃 2）`）。
+   首行**必须含中文**，不得以 `{` / `[` 开头。
+2. **列表**：每项一行 `- <id>  <标题>  <阶段或状态中文名>`，尾部附计数。
+3. **单条**：按固定字段顺序输出 `id` / `title` / `status` / `stage`…，多行字段（`notes` /
+   `acceptance` / `scope`）每条一行缩进。
+4. **失败态**：`ok:false` 时输出
+   `<name> [<action>] 失败：` + `  ✖ <code>：<message>` + `  下一步：<nextAction>`
+   （`code` 缺省为 `error`，`message` 缺省为「（没有给出原因）」）。`code` 与 `nextAction`
+   必须原样可见——它们就是调用方要照着做的下一步。
+
+**空态文案**：无结果时给**中文空态**而不是 `[]` / `{"items":[]}`——如清单为空写
+「没有可见的心跳记录。」；`flow_status` 在没初始化时写明「缺失（先 `node bin/flow.mjs init`）」；
+没有台账时的提示沿用 `EMPTY_STORE_NOTE`（`no flow store in this workspace; run: node bin/flow.mjs init`）。
+
+**截断规则**：列表最多渲染 `MAX_TOOL_ITEMS = 200` 条（`execute` 已先截过一遍，这里只兜底）。
+超出时末尾追加一行 `…还有 N 条，用 <name> <action> 缩小范围`；结果值带 `truncated:true`
+但条数不足上限时，同样给「…还有更多 条」的提示。
+
+**兜底（永不丢信息）**：以下任一情况一律回落 `JSON.stringify(value, null, 2)`：
+
+- 工具线名未登记（`toolOutput()` 无参 = 旧的调用方式，保持兼容）；
+- 传入的形状没被该工具的渲染分支覆盖（新增 action 时最常出现）；
+- 渲染器**抛错**（`renderToolText` 内部 `try/catch` 兜住）。
+
+**渲染失败绝不拖垮工具调用**——这是硬约束：一次成功的 `execute` 不能因为渲染而变成失败，
+所以兜底必须是「能 JSON 就 JSON、连 JSON 都序列化不了就 `String(value)`」。
+
+**注意区分「未登记形状」与「登记了但为空」**：前者走兜底 JSON，后者走中文空态。
+例如 `flow_subtask` 的真实返回只有 `{root, task}` 与 `{root, task, dispatch}` 两种形状，
+它们的渲染是登记过的（`Returns null` 只代表形状未登记，不代表团为空）。
+
+**本卡不做 GUI 自定义 toolview**：Web Client 按 `tool.client.toolview` 槽位
+（key = 工具线名）派生视图，**没有注册就落通用行**——用户看到的一直是「结果文本 + 通用卡片」。
+所以改 `render` 之后结果文本本身已是中文报告，**不需要**自定义视图就能去掉「JSON 感」。
+做富视图需要新增 keyed 槽位注册 + locale 文案 + **重新构建客户端产物**，与本次收口无关，
+**留作后续卡**。
+
 ## 6 机械检查（`flow check`）
 
 `flow check` 把 `skills/ai-collaborative-dev-workflow/scripts/` 下的机械检查脚本包成

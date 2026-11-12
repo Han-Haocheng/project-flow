@@ -215,7 +215,8 @@ def warn_if_shadow_ledger(root):
     """Warn loudly when this project already keeps its truth in the flow ledger.
 
     `scripts/task` writes its own `.agents/taskbook/` store (this skill's precision
-    layer). The project-flow plugin reads ONLY `.agents/flow/`, so a task created
+    layer). The project-flow plugin reads `.agents/flow/flow.json` plus the sibling
+    record dirs (`.agents/tasks/`, `.agents/experiments/`, ...), so a task created
     here would be invisible to `flow task list`, the panel and every gate — a
     silent write to the wrong place. We keep the tool working (it has its own
     uses) but say so before the user relies on the result.

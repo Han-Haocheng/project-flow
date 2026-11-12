@@ -5,14 +5,19 @@ metadata:
 ---
 # project-flow-usage
 
-技能名：`project-flow-usage`。用 `flow` CLI 维护 `.agents/flow/` 里的实验、任务与门禁；
-面板读同一份 store（唯一写动作是未初始化空态上的「初始化」按钮，同样走 core）。
-所有命令都接受全局 `--root <dir>` 与 `--json`，**位置不限**（`parseArgv` 全位置扫描，
+技能名：`project-flow-usage`。用 project-flow 的 CLI 或 MCP 工具维护 `.agents/` 下的实验、任务、门禁、决策与描述台账（`.agents/flow/` 只放契约 `flow.json`、门禁日志 `logs/` 与写锁 `.lock`；记录在 `.agents/{tasks,experiments,gates,decisions,heartbeat,description}/`）；面板读同一份 store。
+
+执行入口分两类：
+
+- **自动工作流（首选）**：MCP `flow_orchestrate start` 建立/接管主任务，后台自动派分析者、实现者、审查者并做父子聚合；Skill 只规定流程和验收标准。
+- **手工操作**：CLI 全量命令，或 MCP 的 `flow_task` / `flow_subtask` / `flow_exp` / `flow_gate` / `flow_decision` / `flow_desc` / `flow_check` 工具。
+
+所有 CLI 命令都接受全局 `--root <dir>` 与 `--json`，**位置不限**（`parseArgv` 全位置扫描，
 `flow --root P task list` 与 `flow task list --root P` 等价）。
 
 ## 实验：生命周期与谱系
 
-状态：`open`（新建默认）→ `confirmed` | `refuted`，任何阶段可改 `abandoned`。
+状态：`open`（新建默认）→ `confirmed` | `refuted`；任何阶段可改 `abandoned`；另有 `inconclusive`（窗口内无定论）与 `pivoted`（转向、派生新假设）。后两态是加法，旧四态记录兼容。
 一次实验一条记录，用 `metrics` 存结构化数字，`measured` 存一句话结论。
 
 `exp add` 对新记录有**七个必填字段**（`CONTRACT §3.1`）：`--direction`、`--expected`、
@@ -20,7 +25,7 @@ metadata:
 `--stop-loss`；外加 `--title` 与 `--hypothesis`。缺一个即 `invalid`。
 
 ```bash
-# 新建（id 自动生成 E-YYYYMMDD-NN）；下面是最小可用的完整形态
+# 新建（id 自动生成 E-YYYYMMDD-NN，也可用 --id 显式指定）；下面是最小可用的完整形态
 flow exp add --title "focus 归一化降 tie" \
   --direction "focus 归一化后对比度是否下降" \
   --hypothesis "归一化后 tie_mean<=1.0" \
@@ -51,16 +56,37 @@ flow exp show E-20261028-01
 flow exp tree                # 按 parent 缩进；未知 parent / 成环按根显示
 ```
 
-- `flow exp add` 的 id 固定自动生成，不能指定；`--parent` 指向不存在的实验会直接报
-  `invalid`（退出码 2）。
+- `flow exp add` 默认自动生成 id，也支持 `--id E-YYYYMMDD-NN` 显式指定（格式非法或同秒冲突 →
+  `invalid`，退出码 2）；`--parent` 指向不存在的实验会直接报 `invalid`（退出码 2）。
 - `exp update` 不能改 `id`/`schema`/`created_at`，但会自动刷新 `updated_at`；任务另有
   `title`/`type` 也不可改（见下「任务」段）。
 - 删除需 `--yes`：`flow exp rm E-20261028-01 --yes`（不带 `--yes` 且非交互 → 退出码 1）。
 
+## 自动工作流
+
+推荐入口：
+
+```text
+flow_orchestrate start { title: "实现 X", type: "feat", acceptance: ["cmd:node --test"], scope: { allow: ["lib/x.mjs"] } }
+flow_orchestrate status
+flow_orchestrate stop
+```
+
+编排器行为：
+
+1. 新建主任务并置 `queued-analysis`，或接管已有 `taskId`；
+2. 扫描 `queued-analysis` / `queued-implementation` / `queued-review`，按角色启动本地 runner；
+3. runner 默认是 `codex exec --json --ephemeral -C <root> --sandbox workspace-write --approve-for-me -`；
+4. 分析者用 `flow_subtask add` 拆实现单元，子任务默认进入 `queued-implementation`；
+5. 子任务全部完成后，编排器把父任务聚合回 `queued-analysis` 并派分析者做汇总轮；
+6. 汇总轮用 `flow_task update` 把父任务推进到 `done`；验收门仍生效。
+
+MCP 的 `flow_task add/update` 比 CLI 多支持 `scope`、`acceptance`、`commits` 与 `expectedRevision`，因为自动工作流依赖这些字段。CLI 仍只暴露其既有参数面。
+
 ## 任务：状态流转
 
-`draft` → `active` → `done`，废弃用 `archived`。`scope` 用 `--json`/API 维护，
-CLI 只暴露常用字段。
+`draft` → `active` → `done`，废弃用 `archived`。`scope` / `acceptance` 等扩展字段目前由
+`flow_task` 工具面或 core API 维护，**CLI 没有 `--scope`**；`--json` 只是输出模式，不是写字段的手段。
 
 - **`title` 是"标题兼目标"**：`goal` 已并入 `title`，`task add/update` **没有** `--goal`
   （传了是未声明参数 → 用法错误 `exit 1`）。目标就写进 `--title`，用 ` — ` 分隔。
@@ -91,7 +117,9 @@ flow task rm T-20261028-01 --yes
   任务由主会话分析后显式创建。
 - 主会话**不能**直接建子任务（`flow_task add --parent` 会被拒）；子任务只由分析者用
   `flow_subtask add` 创建。
-- 收口用 `--stage`，不要用 `--status done`。
+- **与手工 Agent Teams 二选一**：走这条流水线时，**不要再手工建 Team 卡或 `spawn_teammate`**
+  （插件已按 `queued-*` 自动派工，`config.dispatch.auto` 默认 `true`）。要手工 Agent Teams，
+  先把 `config.dispatch.auto` 设为 `false`（或不把任务放进 `queued-*`），否则同一任务会被派两次。
 
 - **收口不要用 `--status done`**：`stage` 是流程真源，`status` 只是兼容视图。用
   `flow task next <id>` 拿到下一阶段，再 `--stage` 推进；带可执行验收项的任务必须先
@@ -103,14 +131,14 @@ flow task rm T-20261028-01 --yes
 
 ## 项目任务 ↔ Team 任务（Agent Teams 执行视图）
 
-项目台账（`.agents/flow/`）是 **durable 真源**；Agent Teams 的共享任务板（`team_task_*`）只是本次
+项目台账（`.agents/tasks/`、`.agents/experiments/` 等；`.agents/flow/` 只有契约与日志）是 **durable 真源**；Agent Teams 的共享任务板（`team_task_*`）只是本次
 Lead 会话的执行视图，随会话消失。两者用文本字段对接（用户已确认，写死）：
 
 | 方向 | 位置 | 写法 | 谁写 |
 |---|---|---|---|
 | 项目 → Team | Team 任务 `description` 首行 | `flow: <T-id>`；一张 Team 任务只对应一个项目任务 | Lead 建卡时写 |
 | Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论） | Lead |
-| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**已合并**才置 done | Lead |
+- **状态** | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；Team `completed` = 该卡职责完成（实现卡待审、审查卡出结论），**项目 `done` 只在合并后** | Lead |
 | 证据 | 项目任务 `commits` | Lead 合并后回填合并提交与纳入的贡献提交；队友不写 | Lead |
 
 - **只有 Lead 写映射**：队友（Team 子代理）不 `flow task update`、不建卡、不写心跳（心跳只面向
@@ -130,7 +158,7 @@ Lead 会话的执行视图，随会话消失。两者用文本字段对接（用
 
 ## 门禁：定义 + 运行记录
 
-门禁是**定义**（`gates/<id>.json`）加**运行记录**（`logs/<id>/<ts>.json`）。步骤顺序执行，
+门禁是**定义**（`.agents/gates/<id>.json`）加**运行记录**（`.agents/flow/logs/<id>/<ts>.json`）。步骤顺序执行，
 首个失败即停；命令在项目根执行，`expect` 支持 `exit 0`、`exit N`、`contains:文本`。
 
 ```bash
@@ -218,10 +246,11 @@ flow --json status     # 同上 + data.store 绝对路径
 
 ## 与 git 的关系
 
-- `.agents/flow/` 是真相源：可以提交，实验的 `commits` 字段负责回指提交；
+- **`.agents/` 整目录不入 git**（2026-11-08 起，`CONTRACT.md` §8；`.gitignore` 一条 `.agents/` 覆盖）：
+  台账随会话与机器变化，入库只会带进噪音与私有上下文。实验的 `commits` 字段负责回指提交，不需要提交台账。
 - 提交信息里的 `Exp-Id`/`Verdict` trailer **不再被读取或迁移**；实验与提交的关联改用
   `flow exp update <id> --commits <sha>` 维护。
-- 写锁 `.agents/flow/.lock` 不要提交；并发写会得到 `conflict`（退出码 2），重试即可；
+- 写锁 `.agents/flow/.lock` 是运行时临时文件，随目录一起被忽略；并发写会得到 `conflict`（退出码 2），重试即可；
 - 需要给面板/他人看时不用导出：面板直接读同一份 store。
 
 ## 分支/工作树与台账
@@ -229,22 +258,17 @@ flow --json status     # 同上 + data.store 绝对路径
 中心-贡献者模型下（贡献者在自己分支提交、中心唯一合并与写台账；协议见
 `ai-collaborative-dev-workflow/references/contribution-flow.md`）：
 
-- **台账真源在主工作区**：`.agents/flow/` 只在主工作区初始化与提交；工作树继承已提交的
-  台账，**不要**在工作树里 `flow init` 或另建 store，否则会出现两份互不相认的卡片。
+- **台账真源在主工作区**：`.agents/` **不入 git**（`CONTRACT.md` §8）；worktree 会话一律读写
+  **项目主工作区**的 `.agents/`，不存在"工作树继承已提交台账"。**不要**在工作树里 `flow init`
+  或另建 store，否则会出现两份互不相认的卡片。
 - **中心唯一写台账**：贡献者不 init、不建卡；需要更新状态时经中心，或用 `--root` 显式
   指向主工作区（且需中心同意）。
-- **子会话写卡必须 `--root` 主工作区**：面板只按**当前工作区**查找 `.agents/flow/`，而且
-  **看不到某会话在哪条分支**。在子 worktree 里直接 `flow task add` 会把卡写进工作树，
-  主面板看不到，合并时才变成"多出来的文件"。正确写法：
-
-  ```bash
-  flow --root /path/to/main-workspace task update T-20261030-02 --status active --notes "..."
-  ```
-
-- **分支信息写进文字**：心跳 `last_action`、任务 `notes`、提交评审申请三处都写
-  `branch` + `worktree path` + `commit`；这些不会自动出现在面板上。
-- 心跳可留在各自工作树（运行态、不入台账），但不要靠心跳在工作区自动建卡，也不登记
-  文件锁。
+- **worktree 归一自动发生**：CLI/core 会把真实 linked worktree 的 `.agents/` 解析到主工作区；
+  在 worktree 根直接 `flow task add` 也会写到主工作区，不会长出第二份台账。
+- `--root <主工作区>` 仍可用于显式指定环境，但不再是 worktree 写卡的必需写法。
+- **分支信息自动记录**：心跳会写 `branch` 与 `worktree`，面板可显示分支徽标；
+  任务 `notes` / 评审申请仍可写 branch + worktree + commit，作为人类可读证据。
+- 心跳台账同样归一到项目主工作区，不是“各 worktree 各留一份”。
 - 提交评审申请模板：`ai-collaborative-dev-workflow/assets/merge-request-template.md`。
 
 ## 排错
@@ -252,7 +276,7 @@ flow --json status     # 同上 + data.store 绝对路径
 | 现象 | 原因与处理 |
 |---|---|
 | `错误（usage）：run flow init first ...` | store 未初始化，先 `flow init` |
-| `错误（conflict）：store is locked ...` | 另一个写者持有锁，等它结束或等 30 秒过期后重试 |
+| `错误（conflict）：store is locked ...` | 另一个写者持有锁：等它结束；确认持有进程已死后，30 秒后会自动接管，活着的锁不会因超时消失 |
 | `错误（invalid）：parent experiment does not exist` | 先建父实验，或确认 id 拼写 |
 | `错误（not-found）：experiment E-... not found` | id 不存在：`flow exp list` 核对 |
 | `gate run` 退出 0 但结果失败 | 门禁本身失败，检查 `data.steps[].tail` |

@@ -10,7 +10,7 @@ metadata:
 
 > 随 `@local/project-flow` 插件分发（技能来源 `bundled`）：`resourceBase` 即本文件所在目录，文中 `references/`、`assets/`、`scripts/` 均相对该目录解析。
 
-> 技能版本 2.15（2026-11-04）：随 project-flow 插件分发；检查入口 `flow check`。**2.15**：实验型项目一节——七段流程、假设七字段硬规范（缺一即拒）、结果分流四分支（成功/不确定/失败/转向）、任务 `experiment` 字段与 `exp/<E-id>/<topic>` 分支（§十二）。**2.14**：团队派工规范——命名（队友名 `<role>-<scope>`、任务标题 `<feat|fix|chore>: <范围>`，§10.2.1）；配比 `round(N×0.25) / round(N×0.375) / 余数`（§10.2）；七阶段生命周期与现有状态的映射（§10.3.1）；关键路径与满编调度、满编六条、每轮对账、Lead 派工检查清单（§10.6）；空转三分法与派工前三问（references §3.3）。**2.13**：团队名额上限内按角色配比建满（§10.2 / §10.6）；Lead 收口改为队友 `send_message` 回报唤醒，**默认不 `wait_agent`**（仅排障，§10.6 / §10.7）。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
+> 技能版本 2.16（2026-11-11）：随 project-flow 插件分发；检查入口 `flow check`。**口径纠错版**——台账目录改为真实布局（`.agents/flow/` 只放 `flow.json` + `logs/` + `.lock`，记录在 `.agents/{tasks,experiments,gates,decisions,heartbeat,description}/`）；`.agents/` 整目录不入 git、worktree 读写主工作区台账；`exp add --id` 可用；七字段冒烟示例补全；项目台账路径不再写成 `.agents/taskbook/`；`reject` 回边统一为“先回分析修订任务书”；Team `completed` 与项目 `done` 语义分离（`done` 只在合并后）；中心自审的 §1.5 例外写明；project-flow 自动派工与手工 Agent Teams 二选一。**2.15**：实验型项目一节——七段流程、假设七字段硬规范（缺一即拒）、结果分流四分支（成功/不确定/失败/转向）、任务 `experiment` 字段与 `exp/<E-id>/<topic>` 分支（§十二）。**2.14**：团队派工规范——命名（队友名 `<role>-<scope>`、任务标题 `<feat|fix|chore>: <范围>`，§10.2.1）；配比 `round(N×0.25) / round(N×0.375) / 余数`（§10.2）；七阶段生命周期与现有状态的映射（§10.3.1）；关键路径与满编调度、满编六条、每轮对账、Lead 派工检查清单（§10.6）；空转三分法与派工前三问（references §3.3）。**2.13**：团队名额上限内按角色配比建满（§10.2 / §10.6）；Lead 收口改为队友 `send_message` 回报唤醒，**默认不 `wait_agent`**（仅排障，§10.6 / §10.7）。**2.12**：Agent Teams 固定四类角色（中心 / 分析者 / 实现者 / 审查者）+ 一条状态机 + 四类交接物 + Team 卡 `role:` / `domain:` 标注 + 单域小任务降级（§十）。**2.11 重写**：唯一流程改为**中心-贡献者模型**（§一）——中心唯一合并主分支、唯一写主分支台账、唯一决定合并顺序，并对每份提交做合理性判定；贡献者在自己分支提交并提评审申请，中心只给 accept / reject / request-rebase 三种结论。删除上一版的整套差异化流程与两套并行工作方式、令牌与文件锁；分支隔离降为"让提交可评审"的手段（§1.3）。贡献者与中心两侧的完整操作见 `references/contribution-flow.md`。2.10：接入 Agent Teams。2.9：精度层参考实现（task/doc_check/gate）。2.7：新项目接入清单。2.4：授权模型与 DSH 0.2.0 工具面（任务板 / 团队 / 时效纪律）。2.3：任务板卡片模式。
 
 本技能只有一个流程：**一个项目有且只有一个中心负责合并与同步，其余人产出可评审的提交与证据，由中心判断提交是否合理**。没有模式开关、没有多中心协商；单人就是"中心与贡献者合一"的退化情形（§1.5）。与语言/构建体系无关。**本技能的命令只使用 shell 系统命令与 git**；随包附带的 `scripts/` 运行需要 `bash`（`doc_check.py`、`gate.py`、`task` 另需 `python3`），项目若在 CI / 非 DSH 环境使用，应把需要的脚本复制进仓库（如 `.agents/scripts/`）随版本管理，而不是依赖某个用户级目录里的副本。类型检查、lint、构建、测试、打包、安装依赖等工具链操作一律由项目技能以"命令契约"声明（见〇）。
 
@@ -41,7 +41,7 @@ metadata:
 
 ## 与 project-flow 插件的分工
 
-- **台账/存储归插件**：`.agents/flow/` 由 `@local/project-flow` 拥有——写入口是 `flow` CLI 与 `flow_*` 工具，面板是只读视图；记录字段、schema 与校验以插件 `CONTRACT.md` 为准。
+- **台账/存储归插件**：`.agents/` 下的流程台账由 `@local/project-flow` 拥有——写入口是 `flow` CLI 与 `flow_*` 工具，面板是只读视图；记录字段、schema 与校验以插件 `CONTRACT.md` 为准。**目录别记错**：`.agents/flow/` 只放契约 `flow.json`、门禁运行日志 `logs/` 与写锁 `.lock`；记录在兄弟目录 `.agents/{tasks,experiments,gates,decisions,heartbeat,description}/`。`.agents/` 整目录**不入 git**（见 `CONTRACT.md` §8）。
 - **本技能只管流程纪律**：角色与判定、命令契约、质量门禁、提交/发布/交接纪律。**不得重定义记录字段**；需要记实验/任务/门禁时调用插件，不要在技能或项目文档里另立一套字段。
 - **机械检查由插件提供**：`flow check staged|release-baseline|state|doc`（DSH 内首选入口）。同一批脚本随本技能分发在 `scripts/`，项目可在 CI / 非 DSH 环境把需要的脚本复制进 `.agents/scripts/` 直接运行。
 
@@ -136,7 +136,7 @@ metadata:
 
 > 派工前先执行「硬性约束」：预研、反驳与建议回馈给用户；任务书获得确认后，范围内推进，范围外与敏感操作当次再确认。新会话、上下文压缩或中断恢复时，先执行「六、长期项目与会话连续性」的恢复协议。
 
-1. **选执行面（先定怎么跑）**：中心先读项目任务与进度（`flow_task list` / `flow_task show`），再按顺序选执行面——**本次会话内有多路可并行写域、或需要来回追问/补证据 ⇒ Agent Teams（§十，默认，按四类角色跑）**；**跨会话 / 无人值守 / 要钉工作区与权限 ⇒ Host 任务板卡片（§九）**；**大规模只读扇出 ⇒ `workflow` / 并行子代理**；**一次性只读调研，或当前会话工具列表里没有 Team 工具 ⇒ 一次性 subagent（唯一降级，只做只读）**。项目任务再多、只有一条写线时也不组队：中心自己推进更快。
+1. **选执行面（先定怎么跑）**：中心先读项目任务与进度（`flow_task list` / `flow_task show`），再按顺序选执行面——**本次会话内有多路可并行写域、或需要来回追问/补证据 ⇒ Agent Teams（§十，默认，按四类角色跑）**；**跨会话 / 无人值守 / 要钉工作区与权限 ⇒ Host 任务板卡片（§九）**；**大规模只读扇出 ⇒ `workflow` / 并行子代理**；**一次性只读调研，或当前会话工具列表里没有 Team 工具 ⇒ 一次性 subagent（唯一降级，只做只读）**。项目任务再多、只有一条写线时也不组队：中心自己推进更快。**与 project-flow 流水线互斥**：项目若用 `stage=queued-*` 的插件自动派工（`config.dispatch.auto` 默认 `true`，`lib/dispatch.mjs`），**不要再手工建 Team 卡或 `spawn_teammate`**——两条路径会对同一任务各派一次；要手工 Agent Teams，先显式把 `config.dispatch.auto` 设为 `false`（或不让任务进入 `queued-*` 入口），二选一。
 2. **分析（只读）→ 任务书**：组队时先把项目任务交给分析者（`role: analyst` 卡）只读出任务书：目标、范围/base、文件域切分、验收标准、验证命令、风险、依赖（[assets/task-brief-template.md](assets/task-brief-template.md)）；中心确认后才派实现。单域小任务不组队，中心自析自验（§10.8）。
 3. **拆分：项目任务 → Team 任务**：按**文件域与依赖**拆三类卡——分析卡（`role: analyst`，只读）、实现卡（`role: implementer` + `domain:`，一片可独立验收且域不相交的写域）、审查卡（`role: reviewer`，只读，`blocked_by` 实现卡）；`description` **首行 `flow: <T-id>`、第二行 `role:`，实现者第三行 `domain:`**（一张卡只对应一个项目角色/一片域；要覆盖多个就拆多张），正文写任务书路径、交付格式（分支 + 提交 + 证据 + 申请/结论）与停止条件；依赖用 `blocked_by`、文件域用 `write_scopes` 预声明（**协调信息，不是锁**）。拆完由中心把 `team: <taskId>` 回记到**项目任务 notes**——项目台账是 durable 真源，Team 板只是本次会话的执行视图。
 4. **派队友**：`spawn_teammate`（Lead 专用）按角色建持久队友——实现者每人一条分支/worktree、一片 `domain:`，**审查者必须是非实现者**；prompt 必须自带 role/domain 标注、Team 任务 id、项目 task id、任务书路径、base、允许写域、映射约定、交付格式与停止条件（队友看不到 Lead 的对话）。**建卡与派工都不会自动开跑**：队友按 `team_task_get` 取当前 revision 后 `claim`；Lead 用 `send_message` 唤醒或追加指令。人数与配比见 §10.2、命名见 §10.2.1（不在本清单复述数字）；唤醒后**结束本轮等队友 `send_message` 回报**，不用 `wait_agent` 干等。
@@ -207,7 +207,7 @@ metadata:
 
 **适用**：部署里有 Host 侧任务板（DSH 为 `@linxin666/dsh-client-ui-task-board`）时，把"派子代理"升级成**派卡片**：卡片钉住**工作区 / agent 预设 / 权限**，由 Host 调度、执行与结算，**浏览器关掉也照跑**。中心（Coordinator）仍是派单、判定、合并、写台账与汇报的唯一主体；**卡片是贡献者**——只在自己分支提交并提申请。
 
-**三块"板"别混（2026-10-30 起，按 T-26/T-21 口径）**：① **项目台账** `.agents/flow`（`flow_task` / `flow task`）是 **durable 真源**，跨会话、跨工作树；② **Host 任务板卡片**（`task_board_*`，本节）是 Host 持久调度面，浏览器关掉照跑；③ **Agent Teams 共享任务板**（`team_task_*`，§十）只活本次 Lead 会话，是会话内执行视图。**卡片与 Team 任务都不是真源**：由项目任务派生时，Team 任务 `description` 首行写 `flow: <T-id>`、项目任务 notes 回记 `team: <taskId>`；卡片若也由项目任务派生，沿用同一写法（协调建议，非硬性字段）。状态/证据/结论最终一律回收到项目任务（字段约定见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1）；项目流面板**不做** Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。跨会话 / 无人值守 / 要钉工作区与权限仍走卡片。
+**三块"板"别混（2026-10-30 起，按 T-26/T-21 口径）**：① **项目台账** `.agents/tasks/`（`flow_task` / `flow task`；`.agents/flow/` 只有契约与日志）是 **durable 真源**，跨会话、跨工作树，**不入 git**；② **Host 任务板卡片**（`task_board_*`，本节）是 Host 持久调度面，浏览器关掉照跑；③ **Agent Teams 共享任务板**（`team_task_*`，§十）只活本次 Lead 会话，是会话内执行视图。**卡片与 Team 任务都不是真源**：由项目任务派生时，Team 任务 `description` 首行写 `flow: <T-id>`、项目任务 notes 回记 `team: <taskId>`；卡片若也由项目任务派生，沿用同一写法（协调建议，非硬性字段）。状态/证据/结论最终一律回收到项目任务（字段约定见 [references/agent-teams-and-tasks.md](references/agent-teams-and-tasks.md) §3.1）；项目流面板**不做** Team 投影（T-26 已删），Team 板只在原生 Agent Teams UI 看。跨会话 / 无人值守 / 要钉工作区与权限仍走卡片。
 
 **标题统一（2026-11-04）**：三块板的标题一律 `<feat|fix|chore>: <一句话范围>`——项目任务 `title`、Team 卡 `subject`、Host 卡片 `title`；Team 卡另按 §10.4 写 `description` 三行标注。命名细则见 §10.2.1。
 
@@ -239,6 +239,10 @@ metadata:
 
 > **它是执行面，不是另一种协作模式**：中心-贡献者模型不变（§一），Team 只是"多路贡献者 + 共享任务板"的具体跑法。本次会话内有多路可并行写域、或需要来回追问/补证据时**默认组队，不需要用户点播**；单人单线不组队；跨会话 / 无人值守 / 钉工作区与权限走卡片（§九）；大规模只读扇出走 `workflow`。
 >
+> **与 project-flow 自动派工二选一（写死）**：`stage=queued-*` 会让插件按 `config.dispatch.auto`（默认 `true`）自动派分析者/实现者/审查者。**同一条任务不允许既走插件自动派工、又由 Lead 手工建 Team 卡**（会重复派工、烧 token）。选 project-flow 流水线 ⇒ Lead 只建主任务、推进 stage、收口；选手工 Agent Teams ⇒ 先 `config.dispatch.auto: false`（或不在 `queued-*` 入口建任务），再按本节建卡。
+>
+> **工具可用性**：`spawn_teammate` / `team_task_*` 只在 DSH 0.2.0+ 提供；非 DSH 环境按 §10.8 降级（一次性只读 subagent，写活回中心），流程纪律与角色边界不变——本技能的核心命令仍只用 shell 与 git。
+>
 > **2026-10-31 起（T-20261031-01）：团队固定四类角色——中心 / 分析者 / 实现者 / 审查者**（§10.2），配一条状态机（§10.3）与四类固定交接物（§10.4）。角色是**权限与职责划分**，不是头衔：写的人不审自己、审的人不改代码、合并与台账只归中心；单文件/单域小任务不组队（§10.8）。
 
 **工具**：`spawn_teammate`（Lead 专用；`context` = `fresh` 无历史 / `fork` 继承**已完成**轮次）· `send_message`（durable，**唯一能唤醒 inactive 队友**的手段，也是派新活的方式）· `wait_agent`（**Lead 默认不用**，仅排障时确认还有谁在跑；只观察**调用之后**的状态/邮箱/任务变化，**从不唤醒**任何成员；无人在跑时立即 `noProgress`）· `list_agents`（`inactive` = 此刻没在跑，**不代表失败或完成**；`provisioning` / `failed` 才是创建态）· `interrupt_agent`（Lead 专用，**保留 pending inbox**）· `team_task_create` / `get` / `list` / `update`（共享任务板；`update` 用 `expected_revision` 做 **CAS**：claim → 干活 → complete）。
@@ -247,7 +251,7 @@ metadata:
 
 | 面 | 持久性 | 存什么 | 谁写 |
 |---|---|---|---|
-| **项目台账** `.agents/taskbook/`（`flow_task` / `flow task`） | **durable，跨会话/跨工作树** | `title`、`type`、`status`、`owner`、`notes`、`scope`、`acceptance`、`commits`（`title` 兼目标；`goal` 已合并，旧记录由 `normalizeTaskFormat` 迁移） | 中心（Lead）；队友不写 |
+| **项目台账** `.agents/tasks/`（`flow_task` / `flow task`；`.agents/flow/` 只放 `flow.json` + `logs/` + `.lock`） | **durable，跨会话/跨工作树**；**不入 git** | `title`、`type`、`status`、`owner`、`notes`、`scope`、`acceptance`、`commits`（`title` 兼目标；`goal` 已合并，旧记录由 `normalizeTaskFormat` 迁移） | 中心（Lead）；队友不写 |
 | **Team 共享任务板**（`team_task_*`） | **随 Lead 会话消失** | 执行卡片、owner、依赖、write_scopes、完成状态 | 队友 claim/complete；Lead 建卡/回收 |
 | **原生 Agent Teams UI** | 随会话 | 实时观察成员与卡 | 只展示，不是真源；项目流面板**不做** Team 投影（T-26 已删） |
 
@@ -281,7 +285,7 @@ metadata:
 **三类名字都是「类型 + 范围」，范围写模块/产物名，不写序号。**
 
 - **队友名**：`<role>-<scope>`，kebab-case；**role 用简写**（`analyst` / `impl` / `reviewer`），scope 是它能处理的范围（模块、目录、产物）；**卡内 `role:` 用全称**（`analyst` / `implementer` / `reviewer`）。**硬约束**：`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`、≤64 字符、不能叫 `lead`（违反报 `TEAM_INVALID_MEMBER_NAME`）；名字唯一不复用（重名 `TEAM_MEMBER_NAME_TAKEN`），建员前先 `list_agents` 核对。正例：`analyst-lifecycle`、`impl-skill-docs`、`reviewer-consistency`；反例：`analyst-1`（序号）、`Impl_Skill`（大写/下划线）、`lead`（保留名）、`reviewer-alldocs`（范围大于实际域）。
-- **任务标题**：项目任务 `title` 与 Team 卡 `subject` **写同一句**：`<feat|fix|chore>: <一句话范围>`，type 只允许这三个，总长 ≤60 字符。正例：`feat: 团队派工规范（命名/配比/七阶段）`、`fix: 面板轮询慢响应被自噬取消`、`chore: 技能版本升到 2.14`；反例：`实施：T-06 技能纪律`（无 type）、`feat:修复bug`（无空格、范围含糊）、`feature: 改文档`（type 不合法）。**长度事实**：flow 侧 `requireText`（`lib/core.mjs:1536`）**只拒空**、无上限；Team 卡 `subject` 经 `requiredText(..., 200)` ⇒ **拒空且 >200 字符硬报错**。`<type>:` 前缀与 ≤60 字符纯属**技能纪律**（工具不校验），靠 Lead 与审查者把关。
+- **任务标题**：项目任务 `title` 与 Team 卡 `subject` **写同一句**：`<feat|fix|chore>: <一句话范围>`，type 只允许这三个，总长 ≤60 字符。正例：`feat: 团队派工规范（命名/配比/七阶段）`、`fix: 面板轮询慢响应被自噬取消`、`chore: 技能版本升到 2.14`；反例：`实施：T-06 技能纪律`（无 type）、`feat:修复bug`（无空格、范围含糊）、`feature: 改文档`（type 不合法）。**长度事实**：flow 侧 `requireText`（`lib/store/records.mjs`，shared record helpers）**只拒空**、无上限；Team 卡 `subject` 经 `requiredText(..., 200)` ⇒ **拒空且 >200 字符硬报错**。`<type>:` 前缀与 ≤60 字符纯属**技能纪律**（工具不校验），靠 Lead 与审查者把关。
 - **历史不追溯**：已有 `T-*` 任务与已建卡不改名；新卡、新建项目任务、Host 卡片从本版起按此命名。
 - Team 卡 `description` 仍按 §10.4 写三行标注（首行 `flow:`、次行 `role:`、实现者第三行 `domain:`）——标题管"叫什么"，标注管"归属谁"。
 
@@ -290,7 +294,8 @@ metadata:
 ```text
 pulled → analyzing → assigned → implementing → reviewing
                                                   ├─ accept ──────────────→ accepted → merged → reclaimed
-                                                  └─ reject / request-rebase → rejected → 回 implementing → reviewing
+                                                  ├─ reject ─────────────→ rejected → 回 analyzing（修订任务书）→ assigned → implementing → reviewing
+                                                  └─ request-rebase ─────→ rejected → implementing（只换 base）→ reviewing
 ```
 
 | 状态 | 含义 | 谁推进 | 进入下一态的条件 |
@@ -298,10 +303,10 @@ pulled → analyzing → assigned → implementing → reviewing
 | `pulled` | 中心从项目台账拉取任务（`flow_task list` / `show`），确认要做 | 中心 | 多路/可并行 ⇒ `analyzing`；单域小任务 ⇒ §10.8 不组队 |
 | `analyzing` | 分析者只读产出**任务书**（目标、范围/base、文件域切分、验收标准、验证命令、风险、依赖） | 分析者（`role: analyst` 卡） | 中心确认任务书 + 文件域切分互不重叠 ⇒ `assigned` |
 | `assigned` | 中心建 Team 卡（`flow:` / `role:` / `domain:`）并派实现者与审查者 | 中心 | 实现者 claim 实现卡 ⇒ `implementing` |
-| `implementing` | 实现者只在自己 `domain:` 与分支写：提交 + 证据 + 评审申请 | 实现者 | 实现卡 `completed` 且申请含 branch/path/commit ⇒ `reviewing` |
-| `reviewing` | 审查者（非实现者）只读独立复核 diff/范围/门禁/契约影响，逐条给 §1.4 结论 | 审查者 | `accept` ⇒ `accepted`；`reject` / `request-rebase` ⇒ `rejected`（回 `implementing`） |
+| `implementing` | 实现者只在自己 `domain:` 与分支写：提交 + 证据 + 评审申请 | 实现者 | 实现卡 `completed`（= 实现职责交付完成，**不是合并**）且申请含 branch/path/commit ⇒ `reviewing` |
+| `reviewing` | 审查者（非实现者）只读独立复核 diff/范围/门禁/契约影响，逐条给 §1.4 结论 | 审查者 | `accept` ⇒ `accepted`；`reject` ⇒ `rejected`（回 `analyzing` 修订任务书）；`request-rebase` ⇒ `rejected`（直接回 `implementing`） |
 | `accepted` | 审查通过；中心复跑门禁并最终裁定（可推翻审查结论，须写明理由） | 中心 | 中心 accept ⇒ 合并 ⇒ `merged` |
-| `rejected` | `reject`：按具体理由重做；`request-rebase`：实现者 rebase 到新 base、复跑、重新提申请 | 实现者 | 重新提交申请 ⇒ 重返 `reviewing` |
+| `rejected` | `reject`：先回分析者修订任务书，再重新派实现；`request-rebase`：实现者 rebase 到新 base、复跑、重新提申请 | 分析者 / 实现者 | `reject` 走 `analyzing → assigned → implementing`；`request-rebase` 重新提交申请 ⇒ 重返 `reviewing` |
 | `merged` | 中心合并主分支（`merge --no-ff` / `cherry-pick` / 允许时 fast-forward）并复跑门禁 | 中心 | 项目台账 status / commits / notes 更新 ⇒ `reclaimed` |
 | `reclaimed` | 中心逐卡回收 Team 卡、决定分支/工作树保留或清理；**项目台账是唯一 durable 真源** | 中心 | 会话结束前全部卡到达本状态（§10.7） |
 
@@ -317,7 +322,7 @@ pulled → analyzing → assigned → implementing → reviewing
 
 ### 10.3.1 七阶段生命周期与现有状态（映射，写死；不扩展枚举）
 
-用户口径的**七阶段**（创建 → 分析 → 等待 → 实现 → 审查 → 完成 → 归档）是**管理视图**；底层只有两套枚举：§10.3 的九态、Team 卡的 `pending` / `in_progress` / `completed`，外加项目任务的 `draft` / `active` / `done` / `archived`（`lib/core.mjs` 的 `TASK_STATUS`，**没有 `blocked`**）。**不新增状态、不把阶段写进 notes**（notes 是台账字段，禁双写，§10.5）。
+用户口径的**七阶段**（创建 → 分析 → 等待 → 实现 → 审查 → 完成 → 归档）是**管理视图**；底层只有两套枚举：§10.3 的九态、Team 卡的 `pending` / `in_progress` / `completed`，外加项目任务的 `draft` / `active` / `done` / `archived`（`lib/tasks/records.mjs` 的 `TASK_STATUS`，**没有 `blocked`**）。**不新增状态、不把阶段写进 notes**（notes 是台账字段，禁双写，§10.5）。
 
 | 阶段 | §10.3 九态 | Team 卡 | 项目任务 | 推进者 |
 |---|---|---|---|---|
@@ -326,12 +331,12 @@ pulled → analyzing → assigned → implementing → reviewing
 | 等待 | `assigned` + `blocked_by` 非空 | `pending` / `in_progress`（已认领但依赖未清） | `active`（flow 无 blocked；依赖只记 Team 卡 `blocked_by`） | 中心调度 |
 | 实现 | `implementing` | `in_progress` | `active` | 实现者 |
 | 审查 | `reviewing` | `in_progress` | `active` | 审查者 |
-| 完成 | `accepted → merged` | `completed` | `done` | 中心 |
+| 完成 | `accepted → merged` | 实现/审查卡各自职责完成即 `completed`；全部卡回收后不再建卡 | `done`（**只在合并后**） | 中心 |
 | 归档 | `reclaimed` | 卡回收（`release` / 不再建） | `archived`（自动归档可先置、无卡回收、不回退） | 中心 |
 
-- **等待 = `assigned` 且 `blocked_by` 非空**：`blocked_by` 是唯一判据，**依赖完成后也不清空**，所以"能否开工"看两支名单——**`team_task_list({ status: 'pending' })` 里不在 `team_task_list({ ready: true })` 名单的卡 = 被 `blocked_by` 挡住**（再核对其 `blocked_by` 上游卡是否仍在板上）；Team 卡此时是 `pending`（未认领）或 `in_progress`（已认领但依赖未清）。**别反查"非 ready"名单判等待**：`ready` 的定义是 `status==='pending' && 依赖已清`（`lib/index.js:382`），`completed` / `in_progress` 卡因此恒不 ready，历史卡永远落在那个名单里。**两支名单都要 `limit: 100` 并翻完 `nextCursor`**；跨两次调用的差集不是快照，逐卡再用 `blocked_by` + `revision` 核对。
+- **等待 = `assigned` 且 `blocked_by` 非空**：`blocked_by` 是唯一判据，**依赖完成后也不清空**，所以"能否开工"看两支名单——**`team_task_list({ status: 'pending' })` 里不在 `team_task_list({ ready: true })` 名单的卡 = 被 `blocked_by` 挡住**（再核对其 `blocked_by` 上游卡是否仍在板上）；Team 卡此时是 `pending`（未认领）或 `in_progress`（已认领但依赖未清）。**别反查"非 ready"名单判等待**：`ready` 的定义是 `status==='pending' && 依赖已清`（宿主 Team 服务返回，`team_task_list({ready:true})`），`completed` / `in_progress` 卡因此恒不 ready，历史卡永远落在那个名单里。**两支名单都要 `limit: 100` 并翻完 `nextCursor`**；跨两次调用的差集不是快照，逐卡再用 `blocked_by` + `revision` 核对。
 - **完成 ≠ 归档**：完成 = 审查 `accept` + 中心合并 + 门禁复跑 + 台账更新。归档分两种：**自动归档**只做 `done → archived`（时间阈值触发，不要求分支/工作树清理，由 T-07 的 precommit 步执行）；**人工归档**走回收检查单（卡已回收、分支/工作树已清理、现场已记入 notes 之后）。本技能只管"没完成的不许归档"。
-- **审查不过回分析**：`reject` ⇒ 阶段回「分析」，由分析者修订任务书后再回 `等待 → 实现`（九态回边仍是 `rejected → implementing`，阶段纪律要求在 `implementing` 之前先经过 `analyzing`，本节优先）；`request-rebase` 只换 base、不动任务书，可直接回 `implementing`。**不新建卡、不开新回边**。
+- **审查不过回分析**：`reject` ⇒ 阶段回「分析」，由分析者修订任务书后再回 `等待 → 实现`（九态回边统一为 `rejected → analyzing → assigned → implementing → reviewing`；§10.3 的状态机与本条一致）；`request-rebase` 只换 base、不动任务书，可直接回 `implementing`。**不新建卡、不开新回边**。
 - **跳过分析卡**：已有中心确认的任务书（含既有分析产物）可跳过分析卡，在项目 notes 记 `analyzing: skipped (brief=<来源>)`，阶段直接进「等待 / 实现」。
 - **多卡规则**：一个 flow 任务对应多张 Team 卡时，**阶段取最慢的卡**（任一张还在实现 ⇒ 实现阶段；**任一审查卡 `in_progress` ⇒ 审查阶段**）。
 - 九态语义与 §10.5 状态映射不变；与本节冲突时以本节映射为准，并在项目 notes 写一句原因。
@@ -363,7 +368,7 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 
 - **正向锚点**：Team 任务 `description` 首行 `flow: <T-id>`（§10.4）；一张卡只对应一个项目任务（覆盖多个就拆多张）；正文不重复台账字段。
 - **反向回记**：项目任务 `notes` 追加 `team: <taskId>`（可带 branch / commit / 验收结论）。notes 是整字段覆盖式更新，回记时保留原内容。
-- **状态映射**：Team `pending` ↔ 项目 `draft`；`in_progress` ↔ `active`；`completed` ↔ **已合并**后才置项目 `done`（未合并不得置 done）。被 reject / 阻塞 / 放弃时写原因，项目任务回 `active`（还要做）或 `archived`（确定不做）。**`archived` = 归档阶段**（§10.3.1）：**人工归档**只在卡已回收、分支/工作树已清理、现场已记进 notes 之后置；**自动归档**例外：只做 `done → archived`（时间阈值，由 T-07 precommit 步执行，不要求清理）。
+- **状态映射**：Team `pending` ↔ 项目 `draft`；`in_progress` ↔ `active`；Team `completed` = **该卡职责交付完成**（实现卡完成 = 交付待审，审查卡完成 = 结论已给），**不等于项目 `done`**；项目 `done` **只在中心合并之后**置（未合并不得置 done）。被 reject / 阻塞 / 放弃时写原因，项目任务回 `active`（还要做）或 `archived`（确定不做）。**`archived` = 归档阶段**（§10.3.1）：**人工归档**只在卡已回收、分支/工作树已清理、现场已记进 notes 之后置；**自动归档**例外：只做 `done → archived`（时间阈值，由 T-07 precommit 步执行，不要求清理）。
 - **证据**：项目任务 `commits` 由中心合并后回填（合并提交与纳入的贡献提交）；实现者与审查者都不写项目台账。
 - **禁止双写**：status / commits / 验收结论只以项目台账为权威值；Team 卡状态只是执行视图，不把同一进度叙事两边各写一份。
 - **队友不写台账、不写心跳**：心跳只面向主会话；队友的进度经 Team 卡 + 申请/结论回中心，由中心登记。
@@ -444,6 +449,7 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 | 跨会话 / 无人值守 / 钉工作区与权限 / cron | **Host 任务板卡片（§九）** | 卡片按四角色分，合并与台账归中心 |
 
 - **降级只降组队规模，不降审查独立性与"中心唯一合并/台账"**；"单域小任务"不等于"可以把审查权交给实现者本人"。
+- **中心自审是唯一例外，且必须显式标注**：§1.5 单人退化下中心既是唯一实现者也是唯一复核者——这不是"把审查权交给实现者本人"（那条约束禁止的是**把审查权授予另一个实现者**）。走这条路时必须在项目任务 notes 写明 `自审（§1.5 退化）：<复跑的命令与结果>`，并在最终报告里说明"无独立审查者"。
 - 一次性 subagent **不 claim Team 任务、不写项目台账、不写心跳**；结论由中心汇总进项目任务 notes。
 
 ### 10.9 纪律（与卡片模式同源；差异处已标注）
@@ -496,8 +502,8 @@ domain: <path prefix>                  ← 仅实现者（多个用逗号分隔�
 - **`title` / `hypothesis` 沿用旧必填**（非空），七字段是在此之上的追加硬规范。
 - **机器只校验**：存在 / 非空 / `guardrails` ≥1 项且**每项非空 string** / `windowDays` 正整数且 **≤3650** / `primaryMetric` 为单个非空 string / `direction` ≤120 字符；**`falsify` 与 `expected` 同义、`stopLoss` 是否可判定、`expected` 是否真可证伪**属语义判断，**由审查者把关，不依赖机器校验**。
 - 只对**新实验**硬拒；**legacy**：旧 `schema:1` 记录只读、不迁移、不补字段（数量以项目实测为准，不是通用值）。
-- **CLI flag（B2）**：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`；`exp update` 同名可选。`exp add` **不支持** `--id`（id 由 core 自动生成）。
-- 七字段落在实验记录（`experiments/E-*.json`）与实验简报（[assets/experiment-brief-template.md](assets/experiment-brief-template.md)）两处；插件侧校验以 `flow check experiments`（并入 release gate）兜底，落地前由中心与审查者把关。
+- **CLI flag（B2）**：`exp add` 必填 `--direction` / `--expected` / `--primary-metric` / `--guardrail`（可重复）/ `--falsify` / `--window-days` / `--stop-loss`；`exp update` 同名可选。`exp add` **可以**用 `--id E-YYYYMMDD-NN` 指定 id（省略则自动生成；格式非法或同秒冲突 → `invalid`，退出 2）。
+- 七字段落在实验记录（`.agents/experiments/E-*.json`）与实验简报（[assets/experiment-brief-template.md](assets/experiment-brief-template.md)）两处；插件侧校验以 `flow check experiments`（并入 release gate）兜底，落地前由中心与审查者把关。
 
 ### 12.3 结果分流（四分支，写死）
 

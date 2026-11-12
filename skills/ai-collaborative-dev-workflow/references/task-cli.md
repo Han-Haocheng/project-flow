@@ -10,10 +10,10 @@
 > 它有自己的 `.agents/taskbook/` 存储（**flow 插件不读这个目录**，见 §1），以及 `--fields`、
 > `task check --all-active`、`SYNC_MISSING` / `PREFLIGHT_PENDING` 等能力。
 >
-> **本插件 `bin/flow.mjs` 的 `flow task` 是另一套实现**，只有
-> `list|show|add|update|archive|normalize|rm` 七个动作：没有 `--fields`，没有 `task check`
+> **本插件 `bin/flow.mjs` 的 `flow task` 是另一套实现**，动作是
+> `list|show|add|update|next|verify|link|unlink|archive|sweep|normalize|rm` 十二个：没有 `--fields`，没有 `task check`
 > （`check` 属于 `flow check staged|…|tasks`），也没有 `SYNC_MISSING` / `PREFLIGHT_PENDING`
-> 这类错误码。对 `.agents/flow/` 台账做同类动作请用 `flow check tasks`（只读体检）与
+> 这类错误码。对 `.agents/tasks/` 台账做同类动作请用 `flow check tasks`（只读体检）与
 > `flow task normalize`（旧记录归一），见 `CONTRACT.md` §5.1。
 >
 > **引用本文时，不要把 `task ...` 原样敲成 `flow task ...`。**

@@ -213,14 +213,14 @@ git branch -d <branch>        # 未合并会被拒绝；-D 仅在确认丢弃时
 
 ## 8 台账、心跳与分支可见性
 
-- **台账真源在主工作区**：`.agents/flow/` 只在主工作区初始化与提交；工作树继承**已提交**的台账，**不要**在每个 worktree 重复 `flow init` 或另建 store。
+- **台账真源在主工作区**：`.agents/` **整目录不入 git**（`CONTRACT.md` §8）；worktree 会话一律读写主工作区的台账，不存在"继承已提交副本"这回事。**不要**在每个 worktree 重复 `flow init` 或另建 store。
 - **中心是唯一台账写者**：贡献者不 init、不建卡；确需更新状态时经中心，或显式 `flow --root <主工作区> ...`（且需中心同意）。
 - 心跳是运行态，可留在自己工作树；不得因心跳自动建卡，也不登记文件锁。
 - **分支不可见**：面板与工具面都看不到某会话在哪条分支 ⇒ 心跳 `last_action`、任务 `notes`、评审申请三处都写 `branch` + `worktree path` + `commit`。
 
 ### 8.1 项目任务 ↔ Team 任务映射（项目台账是 durable 真源）
 
-Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随会话消失；项目台账（`.agents/tasks/`，由 flow 插件写入）跨会话、跨工作树持久。两者只靠文本字段对接：
+Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随会话消失；项目台账（`.agents/tasks/`、`.agents/experiments/` 等记录目录，由 flow 插件写入；`.agents/flow/` 只有 `flow.json` + `logs/` + `.lock`）跨会话、跨工作树持久，且**不入 git**。两者只靠文本字段对接：
 
 协作技能自带的任务书另存 `.agents/taskbook/`，flow 插件不读它——不要把两者混用。
 
@@ -230,7 +230,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 | 角色标注 | Team 任务 `description` **第二行** | `role: analyst` / `role: implementer` / `role: reviewer`；实现者第三行 `domain: <path prefix>` | Lead 建卡时写 |
 | 写域 | Team 任务 `write_scopes` + 实现者 `domain:` | 两者一致；分析/审查卡只读、无写域 | Lead |
 | Team → 项目 | 项目任务 `notes` | `team: <taskId>`（可带 branch / commit / 验收结论；notes 覆盖式更新，保留原内容） | Lead（唯一台账写者） |
-| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；**只有已合并**才置 `done`，reject/放弃写原因后回 `active` 或 `archived` | Lead |
+| 状态 | Team `pending` / `in_progress` / `completed` | 项目 `draft` / `active` / `done`；Team `completed` = 该卡职责完成（实现卡待审、审查卡出结论），**只有中心合并后**才置项目 `done`；reject/放弃写原因后回 `active` 或 `archived` | Lead |
 | 证据 | 项目任务 `commits` | Lead 合并后回填合并提交与纳入的贡献提交 | Lead；队友不写 |
 
 - **禁止双写**：`status` / `commits` / 验收结论只以项目台账为权威值；Team 卡状态是执行视图，不复制一份进度叙事到项目 notes；Team 描述正文不重复台账字段。
@@ -239,7 +239,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 
 ### 8.2 会话结束前回收检查单（Lead 逐卡）
 
-- [ ] 每张 Team 任务都有结论：`completed`（已合并）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
+- [ ] 每张 Team 任务都有结论：`completed`（该卡职责完成）或 `release` / `reopen` + 原因；没有 `in_progress` 悬空
 - [ ] 每张卡有 `role:` 标注；实现卡另有 `domain:` 且与 `write_scopes` 一致；审查卡 `blocked_by` 实现卡、审查者≠实现者
 - [ ] 状态机对得上：`accepted → merged`；`reject` 先回分析者修订任务书再重做、`request-rebase` 回实现者只换 base，两者都有记录
 - [ ] 每个对应项目任务 notes 有 `team: <taskId>`，`status` / `commits` 已更新（未合并不得 done）
@@ -274,7 +274,7 @@ Agent Teams（`team_task_*`）的共享任务板只活 Lead 本次会话，随�
 | 实现者仍在主工作区改文件 | 中心代建了工作树（被切走 cwd 的是中心） | 让实现者自己 `create_worktree`；中心只给 name/base |
 | 申请里没有 branch/commit | 以为"面板能看到" | 面板看不到分支；按模板补齐 branch + path + commit |
 | 合并时发现改动没进分支 | 忘记 commit，改动只在工作树工作区 | 回分支 `git add` + commit 后重新申请；不得在主工作区补提 |
-| 贡献者分支里冒出第二个 `.agents/flow/` | 在分支里跑了 `flow init` | 确认无独有卡片后删掉该 store，改用 `--root <主工作区>` |
+| 工作树里冒出第二个 `.agents/flow/` | 在工作树里跑了 `flow init` | 确认无独有卡片后删掉该 store，改用 `--root <主工作区>` |
 | 工作树建在工作树里 | 贡献者继承了中心的工作树 cwd | 申请里写清绝对 path；下次从主工作区起步 |
 | 贡献者自己合并/推送了 | 把"申请"当成了"交付" | 停止后续操作、保留现场并上报；由中心评估是否回退 |
 | 申请被 request-rebase 后只回一句"好了" | 没重填 base/commits | 重新提交完整申请，baseCommit 与 commits 必须是 rebase 后的 |
