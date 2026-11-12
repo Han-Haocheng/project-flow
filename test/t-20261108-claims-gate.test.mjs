@@ -771,3 +771,106 @@ test('aspect 锁⑥：续租延长租约；非占用方不能续租/释放（for
     assert.equal(forced.released, true)
   })
 })
+
+// ------------------------- aspect 定义读取 / 任务接入 / CLI（T-20261112183138 续）
+
+function writeAspectDocs(root, aspects) {
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify({ schema: 1, aspects }, null, 2))
+}
+
+const aspectModule = await import('../lib/host/aspect-lock.mjs')
+const { readAspectDefinitions, aspectsForFiles, releaseAspectLocksForSession, acquireTaskAspects } = aspectModule
+const { cmdAspect } = await import('../lib/cli/aspect.mjs')
+
+test('aspect 定义：只读解析 docs/module-domain.json，文件域交集按双向前缀匹配', async () => {
+  const { root, contract } = freshProject('aspect-defs')
+  const empty = readAspectDefinitions(root)
+  assert.deepEqual(empty.aspects, {}, '没有文档 → 空表（接入 no-op）')
+  assert.equal(empty.source, null)
+  writeAspectDocs(root, {
+    'state-machine': { title: '状态机', ownerRole: 'tasks-owner', files: ['lib/stage.mjs', 'lib/tasks/'] },
+    'contract-text': { title: '契约正文', files: ['CONTRACT.md'] },
+  })
+  const defs = readAspectDefinitions(root)
+  assert.deepEqual(Object.keys(defs.aspects).sort(), ['contract-text', 'state-machine'])
+  assert.equal(defs.source, 'docs/module-domain.json')
+  const hits = aspectsForFiles(defs, ['lib/stage.mjs', 'lib/tasks/records.mjs'])
+  assert.deepEqual(hits.map((hit) => hit.id), ['state-machine'])
+  assert.deepEqual(aspectsForFiles(defs, ['CONTRACT.md']).map((hit) => hit.id), ['contract-text'])
+  assert.deepEqual(aspectsForFiles(defs, []), [], '空 scope.allow → 不命中任何 aspect')
+  assert.deepEqual(aspectsForFiles(defs, ['docs/']), [], '无关文件 → 不命中')
+  void contract
+})
+
+test('aspect ⑥b：占用方异常退出（没走 disposed）→ 租约 TTL 回收', async () => {
+  await withFlowProject('aspect-abnormal', async ({ root, contract }) => {
+    await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-aspect-crashed', ttlSeconds: 1 })
+    const held = listAspectLocks(root, contract)
+    assert.equal(held.items[0].state, 'held')
+    // 没走 agent/disposed 的异常退出：只能等租约到期，由 sweep（agent/created 会调）回收。
+    const swept = sweepAspectLocks(root, contract, { now: Date.now() + 60_000 })
+    assert.deepEqual(swept.released.map((item) => item.aspect), ['state-machine'])
+    assert.equal(swept.released[0].state, 'expired')
+    assert.equal(listAspectLocks(root, contract).counts.total, 0)
+  })
+})
+
+test('aspect ⑦：releaseAspectLocksForSession 只释放该会话自己的锁（disposed 路径）', async () => {
+  await withFlowProject('aspect-session-release', async ({ root, contract }) => {
+    await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-a' })
+    await acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-a' })
+    await acquireAspectLock(root, contract, { aspect: 'contract-text', session: 'session-b' })
+    const released = releaseAspectLocksForSession(root, contract, 'session-a')
+    assert.deepEqual(released.released.sort(), ['liveness', 'state-machine'])
+    const left = listAspectLocks(root, contract)
+    assert.equal(left.counts.total, 1)
+    assert.equal(left.items[0].owner.session, 'session-b')
+  })
+})
+
+test('aspect ⑧：acquireTaskAspects 按任务 scope.allow 占用，空 scope 不占用', async () => {
+  await withFlowProject('aspect-task', async ({ root, contract }) => {
+    writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+    const covered = await acquireTaskAspects(root, contract, {
+      task: { id: 'T-1', scope: { allow: ['lib/stage.mjs'] } },
+      session: 'session-task-a',
+      waitMs: 0,
+    })
+    assert.deepEqual(covered.acquired, ['state-machine'])
+    assert.deepEqual(covered.pending, [])
+    assert.equal(listAspectLocks(root, contract).counts.held, 1)
+    const empty = await acquireTaskAspects(root, contract, {
+      task: { id: 'T-2', scope: { allow: [] } },
+      session: 'session-task-b',
+      waitMs: 0,
+    })
+    assert.equal(empty.skipped, 'no-aspect-overlap', '空 scope 是 no-op（多数卡如此，可接受）')
+    assert.deepEqual(empty.acquired, [])
+    const noSession = await acquireTaskAspects(root, contract, { task: { scope: { allow: ['lib/stage.mjs'] } } })
+    assert.equal(noSession.skipped, 'no-session')
+  })
+})
+
+test('aspect CLI：list/acquire/release 走真实命令实现（--ttl 秒 / --wait 毫秒）', async () => {
+  const { root, contract } = freshProject('aspect-cli')
+  writeAspectDocs(root, { 'state-machine': { title: '状态机', files: ['lib/stage.mjs'] } })
+  const core = { loadContract }
+  const makeCtx = (flags) => ({ core, root, flags, json: false, contract: null, contractRoot: null })
+  // acquire：--ttl 单位是秒。
+  const acquired = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli', ttl: '120' }), 'acquire')
+  assert.equal(acquired.acquired, true)
+  assert.equal(acquired.lock.owner.session, 'session-cli')
+  assert.equal(acquired.lock.ttlSeconds, 120)
+  assert.deepEqual(acquired.lock.files, ['lib/stage.mjs'], 'files 从 aspect 定义补全')
+  // list：能看到定义 + 占用。
+  const listed = await cmdAspect(makeCtx({}), 'list')
+  assert.equal(listed.counts.aspects, 1)
+  assert.equal(listed.locks.length, 1)
+  assert.equal(listed.aspects[0].id, 'state-machine')
+  // release。
+  const released = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli' }), 'release')
+  assert.equal(released.released, true)
+  assert.equal(listAspectLocks(root, contract).counts.total, 0)
+  void contract
+})

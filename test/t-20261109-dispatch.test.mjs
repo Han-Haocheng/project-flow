@@ -1185,3 +1185,78 @@ test('saga intent ②：spawn 成功后写回执被 CAS 拦住 → intent 留在
   assert.match(after.notes, /他人写入/, '恢复不得覆盖他人写入的 notes')
   assert.equal(after.stage, 'done', '恢复不得改阶段')
 })
+
+// ------------------------- 派工入口的 aspect 自动串行（T-20261112183138 裁定 6）
+//
+// 放行 queued-* 时按任务 scope.allow 与 docs/module-domain.json 的 aspects.files 求交集，
+// 自动占用相关 aspect；有界排队（config.aspectLock.waitMs，缺省 1500ms）；等不到**不阻断**，
+// 结果与 warning 里都能看见 pending（谁在占、等了多久）。
+
+const { acquireAspectLock, listAspectLocks } = await import('../lib/host/aspect-lock.mjs')
+
+function writeAspectDocs(root, aspects) {
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify({ schema: 1, aspects }, null, 2))
+}
+
+test('aspect 接入①：任务显式 scope.allow 命中 aspect → 派工时自动占用并串行', async () => {
+  const { root, contract } = freshProject('aspect-dispatch-ok')
+  writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: 'aspect 串行任务',
+    stage: 'queued-review',
+    scope: { allow: ['lib/stage.mjs'] },
+  })
+  const subagents = fakeSubagents()
+  const { deps } = recordDeps(root, contract, subagents, task)
+  const result = await dispatchTaskRecord({ ...deps, config: { aspectLock: { waitMs: 0 } } })
+  assert.equal(result.task.stage, 'reviewing')
+  assert.ok(result.dispatch.aspect, '派工结果必须带 aspect（additive 字段）')
+  assert.deepEqual(result.dispatch.aspect.acquired, ['state-machine'])
+  assert.deepEqual(result.dispatch.aspect.pending, [])
+  const locks = listAspectLocks(root, contract)
+  assert.equal(locks.counts.held, 1)
+  assert.equal(locks.items[0].aspect, 'state-machine')
+  assert.equal(locks.items[0].owner.session, deps.agent.id)
+})
+
+test('aspect 接入②：aspect 被别的活会话占着 → 不阻断派工，pending + warning 可见（空 scope 不占用）', async () => {
+  const { root, contract } = freshProject('aspect-dispatch-pending')
+  writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+  // 另一个活会话先占住 state-machine。
+  await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-aspect-holder' })
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '撞 aspect 的卡',
+    stage: 'queued-review',
+    scope: { allow: ['lib/stage.mjs'] },
+  })
+  const subagents = fakeSubagents()
+  const { deps } = recordDeps(root, contract, subagents, task)
+  drainWarnings()
+  const result = await dispatchTaskRecord({ ...deps, config: { aspectLock: { waitMs: 0 } } })
+  assert.equal(result.task.stage, 'reviewing', '裁定 6：等不到锁也放行派工')
+  assert.deepEqual(result.dispatch.aspect.acquired, [])
+  assert.equal(result.dispatch.aspect.pending.length, 1)
+  assert.equal(result.dispatch.aspect.pending[0].aspect, 'state-machine')
+  assert.equal(result.dispatch.aspect.pending[0].holder, 'session-aspect-holder')
+  assert.ok(
+    drainWarnings().some((line) => /aspect-pending: state-machine（占用方 session-aspect-holder）/.test(line)),
+    'pending 不能静默：至少一条 warning 让人看见在等谁',
+  )
+  assert.equal(subagents.calls.length, 1, '子代理照样起——锁是串行提示，不是审批')
+})
+
+test('aspect 接入③：空 scope.allow 是 no-op（不占用、不影响派工）', async () => {
+  const { root, contract } = freshProject('aspect-dispatch-empty')
+  writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
+  const task = addTask(root, contract, { type: 'docs', title: '没有 scope 的卡', stage: 'queued-review' })
+  const subagents = fakeSubagents()
+  const { deps } = recordDeps(root, contract, subagents, task)
+  const result = await dispatchTaskRecord({ ...deps, config: { aspectLock: { waitMs: 0 } } })
+  assert.equal(result.dispatch.aspect.skipped, 'no-aspect-overlap')
+  assert.deepEqual(result.dispatch.aspect.acquired, [])
+  assert.equal(listAspectLocks(root, contract).counts.total, 0)
+  assert.equal(result.task.stage, 'reviewing')
+})
