@@ -880,28 +880,38 @@ test('aspect CLI：list/acquire/release 走真实命令实现（--ttl 秒 / --wa
   void contract
 })
 
-test('aspect CLI：命令入口惰性清扫死锁（CLI 场景没有 agent/created 也不留死锁）', async () => {
+test('aspect CLI：命令入口惰性清扫死锁（无死锁时零写盘，有才写）', async () => {
   const { root, contract } = freshProject('aspect-cli-sweep')
   writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
   const core = { loadContract }
   const makeCtx = (flags) => ({ core, root, flags, json: false, contract: null, contractRoot: null })
-  await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-dead', ttl: '60' }), 'acquire')
+  const acquire = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-dead', ttl: '60' }), 'acquire')
+  assert.equal(acquire.acquired, true)
+  // 正常路径：没有可回收的锁 → list 不做任何清扫（面板 2.5s 轮询不该每轮拿写锁）。
+  const clean = await cmdAspect(makeCtx({}), 'list')
+  assert.equal(clean.swept, undefined)
   // 把续期时间改成两小时前 = 租约过期（模拟占用方异常退出、没走 disposed）。
   const lockFile = path.join(root, '.agents', 'aspect-locks', 'state-machine.json')
   const record = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
   record.owner.renewed_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
   fs.writeFileSync(lockFile, JSON.stringify(record, null, 2))
+  // 有可回收锁：list 入口真的清扫它。
   const listed = await cmdAspect(makeCtx({}), 'list')
   assert.deepEqual(listed.swept, ['state-machine'], 'list 入口惰性清扫过期锁')
   assert.equal(listed.locks.length, 0)
-  // acquire 入口同样先清扫：死锁不该挡住新占用。
-  fs.writeFileSync(lockFile, JSON.stringify({ ...record, owner: { ...record.owner, renewed_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString() } }, null, 2))
-  const acquired = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-next' }), 'acquire')
-  assert.equal(acquired.acquired, true)
-  assert.equal(acquired.lock.owner.session, 'session-cli-next')
+  // 清扫完再 list：无事可做 → 不再返回 swept。
+  const again = await cmdAspect(makeCtx({}), 'list')
+  assert.equal(again.swept, undefined)
+  // acquire 入口同样先判断/清扫：死锁不会挡住新占用。
+  await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-dead', ttl: '60' }), 'acquire')
+  const again2 = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
+  again2.owner.renewed_at = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+  fs.writeFileSync(lockFile, JSON.stringify(again2, null, 2))
+  const reclaimed = await cmdAspect(makeCtx({ aspect: 'state-machine', session: 'session-cli-next' }), 'acquire')
+  assert.equal(reclaimed.acquired, true)
+  assert.equal(reclaimed.lock.owner.session, 'session-cli-next')
   void contract
 })
-
 test('aspect：force 释放必须给 reason，并写审计日志（谁/为什么）', async () => {
   const { root, contract } = freshProject('aspect-force-audit')
   writeAspectDocs(root, { 'state-machine': { files: ['lib/stage.mjs'] } })
@@ -932,4 +942,22 @@ test('aspect：force 释放必须给 reason，并写审计日志（谁/为什么
   assert.match(log.entries[0].reason, /手工回收/)
   assert.equal(log.entries[0].forced, true)
   void contract
+})
+
+test('aspect 租约：turn-stopping 级别的整会话续租（停止续期 = 放弃）', async () => {
+  await withFlowProject('aspect-session-renew', async ({ root, contract }) => {
+    const module = await import('../lib/host/aspect-lock.mjs')
+    const { renewAspectLocksForSession, sweepAspectLocks } = module
+    await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-r', ttlSeconds: 600 })
+    await acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-r', ttlSeconds: 600 })
+    await acquireAspectLock(root, contract, { aspect: 'contract-text', session: 'session-other', ttlSeconds: 60 })
+    const renewed = renewAspectLocksForSession(root, contract, 'session-r')
+    assert.deepEqual(renewed.renewed.sort(), ['liveness', 'state-machine'], '只续租本会话的锁')
+    // 现在 +120s：续租过的（TTL 600）不该过期，没续租的（session-other，TTL 60）应当过期可回收。
+    const future = Date.now() + 120 * 1000
+    const swept = sweepAspectLocks(root, contract, { now: future })
+    assert.deepEqual(swept.released.map((item) => item.aspect), ['contract-text'])
+    assert.deepEqual(swept.kept.map((item) => item.aspect).sort(), ['liveness', 'state-machine'])
+    assert.deepEqual(renewAspectLocksForSession(root, contract, 'session-nobody').renewed, [])
+  })
 })
