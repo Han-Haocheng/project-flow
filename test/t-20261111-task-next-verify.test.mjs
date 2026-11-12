@@ -28,7 +28,7 @@ import {
   loadContract,
   updateTask,
 } from '../lib/core.mjs'
-import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, edgeDoctrineKey, stageNextStep } from '../lib/stage.mjs'
+import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, actorForEdge, edgeDoctrineKey, edgeOf, stageNextStep } from '../lib/stage.mjs'
 import { acceptancePlan, recordTaskVerification, verificationStateOf } from '../lib/tasks/records.mjs'
 import { vetoSubtask } from '../lib/veto.mjs'
 
@@ -95,7 +95,11 @@ test('doctrine：每条合法边都有动作/验证说明，且没有幽灵键',
     for (const edge of node.next) edges.push(edgeDoctrineKey(stage, edge))
   }
   // 正例守护：边表真的读到了，否则下面的集合比较会假绿。
-  assert.equal(edges.length, 11, `边表应有 11 条边（含汇总轮 analyzing>done），实际 ${edges.length}`)
+  assert.equal(
+    edges.length,
+    12,
+    `边表应有 12 条边（含 analyzing>done 汇总收口与 implementing>queued-analysis:aggregateRound 汇总回边），实际 ${edges.length}`,
+  )
   const declared = Object.keys(STAGE_EDGE_DOCTRINE)
   assert.deepEqual(
     [...declared].sort(),
@@ -116,7 +120,14 @@ test('stageNextStep：单出边直给；reviewing 的两条边分主推荐/回�
   assert.equal(implementing.primary.stage, 'queued-review')
   assert.equal(implementing.primary.actor, 'session')
   assert.equal(implementing.primary.back, false)
-  assert.deepEqual(implementing.alternatives, [])
+  // T-20261112151356：主推荐仍是实现收口；汇总回边作为备选（插件推进）出现。
+  assert.deepEqual(
+    implementing.alternatives.map((row) => ({ stage: row.stage, actor: row.actor, back: row.back, key: row.key })),
+    [{ stage: 'queued-analysis', actor: 'plugin', back: false, key: 'aggregateRound' }],
+  )
+  assert.match(implementing.alternatives[0].action, /汇总/)
+  assert.match(implementing.alternatives[0].action, /done\/archived/)
+  assert.equal(implementing.alternatives[0].verify, null, '汇总回边由插件推进，没有人的验证命令')
   assert.match(implementing.primary.command, /flow task update \{id\} --stage queued-review/)
   assert.match(implementing.primary.verify, /flow task verify \{id\}/)
 
@@ -131,6 +142,34 @@ test('stageNextStep：单出边直给；reviewing 的两条边分主推荐/回�
   assert.equal(archived.terminal, true)
   assert.equal(archived.primary, null)
   assert.deepEqual(archived.alternatives, [])
+})
+
+test('汇总回边：边/actor/doctrine 齐备，且它不是打回边', () => {
+  // T-20261112151356：声明的是写入层早已在走的边（implementing → queued-analysis）。
+  const edge = edgeOf('implementing', 'queued-analysis')
+  assert.ok(edge !== null, '汇总回边必须存在')
+  assert.equal(edge.key, 'aggregateRound')
+  assert.equal(edge.actorOverride, true, '阶段默认 actor 是 session，汇总回边必须显式覆盖')
+  assert.equal(edge.back, undefined, '汇总回边不是审查打回边')
+  assert.equal(actorForEdge('implementing', 'queued-analysis'), 'plugin')
+  assert.ok(STAGE_MACHINE['queued-analysis'].from.includes('implementing'), '逆向声明必须同步')
+  // doctrine：谁推 + 条件 + 未满足时的行为，必须写清（verify 为 null = 插件自动推进）
+  const doctrine = STAGE_EDGE_DOCTRINE['implementing>queued-analysis:aggregateRound']
+  assert.equal(typeof doctrine, 'object')
+  assert.match(doctrine.action, /插件/, '必须写明谁推')
+  assert.match(doctrine.action, /汇总/)
+  assert.match(doctrine.action, /done\/archived|未终态/)
+  assert.equal(doctrine.verify, null)
+})
+
+test('task next：implementing 的备选行是汇总回边（插件/汇总轮），主推荐不变', () => {
+  const { root, contract } = freshProject('next-aggregate')
+  const task = addTask(root, contract, { type: 'feat', title: '实现中', stage: 'implementing' })
+  const result = runCli(root, ['task', 'next', task.id])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.match(result.stdout, /下一步  → 待审查（queued-review）  session/, '主推荐仍是实现收口')
+  assert.match(result.stdout, /备选    → 待分析（queued-analysis）  plugin/)
+  assert.match(result.stdout, /汇总/)
 })
 
 test('stageNextStep：未知阶段抛 invalid 并列出九个 id', () => {

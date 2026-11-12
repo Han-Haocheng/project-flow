@@ -18,6 +18,7 @@ import {
   STAGE_MACHINE,
   STAGE_ZH,
   actorForEdge,
+  aggregateGateReason,
   assertTransition,
   canTransition,
   edgeOf,
@@ -146,7 +147,10 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
   // T-20261111170544：汇总轮新增 analyzing → done（子任务全部完成后分析者收口）。
   assert.deepEqual(nextStages('analyzing'), ['queued-implementation', 'done'])
   assert.deepEqual(nextStages('queued-implementation'), ['implementing'])
-  assert.deepEqual(nextStages('implementing'), ['queued-review'])
+  // T-20261112151356：implementing 增汇总回边（子任务全终态后由插件聚合回待分析）。
+  assert.deepEqual(nextStages('implementing'), ['queued-review', 'queued-analysis'])
+  // 汇总回边的逆向声明：queued-analysis.from 必须含 implementing（不变式 ①）
+  assert.ok(STAGE_MACHINE['queued-analysis'].from.includes('implementing'))
   assert.deepEqual(nextStages('queued-review'), ['reviewing'])
   assert.deepEqual(nextStages('reviewing'), ['done', 'queued-implementation'])
   assert.deepEqual(nextStages('done'), ['archived'])
@@ -225,7 +229,7 @@ test('② canTransition：相邻边可走，跳级/终态/非法 id 不可走，
 
 // ------------------------------------------- 3. 唯一后退边必须被认可（且唯一）
 
-test('③ reviewing → queued-implementation 是唯一后退边，必须被 canTransition 认可', () => {
+test('③ 结构上的后退边：reviewing 打回 + implementing 汇总回边；back 标记仍只有一条', () => {
   const order = new Map(STAGE_IDS.map((id, index) => [id, index]))
   const forward = []
   const backward = []
@@ -234,7 +238,13 @@ test('③ reviewing → queued-implementation 是唯一后退边，必须被 can
       ;(order.get(nextId) > order.get(id) ? forward : backward).push(`${id} → ${nextId}`)
     }
   }
-  assert.deepEqual(backward, ['reviewing → queued-implementation'], '后退边必须恰好一条')
+  // T-20261112151356：结构上的后退边有两条，但**打回边**（back:true）仍只有一条。
+  assert.deepEqual(
+    backward,
+    ['implementing → queued-analysis', 'reviewing → queued-implementation'],
+    '结构后退边必须恰好这两条',
+  )
+  assert.equal(edgeOf('implementing', 'queued-analysis').back, undefined, '汇总回边不是打回边')
   assert.ok(forward.length >= 7, `前向边应有 7 条以上，实际 ${forward.length}`)
   // 唯一后退边必须真的可走（打回路径），且仍可前进到 done（通过路径）
   assert.equal(canTransition('reviewing', 'queued-implementation'), true, '审查打回必须被认可')
@@ -388,8 +398,9 @@ test('⑦ 非法 stage：invalid 且文案列出九值；CLI 的 invalid 映射�
 // 行为不变由第 ⑫ 条的 9×9 矩阵锁死——任何"大部分对、个别边悄悄变了"都会红。
 
 /**
- * 全部 11 条边（顺序即方案 §4 的表序；新增两条：
- * `analyzing → done` 汇总收口、`queued-analysis → analyzing{key:normalizeTask}` 汇总轮入口）。
+ * 全部 12 条边（顺序即方案 §4 的表序；新增三条：
+ * `analyzing → done` 汇总收口、`queued-analysis → analyzing{key:normalizeTask}` 汇总轮入口、
+ * `implementing → queued-analysis{key:aggregateRound}` 汇总回边 T-20261112151356）。
  */
 const EDGES = [
   { from: 'created', to: 'queued-analysis', actor: 'plugin', back: undefined },
@@ -402,13 +413,16 @@ const EDGES = [
   { from: 'analyzing', to: 'done', actor: 'session', back: undefined },
   { from: 'queued-implementation', to: 'implementing', actor: 'plugin', back: undefined },
   { from: 'implementing', to: 'queued-review', actor: 'session', back: undefined },
+  // T-20261112151356：汇总回边（插件在子任务全终态后聚合父卡回待分析）。
+  // actorOverride：阶段默认 actor 是 session，这条边由插件记账，显式覆盖。
+  { from: 'implementing', to: 'queued-analysis', actor: 'plugin', back: undefined, key: 'aggregateRound' },
   { from: 'queued-review', to: 'reviewing', actor: 'plugin', back: undefined },
   { from: 'reviewing', to: 'done', actor: 'reviewer', back: undefined },
   { from: 'reviewing', to: 'queued-implementation', actor: 'reviewer', back: true },
   { from: 'done', to: 'archived', actor: 'plugin', back: undefined },
 ]
 
-test('⑧ 边表逐项：11 条边的 {from, to, actor} 与方案 §4 表一致', () => {
+test('⑧ 边表逐项：12 条边的 {from, to, actor} 与方案 §4 表一致', () => {
   for (const edge of EDGES) {
     const node = STAGE_MACHINE[edge.from]
     // 同目标边靠 `key` 区分：没有 key 的行必须命中**不带 key** 的那条边。
@@ -416,9 +430,11 @@ test('⑧ 边表逐项：11 条边的 {from, to, actor} 与方案 §4 表一致'
     assert.ok(found, `${edge.from} → ${edge.to} 边不见了`)
     assert.equal(found.actor, edge.actor, `${edge.from} → ${edge.to} 的 actor 错了`)
   }
-  // 边总数 = 11（没有多出来的边）
+  // 边总数 = 12（没有多出来的边）
   const total = STAGE_IDS.reduce((sum, id) => sum + STAGE_MACHINE[id].next.length, 0)
-  assert.equal(total, EDGES.length, '边总数必须恰好 11 条（10 条阶段推进 + done→archived）')
+  assert.equal(total, EDGES.length, '边总数必须恰好 12 条（11 条阶段推进 + done→archived）')
+  // 汇总回边不是回退边（back 仍由 ⑨ 锁死为唯一一条）
+  assert.equal(edgeOf('implementing', 'queued-analysis').back, undefined)
 })
 
 test('⑨ back 标记：恰好一条，且就是 reviewing → queued-implementation', () => {
@@ -449,7 +465,7 @@ test('⑩ nextStages 是边表的投影，不是第二份数组', () => {
   assert.deepEqual(nextStages('archived'), [], '终态没有后继')
 })
 
-test('⑪ actorForEdge：11 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
+test('⑪ actorForEdge：12 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
   for (const edge of EDGES) {
     assert.equal(actorForEdge(edge.from, edge.to), edge.actor, `${edge.from} → ${edge.to}`)
   }
@@ -473,7 +489,7 @@ test('⑫ canTransition 零行为变更：9×9 全组合与硬编码真值表逐
     [false, true,  true,  false, false, false, false, false, false], // queued-analysis
     [false, false, true,  true,  false, false, false, true,  false], // analyzing（拆任务 + 汇总收口）
     [false, false, false, true,  true,  false, false, false, false], // queued-implementation
-    [false, false, false, false, true,  true,  false, false, false], // implementing
+    [false, true,  false, false, true,  true,  false, false, false], // implementing（收口 + 汇总回边）
     [false, false, false, false, false, true,  true,  false, false], // queued-review
     [false, false, false, true,  false, false, true,  true,  false], // reviewing（打回 + 通过）
     [false, false, false, false, false, false, false, true,  true ], // done
@@ -521,7 +537,55 @@ test('⑭ 不变式：每条边的 actor 等于其阶段默认 actor（显式覆
     `边的 actor 与阶段默认 actor 不一致：${offenders.join('; ')}。` +
       '若要给某条边单独开特权，请同时决定阶段级 actor 是否同步（或用 actorOverride: true 显式覆盖）。',
   )
-  // 今天没有任何边走覆盖：一旦有人加了 actorOverride，这条会提醒去更新上面的不变式
-  const overrides = STAGE_IDS.flatMap((id) => STAGE_MACHINE[id].next.filter((edge) => edge.actorOverride === true))
-  assert.deepEqual(overrides, [], '今天不应存在 actorOverride（出现了就要把不变式的旁路也一起改）')
+  // 有且仅有一条显式覆盖：implementing 的汇总回边（T-20261112151356，插件记账）。
+  const overrides = STAGE_IDS.flatMap((id) =>
+    STAGE_MACHINE[id].next.filter((edge) => edge.actorOverride === true).map((edge) => `${id} → ${edge.to}:${edge.key}`),
+  )
+  assert.deepEqual(
+    overrides,
+    ['implementing → queued-analysis:aggregateRound'],
+    '今天只应有汇总回边一条 actorOverride（再出现就要把不变式的旁路也一起改）',
+  )
+})
+
+// ------------------------------- ⑮ 汇总回边的判定（纯函数：父卡 implementing 才生效）
+
+test('⑮ aggregateGateReason：子任务未全终态拒绝并点名；全终态放行；非 implementing 恒 null', () => {
+  // 全终态（done / archived 都算）→ 放行
+  assert.equal(aggregateGateReason({ parentStage: 'implementing', childStages: [{ id: 'T-1', stage: 'done' }] }), null)
+  assert.equal(
+    aggregateGateReason({ parentStage: 'implementing', childStages: [{ id: 'T-1', stage: 'archived' }, { id: 'T-2', stage: 'done' }] }),
+    null,
+  )
+  // 有未终态 → 拒绝，文案点名子卡 id 与阶段，并指向 done/archived 与 flow task next
+  const reason = aggregateGateReason({
+    parentStage: 'implementing',
+    childStages: [{ id: 'T-20260101-02', stage: 'queued-review' }, { id: 'T-20260101-03', stage: 'done' }],
+  })
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /T-20260101-02/, '未终态子卡的 id 必须被点名')
+  assert.match(reason, /queued-review/)
+  assert.match(reason, /done\/archived/)
+  assert.match(reason, /flow task next/)
+  assert.equal(reason.includes('T-20260101-03'), false, '已终态的子卡不该被点名')
+  // 阶段字符串（无 id）也接受，且仍能指出是哪一条
+  const byStage = aggregateGateReason({ parentStage: 'implementing', childStages: ['done', 'implementing'] })
+  assert.equal(typeof byStage, 'string')
+  assert.match(byStage, /implementing/)
+  // 没有子任务：不是汇总轮父卡，拒绝并指向正常收口边
+  const leaf = aggregateGateReason({ parentStage: 'implementing', childStages: [] })
+  assert.equal(typeof leaf, 'string')
+  assert.match(leaf, /queued-review/)
+  // 只有 implementing 受这条边约束；其它阶段恒放行
+  for (const stage of ['analyzing', 'queued-review', 'reviewing', 'done', 'created']) {
+    assert.equal(
+      aggregateGateReason({ parentStage: stage, childStages: [{ id: 'T-1', stage: 'implementing' }] }),
+      null,
+      `${stage} 不该被汇总回边判定拦住`,
+    )
+  }
+  // 脏输入不抛：缺参/非数组都按"没有子任务"处理
+  assert.equal(aggregateGateReason({}), null, '缺 parentStage 不拦')
+  assert.equal(typeof aggregateGateReason({ parentStage: 'implementing', childStages: 'nope' }), 'string')
+  assert.equal(aggregateGateReason(null), null)
 })
