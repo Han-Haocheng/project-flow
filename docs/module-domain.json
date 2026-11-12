@@ -7,6 +7,161 @@
     "tests = 测试归属：测试跟着被测模块走，不跟着目录走",
     "sections 的 from/to 是文件内一字不差的锚点行；verify 会检查锚点存在、唯一、顺序正确"
   ],
+  "roles": {
+    "tasks-owner": {
+      "title": "任务域负责人",
+      "semantics": "负责九阶段状态机与任务记录的合法迁移：任何写 stage 的路径都必须过同一处校验。",
+      "modules": [
+        "tasks"
+      ]
+    },
+    "heartbeats-owner": {
+      "title": "心跳域负责人",
+      "semantics": "负责心跳存活判定口径：面板、任务活锁与 claims 的「活」都从这一处读。",
+      "modules": [
+        "heartbeats"
+      ]
+    },
+    "store-owner": {
+      "title": "存储域负责人",
+      "semantics": "负责写盘原子性、文件锁与记录契约：CAS / 补偿不得绕过这一层。",
+      "modules": [
+        "store"
+      ]
+    },
+    "docs-owner": {
+      "title": "文档域负责人",
+      "semantics": "负责契约正文、README 与技能文档的同一套口径，改一处必须同步另一处。",
+      "modules": [
+        "docs"
+      ]
+    }
+  },
+  "aspects": {
+    "state-machine": {
+      "title": "任务状态机",
+      "semantics": "任务只能沿九阶段的合法边迁移；任何写 stage 的路径都必须过同一处校验。",
+      "ownerRole": "tasks-owner",
+      "files": [
+        "lib/stage.mjs",
+        "lib/tasks/records.mjs",
+        "lib/state-snapshot.mjs",
+        "CONTRACT.md",
+        "client.js"
+      ],
+      "rationale": "已有 t-20261107-stage-machine 与 t-20261107-status-accuracy 两条守卫；跨 tasks/panel 两个模块；漏了会写坏任务台账（正确性事故）。"
+    },
+    "liveness": {
+      "title": "存活判定",
+      "semantics": "心跳存活判定决定面板、任务与 claims 的「活」与「死」，只有一套口径。",
+      "ownerRole": "heartbeats-owner",
+      "files": [
+        "lib/heartbeats/records.mjs",
+        "lib/host/session.mjs",
+        "lib/state-snapshot.mjs",
+        "lib/cli/heartbeat.mjs",
+        "client.js"
+      ],
+      "rationale": "已有 t-20261104-10-heartbeat-liveness 与 t-20261107-heartbeat-keepalive 两条守卫；跨 heartbeats/host/panel 三个模块；判错会把死会话当活、把活会话当死（正确性事故）。"
+    },
+    "contract-text": {
+      "title": "契约正文口径",
+      "semantics": "契约正文、README、技能文档与写域文档是同一套口径，改一处必须同步另一处。",
+      "ownerRole": "docs-owner",
+      "files": [
+        "CONTRACT.md",
+        "README.md",
+        "docs/module-domain.json",
+        "docs/module-boundaries.md",
+        "skills/ai-collaborative-dev-workflow/SKILL.md"
+      ],
+      "rationale": "已有 t-20261106-doc-drift、t-20261107-collab-skill-scope、t-20261107-module-map-drift 三条守卫；跨 docs/framework 两个模块；口径分叉会让协作者按错的契约提交（正确性事故）。"
+    },
+    "concurrency": {
+      "title": "并发与写盘原子性",
+      "semantics": "所有写盘走同一把锁与原子写；CAS / 补偿不得绕过这一层。",
+      "ownerRole": "store-owner",
+      "files": [
+        "lib/lock.mjs",
+        "lib/atomic.mjs",
+        "lib/store/records.mjs",
+        "lib/store/contract.mjs",
+        "lib/backup.mjs",
+        "lib/tasks/records.mjs"
+      ],
+      "rationale": "已有 test/concurrency.test.mjs、test/lock.test.mjs 与 t-20261111-04-task-cas-core 三条守卫；跨 store/tasks/backup 三个模块；漏了会静默丢写或写坏台账（正确性事故）。"
+    }
+  },
+  "unmanaged": [
+    {
+      "path": ".selftest/client-poll.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/client-registration.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/client-render.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/harness.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/host2-tools.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/root-explicit.mjs",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-broken.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-fake.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-init.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-no-project.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-not-initialized.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-store.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".selftest/state-unknown-root.json",
+      "reason": "宿主 / 浏览器自测探针：不是模块产物，由 framework 会话手工维护"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "reason": "CI 定义：仓库级元数据，不属于任何模块写域，改动需用户批准"
+    },
+    {
+      "path": ".gitignore",
+      "reason": "仓库元数据：忽略规则，跨模块"
+    },
+    {
+      "path": "LICENSE",
+      "reason": "许可证：仓库元数据"
+    },
+    {
+      "path": "icon.svg",
+      "reason": "图标资源：仓库元数据"
+    }
+  ],
   "modules": {
     "framework": {
       "title": "框架 / Host 装配",
@@ -37,6 +192,9 @@
         "lib/core.mjs": [
           "aggregate"
         ],
+        "index.js": [
+          "entry"
+        ],
         "bin/flow.mjs": [
           "entry"
         ],
@@ -45,6 +203,16 @@
         ],
         "CONTRACT.md": [
           "c1.1"
+        ],
+        "lib/host/shared.mjs": [
+          "workspace",
+          "http"
+        ],
+        "lib/host/session.mjs": [
+          "switches"
+        ],
+        "lib/host/enforce.mjs": [
+          "enforce"
         ]
       },
       "tests": [
@@ -55,8 +223,11 @@
         "test/t-20261107-no-literal-order.test.mjs",
         "test/t-20261107-enforce.test.mjs",
         "test/t-20261108-reminder.test.mjs",
-        "test/t-20261108-claims-gate.test.mjs"
-      ]
+        "test/t-20261108-claims-gate.test.mjs",
+        "test/t-20261112-module-aspects.test.mjs",
+        "test/t-20261112-module-owners.test.mjs"
+      ],
+      "semantics": "Host 装配：apply、路由、工具/技能/提示注册、权限面、子插件入口与清单。"
     },
     "store": {
       "title": "存储基础（契约骨架 / 锁 / 原子写 / 路径 / 进程）",
@@ -79,7 +250,8 @@
         "test/t-20261104-12-review-core.test.mjs",
         "test/t-20261030-09-win-compat.test.mjs",
         "test/t-20261109-worktree-store.test.mjs"
-      ]
+      ],
+      "semantics": "存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树。"
     },
     "tasks": {
       "title": "任务模块（任务 CRUD / 九阶段状态机 / 捕获 / 子任务 / 团队板对账）",
@@ -102,6 +274,9 @@
         "lib/host/team.mjs"
       ],
       "sections": {
+        "lib/core.mjs": [
+          "aggregate"
+        ],
         "lib/state-snapshot.mjs": [
           "snapshot-tasks"
         ],
@@ -116,6 +291,9 @@
         ],
         "lib/host/team.mjs": [
           "team"
+        ],
+        "client.js": [
+          "right-column-cards"
         ]
       },
       "tests": [
@@ -137,7 +315,8 @@
         "test/t-20261111-task-next-verify.test.mjs",
         "test/t-20261112-tool-output-e2e.test.mjs",
         "test/t-20261112-tool-output-render.test.mjs"
-      ]
+      ],
+      "semantics": "任务模块：任务 CRUD、九阶段状态机、捕获、子任务、团队板对账。"
     },
     "decisions": {
       "title": "决策模块（决策台账 / 否决 / 命令解析）",
@@ -170,6 +349,9 @@
         ],
         "lib/host/tools.mjs": [
           "tools"
+        ],
+        "client.js": [
+          "right-column-cards"
         ]
       },
       "tests": [
@@ -177,7 +359,8 @@
         "test/t-20261108-control-word.test.mjs",
         "test/t-20261108-decision-cli-option.test.mjs",
         "test/t-20261108-decision-session-scope.test.mjs"
-      ]
+      ],
+      "semantics": "决策模块：决策台账、否决、命令解析与会话隔离。"
     },
     "heartbeats": {
       "title": "心跳模块（存活判定 / 自动开关 / 面板行）",
@@ -193,6 +376,9 @@
         "lib/host/session.mjs"
       ],
       "sections": {
+        "lib/core.mjs": [
+          "aggregate"
+        ],
         "lib/state-snapshot.mjs": [
           "snapshot-heartbeats"
         ],
@@ -204,6 +390,9 @@
         ],
         "lib/host/session.mjs": [
           "heartbeats"
+        ],
+        "client.js": [
+          "right-column-cards"
         ]
       },
       "tests": [
@@ -211,7 +400,8 @@
         "test/t-20261107-heartbeat-keepalive.test.mjs",
         "test/t-20261108-heartbeat-lifecycle.test.mjs",
         "test/t-20261108-heartbeat-session.test.mjs"
-      ]
+      ],
+      "semantics": "心跳模块：存活判定、自动开关与面板行。"
     },
     "gates": {
       "title": "门禁模块（门禁定义 / 步骤执行 / flow check 检查器）",
@@ -244,8 +434,11 @@
         "test/t-20261106-check-tasks.test.mjs",
         "test/t-20261106-contract-check-tasks.test.mjs",
         "test/t-20261111-gate-expect-docs.test.mjs",
-        "test/t-20261111-gate-expect-tool.test.mjs"
-      ]
+        "test/t-20261111-gate-expect-tool.test.mjs",
+        "test/t-20261112-gate-kinds.test.mjs",
+        "test/t-20261112-rule-guard.test.mjs"
+      ],
+      "semantics": "门禁模块：门禁定义、步骤执行与 flow check 检查器。"
     },
     "experiments": {
       "title": "实验模块（实验树 / 七字段 / 分流）",
@@ -268,9 +461,14 @@
         ],
         "CONTRACT.md": [
           "c3.1"
+        ],
+        "client.js": [
+          "right-column-cards",
+          "experiment-tree"
         ]
       },
-      "tests": []
+      "tests": [],
+      "semantics": "实验模块：实验树、七字段与分流。"
     },
     "description": {
       "title": "项目描述模块（文件图 / 模块图 / 语义 / 漂移）",
@@ -296,6 +494,12 @@
         "CONTRACT.md": [
           "c3.7",
           "c6.1.4"
+        ],
+        "lib/state-snapshot.mjs": [
+          "description-projection"
+        ],
+        "README.md": [
+          "description"
         ]
       },
       "tests": [
@@ -304,7 +508,8 @@
         "test/t-20261108-desc-gate.test.mjs",
         "test/t-20261108-desc-model.test.mjs",
         "test/t-20261108-desc-scan.test.mjs"
-      ]
+      ],
+      "semantics": "项目描述模块：文件图、模块图、语义与漂移（AST 派生字段已停用）。"
     },
     "panel": {
       "title": "面板模块（只读快照投影 / Web 面板 / TUI 面板）",
@@ -326,6 +531,27 @@
         ],
         "lib/host/state.mjs": [
           "state"
+        ],
+        "lib/state-snapshot.mjs": [
+          "primitives",
+          "payload"
+        ],
+        "README.md": [
+          "panel-tui"
+        ],
+        "client.js": [
+          "locale-dictionaries",
+          "defensive-helpers",
+          "state-normalization",
+          "icon",
+          "presentational-pieces",
+          "experiment-tree",
+          "fold-header",
+          "right-column-cards",
+          "top-bar",
+          "display-preferences",
+          "right-bar-seats",
+          "styles"
         ]
       },
       "tests": [
@@ -341,7 +567,8 @@
         "test/t-20261107-state-degradation.test.mjs",
         "test/warnings.test.mjs",
         "test/t-20261111-01-goals-framework.test.mjs"
-      ]
+      ],
+      "semantics": "面板模块：只读快照投影、Web 面板与 TUI 面板。"
     },
     "backup": {
       "title": "台账备份与体检（本地快照 / flow doctor 完整性报告）",
@@ -351,13 +578,23 @@
       "shared": [
         "bin/flow.mjs",
         "lib/host/session.mjs",
-        "CONTRACT.md",
-        "README.md"
+        "CONTRACT.md"
       ],
-      "sections": {},
+      "sections": {
+        "bin/flow.mjs": [
+          "commands"
+        ],
+        "lib/host/session.mjs": [
+          "capture"
+        ],
+        "CONTRACT.md": [
+          "c8"
+        ]
+      },
       "tests": [
         "test/t-20261109-backup-doctor.test.mjs"
-      ]
+      ],
+      "semantics": "台账备份与体检：本地快照、flow doctor 完整性报告与过期快照提醒。"
     },
     "cli": {
       "title": "CLI 与 MCP（参数面 / 命令分发 / 输出 / 完整工作流与自动编排）",
@@ -368,14 +605,23 @@
         "bin/mcp.mjs"
       ],
       "shared": [],
-      "sections": {},
+      "sections": {
+        "bin/flow.mjs": [
+          "parse",
+          "output",
+          "commands",
+          "entry"
+        ]
+      },
       "tests": [
         "test/t-20261030-15-flag-spec.test.mjs",
         "test/t-20261104-12-b2-cli.test.mjs",
         "test/t-20261107-cli-status-block.test.mjs",
         "test/t-20261107-stage-cli.test.mjs",
-        "test/t-20261111-mcp.test.mjs"
-      ]
+        "test/t-20261111-mcp.test.mjs",
+        "test/cli-json-contract.test.mjs"
+      ],
+      "semantics": "CLI 与 MCP：参数面、命令分发、输出、完整工作流与自动编排。"
     },
     "docs": {
       "title": "文档与技能（契约正文 / README / 内嵌技能）",
@@ -390,7 +636,8 @@
         "test/t-20261106-doc-drift.test.mjs",
         "test/t-20261107-collab-skill-scope.test.mjs",
         "test/t-20261107-skill-frontmatter.test.mjs"
-      ]
+      ],
+      "semantics": "文档与技能：契约正文、README、内嵌技能与写域文档。"
     }
   },
   "sections": {
@@ -459,7 +706,11 @@
       },
       "payload": {
         "from": "// -------------------------------------------------------------------- payload",
-        "to": null
+        "to": "// --------------------------------------------------------------- description"
+      },
+      "description-projection": {
+        "from": "// --------------------------------------------------------------- description",
+        "to": "// ------------------------------------------------------------- snapshot API"
       }
     },
     "CONTRACT.md": {
@@ -503,12 +754,24 @@
         "from": "### 6.1.4 `check description`（项目描述门禁）",
         "to": "### 6.2 退出码"
       },
+      "c8": {
+        "from": "## 8 与 git 的关系",
+        "to": "## 9 面板 HTTP 表面"
+      },
       "c9": {
         "from": "## 9 面板 HTTP 表面",
         "to": "## 10 团队同步（P3a：只读对账）"
       }
     },
     "README.md": {
+      "description": {
+        "from": "## 项目描述（强制语义更新）",
+        "to": "## 安装（本机 DSH）"
+      },
+      "panel-tui": {
+        "from": "## TUI 侧栏面板",
+        "to": "## 边界"
+      },
       "selftest-count": {
         "from": "## 自测",
         "to": "## 许可证"
@@ -563,6 +826,56 @@
     "lib/host/tools.mjs": {
       "tools": {
         "from": "// ---------------------------------------------------------------- decisions",
+        "to": null
+      }
+    },
+    "client.js": {
+      "locale-dictionaries": {
+        "from": "// #region locale dictionaries",
+        "to": "// #region defensive helpers"
+      },
+      "defensive-helpers": {
+        "from": "// #region defensive helpers",
+        "to": "// #region state normalization"
+      },
+      "state-normalization": {
+        "from": "// #region state normalization",
+        "to": "// #region icon"
+      },
+      "icon": {
+        "from": "// #region icon",
+        "to": "// #region small presentational pieces"
+      },
+      "presentational-pieces": {
+        "from": "// #region small presentational pieces",
+        "to": "// #region experiment tree"
+      },
+      "experiment-tree": {
+        "from": "// #region experiment tree",
+        "to": "// #region shared fold header"
+      },
+      "fold-header": {
+        "from": "// #region shared fold header",
+        "to": "// #region right column cards"
+      },
+      "right-column-cards": {
+        "from": "// #region right column cards",
+        "to": "// #region top bar / footer / states"
+      },
+      "top-bar": {
+        "from": "// #region top bar / footer / states",
+        "to": "// #region panel + polling"
+      },
+      "display-preferences": {
+        "from": "// #region display preferences (D-20261113: in-place fold + a top control row)",
+        "to": "// #region right-bar seats"
+      },
+      "right-bar-seats": {
+        "from": "// #region right-bar seats",
+        "to": "// #region styles"
+      },
+      "styles": {
+        "from": "// #region styles",
         "to": null
       }
     }
