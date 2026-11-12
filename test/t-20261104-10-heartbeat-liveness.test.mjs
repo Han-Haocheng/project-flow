@@ -11,6 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { initProject, livenessOf, loadContract, readHeartbeatSection, startHeartbeat } from '../lib/core.mjs'
+import { applyAgentLiveness } from '../lib/host/session.mjs'
 import { panelModel } from '../tui-panel.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -367,7 +368,12 @@ test('GET state：agents 命中把 >6h 旧心跳标为 live/agent-live；无 age
   assert.equal(fs.statSync(file).mtimeMs, mtimeBefore, '读路径不得触碰 mtime')
 })
 
-test('GET state：agents 命中也不覆盖 dead（pid 证据优先）', async () => {
+test('GET state：与门禁同源——注册表说活时 pid-gone 也判 live（registry 优先；2026-11-12 反转旧口径）', async () => {
+  /* T-20261112202457 反转了这里原来的断言（"agents 命中也不覆盖 dead"）：面板现在和
+     claims 门禁走**同一个函数**（heartbeats 的 applyRegistryLiveness → livenessOf），
+     而 livenessOf 的证据顺序是 foreign → registry → boot → pid → ttl。注册表是本进程
+     对"这个会话是否还活着"的直接回答，比**共用**的宿主 pid 更强——门禁已经按这个口径
+     判（b86bea8），面板必须跟它一致，否则人看到的"活"和门禁的"活"就是两套。 */
   const { root, contract } = freshProject('state-dead-agents')
   const live = hostHeartbeat(root, contract, 'crashed-session')
   writeHeartbeat(root, 'crashed-session', { ...live, pid: deadPid(), updated_at: new Date().toISOString() })
@@ -375,9 +381,122 @@ test('GET state：agents 命中也不覆盖 dead（pid 证据优先）', async (
   const host = makeCtx({ root, agents: liveAgents(['crashed-session']) })
   try {
     const payload = await panelPayload(host.ctx, root)
-    assert.equal(heartbeatRow(payload, 'crashed-session'), undefined, 'dead 默认隐藏（agents 证据也不回填）')
-    assert.equal(payload.heartbeatsHidden, 1, 'dead 行计入隐藏条数')
-    assert.ok(payload.heartbeats.every((item) => item.liveness !== 'dead'), 'payload 不得携带 dead 行')
+    const row = heartbeatRow(payload, 'crashed-session')
+    assert.ok(row, '注册表说活 → 行可见（与 claims 门禁同一判据）')
+    assert.equal(row.liveness, 'live')
+    assert.equal(row.reason, 'agent-live')
+    assert.equal(payload.livenessEvidence, 'registry')
+    assert.equal(payload.heartbeatsHidden, 0)
+  } finally {
+    host.disposeAll()
+  }
+})
+
+// --------------------------------- 面板判活与门禁同源（T-20261112202457，2026-11-12）
+//
+// 背景：b86bea8 已让 claims 门禁按「注册表 + TTL 租约」判活，但面板（state worker
+// 是 fork 的，拿不到 agents 服务）还只靠 pid → 宿主活着但会话已停的行仍显示 live。
+// 本卡把宿主的 liveSessions + hostPid 随读请求送进 worker，宿主侧富化再走同一个
+// applyRegistryLiveness，做到「面板显示」与「门禁判定」同一函数、同一优先级。
+//
+// 验收：①注册表说不在 + pid 在 → session-gone ②注册表说在 → live
+//       ③无注册表 → ttl-only 且证据档位可见 ④两侧同源（同一记录，判定一致）
+
+test('面板判活①：宿主活着但会话已停止 → session-gone（不再显示 live）', async () => {
+  const { root, contract } = freshProject('panel-session-gone')
+  // 心跳由本测试进程写（pid 就是"宿主" pid）：旧口径只会看到 pid → live。
+  hostHeartbeat(root, contract, 'session-gone')
+  // 注册表里没有它 = 宿主进程还在、会话已经停了。
+  const host = makeCtx({ root, agents: liveAgents([]) })
+  try {
+    const payload = await panelPayload(host.ctx, root)
+    assert.equal(heartbeatRow(payload, 'session-gone'), undefined, 'session-gone 行默认隐藏，不再冒充 live')
+    assert.equal(payload.heartbeatsHidden, 1, '被隐藏的正是"宿主活着但会话停了"的那行')
+    assert.equal(payload.livenessEvidence, 'registry', '注册表参与过判定')
+    // 结论本身用 core 投影验证（与 claims 门禁同一函数、同一证据）：
+    const section = readHeartbeatSection(root, contract, {
+      visibility: 'all',
+      sessionLive: () => false,
+      ownerPid: process.pid,
+    })
+    const row = section.items.find((item) => item.session === 'session-gone')
+    assert.equal(row.liveness, 'dead')
+    assert.equal(row.reason, 'session-gone')
+    assert.equal(row.livenessEvidence, 'registry')
+  } finally {
+    host.disposeAll()
+  }
+})
+
+test('面板判活②：注册表说会话在 → live（即使记录老旧/pid 证据不足）', async () => {
+  const { root, contract } = freshProject('panel-registry-live')
+  hostHeartbeat(root, contract, 'session-alive')
+  const file = heartbeatFile(root, 'session-alive')
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  delete record.pid
+  delete record.pid_start
+  delete record.boot_id
+  record.updated_at = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()
+  fs.writeFileSync(file, JSON.stringify(record, null, 2))
+  const host = makeCtx({ root, agents: liveAgents(['session-alive']) })
+  try {
+    const payload = await panelPayload(host.ctx, root)
+    const row = heartbeatRow(payload, 'session-alive')
+    assert.ok(row, '注册表命中 → 7h 未续期也不隐藏')
+    assert.equal(row.liveness, 'live')
+    assert.equal(row.reason, 'agent-live')
+    assert.equal(payload.heartbeatsHidden, 0)
+  } finally {
+    host.disposeAll()
+  }
+})
+
+test('面板判活③：无 agents 服务 → ttl-only 显式标注 + 行证据档位可见', async () => {
+  const { root, contract } = freshProject('panel-ttl-only')
+  const record = hostHeartbeat(root, contract, 'session-ttl')
+  writeHeartbeat(root, 'session-ttl', { ...record, updated_at: new Date().toISOString() })
+  const host = makeCtx({ root }) // 没有 agents 服务
+  try {
+    const payload = await panelPayload(host.ctx, root)
+    assert.equal(payload.livenessEvidence, 'ttl-only', '降级一档必须显式标出来')
+    const row = heartbeatRow(payload, 'session-ttl')
+    assert.ok(row)
+    assert.equal(typeof row.livenessEvidence, 'string', '行级证据档位与 claims 侧同名同义')
+    assert.equal(host.ctx.get('agents'), undefined)
+  } finally {
+    host.disposeAll()
+  }
+})
+
+test('面板判活④：同一记录上面板与门禁同源（同一函数、同一结论）', async () => {
+  const { root, contract } = freshProject('panel-same-source')
+  hostHeartbeat(root, contract, 'session-shared')
+  hostHeartbeat(root, contract, 'session-mine')
+  const probe = (session) => session === 'session-mine'
+  const host = makeCtx({ root, agents: liveAgents(['session-mine']) })
+  try {
+    const payload = await panelPayload(host.ctx, root)
+    assert.equal(heartbeatRow(payload, 'session-shared'), undefined, '注册表说死 → 面板不显示 live')
+    /* 同源判据：core 投影（claims 门禁读的那份）与宿主富化（面板读的那份）对同一条
+       记录必须给出完全相同的 liveness/reason——富化不是第二套逻辑，而是把同一个
+       applyRegistryLiveness 套在 worker/CLI 产的初始行上。 */
+    const section = readHeartbeatSection(root, contract, {
+      visibility: 'all',
+      sessionLive: probe,
+      ownerPid: process.pid,
+    })
+    const projection = section.items.find((item) => item.session === 'session-shared')
+    assert.equal(projection.liveness, 'dead')
+    assert.equal(projection.reason, 'session-gone')
+    // 面板富化：喂一份**没有注册表证据**的行（模拟 worker/CLI 的原始投影），
+    // 富化后必须与带注册表的 core 投影逐字段一致。
+    const bare = readHeartbeatSection(root, contract, { visibility: 'all' }).items
+    const enriched = applyAgentLiveness(host.ctx, { heartbeats: bare })
+    const enrichedRow = enriched.heartbeats.find((item) => item.session === 'session-shared')
+    assert.equal(enrichedRow.liveness, projection.liveness, '富化结论必须等于 core 投影结论')
+    assert.equal(enrichedRow.reason, projection.reason)
+    assert.equal(enrichedRow.livenessEvidence, projection.livenessEvidence)
+    assert.equal(enriched.livenessEvidence, 'registry')
   } finally {
     host.disposeAll()
   }
