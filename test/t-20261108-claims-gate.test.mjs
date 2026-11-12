@@ -9,7 +9,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
-import { initProject, loadContract, startHeartbeat, updateHeartbeat } from '../lib/core.mjs'
+import { initProject, livenessOf, loadContract, readHeartbeatSection, startHeartbeat, updateHeartbeat } from '../lib/core.mjs'
+import { foreignClaimOwner } from '../lib/host/session.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -306,5 +307,110 @@ test('ops_write_file：被别的活会话 claim 时同样拒绝（跨会话反�
   assert.equal(guard(call('ops_write_file', { path: path.join(root, 'lib/other/x.mjs') }, mine)), undefined)
   // 反向同样生效：对方的域里也在本会话的 lib/ 范围内。
   assert.match(guard(call('ops_write_file', { path: path.join(root, 'lib/host/x.mjs') }, other)), /session-ops-foreign-a/)
+})
+
+// --------------------------------------------- 跨会话判活（T-20261112163241，2026-11-12）
+//
+// 事故：会话已停止、pid 已不存在，它 claim 的 CONTRACT.md 仍阻塞别人写入 63 分钟。
+// 判活现在按投影里的 `liveness`（pid / pid_start / boot_id / host 的证据）：
+// dead / foreign / stale 一律不占域；live 即使记录老旧也占域；没有存活证据的旧记录
+// 退回 6 小时老化兜底。
+
+const HEARTBEAT_DIR = path.join('.agents', 'heartbeat')
+
+function heartbeatPath(root, session) {
+  return path.join(root, HEARTBEAT_DIR, `${session}.json`)
+}
+
+/** 直接改心跳 JSON：绕过写 API 的 pid 证据，才能造出"证据死了"的记录。 */
+function patchHeartbeat(root, session, patch) {
+  const file = heartbeatPath(root, session)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const next = { ...record, ...patch }
+  fs.writeFileSync(file, JSON.stringify(next, null, 2))
+  return next
+}
+
+/** 只写给定字段的心跳（默认不带 host / pid / boot_id 存活证据）。 */
+function rawHeartbeat(root, record) {
+  fs.mkdirSync(path.join(root, HEARTBEAT_DIR), { recursive: true })
+  fs.writeFileSync(heartbeatPath(root, record.session), JSON.stringify(record, null, 2))
+  return record
+}
+
+/** 一条投影行形状的心跳（可覆盖任意字段）。 */
+function projectedItem(overrides = {}) {
+  return { session: 'session-x', status: 'idle', liveness: 'live', claims: ['CONTRACT.md'], stale: false, ...overrides }
+}
+
+test('判活：pid 已不存在的心跳不占域（dead 跳过）', () => {
+  // 单元：liveness=dead 时，即使 status=idle 且未过 6h，也不再是待避让的域。
+  const deadItem = projectedItem({ session: 'session-dead', liveness: 'dead' })
+  assert.equal(foreignClaimOwner([deadItem], 'session-mine', 'CONTRACT.md'), null)
+  // 集成：把一个真实心跳的 pid 改成不存在的值，门禁放行。
+  const { root, contract } = freshProject('dead-owner')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-dead-mine')
+  withClaims(root, contract, 'session-dead-mine', ['lib/', 'CONTRACT.md'])
+  withClaims(root, contract, 'session-dead-owner', ['CONTRACT.md'])
+  const record = patchHeartbeat(root, 'session-dead-owner', { pid: 2147483646, pid_start: 1 })
+  assert.equal(livenessOf(record).liveness, 'dead')
+  assert.equal(harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine)), undefined)
+})
+
+test('判活：pid 存活的心跳仍占域（live 不因记录老旧被跳过）', () => {
+  const { root, contract } = freshProject('live-owner')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-live-mine')
+  withClaims(root, contract, 'session-live-mine', ['lib/', 'CONTRACT.md'])
+  withClaims(root, contract, 'session-live-owner', ['CONTRACT.md'])
+  // 心跳由本测试进程写入，它的 pid 就是存活证据。
+  const row = readHeartbeatSection(root, contract, { visibility: 'all' }).items.find(
+    (item) => item.session === 'session-live-owner',
+  )
+  assert.equal(row.liveness, 'live')
+  const reason = harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine))
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /session-live-owner/)
+})
+
+test('判活：host 不同的心跳跳过（foreign 不跨机器占域）', () => {
+  const { root, contract } = freshProject('foreign-owner')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-foreign-mine')
+  withClaims(root, contract, 'session-foreign-mine', ['lib/', 'CONTRACT.md'])
+  withClaims(root, contract, 'session-foreign-owner', ['CONTRACT.md'])
+  const record = patchHeartbeat(root, 'session-foreign-owner', { host: 'other-host|linux' })
+  assert.equal(livenessOf(record).liveness, 'foreign')
+  assert.equal(harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine)), undefined)
+})
+
+test('判活：无存活证据时按 6 小时老化兜底（老记录放行、新记录仍占域）', () => {
+  const { root, contract } = freshProject('age-fallback')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-age-mine')
+  withClaims(root, contract, 'session-age-mine', ['CONTRACT.md', 'README.md'])
+  const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()
+  rawHeartbeat(root, { schema: 1, session: 'session-age-old', status: 'idle', claims: ['CONTRACT.md'], updated_at: sevenHoursAgo })
+  rawHeartbeat(root, { schema: 1, session: 'session-age-new', status: 'idle', claims: ['README.md'], updated_at: new Date().toISOString() })
+  const items = readHeartbeatSection(root, contract, { visibility: 'all' }).items
+  assert.equal(items.find((item) => item.session === 'session-age-old').liveness, 'stale')
+  assert.equal(items.find((item) => item.session === 'session-age-new').liveness, 'unknown')
+  const guard = harness.guardOf()
+  // 老记录：没有存活证据且已过 6h，放行。
+  assert.equal(guard(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine)), undefined)
+  // 新记录：同样没有存活证据，但没过 6h，仍按活会话占域。
+  const reason = guard(call('edit', { file_path: path.join(root, 'README.md') }, mine))
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /session-age-new/)
+})
+
+test('判活：自己会话不自我阻塞', () => {
+  assert.equal(foreignClaimOwner([projectedItem({ session: 'session-self' })], 'session-self', 'CONTRACT.md'), null)
+  const { root, contract } = freshProject('self-claim')
+  const harness = makeHarness(root)
+  const agent = harness.addAgent('session-self-claim')
+  withClaims(root, contract, 'session-self-claim', ['CONTRACT.md'])
+  assert.equal(harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, agent)), undefined)
 })
 
