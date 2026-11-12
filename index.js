@@ -164,11 +164,13 @@ import {
 import { registerTools } from './lib/host/tools.mjs'
 import { registerSkills } from './lib/host/skills.mjs'
 import {
+  STATE_DEADLINE_MS,
   STATE_POOLS,
   StateWorkerPool,
   handleState,
   panelStateReader,
   statePoolOf,
+  stateSnapshot,
 } from './lib/host/state.mjs'
 
 export { panelStateReader }
@@ -310,21 +312,13 @@ export function cliPanelStateReader(ctx, options = {}) {
  * where `result` is the `{ok:true,payload}` | `{ok:false,code,message}` union
  * `collectPanelState` already understands.
  *
- * **Prepared, not wired yet.** The route still calls
- * `mountJsonRoute(ctx, ROUTE_PATH, 'state route', handleState)`. Switching it needs the
- * injectable read seam in lib/host/state.mjs (owner: concurrency, T-20261112202457).
- * Once that lands the mount line becomes:
- *
- *   mountJsonRoute(ctx, ROUTE_PATH, 'state route', (scope, request, response) =>
- *     handleState(scope, request, response, {
- *       readSnapshot: cliStateSnapshotReader(scope, {
- *         fallbackSnapshot: (req, ctx) => stateSnapshot(scope, req, ctx),
- *       }),
- *       deadlineMs: CLI_STATE_TIMEOUT_MS,
- *     }))
+ * Wired through the read seam of lib/host/state.mjs (T-20261112202457) by
+ * `makeStateRoute`; the production mount passes no injection, route-level tests
+ * inject a failing runner to exercise the degraded path.
  *
  * Budget: the CLI gets at most 45% of `deadlineMs` (capped at 900 ms); the fallback
- * gets the remaining budget, so the route's total stays inside the 1800 ms contract.
+ * gets the remaining budget (`stateSnapshot` honours it), so the route's total stays
+ * inside the unchanged 1800 ms contract.
  * Without an injected `fallbackSnapshot` the fallback is the legacy in-process
  * `panelStateReader` (its own worker deadline applies); production wiring must pass
  * `stateSnapshot` so the fallback honours the remaining budget.
@@ -362,6 +356,29 @@ export function cliStateSnapshotReader(ctx, options = {}) {
       }
       return fallback
     }
+  }
+}
+/**
+ * The production `/api/project-flow/state` handler: CLI contract first, in-process
+ * fallback on failure, all inside the unchanged worker deadline.
+ *
+ * Exported (rather than inlined in `apply`) so route-level tests can inject a
+ * failing CLI runner without stubbing the filesystem or the process:
+ *
+ *   const handler = makeStateRoute(ctx, { runCliState: async () => { throw ... } })
+ *
+ * Production calls `makeStateRoute(ctx)` — no injection, real `flow state --json`.
+ */
+export function makeStateRoute(ctx, options = {}) {
+  const input = options !== null && typeof options === 'object' ? options : {}
+  const readSnapshot = cliStateSnapshotReader(ctx, {
+    ...(typeof input.runCliState === 'function' ? { runCliState: input.runCliState } : {}),
+    // The fallback is the seam's own default read, so it honours the *remaining*
+    // budget instead of starting another full 1800 ms worker deadline.
+    fallbackSnapshot: (request, context) => stateSnapshot(ctx, request, context),
+  })
+  return function stateRouteHandler(scope, request, response) {
+    return handleState(scope, request, response, { readSnapshot, deadlineMs: STATE_DEADLINE_MS })
   }
 }
 // ------------------------------------------------------------------- tools
@@ -485,7 +502,9 @@ export function apply(ctx, config) {
   // Hooks the session surface needs but must not import (cycle-free split):
   // P2 tool restriction and the Team-board caller cache stay in this entry.
   const sessionHooks = { restrict: restrictMainSessionTools, rememberCaller: rememberTeamCaller }
-  mountJsonRoute(ctx, ROUTE_PATH, 'state route', handleState)
+  // T-20261112154725：web 路由先读后端 CLI 契约（`flow state --json`），CLI 不可用时用
+  // 剩余预算做进程内只读兜底并标 degraded；总预算仍是 STATE_DEADLINE_MS。
+  mountJsonRoute(ctx, ROUTE_PATH, 'state route', makeStateRoute(ctx))
   mountJsonRoute(ctx, INIT_ROUTE_PATH, 'init route', handleInit)
   mountJsonRoute(ctx, GATE_ROUTE_PATH, 'gate route', handleGate)
 

@@ -22,7 +22,7 @@ import * as core from '../lib/core.mjs'
 const plugin = await import('../index.js')
 // The pool is reachable through `statePoolOf(ctx)`; the crash-vs-cap case inspects a
 // live pool (slot states) instead of only watching the HTTP answer.
-const { statePoolOf } = await import('../lib/host/state.mjs')
+const { handleState, statePoolOf } = await import('../lib/host/state.mjs')
 
 const POSIX = process.platform !== 'win32'
 const LINUX = process.platform === 'linux'
@@ -152,6 +152,104 @@ function makeResponse() {
   })
 }
 
+/**
+ * Fire GET state through the **default worker read**: `handleState(ctx, req, res)`
+ * with no read options. T-20261112154725：生产路由已改为「先 `flow state --json`、
+ * 失败再回落 worker」，池内部行为（children 数 / saturated / crashed / 启动失败）
+ * 只能走默认读来测；用例的状态码、错误码与时序断言一字未改，只换了请求入口。
+ */
+/** Fire GET state through an arbitrary route handler `(scope, request, response)`. */
+function startStateWith(handler, ctx, root) {
+  const response = {}
+  const done = new Promise((settle) => {
+    let guard
+    const finish = (res) => {
+      clearTimeout(guard)
+      settle(res)
+    }
+    Object.assign(response, {
+      statusCode: 0,
+      body: '',
+      headersSent: false,
+      finished: false,
+      writeHead(status) {
+        this.statusCode = status
+        this.headersSent = true
+        return this
+      },
+      setHeader() {},
+      end(body) {
+        if (this.finished) return
+        this.finished = true
+        this.body = body === undefined ? '' : String(body)
+        finish(this)
+      },
+      destroy() {
+        finish(this)
+      },
+    })
+    handler(ctx, { url: `${ROUTE}?root=${encodeURIComponent(root)}`, method: 'GET', headers: {} }, response).catch(
+      () => {
+        if (response.finished === false) response.end('')
+      },
+    )
+    guard = setTimeout(() => finish(response), 30_000)
+  })
+  return { response, done }
+}
+
+function startDefaultState(ctx, root) {
+  const response = {}
+  const done = new Promise((settle) => {
+    let guard
+    const finish = (res) => {
+      clearTimeout(guard)
+      settle(res)
+    }
+    Object.assign(response, {
+      statusCode: 0,
+      body: '',
+      headersSent: false,
+      finished: false,
+      writeHead(status) {
+        this.statusCode = status
+        this.headersSent = true
+        return this
+      },
+      setHeader() {},
+      end(body) {
+        if (this.finished) return
+        this.finished = true
+        this.body = body === undefined ? '' : String(body)
+        finish(this)
+      },
+      destroy() {
+        finish(this)
+      },
+    })
+    handleState(ctx, { url: `${ROUTE}?root=${encodeURIComponent(root)}`, method: 'GET', headers: {} }, response).catch(
+      () => {
+        // The production route wrapper answers 500 here; mirror that so a broken
+        // seam fails the assertion instead of hanging the case.
+        if (response.finished === false) response.end('')
+      },
+    )
+    guard = setTimeout(() => finish(response), 30_000)
+  })
+  return { response, done }
+}
+
+/** Median steady-state latency of the DEFAULT worker read (same-root baseline). */
+async function baselineLatencyDefault(ctx, root, count = 3) {
+  const samples = []
+  for (let index = 0; index < count; index += 1) {
+    const started = Date.now()
+    const res = await startDefaultState(ctx, root).done
+    samples.push(Date.now() - started)
+    assert.equal(json(res).ok, true, `默认读基线采样失败：${res.body}`)
+  }
+  return samples.slice().sort((left, right) => left - right)[Math.floor(samples.length / 2)]
+}
 /** Fire GET state without awaiting; returns `{ response, done }`. */
 function startState(routes, root) {
   const response = {}
@@ -530,14 +628,14 @@ test('冷池首轮两并发（hung+normal）：normal 必须成功且 ≤20×同
   const normal = makeProject('cold-normal')
   // `mount` 只 apply（预热 fork 已在途）就返回：立刻并发请求，触发「await starting 后
   // 两个请求抢同一个子进程」的旧竞态。修复后第二个请求必须自己 spawn 一个子进程。
-  const { routes } = await mount([hung, normal])
+  const { ctx, routes } = await mount([hung, normal])
 
   // Latency is measured from the instant both requests are fired: a cold pool
   // may have to fork one extra child for the loser of the warm-up race, which is
   // exactly what this case exercises.
   const firedAt = Date.now()
-  const hungRequest = startState(routes, hung)
-  const normalRequest = startState(routes, normal)
+  const hungRequest = startDefaultState(ctx, hung)
+  const normalRequest = startDefaultState(ctx, normal)
   const normalRes = await normalRequest.done
   const normalElapsed = Date.now() - firedAt
   const normalPayload = json(normalRes)
@@ -556,7 +654,7 @@ test('冷池首轮两并发（hung+normal）：normal 必须成功且 ≤20×同
   // 前提），所以基线放在结构断言之后取——此时池已热、假死请求已回收，测的是本机此刻
   // 稳态下同一 root 的耗时。冷池首轮允许比它慢（要 fork 一个额外子进程），给 8 倍。
   // 真正的回归（两个请求抢同一个子进程 → 串行 → 正常请求要等满假死超时）会到秒级。
-  const baseline = await baselineLatency(routes, normal)
+  const baseline = await baselineLatencyDefault(ctx, normal)
   const denominator = Math.max(baseline, BASELINE_FLOOR_MS)
   // 冷池用例的比值上限单独放宽到 20：它要 fork **一个额外子进程**，且基线是在池已热、
   // 假死请求已回收之后测的，两者的系统状态本来就不对称。负载实测（16 忙进程）比值
@@ -599,9 +697,9 @@ test('冷池饱和（上限 2）：3 路 hung → 2 路 state-timeout + 1 路 sa
       makeProject('sat-b', { fifoTask: true }),
       makeProject('sat-c', { fifoTask: true }),
     ]
-    const { routes } = await mount(roots)
+    const { ctx, routes } = await mount(roots)
     const firedAt = Date.now()
-    const requests = roots.map((root) => startState(routes, root))
+    const requests = roots.map((root) => startDefaultState(ctx, root))
     // 任何时刻子进程数都不得越过上限（每 10ms 采样 600ms）。
     const exceeded = await waitUntil(() => workerPids().length > 2, 600)
     const results = await Promise.all(requests.map((request) => request.done))
@@ -630,7 +728,7 @@ test('崩溃自愈：忙子进程被 SIGKILL → state-worker-crashed；下一�
   assert.ok(ctx)
   const busyPid = await warmWorker()
 
-  const pending = startState(routes, root).done
+  const pending = startDefaultState(ctx, root).done
   await waitUntil(() => alive(busyPid), 1000)
   await sleep(200)
   process.kill(busyPid, 'SIGKILL')
@@ -642,7 +740,7 @@ test('崩溃自愈：忙子进程被 SIGKILL → state-worker-crashed；下一�
   fs.rmSync(path.join(root, '.agents/tasks', 'T-20260101-01.json'), { force: true })
   const rebuilt = await waitUntil(() => workerPids().length > 0, 5000)
   assert.equal(rebuilt, true, '崩溃后应自动重建 worker')
-  const recovered = json(await startState(routes, root).done)
+  const recovered = json(await startDefaultState(ctx, root).done)
   assert.equal(recovered.ok, true, JSON.stringify(recovered.error ?? recovered.warnings ?? null))
 })
 
@@ -715,8 +813,8 @@ test('启动失败：worker 脚本不可用 → state-worker-unavailable；写�
   // The override is test-only: production needs the explicit opt-in pair.
   process.env.PF_STATE_WORKER_SCRIPT_ALLOW = '1'
   try {
-    const { routes } = await mount([root])
-    const res = await startState(routes, root).done
+    const { ctx, routes } = await mount([root])
+    const res = await startDefaultState(ctx, root).done
     const payload = json(res)
     assert.equal(res.statusCode, 200)
     assert.equal(payload.ok, false)
@@ -981,4 +1079,44 @@ test('seam：注入实现返回裸 payload 时规范成 {ok:true,payload}', asyn
     readSnapshot: async () => ({ hello: 'world' }),
   })
   assert.deepEqual(result, { ok: true, payload: { hello: 'world' } })
+})
+// ------------------------------------ web 路由 ← CLI 契约（T-20261112154725 / 裁决 A）
+//
+// 生产路由先 spawn `flow state --json`（读 seam 注入），失败才回落进程内只读并标
+// degraded。上面 4 条池内部用例已改为走默认读（startDefaultState），这里补路由级：
+// CLI 成功 → readPath=cli；CLI 失败 → 200 + degraded + 直连数据（不是白屏/不是错误）。
+
+test('web 路由：默认先走 flow state --json（readPath=cli），payload 与直连读同形', async () => {
+  const root = makeProject('route-cli-ok')
+  const { routes } = await mount([root])
+  const res = await startState(routes, root).done
+  const payload = json(res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
+  assert.equal(payload.readPath, 'cli', '生产路由默认必须走后端 CLI 契约')
+  assert.equal(payload.degraded, undefined, 'CLI 正常时不得标降级')
+  assert.equal(payload.root, fs.realpathSync(root))
+  assert.equal(payload.tasks.total, 1)
+})
+
+test('web 路由：CLI 不可用 → 200 + degraded + 进程内只读数据（不 throw、不白屏）', async () => {
+  const root = makeProject('route-cli-degraded')
+  const { ctx } = await mount([root])
+  const handler = plugin.makeStateRoute(ctx, {
+    runCliState: async () => {
+      throw new Error('spawn ENOENT flow')
+    },
+  })
+  const firedAt = Date.now()
+  const res = await startStateWith(handler, ctx, root).done
+  const elapsed = Date.now() - firedAt
+  const payload = json(res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
+  assert.equal(payload.readPath, 'direct')
+  assert.equal(payload.degraded, true, '降级必须被标注（否则界面看起来像正常）')
+  assert.match(payload.degradedReason, /cli-unavailable/)
+  assert.match(payload.degradedReason, /spawn ENOENT/)
+  assert.equal(payload.tasks.total, 1, '兜底仍是只读直连，数据不能丢')
+  assert.ok(elapsed < TIMEOUT_BUDGET_MS, `降级路径应 ≤${TIMEOUT_BUDGET_MS}ms，实际 ${elapsed}ms`)
 })
