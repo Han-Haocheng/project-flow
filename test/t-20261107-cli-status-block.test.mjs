@@ -236,3 +236,48 @@ test('回归：心跳命令的既有 data 字段一个不少（只新增五个�
     assert.ok(Object.hasOwn(started.json.data, key), `状态块字段 ${key} 应平铺在 data 上`)
   }
 })
+// ------------------------------------------- flow state：前端唯一读面（T-20261112154725）
+//
+// 前端（dsh-web / dsh-tui）不再 import 后端、也不读 .agents/：它 spawn
+// `flow state --json`。这三条钉住：形状与投影同源、未初始化是「状态」不是失败、
+// --root 指向别的工作区时只看那一个。
+
+test('flow state --json：payload 与只读投影同源，不是第二套组装', () => {
+  const root = freshProject('state-cli')
+  addTasks(root, 2)
+  const result = runCli(root, ['state', '--json'])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const payload = result.json.data
+  assert.equal(payload.ok, true)
+  assert.equal(payload.root, root)
+  assert.deepEqual(payload.roots.map((entry) => entry.path), [root])
+  for (const key of ['generatedAt', 'contract', 'head', 'experiments', 'tasks', 'gates', 'heartbeats', 'decisions', 'description', 'ledgerRoot', 'worktree']) {
+    assert.ok(Object.hasOwn(payload, key), `payload 缺 ${key}`)
+  }
+  assert.equal(payload.tasks.total, 2)
+  // 信封字段只在外层：data 里不能再出现 ok/schemaVersion 之类的 CLI 形状。
+  assert.equal(Object.hasOwn(payload, 'schemaVersion'), false)
+  assert.equal(Object.hasOwn(payload, 'data'), false)
+  // 与直接调用投影同源：五个状态计数之和 = total（面板读的就是这两个数）。
+  const counts = payload.tasks.counts
+  assert.equal(counts.draft + counts.active + counts.done + counts.archived + counts.other, payload.tasks.total)
+})
+
+test('flow state：未初始化是正常状态（exit 0 + not-initialized），不是命令失败', () => {
+  const root = emptyRoot('state-cli-empty')
+  const result = runCli(root, ['state', '--json'])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.equal(result.json.ok, true)
+  assert.equal(result.json.data.ok, false)
+  assert.equal(result.json.data.error.code, 'not-initialized')
+  assert.equal(result.json.data.root, root)
+})
+
+test('flow state --root：只报被指定的那个工作区，不回退到 cwd', () => {
+  const root = freshProject('state-cli-root')
+  addTasks(root, 1)
+  const result = runCli(process.cwd(), ['state', '--json', '--root', root])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  assert.equal(result.json.data.root, root)
+  assert.equal(result.json.data.tasks.total, 1)
+})

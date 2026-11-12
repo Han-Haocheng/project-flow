@@ -104,6 +104,8 @@ const REPEAT_FLAGS = new Set([
 export const SPEC = Object.freeze({
   init: Object.freeze({ flags: ['name', 'force', 'no-gates'] }),
   status: Object.freeze({ flags: [] }),
+  // 面板状态快照（T-20261112154725）：前端（web/TUI）唯一允许读的台账面。
+  state: Object.freeze({ flags: [] }),
   backup: Object.freeze({ flags: ['keep'] }),
   doctor: Object.freeze({ flags: ['stale-hours'] }),
   exp: Object.freeze({
@@ -380,6 +382,8 @@ async function dispatch(ctx, parsed) {
       return cmdInit(ctx)
     case 'status':
       return cmdStatus(ctx)
+    case 'state':
+      return runState(ctx)
     case 'backup':
       return cmdBackup(ctx)
     case 'doctor':
@@ -429,6 +433,19 @@ async function runMcpServe(argv) {
   return await server.main(argv)
 }
 
+// 面板状态快照（T-20261112154725）：前端唯一允许读的台账面。实现放
+// lib/cli/state.mjs；这里动态 import，保持其它命令「先解析参数、后加载 core」的
+// 惰性（state 会连带加载 state-snapshot 的投影层）。
+async function runState(ctx) {
+  let mod
+  try {
+    mod = await import(new URL('../lib/cli/state.mjs', import.meta.url).href)
+  } catch (error) {
+    throw new CliError('io', `无法加载面板快照模块（lib/cli/state.mjs）：${error?.message || String(error)}`)
+  }
+  return await mod.cmdState(ctx)
+}
+
 async function loadCore() {
   try {
     return await import(new URL('../lib/core.mjs', import.meta.url).href)
@@ -462,6 +479,7 @@ async function main() {
     out(USAGE)
     // USAGE 由 lib/cli/misc.mjs 维护（CLI 域）；单可执行新增的 MCP 子命令在这里
     // 补一行，避免为了一个入口去改另一个模块的文件。
+    out('  state                      面板状态快照（--json；前端经此读台账，不直连 store）')
     out('  mcp-serve                  以 stdio 启动 MCP adapter（与 flow <command> 同一份 core）')
     return 0
   }
