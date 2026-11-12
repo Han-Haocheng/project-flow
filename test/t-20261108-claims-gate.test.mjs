@@ -654,3 +654,120 @@ test('判活加固：agents.list 不穷举子会话时，agents.get 仍证明子
   assert.equal(typeof reason, 'string', '活着的子会话不因 list() 不穷举就被判 session-gone')
   assert.match(reason, /session-probe-child/)
 })
+
+// --------------------------- aspect 锁：自动串行占用 + 存活/TTL 判据（T-20261112183138）
+//
+// 目标不是审批，而是机器可判的占用：同一 aspect 已有在途占用时排队，释放条件 =
+// 占用方 release / 租约到期 / 判活说死。判活复用 heartbeats 的 livenessOf，绝不允许
+// 「死会话占域 6 小时」重演。
+
+const aspectLocks = await import('../lib/host/aspect-lock.mjs')
+const { acquireAspectLock, listAspectLocks, releaseAspectLock, renewAspectLock, sweepAspectLocks, ASPECT_LOCK_DEFAULT_TTL_SECONDS } = aspectLocks
+
+async function withFlowProject(label, run) {
+  const { root, contract } = freshProject(label)
+  return await run({ root, contract })
+}
+
+test('aspect 锁①：占用登记可查询，释放后回到空闲', async () => {
+  await withFlowProject('aspect-basic', async ({ root, contract }) => {
+    const acquired = await acquireAspectLock(root, contract, {
+      aspect: 'state-machine',
+      files: ['lib/tasks/records.mjs', './lib/stage.mjs'],
+      session: 'session-lock-a',
+    })
+    assert.equal(acquired.acquired, true)
+    assert.deepEqual(acquired.lock.files, ['lib/tasks/records.mjs', 'lib/stage.mjs'])
+    assert.equal(acquired.lock.state, 'held')
+    assert.equal(acquired.lock.owner.session, 'session-lock-a')
+    assert.equal(acquired.lock.evidence, 'ttl-only', '没有注册表探针 → ttl-only')
+    const listed = listAspectLocks(root, contract)
+    assert.equal(listed.counts.held, 1)
+    assert.equal(listed.items[0].aspect, 'state-machine')
+    const released = releaseAspectLock(root, contract, { aspect: 'state-machine', session: 'session-lock-a' })
+    assert.equal(released.released, true)
+    assert.equal(listAspectLocks(root, contract).counts.total, 0)
+  })
+})
+
+test('aspect 锁②：同 aspect 第二个占用排队等待，释放后自动接手（不丢）', async () => {
+  await withFlowProject('aspect-queue', async ({ root, contract }) => {
+    const first = await acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-first' })
+    assert.equal(first.acquired, true)
+    // 非阻塞尝试：立刻被挡，并给出占用方（调用方可以决定等/换/升级）。
+    const blocked = await acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-second', waitMs: 0 })
+    assert.equal(blocked.acquired, false)
+    assert.equal(blocked.holder.owner.session, 'session-lock-first')
+    // 排队等待：另一个占用方释放后，等待者必须接手。
+    const waiting = acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-second', waitMs: 2000, pollMs: 20 })
+    await new Promise((settle) => setTimeout(settle, 120))
+    releaseAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-first' })
+    const acquired = await waiting
+    assert.equal(acquired.acquired, true)
+    assert.equal(acquired.lock.owner.session, 'session-lock-second')
+  })
+})
+
+test('aspect 锁③：不同 aspect 互不阻塞', async () => {
+  await withFlowProject('aspect-independent', async ({ root, contract }) => {
+    const a = await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-lock-a' })
+    const b = await acquireAspectLock(root, contract, { aspect: 'contract-text', session: 'session-lock-b' })
+    assert.equal(a.acquired, true)
+    assert.equal(b.acquired, true)
+    assert.equal(listAspectLocks(root, contract).counts.held, 2)
+  })
+})
+
+test('aspect 锁④：租约到期自动释放（TTL-only 租约语义）', async () => {
+  await withFlowProject('aspect-ttl', async ({ root, contract }) => {
+    await acquireAspectLock(root, contract, { aspect: 'concurrency', session: 'session-lock-ttl', ttlSeconds: 60 })
+    const fresh = listAspectLocks(root, contract)
+    assert.equal(fresh.items[0].state, 'held')
+    assert.equal(fresh.items[0].ttlSeconds, 60)
+    assert.equal(typeof fresh.items[0].leaseExpiresAt, 'string')
+    // 两分钟后：租约过期 → 可回收（不需要等真实时间）。
+    const later = listAspectLocks(root, contract, { now: Date.now() + 2 * 60 * 1000 })
+    assert.equal(later.items[0].state, 'expired')
+    assert.equal(later.items[0].releasable, true)
+    const swept = sweepAspectLocks(root, contract, { now: Date.now() + 2 * 60 * 1000 })
+    assert.deepEqual(swept.released.map((item) => item.aspect), ['concurrency'])
+    assert.equal(listAspectLocks(root, contract).counts.total, 0)
+    assert.equal(ASPECT_LOCK_DEFAULT_TTL_SECONDS, 1800)
+  })
+})
+
+test('aspect 锁⑤：注册表说死 → 立即释放（不让死会话占着锁）', async () => {
+  await withFlowProject('aspect-dead', async ({ root, contract }) => {
+    // 锁由本进程写（pid === process.pid），注册表却没有这个会话 = 会话已停。
+    await acquireAspectLock(root, contract, { aspect: 'state-machine', session: 'session-lock-dead' })
+    const section = listAspectLocks(root, contract, { sessionLive: () => false })
+    assert.equal(section.items[0].state, 'dead')
+    assert.equal(section.items[0].evidence, 'registry')
+    // 另一个会话可以立刻接手，不需要等 TTL。
+    const takeover = await acquireAspectLock(root, contract, {
+      aspect: 'state-machine',
+      session: 'session-lock-next',
+      sessionLive: () => false,
+    })
+    assert.equal(takeover.acquired, true)
+    assert.equal(takeover.lock.owner.session, 'session-lock-next')
+  })
+})
+
+test('aspect 锁⑥：续租延长租约；非占用方不能续租/释放（force 例外）', async () => {
+  await withFlowProject('aspect-renew', async ({ root, contract }) => {
+    await acquireAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-owner', ttlSeconds: 60 })
+    const renewed = renewAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-owner', ttlSeconds: 600 })
+    assert.equal(renewed.renewed, true)
+    assert.equal(renewed.lock.owner.ttl_seconds, 600)
+    const stranger = renewAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-stranger' })
+    assert.equal(stranger.renewed, false)
+    assert.equal(stranger.reason, 'not-owner')
+    assert.throws(
+      () => releaseAspectLock(root, contract, { aspect: 'liveness', session: 'session-lock-stranger' }),
+      (error) => error.code === 'conflict' && /只有它自己能释放/.test(error.message),
+    )
+    const forced = releaseAspectLock(root, contract, { aspect: 'liveness', force: true })
+    assert.equal(forced.released, true)
+  })
+})
