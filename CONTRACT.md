@@ -45,7 +45,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `index.js` | 插件入口：注册工具/技能/HTTP 路由/宿主事件监听 | 宿主 |
 | `lib/host/*.mjs` | Host 装配拆分（2026-11-08 框架会话）：`shared`=常量/工作区作用域/HTTP 助手；`session`=心跳/提醒/捕获/会话钩子；`state`=快照池与 HTTP 读路由；`team`=团队板读面；`routes`=init/gate 写路由；`enforce`=P2 权限面；`tools`=工具定义与注册；`skills`=技能注册。**`index.js` 只做 `apply` 装配** | `index.js` |
 | `bin/flow.mjs` | CLI **薄入口**（2026-11-11 拆分后 520 行）：SPEC/参数解析/dispatch/退出码；命令实现全部在 `lib/cli/` | 人、脚本、门禁 |
-| `lib/cli/*.mjs` | CLI 命令实现（Phase 1 第 4 期）：`shared` 信封与助手、`tasks`/`exp`/`gates`/`decisions`/`heartbeat`/`desc`/`check`/`misc` 按域拆分；写盘仍经 core 门面与同一把 store 锁 | `bin/flow.mjs` |
+| `lib/cli/*.mjs` | CLI 命令实现（Phase 1 第 4 期）：`shared` 信封与助手、`tasks`/`exp`/`gates`/`decisions`/`heartbeat`/`desc`/`check`/`misc` 按域拆分；`mcp-server` 暴露完整查询/写入工作流，`lib/mcp/orchestrator.mjs` 负责 queued 任务领取、本地 runner 派工与父子聚合；所有写盘仍经 core 门面与同一把 store 锁 | `bin/flow.mjs`、`bin/mcp.mjs` |
 | `lib/core.mjs` | **契约装配与对外门面**（Phase 1 后 501 行）：gate seeds、`initProject`、只读聚合 `readStoreState`，其余 97 个 API 从各域 import 后原样 re-export；域模块之间不 import core，全部写盘仍经同一把 store 锁 | 工具层、CLI、快照 |
 | `lib/desc.mjs` | **描述台账模型**（纯函数）：`description/` 三族记录的校验、build 回填（哈希/import）、模块图推导（`moduleEdges`）、漂移检查（`checkDescription`）、确定性渲染。**不 import core**（与 `checks.mjs` 同一策略：模型只算，锁内编排与写盘在 core） | core |
 | `lib/source-scan.mjs` | 零依赖源码扫描器（仅 import `./util.mjs` 的 `FlowError` 用于非法入参）：JS/TS/JSX 的注释剥离与顶层声明、Python 的 `def`/`class`/顶层赋值/import；产出 `declarations`（含 `identifiers`）供模块归属推导。**不 import 其它 lib 模块**（扫描器不认识项目，只认识文本） | `lib/desc.mjs` |
@@ -2661,7 +2661,8 @@ H7/H8/H10/H11 新口径。
   阶段停在 queued，调用方可用显式 `dispatch` 重试。
 - **配置（完整）**：`config.dispatch.enabled`（默认 `true`；`false` 连显式 dispatch 都关）、
   `config.dispatch.auto`（默认 `true`；`false` 只关阶段入口自动派工，保留显式 dispatch）、
-  `config.dispatch.provider`（默认 `spawn`）。
+  `config.dispatch.provider`（默认 `spawn`）；
+  模型三兄弟 `config.dispatch.model` / `models` / `requireModel` 见 §10.1.1。
 - **团队板自动挂载（第二批，默认 off，`config.team.mount === true` 才开）**：计划 §16 的
   「默认 off、dispatch 模式、建一次 + 终态一次」。
   - 派工成功、插件走完 queued→working 后，`mountTaskOnBoard` 调 `agentTeams.createTask`
@@ -2679,3 +2680,69 @@ H7/H8/H10/H11 新口径。
 - **仍未做**：`actorMode`/`boardMode` 默认值翻到 `team`/`plugin`——翻 `boardMode` 之前必须
   先开 `team.mount`，否则主会话的 `team_task_*` 记账面被藏起来而插件又没接管，团队板会冻住。
   在那之前 `single`/`lead` 默认值保持不变。
+
+### 10.1.1 派工模型（`config.dispatch.model` / `models` / `requireModel`，2026-11-12）
+
+背景：此前 `dispatchTask` 从不传 `agentOptions`，子代理**合并父会话的模型选项**——派出去的
+分析者/实现者/审查者吃的是父会话（lead）的模型。这一节把「按配置给子代理指定模型」写成契约。
+真源 `lib/dispatch.mjs`：`dispatchModel` / `dispatchRoleModel` / `dispatchModelExplicit` /
+`dispatchModelRequired` 是纯函数，`dispatchTask` 与 `dispatchTaskRecord` 是执行层。
+
+**三个字段的语义**：
+
+| 字段 | 类型 | 默认 | 语义 |
+|---|---|---|---|
+| `config.dispatch.model` | string | 见下「生效条件」 | 派工子代理的模型。接受 `model` 或 `provider/model`（**取末段**：provider 仍走顶层 `config.dispatch.provider`，不塞进 `agentOptions`，避免两处真源） |
+| `config.dispatch.models` | object | `{}` | 按角色覆盖：`{analyzer?, implementer?, reviewer?}`，只认这三个键。取值优先级 **`models[role]` → `model` → `DEFAULT_DISPATCH_MODEL`** |
+| `config.dispatch.requireModel` | boolean | `false` | 模型能力缺失时是**失败**（`true`）还是**降级**（`false`，默认） |
+
+**生效条件（零回归，最重要的一条）**：`DEFAULT_DISPATCH_MODEL = 'iceman-contributor-free'`
+**不是**无条件生效的默认值，而是「已经显式声明了 `model`/`models` 之后的缺省值」。
+
+- `config.dispatch` 里**没写** `model` 也没写 `models` → `dispatchModelExplicit` 返回 `false`
+  → 派工请求里**一个 `agentOptions` 键都不出现**，子代理按父会话模型跑，请求与改动前逐字节一致。
+- 写了其中任一个键（哪怕值写错成空串、或只写 `models: {}`）→ 视为「用户确实想指定模型」，
+  按上面的优先级解析，非法值回落 `DEFAULT_DISPATCH_MODEL`，**不静默忽略**。
+
+因此「默认模型 `iceman-contributor-free`」的准确说法是：**你一旦开始配置派工模型，缺省就是它**；
+完全不配置时本项目根本不介入模型选择。默认值取它是因为 `contributor` 的语义与实现者/审查者职责
+最贴（本机 `opencode-go` provider 的另一个免费模型是 `longcat-2.5-free`）。
+
+**能力不支持时的降级**：宿主子代理服务只有声明了 `capabilities.agentOptions === true` 才认
+`request.agentOptions`（`dsh-subagent` 契约；没声明的服务会**静默忽略**该字段）。所以：
+
+1. 派工前用 `supportsAgentOptions(service)` 探测，不支持时**不带** `agentOptions` 起子代理
+   （按父会话模型），返回的 `degraded` 说明原因；
+2. 若探测通过但运行时以「不认识 agentOptions」为由拒绝（错误信息含 `agentOptions`），
+   **删掉该字段降级重试一次**；
+3. 两者都只在 `requireModel === true` 时报错——默认 `false` 时**降级不失败**：
+   免费模型在长上下文/工具调用上可能不稳，宁可让子代理按父模型跑，也不要让整条派工失败。
+
+**回执新增 `model` 字段**：派工回执 `checkpoints` 条目从
+`{kind:'dispatch', role, childId, provider, from, to, at}` 扩展为**可能含 `model`**：
+
+```jsonc
+{
+  "kind": "dispatch",
+  "role": "implementer",
+  "childId": "…",
+  "provider": "spawn",
+  "model": "iceman-contributor-free",  // 子代理**实际**用的模型；没配模型或降级时**该键不出现**
+  "from": "queued-implementation",
+  "to": "implementing",
+  "at": "ISO"
+}
+```
+
+`model` 走 `dispatchCheckpoint` 的同一套「空则不写」规则（与既有的 `model` 入参一致），
+所以**没配置派工模型的老台账回执形状完全不变**，不需要迁移。`dispatch` 结果对象同样带
+`model`（空串表示按父模型）与可选的 `degraded`。
+
+**写域提醒**：本节只描述行为，**不改 schema**——`checkpoints` 本就是 core 系统键、允许任意
+对象短字段，面板/CLI 直接可读，不另设登记处。
+
+**本卡不做 GUI 自定义 toolview**：`flow_*` 工具的呈现只改 `output.render`（见 §5.6）。
+Web Client 按 `tool.client.toolview` 槽位（key = 工具线名）派生视图，**没有注册就落通用行**——
+所以「用户看到的不再是 JSON」不需要自定义视图，改 `render` 后结果文本本身就是中文报告。
+做富视图要新增 keyed 槽位注册 + locale 文案 + **重新构建客户端产物**，与本次收口无关，
+**留作后续卡**（见 §5.6 末尾）。
