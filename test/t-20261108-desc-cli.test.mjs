@@ -619,3 +619,120 @@ test('flow status：描述行与 --json.counts.description 同口径；描述在
   assert.equal(list.code, 0, list.stdout + list.stderr)
   assert.equal(list.json.data.checks[7].name, 'description')
 })
+
+// --------------------------------------------- --input 双形态（T-20261112151401）
+//
+// `--input` 同时接受「内联 JSON」与「JSON 文件路径」：去前导空白/BOM 后首字符
+// 是 `{`/`[` 走内联，否则一律当路径（相对 `--root`，与 `--type-map` 同口径）。
+// 下面钉的是这条通道：两种形态都真的落盘，三档读文件错误各自可辨。
+
+const PLAN_FROM_FILE = { noSemanticChange: true, reason: '夹具：无语义变更' }
+
+test('desc --input：文件路径与内联 JSON 双形态（相对/绝对/空格/BOM/前导空白）', () => {
+  const root = freshProject('input-forms', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescriptionCli(root)
+  const task = addTask(root, '输入形态任务', ['--stage', 'analyzing'])
+  writeFile(root, 'plan.json', JSON.stringify(PLAN_FROM_FILE))
+
+  // 相对路径文件 → 读进来并真的写进计划
+  const fromFile = runCli(root, ['desc', 'plan', task.id, '--input', 'plan.json', '--json'])
+  assert.equal(fromFile.code, 0, fromFile.stdout + fromFile.stderr)
+  assert.equal(fromFile.json.data.plan.noSemanticChange, true)
+  const shown = runCli(root, ['desc', 'plan', task.id, '--show', '--json'])
+  assert.equal(shown.code, 0, shown.stdout + shown.stderr)
+  assert.equal(shown.json.data.plan.noSemanticChange, true, '文件里的计划必须真落盘')
+
+  // desc set 与 desc plan 共用同一个读入函数：数组文件也走文件分支
+  writeFile(root, 'patches.json', '[]')
+  const setFile = runCli(root, ['desc', 'set', '--input', 'patches.json'])
+  assert.equal(setFile.code, 0, setFile.stdout + setFile.stderr)
+  assert.match(setFile.stdout, /没有变化/)
+
+  // 内联回归
+  const inline = runCli(root, ['desc', 'set', '--input', '[]'])
+  assert.equal(inline.code, 0, inline.stdout + inline.stderr)
+  assert.match(inline.stdout, /没有变化/)
+
+  // 文件名带空格（spawnSync 传数组，等价于真实用户加引号）
+  writeFile(root, 'plan with space.json', JSON.stringify(PLAN_FROM_FILE))
+  const spaced = runCli(root, ['desc', 'plan', task.id, '--input', 'plan with space.json', '--json'])
+  assert.equal(spaced.code, 0, spaced.stdout + spaced.stderr)
+
+  // 前导空白的内联 JSON（trim 之后首字符才作判据）
+  const padded = runCli(root, ['desc', 'plan', task.id, '--input', `  ${JSON.stringify(PLAN_FROM_FILE)}`, '--json'])
+  assert.equal(padded.code, 0, padded.stdout + padded.stderr)
+
+  // BOM（Windows 编辑器常见产物）
+  const bom = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify(PLAN_FROM_FILE))])
+  writeFile(root, 'bom.json', bom)
+  const bomRead = runCli(root, ['desc', 'plan', task.id, '--input', 'bom.json', '--json'])
+  assert.equal(bomRead.code, 0, bomRead.stdout + bomRead.stderr)
+
+  // 绝对路径；以及非 ASCII + 空格叠加的绝对路径
+  const absolute = path.join(root, 'plan.json')
+  const absoluteRun = runCli(root, ['desc', 'plan', task.id, '--input', absolute, '--json'])
+  assert.equal(absoluteRun.code, 0, absoluteRun.stdout + absoluteRun.stderr)
+  const nested = writeFile(root, '目标 目录/计划.json', JSON.stringify(PLAN_FROM_FILE))
+  const nestedRun = runCli(root, ['desc', 'plan', task.id, '--input', nested, '--json'])
+  assert.equal(nestedRun.code, 0, nestedRun.stdout + nestedRun.stderr)
+})
+
+test('desc --input：读文件失败三档可读错误（读不到/是目录/非 JSON），全部 usage 退 1', () => {
+  const root = freshProject('input-errors', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescriptionCli(root)
+  const task = addTask(root, '输入错误任务', ['--stage', 'analyzing'])
+
+  const missing = runCli(root, ['desc', 'plan', task.id, '--input', 'nope.json', '--json'])
+  assert.equal(missing.code, 1, missing.stdout + missing.stderr)
+  assert.equal(missing.json.error.code, 'usage')
+  assert.match(missing.json.error.message, /读不到/)
+  assert.match(missing.json.error.message, /nope\.json/)
+  assert.match(missing.json.error.message, /内联 JSON/)
+  assert.match(missing.json.error.message, /文件路径/)
+  assert.doesNotMatch(missing.json.error.message, /需要合法 JSON（对象或对象数组）/, '旧的通用文案不该再出现')
+
+  const directory = runCli(root, ['desc', 'plan', task.id, '--input', '.agents', '--json'])
+  assert.equal(directory.code, 1, directory.stdout + directory.stderr)
+  assert.equal(directory.json.error.code, 'usage')
+  assert.match(directory.json.error.message, /目录/)
+
+  writeFile(root, 'bad.json', '{bad')
+  const broken = runCli(root, ['desc', 'plan', task.id, '--input', 'bad.json', '--json'])
+  assert.equal(broken.code, 1, broken.stdout + broken.stderr)
+  assert.equal(broken.json.error.code, 'usage')
+  assert.match(broken.json.error.message, /不是合法 JSON/)
+  assert.match(broken.json.error.message, /bad\.json/)
+
+  const empty = runCli(root, ['desc', 'set', '--input', '', '--json'])
+  assert.equal(empty.code, 1, empty.stdout + empty.stderr)
+  assert.equal(empty.json.error.code, 'usage')
+  assert.match(empty.json.error.message, /不能为空/)
+  assert.match(empty.json.error.message, /内联 JSON/)
+})
+
+test('desc --input：相对路径以 --root 为基准（不是进程 cwd）', () => {
+  const root = freshProject('input-root', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescriptionCli(root)
+  const task = addTask(root, '输入基准任务', ['--stage', 'analyzing'])
+  writeFile(root, 'plans/p.json', JSON.stringify(PLAN_FROM_FILE))
+
+  const elsewhere = tempRoot('input-cwd')
+  const run = runCli(elsewhere, ['--root', root, 'desc', 'plan', task.id, '--input', 'plans/p.json', '--json'])
+  assert.equal(run.code, 0, run.stdout + run.stderr)
+  assert.equal(run.json.data.plan.noSemanticChange, true)
+})
+
+test(
+  'desc --input：win32 盘符路径原样回显（不当相对路径拼到 cwd 下）',
+  { skip: process.platform !== 'win32' },
+  () => {
+    const root = freshProject('input-win', { 'lib/a.mjs': 'export function alpha() {}\n' })
+    buildDescriptionCli(root)
+    const task = addTask(root, '盘符路径任务', ['--stage', 'analyzing'])
+    const drivePath = 'C:\\Users\\x\\plan.json'
+    const run = runCli(root, ['desc', 'plan', task.id, '--input', drivePath, '--json'])
+    assert.equal(run.code, 1, run.stdout + run.stderr)
+    assert.ok(run.json.error.message.includes(drivePath), run.json.error.message)
+  },
+)
+
