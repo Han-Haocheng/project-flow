@@ -566,7 +566,8 @@
         "test/t-20261107-panel-stage.test.mjs",
         "test/t-20261107-state-degradation.test.mjs",
         "test/warnings.test.mjs",
-        "test/t-20261111-01-goals-framework.test.mjs"
+        "test/t-20261111-01-goals-framework.test.mjs",
+        "test/t-20261112-client-pure.test.mjs"
       ],
       "semantics": "面板模块：只读快照投影、Web 面板与 TUI 面板。"
     },

@@ -3035,8 +3035,6 @@ window.__ModuleLoader__.load({
     }
     // #endregion
 
-    // #region top bar / footer / states    // #endregion
-
     // #region top bar / footer / states
     function TopBar(props) {
       const view = props.view;
