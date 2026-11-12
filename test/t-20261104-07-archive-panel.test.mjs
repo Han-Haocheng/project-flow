@@ -26,7 +26,7 @@ import { addTask as addTaskCore, archiveTasks, getTask, initProject, loadContrac
 function addTask(root, contract, input = {}, options) {
   return addTaskCore(root, contract, { type: 'feat', ...input }, options)
 }
-import { cliPanelStateReader, panelStateReader } from '../index.js'
+import { cliPanelStateReader, cliStateSnapshotReader, panelStateReader } from '../index.js'
 
 const DAY = 86_400_000
 /** 面板行对象字段（`lib/state-snapshot.mjs:panelTaskRow` 的投影面，顺序即契约）。 */
@@ -377,4 +377,52 @@ test('前端包结构：四个前端文件没有直读 .agents 的 store 调用�
   assert.ok(index.includes("'state', '--json'"), '主路径 must be flow state --json')
   assert.ok(index.includes('degraded = true'), '降级结果必须标 degraded')
   assert.ok(index.includes('cli-unavailable'), '降级原因必须写明是 CLI 不可用')
+})
+// ------------------- seam 形状的路由读（准备好、尚未接线）：CLI 优先 + 进程内兜底
+//
+// lib/host/state.mjs 的可注入读 seam 由 concurrency 在 T-20261112202457 落地；本文件先
+// 钉住「将来要注入的那个 reader」的行为契约：result 是 {ok:true,payload}|{ok:false,…}，
+// 不 throw；CLI 成功 readPath=cli；CLI 失败/坏载荷 → 进程内兜底并标 degraded。
+
+test('cliStateSnapshotReader（seam 形状）：CLI 成功 → {ok:true,payload,readPath:cli}，预算 ≤900ms', async () => {
+  const { root } = freshProject('seam-cli')
+  const seen = []
+  const reader = cliStateSnapshotReader(fixtureCtx(), {
+    runCliState: async (requestedRoot, deadlineMs) => {
+      seen.push({ requestedRoot, deadlineMs })
+      return { ok: true, generatedAt: 'now', root: requestedRoot, tasks: { total: 0 } }
+    },
+  })
+  const result = await reader({ root }, { deadlineMs: 1800 })
+  assert.equal(result.ok, true)
+  assert.equal(result.payload.readPath, 'cli')
+  assert.equal(result.payload.root, root)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].requestedRoot, root)
+  assert.ok(seen[0].deadlineMs >= 250 && seen[0].deadlineMs <= 900, 'CLI 只准拿 45% 预算（上限 900ms）')
+})
+
+test('cliStateSnapshotReader（seam 形状）：CLI 抛错 → 进程内兜底，标 degraded 且不 throw', async () => {
+  const { root, contract } = freshProject('seam-degraded')
+  addTask(root, contract, { title: '兜底数据', status: 'active' })
+  const reader = cliStateSnapshotReader(fixtureCtx(), {
+    runCliState: async () => {
+      throw new Error('spawn ENOENT')
+    },
+  })
+  const result = await reader({ root }, { deadlineMs: 1800 })
+  assert.equal(result.ok, true)
+  assert.equal(result.payload.degraded, true)
+  assert.equal(result.payload.readPath, 'direct')
+  assert.match(result.payload.degradedReason, /cli-unavailable/)
+  assert.equal(result.payload.tasks.total, 1, '兜底仍返回真实只读数据')
+})
+
+test('cliStateSnapshotReader（seam 形状）：CLI 给非对象载荷 → 同样走兜底而不是把坏对象交出去', async () => {
+  const { root } = freshProject('seam-junk')
+  const reader = cliStateSnapshotReader(fixtureCtx(), { runCliState: async () => null })
+  const result = await reader({ root }, { deadlineMs: 1800 })
+  assert.equal(result.ok, true)
+  assert.equal(result.payload.degraded, true)
+  assert.match(result.payload.degradedReason, /non-object payload/)
 })

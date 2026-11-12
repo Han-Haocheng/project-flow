@@ -201,12 +201,13 @@ function cliStateEntry() {
  * failing) has to be exercised without breaking the real bin. Production always
  * spawns `process.execPath`, so the plugin needs neither a shell nor a PATH.
  */
-function runCliState(root) {
+function runCliState(root, deadlineMs = CLI_STATE_TIMEOUT_MS) {
+  const timeout = Number.isFinite(deadlineMs) && deadlineMs > 0 ? Math.floor(deadlineMs) : CLI_STATE_TIMEOUT_MS
   return new Promise((resolvePromise, rejectPromise) => {
     execFile(
       process.execPath,
       [cliStateEntry(), 'state', '--json', '--root', root],
-      { cwd: PACKAGE_ROOT, timeout: CLI_STATE_TIMEOUT_MS, maxBuffer: CLI_STATE_MAX_BYTES, windowsHide: true },
+      { cwd: PACKAGE_ROOT, timeout, maxBuffer: CLI_STATE_MAX_BYTES, windowsHide: true },
       (error, stdout, stderr) => {
         if (error !== null && error !== undefined) {
           const detail = String(stderr || '').trim() || brief(error)
@@ -304,6 +305,65 @@ export function cliPanelStateReader(ctx, options = {}) {
 }
 
 
+/**
+ * Seam-shaped reader for the HTTP route: `(request, {deadlineMs}) => Promise<result>`,
+ * where `result` is the `{ok:true,payload}` | `{ok:false,code,message}` union
+ * `collectPanelState` already understands.
+ *
+ * **Prepared, not wired yet.** The route still calls
+ * `mountJsonRoute(ctx, ROUTE_PATH, 'state route', handleState)`. Switching it needs the
+ * injectable read seam in lib/host/state.mjs (owner: concurrency, T-20261112202457).
+ * Once that lands the mount line becomes:
+ *
+ *   mountJsonRoute(ctx, ROUTE_PATH, 'state route', (scope, request, response) =>
+ *     handleState(scope, request, response, {
+ *       readSnapshot: cliStateSnapshotReader(scope, {
+ *         fallbackSnapshot: (req, ctx) => stateSnapshot(scope, req, ctx),
+ *       }),
+ *       deadlineMs: CLI_STATE_TIMEOUT_MS,
+ *     }))
+ *
+ * Budget: the CLI gets at most 45% of `deadlineMs` (capped at 900 ms); the fallback
+ * gets the remaining budget, so the route's total stays inside the 1800 ms contract.
+ * Without an injected `fallbackSnapshot` the fallback is the legacy in-process
+ * `panelStateReader` (its own worker deadline applies); production wiring must pass
+ * `stateSnapshot` so the fallback honours the remaining budget.
+ */
+export function cliStateSnapshotReader(ctx, options = {}) {
+  const run = typeof options.runCliState === 'function' ? options.runCliState : runCliState
+  const fallbackSnapshot = typeof options.fallbackSnapshot === 'function'
+    ? options.fallbackSnapshot
+    : async (request) => {
+        const direct = await panelStateReader(ctx)(request.root)
+        if (direct === null || typeof direct !== 'object') return null
+        return { ok: true, payload: direct }
+      }
+  return async function readSnapshot(request, context = {}) {
+    const root = request !== null && typeof request === 'object' && typeof request.root === 'string' ? request.root : ''
+    const deadlineMs =
+      Number.isFinite(context.deadlineMs) && context.deadlineMs > 0 ? context.deadlineMs : CLI_STATE_TIMEOUT_MS
+    const started = Date.now()
+    const cliBudget = Math.max(250, Math.min(900, Math.floor(deadlineMs * 0.45)))
+    try {
+      const payload = await run(root, cliBudget)
+      if (payload === null || typeof payload !== 'object') {
+        throw new Error('flow state returned a non-object payload')
+      }
+      payload.readPath = 'cli'
+      return { ok: true, payload }
+    } catch (error) {
+      const remaining = Math.max(200, deadlineMs - (Date.now() - started))
+      const fallback = await fallbackSnapshot(request, { deadlineMs: remaining })
+      if (fallback === null || typeof fallback !== 'object') {
+        return { ok: false, code: 'state-cli-unavailable', message: `cli-unavailable: ${brief(error)}` }
+      }
+      if (fallback.ok === true && fallback.payload !== null && typeof fallback.payload === 'object') {
+        markDegraded(fallback.payload, error)
+      }
+      return fallback
+    }
+  }
+}
 // ------------------------------------------------------------------- tools
 //
 // Three model-facing tools over the same lib/core.mjs writer the CLI uses. They

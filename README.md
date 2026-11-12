@@ -8,14 +8,15 @@ agent 工具（`flow_exp` / `flow_task` / `flow_gate`，共用同一个核心 `l
 
 | 入口 | 用途 |
 |---|---|
+| `flow <command> --json`（`bin/flow.mjs`） | **后端唯一可执行 + 前后端唯一接口**：CLI 与 `flow mcp-serve`（MCP adapter）共用同一份 core；前端只经它调用，不读 `.agents/` |
 | 右侧栏标签页「项目流」 | 看实验树、任务进度、门禁、心跳（只读；未初始化时可一键初始化） |
 | 会话头小图标 / 指南卡 | 打开同一面板 |
-
-面板按**项目主工作区**读台账：会话在 linked git worktree 里时也看同一份台账，头部同时显示
-「台账分支」与「当前分支」，心跳行标注该会话所在分支（`branch`/`worktree` 字段）。
 | `node bin/flow.mjs …` | 人改台账、跑门禁 |
 | agent 工具 `flow_*` | 模型改台账、跑门禁 |
 | 内嵌技能 `project-flow-init` / `project-flow-usage` / `ai-collaborative-dev-workflow` | 教模型何时初始化、怎么维护台账，以及中心-贡献者协作（谁提交、谁判定、谁合并）、Agent Teams 四类角色（中心/分析者/实现者/审查者）与状态机、项目任务映射、发布纪律 |
+
+面板按**项目主工作区**读台账：会话在 linked git worktree 里时也看同一份台账，头部同时显示
+「台账分支」与「当前分支」，心跳行标注该会话所在分支（`branch`/`worktree` 字段）。
 
 契约与记录格式见 [CONTRACT.md](CONTRACT.md)；Agent 技能正文见 `skills/`。前两个技能是单文件
 （`skills/<name>.md`）；`ai-collaborative-dev-workflow` 以目录形式随包分发
@@ -182,6 +183,12 @@ plugin_manager install_bundle  target=<仓库根目录>
 安装即五个一起装载，不提供逐条启用。安装后刷新页面；卸载用
 `plugin_manager remove_bundle target=@local/project-flow`。
 
+**后端是单一可执行 `flow`**：`bin/flow.mjs` 同一进程承载 `flow <command>` 与
+`flow mcp-serve`（MCP stdio adapter，与 CLI 共用同一份 core，不再有第二个入口）。
+旧入口 `flow-mcp` / `bin/mcp.mjs` 保留为**兼容别名**——行为不变，只在 stderr 打一行弃用提示；
+新配置直接写 `flow mcp-serve`。机器可读的 `--json` 契约（信封 + schemaVersion + 逐命令
+data 形状）见 [docs/cli-contract.md](docs/cli-contract.md)。
+
 ## 派工模型配置（可选）
 
 插件派出的分析者/实现者/审查者，默认**合并父会话的模型选项**（零介入、与旧版逐字节一致）。
@@ -280,7 +287,7 @@ web 端「项目流」标签页与 TUI 面板读的是同一个工作区的同�
 `.selftest/` 与 `test/` 是可重跑的回归资产：
 
 ```text
-node --test test/                        # core + CLI + check：1076 用例（77 个文件）
+node --test test/                        # core + CLI + check：1079 用例（77 个文件）
 node .selftest/harness.mjs               # Host 只读端点：store 投影 / 未初始化空态
 node .selftest/host2-tools.mjs           # Host store 模式、6 工具、3 技能
 node .selftest/client-registration.mjs   # Client 座位注册 / locale
