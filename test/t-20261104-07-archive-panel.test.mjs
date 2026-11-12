@@ -515,3 +515,85 @@ test('cliStateSnapshotReader：CLI state 成功时附带 aspects 段；aspect CL
   assert.equal(bare.ok, true)
   assert.equal(Object.hasOwn(bare.payload, 'aspects'), false, '族化失败必须整键缺席，不是 available:false')
 })
+
+// ---------------------------- aspect 判活：宿主注册表纠正 CLI 的 ttl-only（T-20261112211817）
+
+test('aspect 判活：宿主注册表可用时，活 owner 从 ttl-only/dead 纠正为 registry/held', async () => {
+  const { root } = freshProject('aspect-live')
+  const ctx = {
+    get(id) {
+      if (id === 'workspaceRegistry') return { list: () => [] }
+      if (id === 'agents') return { list: () => [{ id: 'sess-live' }] }
+      return undefined
+    },
+  }
+  const lease = new Date(Date.now() + 5 * 60_000).toISOString()
+  const runAspectList = async () => ({
+    aspects: [],
+    locks: [{
+      aspect: 'semantics',
+      state: 'dead',
+      releasable: true,
+      evidence: 'ttl-only',
+      leaseExpiresAt: lease,
+      owner: { session: 'sess-live', pid: 999 },
+      waiters: [],
+      files: [],
+    }],
+    counts: { total: 1, held: 0, releasable: 1, aspects: 0 },
+  })
+  const read = cliStateSnapshotReader(ctx, {
+    runCliState: async () => ({ ok: true, root, tasks: { total: 0 } }),
+    runAspectList,
+  })
+  const payload = (await read({ root }, { deadlineMs: 1800 })).payload
+  const item = payload.aspects.items[0]
+  assert.equal(item.evidence, 'registry', '活会话的 evidence 必须升级为 registry')
+  assert.equal(item.state, 'held', 'CLI 看到的 pid 已死是 CLI 进程，宿主注册表证明会话活着')
+  assert.equal(item.releasable, false)
+  assert.equal(payload.aspects.livenessEvidence, 'registry')
+})
+
+test('aspect 判活：活会话的租约真过期仍是 expired；注册表不可用时保持 CLI 的 ttl-only', async () => {
+  const { root } = freshProject('aspect-live-expired')
+  const withAgents = {
+    get(id) {
+      if (id === 'agents') return { list: () => [{ id: 'sess-live' }] }
+      if (id === 'workspaceRegistry') return { list: () => [] }
+      return undefined
+    },
+  }
+  const expiredLease = new Date(Date.now() - 60_000).toISOString()
+  const makeAspect = (lock) => async () => ({
+    aspects: [],
+    locks: [lock],
+    counts: { total: 1, held: 0, releasable: 1, aspects: 0 },
+  })
+  const expiredLock = {
+    aspect: 'cli',
+    state: 'held',
+    releasable: false,
+    evidence: 'ttl-only',
+    leaseExpiresAt: expiredLease,
+    owner: { session: 'sess-live' },
+    waiters: [],
+    files: [],
+  }
+  const read = cliStateSnapshotReader(withAgents, {
+    runCliState: async () => ({ ok: true, root, tasks: { total: 0 } }),
+    runAspectList: makeAspect(expiredLock),
+  })
+  const payload = (await read({ root }, { deadlineMs: 1800 })).payload
+  assert.equal(payload.aspects.items[0].state, 'expired', '租约到期优先于注册表存活')
+  assert.equal(payload.aspects.livenessEvidence, 'registry')
+
+  /* 没有 agents 服务的宿主（fixtureCtx）不得改写 CLI 结论。 */
+  const bare = cliStateSnapshotReader(fixtureCtx(), {
+    runCliState: async () => ({ ok: true, root, tasks: { total: 0 } }),
+    runAspectList: makeAspect({ ...expiredLock, state: 'dead', releasable: true }),
+  })
+  const barePayload = (await bare({ root }, { deadlineMs: 1800 })).payload
+  assert.equal(barePayload.aspects.items[0].evidence, 'ttl-only')
+  assert.equal(barePayload.aspects.items[0].state, 'dead', '无注册表时保留 CLI 判活结果')
+  assert.equal(barePayload.aspects.livenessEvidence, 'ttl-only')
+})

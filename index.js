@@ -136,6 +136,7 @@ import {
   heartbeatGateEnabled,
   heartbeatGuardReason,
   heartbeatRootOf,
+  liveSessionIds,
   registerAgentCreated,
   autoSweepHoursOf,
   registerAgentDisposed,
@@ -347,6 +348,38 @@ export async function readAspectSection(root, run = runAspectList) {
     items,
   }
 }
+/**
+ * 宿主侧纠正 CLI 的 ttl-only 判定（T-20261112211817）：
+ *
+ * `flow aspect list` 是独立 CLI 进程，拿不到宿主 `agents` 注册表，所以它的
+ * `locks[].evidence` 恒为 `ttl-only`（诚实但会让面板徽标常亮）。宿主有注册表时
+ * 可以做一次真实判活：owner 是活会话 → evidence 升级为 `registry`；CLI 因为看到
+ * 的是**已退出的 CLI 进程 pid** 而误判 dead/foreign 的，纠正回 held（租约真过期
+ * 仍然 expired）。注册表不可用（`liveSessionIds` 返回 null）时保持 CLI 结论。
+ */
+function reconcileAspectLiveness(ctx, section) {
+  if (section === undefined || section === null || typeof section !== 'object') return section
+  const live = liveSessionIds(ctx)
+  if (live === null || live instanceof Set === false) return section
+  const now = Date.now()
+  for (const item of section.items) {
+    const session = item.owner !== null && typeof item.owner === 'object' ? item.owner.session : ''
+    if (typeof session !== 'string' || session === '' || live.has(session) === false) continue
+    item.evidence = 'registry'
+    const leaseMs = item.leaseExpiresAt === null ? NaN : Date.parse(item.leaseExpiresAt)
+    if (Number.isFinite(leaseMs) && leaseMs <= now) {
+      item.state = 'expired'
+      item.releasable = true
+    } else if (item.state === 'dead' || item.state === 'foreign') {
+      item.state = 'held'
+      item.releasable = false
+    }
+  }
+  if (section.items.length === 0) return section
+  section.livenessEvidence = section.items.every((item) => item.evidence === 'ttl-only') ? 'ttl-only' : 'registry'
+  return section
+}
+
 async function enrichHostState(ctx, payload, root, aspectRun) {
   if (payload === null || typeof payload !== 'object') return payload
   try {
@@ -366,7 +399,7 @@ async function enrichHostState(ctx, payload, root, aspectRun) {
   }
   // aspect 锁状态（T-20261112211817）：数据只能来自 `flow aspect list --json`，
   // 拿不到就**不写这个键**——面板据此整块隐藏，而不是报错/白屏。
-  const aspects = await readAspectSection(root, aspectRun)
+  const aspects = reconcileAspectLiveness(ctx, await readAspectSection(root, aspectRun))
   if (aspects !== undefined) payload.aspects = aspects
   return payload
 }
