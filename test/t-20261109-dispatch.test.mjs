@@ -36,14 +36,19 @@ import {
 import { apply as applyTasks } from '../tasks.js'
 import * as core from '../lib/core.mjs'
 import {
+  DEFAULT_DISPATCH_MODEL,
   DISPATCH_ROLES,
   WORKING_STAGE,
   autoDispatchTask,
   dispatchCheckpoint,
   dispatchEnabled,
+  dispatchModel,
+  dispatchModelExplicit,
+  dispatchModelRequired,
   dispatchPlan,
   dispatchPrompt,
   dispatchProvider,
+  dispatchRoleModel,
   dispatchTaskRecord,
 } from '../lib/dispatch.mjs'
 
@@ -69,8 +74,14 @@ function fakeSubagents(fail = false) {
   }
 }
 
-/** 最小宿主：tools 注册面 + workingDirectory + 可选 subagents。 */
-function makeHost(root, { subagents, team, config } = {}) {
+/**
+ * 最小宿主：tools 注册面 + workingDirectory + 可选 subagents。
+ * `capabilities` 是 hosts 的真实形状：dsh-subagent 的 backend 能力声明**挂在服务
+ * 对象上**（`service.capabilities`），而 `ctx.get('subagents')` 按 API 约定只给
+ * Service API（startActivation 等）。所以这里把声明的能力并到 get 返回的对象上，
+ * 与真实宿主一致。
+ */
+function makeHost(root, { subagents, team, config, capabilities } = {}) {
   const registered = new Map()
   const tools = {
     register(definition) {
@@ -87,7 +98,10 @@ function makeHost(root, { subagents, team, config } = {}) {
   const ctx = {
     get(name) {
       if (name === 'tools') return tools
-      if (name === 'subagents') return subagents
+      if (name === 'subagents') {
+        if (subagents === null || subagents === undefined) return subagents
+        return capabilities === undefined ? subagents : { ...subagents, capabilities }
+      }
       if (name === 'agentTeams') return team
       if (name === 'workingDirectory') return { get: () => root }
       return undefined
@@ -748,3 +762,241 @@ test('汇总轮 ⑤：描述门豁免只对 aggregate 生效，internal/plugin/s
   assert.ok(acceptError, 'aggregate 豁免描述门，但不得豁免验收门')
   assert.match(acceptError.message, /^acceptance gate: done: /)
 })
+
+// ---------------------------------------------------------------------------
+// 派工模型（T-20261112152355-02，2026-11-12 任务书【B 派工模型】）
+//
+// 这组用例锁三件事：
+// 1. **零回归**：`config.dispatch` 没写 `model`/`models` 时，startActivation 收到的
+//    request 里一个 `agentOptions` 键都不能有（与改动前逐字节一致）；
+// 2. 显式声明时按角色解析模型（`models[role]` → `model` → 默认），provider 仍走顶层；
+// 3. 服务没有 `capabilities.agentOptions` 时**降级不失败**（回执 model 为空），
+//    只有 `config.dispatch.requireModel === true` 才报错。
+// ---------------------------------------------------------------------------
+
+/** 声明了 `capabilities.agentOptions` 的宿主：子代理服务真能按模型起。 */
+const MODEL_CAPABLE = { agentOptions: true }
+
+test('派工模型：配置纯函数——默认值 / provider-model 取末段 / 角色覆盖 / 显式判定', () => {
+  assert.equal(DEFAULT_DISPATCH_MODEL, 'iceman-contributor-free')
+
+  /* 没配置：一律回落默认模型，但不是「显式」——是否透传由 dispatchModelExplicit 决定。 */
+  assert.equal(dispatchModel(undefined), DEFAULT_DISPATCH_MODEL)
+  assert.equal(dispatchModel({}), DEFAULT_DISPATCH_MODEL)
+  assert.equal(dispatchModel({ dispatch: {} }), DEFAULT_DISPATCH_MODEL)
+  assert.equal(dispatchModelExplicit(undefined), false)
+  assert.equal(dispatchModelExplicit({}), false)
+  assert.equal(dispatchModelExplicit({ dispatch: { enabled: true, provider: 'spawn' } }), false, '老配置不算显式')
+  assert.equal(dispatchModelRequired(undefined), false)
+  assert.equal(dispatchModelRequired({ dispatch: {} }), false)
+
+  /* 显式声明：裸模型名 / provider 前缀（取末段，provider 不进 agentOptions）/ 非法回落。 */
+  assert.equal(dispatchModel({ dispatch: { model: 'longcat-2.5-free' } }), 'longcat-2.5-free')
+  assert.equal(dispatchModel({ dispatch: { model: 'opencode-go/longcat-2.5-free' } }), 'longcat-2.5-free')
+  assert.equal(dispatchModel({ dispatch: { model: '  ' } }), DEFAULT_DISPATCH_MODEL, '空串回落默认')
+  assert.equal(dispatchModel({ dispatch: { model: 42 } }), DEFAULT_DISPATCH_MODEL, '非字符串回落默认')
+  assert.equal(dispatchModelExplicit({ dispatch: { model: 'x' } }), true)
+  assert.equal(dispatchModelExplicit({ dispatch: { models: {} } }), true, '只写 models 也算显式')
+  assert.equal(dispatchModelRequired({ dispatch: { requireModel: true } }), true)
+  assert.equal(dispatchModelRequired({ dispatch: { requireModel: 'yes' } }), false, '只认严格 true')
+
+  /* 角色解析：models[role] 优先，其次 model，再次默认。 */
+  const both = { dispatch: { model: 'longcat-2.5-free', models: { reviewer: 'iceman-contributor-free' } } }
+  assert.equal(dispatchRoleModel(both, 'reviewer'), 'iceman-contributor-free', 'models[role] 覆盖 model')
+  assert.equal(dispatchRoleModel(both, 'implementer'), 'longcat-2.5-free', '未覆盖的角色回落 model')
+  assert.equal(dispatchRoleModel(both, 'analyzer'), 'longcat-2.5-free')
+  assert.equal(dispatchRoleModel({}, 'reviewer'), DEFAULT_DISPATCH_MODEL, '都没配回落默认')
+  assert.equal(dispatchRoleModel({ dispatch: { model: 'a/b/c' } }, 'reviewer'), 'c', '多段取末段')
+  assert.equal(
+    dispatchRoleModel({ dispatch: { model: 'x', models: { reviewer: '  ' } } }, 'reviewer'),
+    'x',
+    '角色值写空 → 回落 model（不是回落默认）',
+  )
+  assert.equal(
+    dispatchRoleModel({ dispatch: { models: { unknownRole: 'x' } } }, 'unknownRole'),
+    DEFAULT_DISPATCH_MODEL,
+    '非三角色键不认',
+  )
+
+  /* 回执：model 非空才写，空串不写键（老回执形状不变）。 */
+  assert.equal(Object.hasOwn(dispatchCheckpoint({ childId: 'c1', role: 'analyzer' }), 'model'), false)
+  assert.equal(Object.hasOwn(dispatchCheckpoint({ childId: 'c1', role: 'analyzer', model: '' }), 'model'), false)
+  assert.equal(dispatchCheckpoint({ childId: 'c1', role: 'analyzer', model: 'longcat-2.5-free' }).model, 'longcat-2.5-free')
+})
+
+test('派工模型（零回归）：没配 model/models → request 里没有 agentOptions 键，回执不带 model', async () => {
+  const { root, contract } = freshProject('model-none')
+  const task = addTask(root, contract, { type: 'feat', title: '不配模型', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  /* 宿主**具备**按模型起的能力（capabilities 已声明），但配置没写 model：
+     这种组合最危险——实现里一旦偷懒给个默认模型，本用例就会红。 */
+  const { tool, exec } = makeHost(root, {
+    subagents,
+    capabilities: MODEL_CAPABLE,
+    config: { dispatch: { provider: 'spawn' } },
+  })
+  const result = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(subagents.calls.length, 1)
+  assert.equal(
+    Object.hasOwn(subagents.calls[0].request, 'agentOptions'),
+    false,
+    '零回归：没显式声明模型时 request 绝不能出现 agentOptions 键',
+  )
+  assert.equal(
+    Object.hasOwn(subagents.calls[0], 'agentOptions'),
+    false,
+    'agentOptions 只在 request 里，不在 startActivation 顶层',
+  )
+  assert.equal(result.dispatch.model, '', '模型为空：实际用的是父模型')
+  assert.equal(Object.hasOwn(result.task.checkpoints.at(-1), 'model'), false, '回执不写 model 键')
+  assert.equal(result.task.stage, 'analyzing')
+})
+
+test('派工模型：dispatch.model 透传 agentOptions.model，provider 仍走顶层', async () => {
+  const { root, contract } = freshProject('model-one')
+  const task = addTask(root, contract, { type: 'feat', title: '指定模型', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, {
+    subagents,
+    capabilities: MODEL_CAPABLE,
+    config: { dispatch: { provider: 'fork', model: 'longcat-2.5-free' } },
+  })
+  const result = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  const spec = subagents.calls[0]
+  assert.deepEqual(spec.request.agentOptions, { model: 'longcat-2.5-free' }, '模型进 request.agentOptions')
+  assert.equal(spec.provider, 'fork', 'provider 仍走顶层字段')
+  assert.equal(
+    Object.hasOwn(spec.request.agentOptions, 'provider'),
+    false,
+    'provider 不塞进 agentOptions（单一真源）',
+  )
+  assert.equal(result.dispatch.model, 'longcat-2.5-free')
+  assert.equal(result.task.checkpoints.at(-1).model, 'longcat-2.5-free', '回执记实际用的模型')
+  assert.equal(result.task.stage, 'analyzing')
+})
+
+test('派工模型：models.reviewer 覆盖、其余角色回落 dispatch.model', async () => {
+  const { root, contract } = freshProject('model-role')
+  const config = { dispatch: { model: 'longcat-2.5-free', models: { reviewer: 'iceman-contributor-free' } } }
+
+  /* 实现者（queued-implementation）→ 未覆盖的角色回落 dispatch.model。 */
+  const impl = addTask(root, contract, { type: 'fix', title: '实现者', stage: 'queued-implementation' })
+  const a = fakeSubagents()
+  const hostA = makeHost(root, { subagents: a, capabilities: MODEL_CAPABLE, config })
+  const ra = await hostA.tool.execute({ action: 'dispatch', id: impl.id, root }, hostA.exec)
+  assert.equal(a.calls[0].request.agentOptions.model, 'longcat-2.5-free', '未覆盖的角色回落 dispatch.model')
+  assert.equal(ra.dispatch.role, 'implementer')
+
+  /* 审查者（queued-review）→ models.reviewer 优先。 */
+  const rev = addTask(root, contract, { type: 'fix', title: '审查者', stage: 'queued-review' })
+  const b = fakeSubagents()
+  const hostB = makeHost(root, { subagents: b, capabilities: MODEL_CAPABLE, config })
+  const rb = await hostB.tool.execute({ action: 'dispatch', id: rev.id, root }, hostB.exec)
+  assert.equal(b.calls[0].request.agentOptions.model, 'iceman-contributor-free', 'models[role] 覆盖 dispatch.model')
+  assert.equal(rb.dispatch.role, 'reviewer')
+  assert.equal(rb.task.checkpoints.at(-1).model, 'iceman-contributor-free')
+})
+
+test('派工模型：服务无 agentOptions 能力 → 降级不失败，回执 model 为空并说明降级', async () => {
+  /* ① 没声明 capabilities 的宿主（老 backend）：根本不带 agentOptions，按父模型跑。 */
+  const { root, contract } = freshProject('model-degrade')
+  const task = addTask(root, contract, { type: 'feat', title: '降级', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, { subagents, config: { dispatch: { model: 'longcat-2.5-free' } } })
+  const result = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(subagents.calls.length, 1, '仍然起子代理（按父会话模型），不是失败')
+  assert.equal(Object.hasOwn(subagents.calls[0].request, 'agentOptions'), false, '能力缺失时不带 agentOptions')
+  assert.equal(result.task.stage, 'analyzing', '台账照常推进')
+  assert.equal(result.dispatch.model, '', '模型为空：实际用的是父模型')
+  assert.equal(Object.hasOwn(result.task.checkpoints.at(-1), 'model'), false)
+  assert.match(String(result.dispatch.degraded), /agentOptions/, '返回值说明降级原因')
+
+  /* ② 声明了能力却仍然拒绝：运行时降级重试一次（不带模型），不判失败。 */
+  const { root: root2, contract: contract2 } = freshProject('model-degrade-runtime')
+  const task2 = addTask(root2, contract2, { type: 'feat', title: '运行时拒绝', stage: 'queued-analysis' })
+  const calls = []
+  const rejects = {
+    async startActivation(spec) {
+      calls.push(spec)
+      if (spec.request.agentOptions !== undefined) throw new Error('this backend does not support agentOptions')
+      return { childId: 'child-fallback' }
+    },
+  }
+  const host2 = makeHost(root2, {
+    subagents: rejects,
+    capabilities: MODEL_CAPABLE,
+    config: { dispatch: { model: 'longcat-2.5-free' } },
+  })
+  const r2 = await host2.tool.execute({ action: 'dispatch', id: task2.id, root: root2 }, host2.exec)
+  assert.equal(calls.length, 2, '先带模型试一次，被拒后不带模型重试一次')
+  assert.equal(Object.hasOwn(calls[0].request, 'agentOptions'), true)
+  assert.equal(Object.hasOwn(calls[1].request, 'agentOptions'), false, '重试请求不带 agentOptions')
+  assert.equal(r2.dispatch.childId, 'child-fallback')
+  assert.equal(r2.dispatch.model, '')
+  assert.match(String(r2.dispatch.degraded), /agentOptions/)
+  assert.equal(r2.task.stage, 'analyzing')
+})
+
+test('派工模型：requireModel=true 时能力缺失必须报错且台账不动', async () => {
+  const { root, contract } = freshProject('model-require')
+  const task = addTask(root, contract, { type: 'feat', title: '要求模型', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, {
+    subagents,
+    config: { dispatch: { model: 'longcat-2.5-free', requireModel: true } },
+  })
+  await assert.rejects(
+    () => tool.execute({ action: 'dispatch', id: task.id, root }, exec),
+    /requireModel=true[\s\S]*capabilities\.agentOptions/,
+    'requireModel 时不降级，直接报错并给出改配置的办法',
+  )
+  assert.equal(subagents.calls.length, 0, '没起子代理')
+  assert.equal(getTask(root, contract, task.id).stage, 'queued-analysis', '阶段不推进')
+  assert.deepEqual(getTask(root, contract, task.id).checkpoints, [], '不写回执')
+
+  /* 能力齐全时 requireModel=true 正常派工并带上模型（不误伤主路径）。 */
+  const { root: okRoot, contract: okContract } = freshProject('model-require-ok')
+  const okTask = addTask(okRoot, okContract, { type: 'feat', title: '能力齐全', stage: 'queued-analysis' })
+  const okSubagents = fakeSubagents()
+  const okHost = makeHost(okRoot, {
+    subagents: okSubagents,
+    capabilities: MODEL_CAPABLE,
+    config: { dispatch: { model: 'longcat-2.5-free', requireModel: true } },
+  })
+  const ok = await okHost.tool.execute({ action: 'dispatch', id: okTask.id, root: okRoot }, okHost.exec)
+  assert.equal(okSubagents.calls[0].request.agentOptions.model, 'longcat-2.5-free')
+  assert.equal(ok.dispatch.model, 'longcat-2.5-free')
+})
+
+test('派工模型：阶段入口自动派工也按角色透传模型（autoDispatchTask 取 config）', async () => {
+  const { root, contract } = freshProject('model-auto')
+  const task = addTask(root, contract, { type: 'feat', title: '自动派工带模型', stage: 'created' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, {
+    subagents,
+    capabilities: MODEL_CAPABLE,
+    config: { dispatch: { model: 'opencode-go/longcat-2.5-free' } },
+  })
+  const result = await tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, exec)
+  assert.equal(subagents.calls.length, 1)
+  assert.equal(subagents.calls[0].request.agentOptions.model, 'longcat-2.5-free', 'provider/model 取末段')
+  assert.equal(result.dispatch.auto, true)
+  assert.equal(result.dispatch.model, 'longcat-2.5-free')
+  assert.equal(result.task.checkpoints.at(-1).model, 'longcat-2.5-free')
+
+  /* 自动派工 + requireModel + 能力缺失：折成 dispatch.ok:false，不拖垮 update。 */
+  const { root: badRoot, contract: badContract } = freshProject('model-auto-require')
+  const badTask = addTask(badRoot, badContract, { type: 'feat', title: '自动派工失败', stage: 'created' })
+  const badHost = makeHost(badRoot, {
+    subagents: fakeSubagents(),
+    config: { dispatch: { model: 'longcat-2.5-free', requireModel: true } },
+  })
+  const bad = await badHost.tool.execute(
+    { action: 'update', id: badTask.id, stage: 'queued-analysis', root: badRoot },
+    badHost.exec,
+  )
+  assert.equal(bad.dispatch.ok, false, '自动派工失败只回报，不抛')
+  assert.match(String(bad.dispatch.error), /requireModel=true/)
+  assert.equal(bad.task.stage, 'queued-analysis', '台账已写成功，阶段停在入口')
+})
+
