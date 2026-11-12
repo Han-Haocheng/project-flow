@@ -9,13 +9,23 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
-import { initProject, livenessOf, loadContract, readHeartbeatSection, startHeartbeat, updateHeartbeat } from '../lib/core.mjs'
+import {
+  HEARTBEAT_STALE_SECONDS,
+  heartbeatStatus,
+  initProject,
+  livenessOf,
+  loadContract,
+  readHeartbeatSection,
+  startHeartbeat,
+  updateHeartbeat,
+} from '../lib/core.mjs'
 import { foreignClaimOwner } from '../lib/host/session.mjs'
+import { hostTag } from '../lib/lock.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
 
-function makeHarness(root, config = {}) {
+function makeHarness(root, config = {}, { agents: agentsCapable = true } = {}) {
   const handlers = new Map()
   const effects = []
   const live = new Map()
@@ -44,7 +54,7 @@ function makeHarness(root, config = {}) {
   const ctx = {
     get(name) {
       if (name === 'tools') return toolsService
-      if (name === 'agents') return agents
+      if (name === 'agents') return agentsCapable ? agents : undefined
       if (name === 'webServer') return webServer
       return undefined
     },
@@ -364,6 +374,9 @@ test('判活：pid 存活的心跳仍占域（live 不因记录老旧被跳过�
   const mine = harness.addAgent('session-live-mine')
   withClaims(root, contract, 'session-live-mine', ['lib/', 'CONTRACT.md'])
   withClaims(root, contract, 'session-live-owner', ['CONTRACT.md'])
+  // T-20261112184401：宿主有 agents 注册表时，注册表是判活的最终证据——一个"活着"
+  // 的会话当然在注册表里；不登记就等于告诉宿主"这个会话已经不在了"（另有专测）。
+  harness.addAgent('session-live-owner')
   // 心跳由本测试进程写入，它的 pid 就是存活证据。
   const row = readHeartbeatSection(root, contract, { visibility: 'all' }).items.find(
     (item) => item.session === 'session-live-owner',
@@ -412,5 +425,210 @@ test('判活：自己会话不自我阻塞', () => {
   const agent = harness.addAgent('session-self-claim')
   withClaims(root, contract, 'session-self-claim', ['CONTRACT.md'])
   assert.equal(harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, agent)), undefined)
+})
+
+// --------------------------------- 按会话注册表判活 + TTL 租约（T-20261112184401，2026-11-12）
+//
+// pid 是**宿主进程 pid，多会话共用**：宿主退出 → /proc 查不到 → dead（这是止血卡
+// T-20261112163241 覆盖的那类事故）；但**宿主还活着、某个会话已停止** → pid 仍在 →
+// live → 会话继续占域。pid 只能回答"宿主死了没有"，回答不了"这个会话还活着没有"。
+//
+// 彻底解法：宿主 `agents` 注册表是判活的第一证据——
+//   ① 注册表说会话不在了（且记录是本进程写的）→ 立即判死释放；
+//   ② 注册表说会话在 → 记录老旧也判活，不会被误抢；
+//   ③ 没有注册表能力（CLI / 无 agents 服务的宿主）→ 降级为 TTL 租约，读投影显式标
+//      `ttl-only`，租约 = 最后一次续期（updated_at）+ HEARTBEAT_STALE_SECONDS；
+//   ④ 注册表与 TTL 冲突 → 注册表优先（说死就立即释放，说活就继续占域）。
+
+test('livenessOf：registryLive=true 压过 pid 证据（注册表说会话在 = 活）', () => {
+  const record = {
+    schema: 1,
+    session: 's',
+    status: 'working',
+    host: hostTag(),
+    pid: 2147483646,
+    updated_at: new Date().toISOString(),
+  }
+  const pidOnly = livenessOf(record)
+  assert.equal(pidOnly.liveness, 'dead')
+  assert.equal(pidOnly.reason, 'pid-gone')
+  assert.equal(pidOnly.evidence, 'pid')
+  const registry = livenessOf(record, { registryLive: true })
+  assert.equal(registry.liveness, 'live')
+  assert.equal(registry.reason, 'agent-live')
+  assert.equal(registry.evidence, 'registry')
+})
+
+test('livenessOf：registryLive=false 立即判死，压过 pid 与 TTL（注册表优先）', () => {
+  // pid 仍活 + 记录刚续期：旧判据只会说 live；注册表说会话没了就必须判死。
+  const record = {
+    schema: 1,
+    session: 's',
+    status: 'working',
+    host: hostTag(),
+    pid: process.pid,
+    updated_at: new Date().toISOString(),
+  }
+  assert.equal(livenessOf(record).liveness, 'live')
+  const registry = livenessOf(record, { registryLive: false })
+  assert.equal(registry.liveness, 'dead')
+  assert.equal(registry.reason, 'session-gone')
+  assert.equal(registry.evidence, 'registry')
+  assert.equal(registry.ageSeconds, 0)
+  // 跨机器记录仍是 foreign：注册表不替别的机器说话。
+  const foreign = livenessOf({ ...record, host: 'other-machine|linux' }, { registryLive: false })
+  assert.equal(foreign.liveness, 'foreign')
+  assert.equal(foreign.evidence, 'host')
+})
+
+test('livenessOf：无任何证据时走 TTL 租约（fresh=unknown / 过期=stale），并标 evidence=ttl', () => {
+  const fresh = { schema: 1, session: 's', status: 'idle', updated_at: new Date().toISOString() }
+  assert.equal(livenessOf(fresh).liveness, 'unknown')
+  assert.equal(livenessOf(fresh).evidence, 'ttl')
+  const old = { ...fresh, updated_at: new Date(Date.now() - (HEARTBEAT_STALE_SECONDS + 60) * 1000).toISOString() }
+  assert.equal(livenessOf(old).liveness, 'stale')
+  assert.equal(livenessOf(old).evidence, 'ttl')
+})
+
+test('投影：宿主还活着但会话已停止 → dead/session-gone（pid 存活不再骗过判活）', () => {
+  const { root, contract } = freshProject('stopped-session')
+  withClaims(root, contract, 'session-stopped', ['CONTRACT.md'])
+  // 记录由本进程写（pid === 本进程 pid），注册表却没有这个会话 = 会话已停止。
+  const stopped = new Set()
+  const sessionLive = (session) => stopped.has(session)
+  const section = readHeartbeatSection(root, contract, { visibility: 'all', sessionLive })
+  const row = section.items.find((item) => item.session === 'session-stopped')
+  assert.equal(row.liveness, 'dead')
+  assert.equal(row.reason, 'session-gone')
+  assert.equal(row.livenessEvidence, 'registry')
+  assert.equal(section.livenessEvidence, 'registry')
+  // dead 行默认视图里消失（文件还在）。
+  const visible = readHeartbeatSection(root, contract, { sessionLive })
+  assert.deepEqual(visible.items, [])
+  assert.equal(visible.counts.dead, 1)
+})
+
+test('投影：注册表说会话在 → 记录老旧也判活（不会被别人误抢）', () => {
+  const { root, contract } = freshProject('renewed')
+  withClaims(root, contract, 'session-renewed', ['CONTRACT.md'])
+  // 7 小时没续期，且抹掉 pid/boot 证据：只剩 TTL 会判 stale，注册表说活就该判活。
+  const record = JSON.parse(fs.readFileSync(heartbeatPath(root, 'session-renewed'), 'utf8'))
+  delete record.pid
+  delete record.pid_start
+  delete record.boot_id
+  record.updated_at = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()
+  fs.writeFileSync(heartbeatPath(root, 'session-renewed'), JSON.stringify(record, null, 2))
+  const ttlOnly = readHeartbeatSection(root, contract, { visibility: 'all' })
+  assert.equal(ttlOnly.items.find((item) => item.session === 'session-renewed').liveness, 'stale')
+  const registry = readHeartbeatSection(root, contract, {
+    visibility: 'all',
+    sessionLive: (session) => session === 'session-renewed',
+  })
+  const row = registry.items.find((item) => item.session === 'session-renewed')
+  assert.equal(row.liveness, 'live')
+  assert.equal(row.reason, 'agent-live')
+  assert.equal(row.livenessEvidence, 'registry')
+})
+
+test('投影：注册表不能替别的 DSH 进程判死（记录 pid 不是本进程）', () => {
+  const { root, contract } = freshProject('other-process')
+  // 同机器同 host tag，但没有 pid：本进程无法证明是自己的记录，注册表无权判死。
+  rawHeartbeat(root, {
+    schema: 1,
+    session: 'session-other-process',
+    status: 'working',
+    host: hostTag(),
+    updated_at: new Date().toISOString(),
+  })
+  const section = readHeartbeatSection(root, contract, { visibility: 'all', sessionLive: () => false })
+  const row = section.items.find((item) => item.session === 'session-other-process')
+  assert.equal(row.liveness, 'unknown', '没有 pid 就不是本进程的记录，注册表无权判死')
+  assert.equal(row.livenessEvidence, 'ttl')
+  // 有别人的 pid（不是 process.pid）时同样不判 session-gone，交给 pid/TTL。
+  rawHeartbeat(root, {
+    schema: 1,
+    session: 'session-foreign-pid',
+    status: 'working',
+    host: hostTag(),
+    pid: process.pid + 1,
+    updated_at: new Date().toISOString(),
+  })
+  const second = readHeartbeatSection(root, contract, { visibility: 'all', sessionLive: () => false })
+  assert.notEqual(second.items.find((item) => item.session === 'session-foreign-pid').reason, 'session-gone')
+})
+
+test('投影：没有注册表能力 → 整批标 ttl-only，租约到期时间可查（可靠性降一档）', () => {
+  const { root, contract } = freshProject('ttl-only')
+  withClaims(root, contract, 'session-ttl', ['CONTRACT.md'])
+  const section = readHeartbeatSection(root, contract, { visibility: 'all' })
+  assert.equal(section.livenessEvidence, 'ttl-only')
+  assert.equal(section.leaseSeconds, HEARTBEAT_STALE_SECONDS)
+  const row = section.items.find((item) => item.session === 'session-ttl')
+  assert.equal(typeof row.leaseExpiresAt, 'string')
+  const renewed = Date.parse(row.updated_at)
+  assert.equal(Date.parse(row.leaseExpiresAt) - renewed, HEARTBEAT_STALE_SECONDS * 1000, '租约 = 续期时间 + TTL')
+})
+
+test('heartbeatStatus：sessionLive=false 立即 inactive/session-gone；无注册表时标 ttl 证据', () => {
+  const { root, contract } = freshProject('status')
+  withClaims(root, contract, 'session-status', ['CONTRACT.md'])
+  const withoutRegistry = heartbeatStatus(root, contract, 'session-status')
+  assert.equal(withoutRegistry.active, true)
+  assert.equal(withoutRegistry.livenessEvidence, 'pid')
+  const stopped = heartbeatStatus(root, contract, 'session-status', { sessionLive: () => false })
+  assert.equal(stopped.active, false)
+  assert.equal(stopped.liveness, 'dead')
+  assert.equal(stopped.reason, 'session-gone')
+  assert.equal(stopped.livenessEvidence, 'registry')
+  const live = heartbeatStatus(root, contract, 'session-status', { sessionLive: () => true })
+  assert.equal(live.active, true)
+  assert.equal(live.reason, 'agent-live')
+})
+
+test('验收①：宿主活着但会话已停止 → 立即释放它占的文件域', () => {
+  const { root, contract } = freshProject('guard-stopped')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-guard-mine')
+  withClaims(root, contract, 'session-guard-mine', ['lib/', 'CONTRACT.md'])
+  withClaims(root, contract, 'session-guard-stopped', ['CONTRACT.md'])
+  // 停止的会话不在注册表里：即使心跳刚续期、pid 仍活，也不占域。
+  assert.equal(harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine)), undefined)
+})
+
+test('验收②：活会话在注册表里 → 不被误抢', () => {
+  const { root, contract } = freshProject('guard-live')
+  const harness = makeHarness(root)
+  const mine = harness.addAgent('session-guard-live-mine')
+  harness.addAgent('session-guard-live-owner')
+  withClaims(root, contract, 'session-guard-live-mine', ['lib/', 'CONTRACT.md'])
+  withClaims(root, contract, 'session-guard-live-owner', ['CONTRACT.md'])
+  const reason = harness.guardOf()(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine))
+  assert.equal(typeof reason, 'string')
+  assert.match(reason, /session-guard-live-owner/)
+})
+
+test('验收③：没有注册表能力的宿主按 TTL 租约释放（过期放行、新鲜仍占）', () => {
+  const { root, contract } = freshProject('guard-ttl')
+  const harness = makeHarness(root, {}, { agents: false })
+  const mine = harness.addAgent('session-guard-ttl-mine')
+  withClaims(root, contract, 'session-guard-ttl-mine', ['CONTRACT.md', 'README.md'])
+  const sevenHoursAgo = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()
+  rawHeartbeat(root, { schema: 1, session: 'session-ttl-old', status: 'idle', claims: ['CONTRACT.md'], updated_at: sevenHoursAgo })
+  rawHeartbeat(root, { schema: 1, session: 'session-ttl-new', status: 'idle', claims: ['README.md'], updated_at: new Date().toISOString() })
+  const guard = harness.guardOf()
+  assert.equal(guard(call('edit', { file_path: path.join(root, 'CONTRACT.md') }, mine)), undefined, '租约过期 → 释放')
+  const fresh = guard(call('edit', { file_path: path.join(root, 'README.md') }, mine))
+  assert.equal(typeof fresh, 'string', '租约未过期 → 仍占域')
+  assert.match(fresh, /session-ttl-new/)
+})
+
+test('验收④：注册表说死优先于 TTL（新鲜记录也立即释放）；说活优先于 pid-gone', () => {
+  const row = (overrides = {}) =>
+    projectedItem({ session: 'session-conflict', status: 'idle', livenessEvidence: 'registry', ...overrides })
+  // 注册表判死的投影行：不占域（即使 claims 还在、记录不 stale）。
+  assert.equal(foreignClaimOwner([row({ liveness: 'dead', reason: 'session-gone' })], 'session-mine', 'CONTRACT.md'), null)
+  // 注册表判活的投影行：继续占域。
+  const owner = foreignClaimOwner([row({ liveness: 'live', reason: 'agent-live' })], 'session-mine', 'CONTRACT.md')
+  assert.equal(owner.session, 'session-conflict')
 })
 
