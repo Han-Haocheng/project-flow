@@ -92,8 +92,11 @@ test('the host half exposes the shared state projection and does not mount the p
   // T-20261104-01 the caller enumerates the registry exactly once and passes
   // the rows in (`collectPanelState(ctx, root, workspaces)`), so the projection
   // never re-reads the registry inside one request.
-  assert.match(stateSource, /async function collectPanelState\(ctx, root, workspaces\)/)
-  assert.match(stateSource, /sendJson\(response, 200, await collectPanelState\(\w+, root, workspaces\)\)/)
+  // T-20261112202457：读 seam 给 collectPanelState/handleState 加了可选 options
+  // （{deadlineMs, readSnapshot}），默认行为不变；断言只关心「同一投影 + 注册表只传一次」，
+  // 不钉死可选参数的有无。
+  assert.match(stateSource, /async function collectPanelState\(ctx, root, workspaces/)
+  assert.match(stateSource, /sendJson\(response, 200, await collectPanelState\(host, root, workspaces/)
   assert.match(stateSource, /return await collectPanelState\(ctx, root, workspaces\)/)
   assert.match(stateSource, /export function panelStateReader\(ctx\)/)
   // T-20261112154725：前端主读路径走 CLI 契约，进程内读降级为兜底，两者都在入口。
