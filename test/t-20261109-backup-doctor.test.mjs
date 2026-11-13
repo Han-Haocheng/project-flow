@@ -181,3 +181,44 @@ test('flow doctor：未完成 intent 超过 10 条时提示「数量偏多」', 
   assert.match(intents.message, /11 条未完成动作/)
   assert.match(intents.message, /数量偏多，考虑排查/)
 })
+
+test('flow doctor：心跳目录不可读时心跳项是 warn（不再假绿「0 条」）', () => {
+  const root = freshProject('doctor-hb-bad')
+  createBackup(root, { now: new Date() })
+  const beatDir = path.join(root, '.agents', 'heartbeat')
+  const heartbeatsFinding = () => {
+    const result = spawnSync(process.execPath, [BIN, '--root', root, 'doctor', '--json'], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    const data = JSON.parse(result.stdout).data
+    return data.findings.find((item) => item.id === 'heartbeats')
+  }
+
+  // 1) 心跳路径变成普通文件
+  fs.rmSync(beatDir, { recursive: true, force: true })
+  fs.writeFileSync(beatDir, 'not a directory')
+  const asFile = heartbeatsFinding()
+  assert.equal(asFile.level, 'warn')
+  assert.match(asFile.message, /unavailable/)
+  assert.match(asFile.message, /不代表健康/)
+
+  // 2) 目录 chmod 000（root 会绕过权限位，跳过）
+  if (process.platform !== 'win32' && (process.getuid === undefined || process.getuid() !== 0)) {
+    fs.rmSync(beatDir, { force: true })
+    fs.mkdirSync(beatDir, { recursive: true })
+    fs.chmodSync(beatDir, 0o000)
+    try {
+      const denied = heartbeatsFinding()
+      assert.equal(denied.level, 'warn')
+      assert.match(denied.message, /unavailable/)
+      assert.match(denied.message, /不代表健康/)
+    } finally {
+      fs.chmodSync(beatDir, 0o755)
+    }
+  }
+
+  // 3) 目录整体缺失（同样不能报「0 条 ok」）
+  fs.rmSync(beatDir, { recursive: true, force: true })
+  const missing = heartbeatsFinding()
+  assert.equal(missing.level, 'warn')
+  assert.match(missing.message, /不存在/)
+})
