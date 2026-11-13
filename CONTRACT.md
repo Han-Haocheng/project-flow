@@ -78,6 +78,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 
 | `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
 | `lib/plugin/*.mjs` | 子插件挂载骨架（`mount`）与共享参数（`shared`） | `tasks.js`/`gates.js`/`experiments.js` |
+| `lib/backend/*.mjs` | **后端单一 API 层**（T-20261112154526）：CLI/工具/MCP 等 adapter 的唯一入口；按命名空间薄转发 core（锁、校验、写盘、警告仍在 core），本层不做 DTO/缓存/跨调用事务；adapter 不得直接 import core | `lib/cli/check.mjs`、`lib/cli/state.mjs`（迁移中） |
 | `client.js` | 浏览器 bundle：**零 import、无构建步骤**，因此不能放进 `lib/`；宿主按经典脚本原样下发，2026-11-11 评估后**保持单文件 + `#region` 分区**（见 `docs/module-boundaries.md` §7.1） | 面板 |
 | 根目录 `tasks.js`/`gates.js`/`experiments.js`/`tui-host.js` | 子插件/TUI 入口，**被 `package.json` 的 `exports` 逐条点名**，是 npm 包契约的一部分，不要移动 | 宿主 |
 

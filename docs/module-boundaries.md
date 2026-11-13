@@ -23,6 +23,7 @@
 |---|---|
 | `framework` | Host 装配：`apply`、路由、工具/技能/提示注册、权限面、子插件入口、清单；`lib/host/*`、`scripts/*`、`docs/` |
 | `store` | 存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树 |
+| `backend` | 后端单一 API 层（`lib/backend/`）：adapter 唯一入口，按命名空间薄转发 core（锁/校验仍在 core） |
 | `tasks` | 任务 CRUD、九阶段状态机、捕获流水线、子任务、P3b 派工、团队板对账 |
 | `decisions` | 决策台账、否决、命令解析、会话隔离 |
 | `heartbeats` | 心跳存活判定、自动开关、面板行 |

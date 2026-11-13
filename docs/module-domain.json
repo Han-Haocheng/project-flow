@@ -254,6 +254,14 @@
       ],
       "semantics": "存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树。"
     },
+    "backend": {
+      "title": "后端单一 API 层（adapter 唯一入口）",
+      "owns": ["lib/backend/"],
+      "shared": [],
+      "sections": {},
+      "tests": ["test/t-20261113-backend-api.test.mjs"],
+      "semantics": "后端 API 层（T-20261112154526）：CLI/工具/MCP 等 adapter 只调本层；本层是 lib/ 下唯一 import lib/core.mjs 的 adapter 入口，只做按命名空间转发（锁、校验、写盘、警告仍在 core），不做 DTO/缓存/跨调用事务。"
+    },
     "tasks": {
       "title": "任务模块（任务 CRUD / 九阶段状态机 / 捕获 / 子任务 / 团队板对账）",
       "owns": [
