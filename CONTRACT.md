@@ -103,7 +103,9 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 `lib/host/session.mjs` 已于同片收口（走 api，不再懒取 core）；bin 的 `setCoreRef`/`ctx.core`
 注入面同时退场（`drainCoreWarnings` 改走 api，仍是同一条 core 警告通道）。
 切片 5 收尾：`index.js`、`lib/host/enforce.mjs`、`lib/host/team.mjs` 已改走
-`lib/backend/api.mjs`；**除 MCP（另卡）外，所有后端 adapter 均经 api**。
+`lib/backend/api.mjs`；末片（MCP，T-20261113131413）把 `mcp-server` 自建 `loadCore` 与
+orchestrator 的 core shim 收进 api。**至此全部后端 adapter（CLI / MCP / 插件工具 / 宿主）
+均经 api；全库静态/动态 core import 只剩 `lib/backend/api.mjs`。**
 网关（`requireCore`/`coreModule`/`coreAvailable`）只作**降级探测**保留在
 `lib/state-snapshot.mjs`（`index.js` 启动时的一条 `core-unavailable` 警告、
 `test/t-20261107-state-degradation.test.mjs` 的降级断言），正常读写路径不再经过它。
@@ -117,6 +119,16 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 - `flow <command> [--json]`：人类与脚本的 CLI，也是**前后端唯一接口**（形状见 `docs/cli-contract.md`）；
 - `flow mcp-serve [--root <dir>] ...`：MCP stdio adapter，和 CLI **平级、共用同一份 core**
   （实现在 `lib/cli/mcp-server.mjs`，不是第二份实现）。
+
+**MCP 的两条执行路径（T-20261113131413 收口）**：
+
+- **10 个工具走 CLI 子进程**：`cliArgsFor` 生成 `flow <command> --json` argv
+  （experiments / gates / decisions / heartbeat / desc / check / status / doctor / backup / init），
+  与 CLI 共用同一入口与输出契约；
+- **3 个进程内工具**（`flow_task` / `flow_subtask` / `flow_orchestrate`）：写台账经
+  `lib/backend/api.mjs`（方法集与原 core shim 一致：getTask/addTask/updateTask/listTasks/taskRevisionOf），
+  `expectedRevision` CAS 与派工能力不变；
+- 不存在第三条直连 core 的路径；`lib/cli/mcp-server.mjs` 不再自建 core loader。
 
 **兼容策略**：旧入口 `flow-mcp`（`bin/mcp.mjs`）保留为**兼容别名**——它直接复用
 `lib/cli/mcp-server.mjs` 的 `main`，不 spawn 子进程、不复制实现，只在 stderr 排一行弃用提示

@@ -1,4 +1,4 @@
-// 2026-11-13（T-20261112154526 切片 1–5）：后端单一 API 层 + CLI/域助手/工具/宿主/会话/装配面迁移。
+// 2026-11-13（T-20261112154526 切片 1–5 + T-20261113131413）：后端单一 API 层覆盖 CLI/工具/宿主/会话/装配面/MCP。
 //
 // 本文件守三层，且每层都先证「断言会咬人」再证「当前是绿的」：
 //   ① 正例：api 从 ../core.mjs 取能力；已迁文件确实 import api（防文件消失/改名后假绿）；
@@ -47,11 +47,12 @@ const MIGRATED = [
   'lib/host/session.mjs',
   'lib/host/enforce.mjs',
   'lib/host/team.mjs',
+  'lib/cli/mcp-server.mjs',
 ]
 /** 已迁文件中唯一不 import api 的例外（面板读网关，切片 1 裁定）。 */
 const NO_API_IMPORT_EXCEPTIONS = new Set(['lib/cli/state.mjs'])
-/** 仍允许直接 import core 的 lib 文件：MCP 另立卡（切片 4）。 */
-const CORE_IMPORT_ALLOWLIST = new Set([API_FILE, 'lib/cli/mcp-server.mjs'])
+/** 全库唯一允许直接 import core 的文件（MCP 已于 T-20261113131413 收进 api）。 */
+const CORE_IMPORT_ALLOWLIST = new Set([API_FILE])
 const TEMP_ROOTS = []
 
 after(() => {
@@ -151,7 +152,7 @@ test('结构：api 是 core 的唯一 adapter 入口；已迁文件只 import ap
   const importers = [...walk('lib'), ...walk('bin')]
     .filter((rel) => importSpecifiers(readRepo(rel)).some(isCoreSpecifier))
     .sort()
-  assert.deepEqual(importers, [API_FILE, 'lib/cli/mcp-server.mjs'].sort(), 'core import 入口白名单漂移')
+  assert.deepEqual(importers, [API_FILE], '全库 core import 白名单只剩 api.mjs')
 })
 
 test('结构：bin 的 coreRef/ctx.core 注入面已退场，加载点只剩 api 与 state-snapshot', () => {
@@ -168,7 +169,15 @@ test('结构：bin 的 coreRef/ctx.core 注入面已退场，加载点只剩 api
   assert.doesNotMatch(shared, /\bcoreRef\b|\bsetCoreRef\s*\(/, 'shared 不得再持有 coreRef')
   // warnings 仍是单通道：shared 直接转发 api（其成员就是 core.drainWarnings 本身）。
   assert.match(shared, /backendWarnings\.drainWarnings\(\)/, 'drainCoreWarnings 必须走 api 单通道')
-  // 降级加载点仍在 state-snapshot（未迁移的 enforce/team/index 与降级测试依赖）。
+  // MCP 不再自建 core loader（进程内三工具经 api，10 个工具仍走 CLI 子进程）。
+  const mcp = readRepo('lib/cli/mcp-server.mjs')
+  assert.match('const c = loadCore()', /\bloadCore\s*\(/)
+  assert.doesNotMatch(mcp, /\bloadCore\s*\(/, 'MCP 不得再自建 core loader')
+  assert.deepEqual(importSpecifiers(mcp).filter(isCoreSpecifier), [], 'MCP 不得再 import core')
+  // orchestrator 的依赖注入点必须是 api.tasks（不再有逐方法包一层的 core shim）。
+  assert.match(mcp, /orchestrator\.core = tasks/, 'orchestrator 必须注入 api.tasks')
+  assert.doesNotMatch(mcp, /getTask: \(a, b, c\) =>/, '不得恢复 core shim')
+  // 降级加载点仍在 state-snapshot（index 启动探测与降级测试依赖）。
   assert.match(readRepo('lib/state-snapshot.mjs'), /CORE_URL/, 'state-snapshot 的降级加载点必须在')
 })
 
