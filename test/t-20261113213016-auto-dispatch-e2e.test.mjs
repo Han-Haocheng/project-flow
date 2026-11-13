@@ -130,9 +130,37 @@ test('auto 端到端：同角色并行 + analyzer 拆卡→settle 实现者→ap
   assert.equal(reviewClosed.outcome, 'ok')
   assert.equal(getTask(root, contract, child.task.id).stage, 'done')
 
-  // ③ 真实链路缺口（T-20261113213016 实测，不伪造绿）：
-  // 首轮 reject close + settle 能派实现者；第 2 轮在实现者 close 后 queue/ack reviewer 再 close，
-  // settle 未再产生实现者工单，下一轮 closeDispatch 直接报“没有工单”。单测逐次 closeDispatchedChild 是通过的，
-  // 差异在 auto/settle 的重复派工交互；按卡要求只记录，不改断言、不改 lib。
-  t.diagnostic('③ reject 自动回退：settle 在第 2 轮未产生新工单（真实链路缺口，已上报）')
+  // ③ reject 回退：真实 auto reviewer → 打回 → settle 补派实现者 → 三次 needs-human。
+  const rejectParent = await taskTool.execute({ action: 'add', title: '打回父卡', type: 'feat', root, stage: 'queued-analysis' }, exec)
+  const rejectChild = await subtaskTool.execute(
+    {
+      action: 'add', parent: rejectParent.task.id, title: '打回子卡', type: 'fix',
+      mountKind: 'module', mount: 'dispatch', scope: { allow: ['lib/dispatch.mjs'] }, noDispatch: true,
+    },
+    exec,
+  )
+  const rpSession = getTask(root, contract, rejectParent.task.id).checkpoints.filter((x) => x.kind === 'claim' && !x.closedAt).at(-1)?.session
+  const rc = closeDispatchedChild(host.ctx, rpSession)
+  await settleDispatchAfterClose({ ctx: host.ctx, root, contract, task: getTask(root, contract, rejectParent.task.id), result: rc, config: { dispatch: { auto: true } } })
+  for (let cycle = 1; cycle <= 3; cycle += 1) {
+    closeDispatch(root, contract, rejectChild.task.id, { outcome: 'ok', reason: '实现完成 ' + cycle })
+    const beforeReviewer = subagents.calls.length
+    await taskTool.execute({ action: 'update', id: rejectChild.task.id, root, stage: 'queued-review' }, exec)
+    const reviewing = getTask(root, contract, rejectChild.task.id)
+    assert.equal(reviewing.stage, 'reviewing', '第 ' + cycle + ' 轮 reviewer 必须自动进来')
+    assert.equal(subagents.calls.length, beforeReviewer + 1)
+    const rclaim = reviewing.checkpoints.filter((x) => x.kind === 'claim' && !x.closedAt).at(-1)
+    assert.ok(rclaim !== undefined)
+    core.releaseTask(root, contract, rejectChild.task.id, { agent: 'reviewer:' + rejectChild.task.id, outcome: 'ok' })
+    await taskTool.execute({ action: 'update', id: rejectChild.task.id, root, stage: 'queued-implementation' }, exec)
+    const closed = closeDispatchedChild(host.ctx, rclaim.session, { reason: '打回 ' + cycle })
+    assert.equal(closed.decision, 'reject', 'cycle ' + cycle + ' 必须走 reject 分支')
+    const beforeSettle = subagents.calls.length
+    await settleDispatchAfterClose({ ctx: host.ctx, root, contract, task: getTask(root, contract, rejectParent.task.id), result: closed, config: { dispatch: { auto: true } } })
+    assert.equal(subagents.calls.length, beforeSettle + 1, 'reject 后 settle 必须补派实现者')
+    if (cycle === 3) {
+      assert.equal(closed.needsHuman, true, '第 3 次 reject 必须 needs-human')
+      assert.match(String(getTask(root, contract, rejectChild.task.id).notes), /\[needs-human\]/)
+    }
+  }
 })

@@ -1723,6 +1723,39 @@ test('派工入口矩阵：analyzing/implementing/reviewing 同角色重派，�
   assert.equal(subagents.calls.length, 0)
 })
 
+
+test('settle reviewer 打回：以 result.task（子卡）为目标补派实现者，不用调用方父卡', async () => {
+  const { root, contract } = freshProject('settle-reject-target')
+  const parent = addTask(root, contract, { type: 'feat', title: '父卡', stage: 'analyzing' })
+  const child = addTask(root, contract, {
+    type: 'feat', title: '子卡', parent: parent.id, stage: 'queued-implementation',
+    mount: { kind: 'module', id: 'dispatch' }, scope: { allow: ['lib/dispatch.mjs'] },
+  })
+  core.queueDispatch(root, contract, child.id, { agent: 'reviewer:' + child.id, role: 'reviewer' })
+  core.ackDispatch(root, contract, child.id, { agent: 'reviewer:' + child.id, session: 'review-1' })
+  const subagents = fakeSubagents()
+  const ctx = {
+    get(name) {
+      if (name === 'subagents') return subagents
+      if (name === 'workingDirectory') return { get: () => root }
+      if (name === 'agents') return { get: () => undefined, list: () => [], roots: () => [] }
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  const agent = { id: 'session-main', session: { cwd: root, header: { origin: 'main' } } }
+  const closed = closeDispatchedChild(ctx, 'review-1', { reason: '打回' })
+  assert.equal(closed.decision, 'reject')
+  const settled = await settleDispatchAfterClose({
+    ctx, agent, root, contract, task: getTask(root, contract, parent.id), result: closed,
+    config: { dispatch: { auto: true } },
+  })
+  assert.equal(subagents.calls.length, 1, '必须以 result.task 为准补派实现者')
+  assert.equal(settled[0].task, child.id)
+  assert.equal(getTask(root, contract, child.id).stage, 'implementing')
+  assert.equal(getTask(root, contract, parent.id).stage, 'analyzing', '父卡不得被当成实现者目标')
+})
+
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
   const { root, contract } = freshProject('review-approve')
   const task = addTask(root, contract, { type: 'feat', title: '审查通过', stage: 'queued-review' })
