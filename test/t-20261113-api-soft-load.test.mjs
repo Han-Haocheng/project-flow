@@ -50,6 +50,22 @@ function stageLibWithoutCore(label) {
   return { dir, lib: target }
 }
 
+/** 复制真实 lib/，但把 core.mjs 的两个 re-export 删掉（模拟 adapter 新 / core 旧的错配安装态）。 */
+function stageLibWithStaleCore(label) {
+  const dir = tempRoot(label)
+  const target = path.join(dir, 'lib')
+  fs.cpSync(LIB, target, { recursive: true })
+  const coreFile = path.join(target, 'core.mjs')
+  const source = fs.readFileSync(coreFile, 'utf8')
+  const patched = source.replace('  getDescriptionPlan,\n', '').replace('  applyDescriptionPlan,\n', '')
+  assert.equal(patched.includes('  getDescriptionPlan,\n'), false)
+  assert.equal(patched.includes('  applyDescriptionPlan,\n'), false)
+  assert.notEqual(patched, source, 'staged core.mjs must actually lose the exports')
+  fs.writeFileSync(coreFile, patched)
+  return { dir, lib: target }
+}
+
+
 test('降级：core.mjs 缺失时 api 仍可 import，成员存在，调用抛可读 io 错误', () => {
   const { dir, lib } = stageLibWithoutCore('degraded')
   const apiUrl = pathToFileURL(path.join(lib, 'backend', 'api.mjs')).href
@@ -114,4 +130,60 @@ test('正例对照：同一份 api 在真实仓库里 core 可用，成员仍是
   assert.equal(api.contract.loadContract, core.loadContract)
   assert.equal(api.FlowError, core.FlowError)
   assert.notDeepEqual(api.tasks.TASK_TYPES, [], '健康路径的 TASK_TYPES 必须是真实清单')
+
+  // 每个命名空间成员都必须是 core 的原函数引用（不是 stub、也不是兜底）；
+  // 缺成员是 --show 报「core is not installed」的唯一成因，这里逐成员锁死。
+  assert.equal(api.description.getDescriptionPlan, core.getDescriptionPlan, '健康路径的 plan 读取必须是 core 原函数')
+  for (const namespace of ['contract', 'tasks', 'gates', 'experiments', 'decisions', 'heartbeats', 'description', 'checks', 'runner']) {
+    for (const [name, value] of Object.entries(api[namespace])) {
+      if (typeof value !== 'function' || typeof core[name] !== 'function') continue
+      assert.equal(value, core[name], namespace + '.' + name + ' 必须是 core 原函数引用（不是 stub）')
+    }
+  }
 })
+
+test('core 缺 re-export 时：getDescriptionPlan 只读兜底可用；其它缺成员报版本错配而非安装错误', () => {
+  const { dir, lib } = stageLibWithStaleCore('stale-core')
+  const apiUrl = pathToFileURL(path.join(lib, 'backend', 'api.mjs')).href
+  const probe = path.join(dir, 'probe-stale.mjs')
+  fs.writeFileSync(
+    probe,
+    [
+      `const api = await import(${JSON.stringify(apiUrl)})`,
+      "const fs = await import('node:fs')",
+      "const os = await import('node:os')",
+      "const path = await import('node:path')",
+      "const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-stale-core-proj-'))",
+      "api.contract.initProject(root, { name: 'stale', noGates: true })",
+      'const contract = api.contract.loadContract(root).contract',
+      'const out = {',
+      "  getPlanType: typeof api.description.getDescriptionPlan,",
+      "  plan: api.description.getDescriptionPlan(root, contract, 'T-20260101000000'),",
+      "  otherReads: typeof api.description.descriptionStatus,",
+      '}',
+      'try {',
+      "  api.description.applyDescriptionPlan(root, contract, 'T-20260101000000')",
+      '} catch (error) {',
+      '  out.missing = { code: error.code, message: error.message, isFlowError: error instanceof api.FlowError }',
+      '}',
+      'process.stdout.write(JSON.stringify(out))',
+      'fs.rmSync(root, { recursive: true, force: true })',
+      '',
+    ].join('\n'),
+  )
+  const run = spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 60_000 })
+  assert.equal(run.status, 0, 'probe failed: ' + run.stderr)
+  const out = JSON.parse(run.stdout)
+
+  assert.equal(out.getPlanType, 'function', '--show 走的成员必须可用（域模块只读兜底）')
+  assert.equal(out.plan, null, '没有计划时返回 null（空态），不是安装错误')
+  assert.equal(out.otherReads, 'function', '其它 desc 只读成员仍由 core 提供')
+
+  assert.ok(out.missing, '缺成员调用必须抛错')
+  assert.equal(out.missing.code, 'io')
+  assert.equal(out.missing.isFlowError, true)
+  assert.match(out.missing.message, /does not export applyDescriptionPlan/)
+  assert.match(out.missing.message, /out of sync/)
+  assert.doesNotMatch(out.missing.message, /core is not installed/, '版本错配不得伪装成「未安装」')
+})
+
