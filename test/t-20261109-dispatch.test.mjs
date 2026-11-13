@@ -162,19 +162,22 @@ function makeHost(root, { subagents, team, config, capabilities, autoDefault = t
 test('派工映射：只有 queued-* 可派，角色/working 阶段与 stage 表一致', () => {
   assert.deepEqual(DISPATCH_ROLES, {
     'queued-analysis': 'analyzer',
+    analyzing: 'analyzer',
     'queued-implementation': 'implementer',
+    implementing: 'implementer',
     'queued-review': 'reviewer',
+    reviewing: 'reviewer',
   })
   for (const [stage, role] of Object.entries(DISPATCH_ROLES)) {
-    const plan = dispatchPlan({ id: 'T-1', stage, title: 'x', type: 'feat' })
+    const plan = dispatchPlan({ id: 'T-1', stage, title: 'x', type: 'feat' }, { allowSameStage: true })
     assert.equal(plan.ok, true)
     assert.equal(plan.role, role)
     assert.equal(plan.workingStage, WORKING_STAGE[stage])
   }
-  for (const stage of ['created', 'analyzing', 'implementing', 'reviewing', 'done', 'archived']) {
+  for (const stage of ['created', 'done', 'archived']) {
     const plan = dispatchPlan({ id: 'T-1', stage, title: 'x' })
     assert.equal(plan.ok, false, `${stage} 不该可派工`)
-    assert.match(plan.reason, /只有待分析\/待实现\/待审查可以派工/)
+    assert.match(plan.reason, /只有分析\/实现\/审查的排队或 working 阶段可以派工/)
   }
   assert.equal(dispatchPlan({ id: 'T-2', stage: 'queued-analysis', parent: 'T-1' }).ok, true, '子任务各自派工（2026-11-11 流程）')
 })
@@ -250,8 +253,10 @@ test('flow_task dispatch：起子代理 + 走 plugin 边到 working + 写回执'
   assert.equal(checkpoints[1].agent, `analyzer:${task.id}`, 'agent 唯一化：role:taskId')
   assert.equal(checkpoints[1].session, 'child-1', 'ack 的执行权落在子会话上')
   assert.match(String(result.dispatch.order), /-r\d+-a\d+$/, '结果回报 round/attempt 工单号')
-  // 已在 working 阶段：再派一次要被拒绝，避免第二个 worker
-  await assert.rejects(() => tool.execute({ action: 'dispatch', id: task.id, root }, exec), /只有待分析\/待实现\/待审查可以派工/)
+  // T-20261113212311：working 阶段允许同角色重派，但同卡未关闭工单会拦住第二个 worker。
+  const again = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(again.dispatch.skipped, true)
+  assert.equal(subagents.calls.length, 1, 'open 工单在，不得起第二个 worker')
 })
 
 test('flow_task dispatch：宿主没有 subagents 服务 / 关闭配置 / provider 失败都拒绝且台账不动', async () => {
@@ -777,11 +782,9 @@ test('审查打回回归：reviewing → queued-implementation 后必须起新�
   const froms = bounced.task.checkpoints.filter((item) => item.kind === 'dispatch').map((item) => item.from)
   assert.deepEqual(froms, ['queued-implementation', 'queued-review', 'queued-implementation'])
 
-  /* working 阶段仍然拒绝再派（放宽幂等不得产生第二个 worker）。 */
-  await assert.rejects(
-    () => tool.execute({ action: 'dispatch', id: task.id, root }, exec),
-    /只有待分析\/待实现\/待审查可以派工/,
-  )
+  /* working 阶段允许同角色重派，但 open 工单兜底，不得产生第二个 worker。 */
+  const blocked = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(blocked.dispatch.skipped, true)
   assert.equal(subagents.calls.length, 3)
 })
 
@@ -800,9 +803,10 @@ test('派工不校验终态 ④：正常路径不受影响（单次派工 + 回�
   assert.equal(result.task.checkpoints[0].kind, 'dispatch')
   assert.equal(result.task.checkpoints[1].kind, 'claim')
   assert.equal(result.task.checkpoints[1].session, 'child-1')
-  /* 工具层仍会拒绝在 working 阶段的第二次派工（不破坏既有语义）。 */
+  /* working 阶段第二次派工：入口允许，但同卡 open 工单让它跳过（不会起第二个 worker）。 */
   const { tool, exec } = makeHost(root, { subagents })
-  await assert.rejects(() => tool.execute({ action: 'dispatch', id: task.id, root }, exec), /只有待分析\/待实现\/待审查可以派工/)
+  const second = await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  assert.equal(second.dispatch.skipped, true)
   assert.equal(subagents.calls.length, 1)
 })
 
@@ -901,6 +905,8 @@ test('汇总轮 ①：子任务全部 done → 父任务经 flow_task update 推
   /* 父任务直接建在 analyzing：本用例从「分析者已进来」开始（created → analyzing 不是合约边）。 */
   const main = await taskTool.execute({ action: 'add', title: '父任务', type: 'feat', root, stage: 'analyzing' }, host.exec)
   const parentId = main.task.id
+  /* T-20261113212311 起 analyzing 也可派工：add 在 analyzing 会起首轮分析者，先收口再走后续。 */
+  finishRound(root, contract, parentId)
   /* 首轮分析者：拆任务（flow_subtask add）后从 analyzing 推到 queued-implementation。 */
   const subtaskTool = host.tool
   /* 子任务建在 queued-implementation（与 flow_subtask add 的默认起点一致）：
@@ -1687,6 +1693,34 @@ test('settleDispatchAfterClose：analyzer ok 派子卡实现者；幂等；revie
   // 没有 subagents 服务：只 warning，不抛。
   const bare = { get: () => undefined, logger: { warn() {} } }
   await settleDispatchAfterClose({ ctx: bare, agent, root, contract, task: getTask(root, contract, parent.id), result: { outcome: 'ok' }, config: {} })
+})
+
+
+test('派工入口矩阵：analyzing/implementing/reviewing 同角色重派，非法组合仍拒', async () => {
+  for (const [stage, role, expected] of [
+    ['queued-analysis', 'analyzer', 'analyzing'],
+    ['analyzing', 'analyzer', 'analyzing'],
+    ['implementing', 'implementer', 'implementing'],
+    ['reviewing', 'reviewer', 'reviewing'],
+  ]) {
+    const { root, contract } = freshProject('same-stage-' + stage)
+    const task = addTask(root, contract, { type: 'feat', title: '同阶段重派', stage })
+    const subagents = fakeSubagents()
+    const before = getTask(root, contract, task.id)
+    const { deps } = recordDeps(root, contract, subagents, before)
+    const result = await dispatchTaskRecord(deps)
+    assert.equal(subagents.calls.length, 1, stage + ' 必须允许同角色重派')
+    assert.equal(result.dispatch.role, role)
+    assert.equal(result.dispatch.from, stage)
+    assert.equal(result.task.stage, expected, '排队入口走 working 边；working 入口不得再写阶段')
+    assert.equal(result.task.checkpoints.length, 2, 'dispatch + claim')
+  }
+  const { root, contract } = freshProject('same-stage-illegal')
+  const done = addTask(root, contract, { type: 'feat', title: '终态', stage: 'done' })
+  const subagents = fakeSubagents()
+  const { deps } = recordDeps(root, contract, subagents, getTask(root, contract, done.id))
+  await assert.rejects(() => dispatchTaskRecord(deps), /只有分析\/实现\/审查的排队或 working 阶段可以派工/)
+  assert.equal(subagents.calls.length, 0)
 })
 
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {

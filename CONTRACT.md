@@ -735,6 +735,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 已离开该阶段 → `ok`；进程重启后按 `dispatch-list --session <child>` 找回工单。`lib/dispatch.mjs`
 只经 `lib/backend/api.mjs` 的 `tasks`（api∩core 同引用）消费队列，不直接 import 记录层。
 
+**派工入口矩阵（T-20261113212311）**：analyzer = `queued-analysis | analyzing`；implementer =
+`queued-implementation | implementing`；reviewer = `queued-review | reviewing`；其它组合仍拒绝。
+同阶段重派（如 analyzing → analyzing）不写阶段边，只追加 dispatch/claim 回执，因此可安全用于
+`settleDispatchAfterClose` 的补派；round/attempt 仍按工单规则推进。
+
 **agent 命名与互斥（T-20261113205947）**：插件派工的 agent 统一为 `role + ':' + taskId`
 （`queue` / `ack` / `close` 三处同一个名字；工单的 `role` 字段仍只存角色）。claim 的互斥规则
 保持「全局 1 条 open claim / agent」不变，因此互斥落在**同一张卡**而不是同一角色：同角色的两张卡
