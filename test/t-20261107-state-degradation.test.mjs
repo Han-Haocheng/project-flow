@@ -79,7 +79,7 @@ function stageSnapshotCopy(label) {
   return { dir, lib, copy, project }
 }
 
-/** 一个**初始化过**的 store：有 `.agents/flow/flow.json`，所以 buildStoreState 不会走兜底。 */
+/** 一个**初始化过**的 store：有 .agents/flow/flow.json（加一份夹具模块图），所以 buildStoreState 不会走兜底。 */
 function healthyStoreRoot(label) {
   const root = tempDir(`healthy-${label}`)
   fs.mkdirSync(path.join(root, '.agents', 'flow'), { recursive: true })
@@ -88,8 +88,10 @@ function healthyStoreRoot(label) {
     `${JSON.stringify({ schema: 2, name: `degradation-${label}` })}\n`,
     'utf8'
   )
+  writeFrameworkFixture(root)
   return root
 }
+
 
 /**
  * 健康参考 payload（模块内缓存一次）。
@@ -223,6 +225,111 @@ function assertPayloadShape(payload, root, reference = null) {
   }
 }
 
+/**
+ * framework 结构投影的公共形状断言（T-20261113162857）：两条 payload 路径都会带这一节，
+ * 前端按这里校验的字段画「模块层次树 + 横向切片」。
+ */
+function assertFrameworkShape(framework) {
+  assert.ok(framework !== null && typeof framework === 'object', 'framework must be an object')
+  assert.equal(typeof framework.degraded, 'boolean')
+  assert.deepEqual(
+    Object.keys(framework.summary).sort(),
+    ['describedModules', 'files', 'graphModules', 'graphRoles', 'graphSlices', 'graphUnmanaged', 'missingSemantics', 'plans'],
+    'framework.summary must keep the eight fixed keys, with no name shared by two artifacts'
+  )
+  for (const [key, value] of Object.entries(framework.summary)) {
+    assert.ok(value === null || typeof value === 'number', 'framework.summary.' + key + ' must be a number or null')
+  }
+  if (framework.degraded === true) {
+    assert.deepEqual(Object.keys(framework).sort(), ['degraded', 'summary'], 'a degraded framework section keeps only summary')
+    return
+  }
+  for (const key of ['modulesTruncated', 'slicesTruncated', 'rolesTruncated', 'unmanagedTruncated']) {
+    assert.equal(typeof framework[key], 'boolean', 'framework.' + key + ' must be a boolean')
+  }
+  assert.ok(Array.isArray(framework.modules), 'framework.modules must be an array')
+  for (const module of framework.modules) {
+    assert.equal(typeof module.name, 'string')
+    assert.equal(typeof module.title, 'string')
+    assert.equal(typeof module.sectionsTruncated, 'boolean')
+    assert.ok(Array.isArray(module.owns), 'module.owns must be an array')
+    for (const entry of module.owns) {
+      assert.equal(typeof entry.path, 'string')
+      assert.ok(entry.kind === 'file' || entry.kind === 'dir', 'module.owns[].kind must be file|dir')
+    }
+    assert.ok(Array.isArray(module.sections), 'module.sections must be an array')
+    for (const section of module.sections) {
+      assert.equal(typeof section.key, 'string')
+      assert.ok(Array.isArray(section.members), 'module.sections[].members must be an array')
+      assert.equal(typeof section.membersTruncated, 'boolean')
+    }
+    assert.ok(Array.isArray(module.slices), 'module.slices must be an array')
+  }
+  assert.ok(Array.isArray(framework.slices), 'framework.slices must be an array')
+  for (const slice of framework.slices) {
+    for (const key of ['id', 'title', 'semantics', 'ownerRole', 'rationale']) {
+      assert.equal(typeof slice[key], 'string', 'slice.' + key + ' must be a string')
+    }
+    assert.ok(Array.isArray(slice.files), 'slice.files must be an array')
+    for (const file of slice.files) {
+      assert.equal(typeof file.path, 'string')
+      assert.ok(file.moduleName === null || typeof file.moduleName === 'string', 'slice.files[].moduleName must be a string or null')
+      assert.equal(typeof file.exists, 'boolean')
+    }
+    assert.ok(Array.isArray(slice.modules), 'slice.modules must be an array')
+    assert.ok(Array.isArray(slice.missingFiles), 'slice.missingFiles must be an array')
+    assert.equal(typeof slice.filesTruncated, 'boolean')
+    assert.equal(typeof slice.missingFilesTruncated, 'boolean')
+  }
+  assert.ok(Array.isArray(framework.roles), 'framework.roles must be an array')
+  for (const role of framework.roles) {
+    for (const key of ['id', 'title', 'semantics']) {
+      assert.equal(typeof role[key], 'string', 'role.' + key + ' must be a string')
+    }
+    assert.ok(Array.isArray(role.modules), 'role.modules must be an array')
+  }
+  assert.ok(Array.isArray(framework.unmanaged), 'framework.unmanaged must be an array')
+  for (const row of framework.unmanaged) {
+    assert.equal(typeof row.path, 'string')
+    assert.equal(typeof row.reason, 'string', 'unmanaged[].reason is an additive echo of the map')
+  }
+  assert.ok(Array.isArray(framework.warnings), 'framework.warnings must be an array')
+  for (const line of framework.warnings) assert.equal(typeof line, 'string')
+}
+
+/**
+ * 测试夹具自带的模块图：正例只断言**这份夹具**，与仓库里的 docs/module-domain.json
+ * 解耦（那份 map 一改就不该让本测试红，也不该掩盖「读错主体」的回归）。
+ */
+const FRAMEWORK_FIXTURE = {
+  modules: {
+    alpha: { title: 'Alpha', owns: ['lib/', 'README.md'], sections: { 'lib/a.mjs': ['one', 'two'] } },
+    beta: { title: 'Beta', owns: ['docs/'], sections: {} },
+  },
+  aspects: {
+    'slice-one': {
+      title: 'Slice one',
+      semantics: 'slice semantics',
+      ownerRole: 'alpha-owner',
+      rationale: 'why the slice exists',
+      files: ['lib/a.mjs', 'stray.txt', 'docs/missing.md'],
+    },
+  },
+  roles: { 'alpha-owner': { title: 'Owner', semantics: 'role semantics', modules: ['alpha', 'ghost-module'] } },
+  unmanaged: [{ path: 'stray.txt', reason: 'fixture file' }],
+}
+
+/** 把夹具 map 写到 <root>/docs，并落下 slice 指向的真实文件。 */
+function writeFrameworkFixture(root) {
+  fs.mkdirSync(path.join(root, 'lib'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'README.md'), '# fixture\n', 'utf8')
+  fs.writeFileSync(path.join(root, 'lib', 'a.mjs'), '// fixture\n', 'utf8')
+  fs.writeFileSync(path.join(root, 'stray.txt'), 'fixture\n', 'utf8')
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify(FRAMEWORK_FIXTURE, null, 2) + '\n', 'utf8')
+}
+
+// ------------------------------------------------------------------ 正例
 // ------------------------------------------------------------------ 正例
 test('正例：core 正常时 buildSnapshot 不走降级，且形状含 heartbeatsHidden 与 8 键 counts', async () => {
   assert.equal(snapshots.coreAvailable(), true, 'real tree must load lib/core.mjs')
@@ -245,7 +352,49 @@ test('正例：core 正常时 buildSnapshot 不走降级，且形状含 heartbea
     ['abandoned', 'confirmed', 'inconclusive', 'open', 'pivoted', 'refuted', 'total', 'unreadable'],
     'healthy experiments.counts must be the 8-key shape from CONTRACT §9.1.3'
   )
+
+  // 新 framework 结构投影（T-20261113162857）：结构必须来自**被查看 workspace 的**
+  // docs/module-domain.json（不是插件安装目录），并且 modules 的两种口径不得同名混用。
+  assert.equal(Object.hasOwn(payload, 'framework'), true, 'healthy payload must carry the framework structure section')
+  assertFrameworkShape(payload.framework)
+  assert.equal(payload.framework.degraded, false, 'a workspace with a module map must project as healthy')
+  assert.equal(payload.framework.modules.length, Object.keys(FRAMEWORK_FIXTURE.modules).length, 'every module of the map is projected')
+  assert.equal(payload.framework.slices.length, Object.keys(FRAMEWORK_FIXTURE.aspects).length, 'the map aspects are projected as slices')
+  assert.equal(payload.framework.roles.length, Object.keys(FRAMEWORK_FIXTURE.roles).length)
+  assert.deepEqual(payload.framework.modules.map((module) => module.name), ['alpha', 'beta'])
+  const alpha = payload.framework.modules[0]
+  assert.deepEqual(alpha.owns.map((entry) => entry.kind), ['dir', 'file'])
+  assert.deepEqual(alpha.sections, [{ key: 'lib/a.mjs', members: ['one', 'two'], membersTruncated: false }])
+  assert.deepEqual(alpha.slices, ['slice-one'])
+  const slice = payload.framework.slices[0]
+  assert.deepEqual(slice.modules, ['alpha', 'beta'])
+  assert.deepEqual(slice.missingFiles, ['docs/missing.md'])
+  assert.deepEqual(
+    slice.files.map((file) => [file.path, file.moduleName, file.exists]),
+    [
+      ['lib/a.mjs', 'alpha', true],
+      ['stray.txt', null, true],
+      ['docs/missing.md', 'beta', false],
+    ]
+  )
+  assert.ok(
+    payload.framework.warnings.includes('role-module-dangling: alpha-owner -> ghost-module'),
+    'a role naming an undeclared module must warn instead of projecting a dangling name'
+  )
+  assert.deepEqual(payload.framework.roles[0].modules, ['alpha'], 'dangling role modules are filtered out')
+  // summary 的两种 modules 口径必须分开命名。
+  assert.equal(Object.hasOwn(payload.framework.summary, 'modules'), false, 'the ambiguous modules key must be gone')
+  assert.equal(payload.framework.summary.describedModules, null, 'no description ledger in the fixture -> null, not a fake 0')
+  assert.equal(payload.framework.summary.graphModules, 2)
+  assert.equal(payload.framework.summary.graphSlices, 1)
+  assert.equal(payload.framework.summary.graphRoles, 1)
+  assert.equal(payload.framework.summary.graphUnmanaged, 1)
+  assert.equal(payload.framework.modulesTruncated, false)
+  assert.equal(payload.framework.slicesTruncated, false)
+  assert.equal(payload.framework.rolesTruncated, false)
+  assert.equal(payload.framework.unmanagedTruncated, false)
 })
+
 
 // ------------------------------------------------------ 降级 ①：core 不存在
 test('降级（core.mjs 缺失）：payload 形状与健康一致，且带可读原因', async () => {
@@ -267,6 +416,10 @@ test('降级（core.mjs 缺失）：payload 形状与健康一致，且带可读
 
   // 载荷合法、形状与健康 payload 一致，且**带原因**，不是静默空对象。
   assertPayloadShape(probe.payload, project, reference)
+  // 副本目录的包根下没有 docs/module-domain.json：这条真实 payload 路径必须降级成
+  // 只回 summary 的 framework 节，而不是抛错或凭空造树。
+  assert.equal(probe.payload.framework.degraded, true, 'a probe copy without docs/ has no module map to project')
+  assert.deepEqual(Object.keys(probe.payload.framework).sort(), ['degraded', 'summary'])
   const reasons = probe.payload.warnings.filter(
     (line) => typeof line === 'string' && line.startsWith('core-unavailable: ')
   )
@@ -277,6 +430,110 @@ test('降级（core.mjs 缺失）：payload 形状与健康一致，且带可读
     'host warnings must survive the degraded path'
   )
 })
+
+// ------------------------------- framework 结构投影：每个列表都有上限 + truncated
+test('framework 结构投影：modules/slices/roles/sections/members/files/unmanaged 全部有界且带标记', async () => {
+  const root = tempDir('framework-bounded')
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n', 'utf8')
+
+  const sliceFiles = ['docs/UNOWNED.md', 'README.md']
+  for (let index = 0; index < 205; index += 1) sliceFiles.push('lib/file-' + index + '.mjs')
+
+  const bigSections = { 'lib/a.mjs': [] }
+  for (let index = 0; index < 51; index += 1) bigSections['lib/a.mjs'].push('member-' + index)
+  for (let index = 0; index < 100; index += 1) bigSections['lib/d' + String(index).padStart(3, '0') + '.mjs'] = ['x']
+
+  const modules = { 'big-module': { title: 'Big', owns: ['lib/'], sections: bigSections } }
+  for (let index = 0; index < 200; index += 1) {
+    modules['d' + String(index).padStart(3, '0')] = { title: 'D', owns: [], sections: {} }
+  }
+  const roles = {}
+  for (let index = 0; index < 201; index += 1) {
+    roles['r' + String(index).padStart(3, '0')] = { title: 'R', semantics: 's', modules: ['big-module'] }
+  }
+  roles.r000.modules.push('ghost-module')
+  const slices = {}
+  for (let index = 0; index < 201; index += 1) {
+    slices['s' + String(index).padStart(3, '0')] = { title: 'S', semantics: 'sem', ownerRole: 'r000', rationale: 'why', files: [] }
+  }
+  // 只有字典序最前的 slice 带文件：它一定在截断后仍可见，后面的 200 个用来撞上限。
+  slices.s000.files = sliceFiles
+  const unmanaged = []
+  for (let index = 0; index < 250; index += 1) unmanaged.push({ path: '.selftest/u-' + index + '.mjs', reason: 'probe' })
+
+  fs.writeFileSync(
+    path.join(root, 'docs', 'module-domain.json'),
+    JSON.stringify({ modules, aspects: slices, roles, unmanaged }),
+    'utf8'
+  )
+
+  const framework = await snapshots.projectFrameworkState(root, { files: 7, modules: 2, missingSemantics: 1, plans: 0 })
+  assertFrameworkShape(framework)
+  assert.equal(framework.degraded, false)
+
+  assert.equal(framework.modules.length, 200, 'modules are capped at 200')
+  assert.equal(framework.modulesTruncated, true)
+  const big = framework.modules.find((module) => module.name === 'big-module')
+  assert.ok(big !== undefined, 'the alphabetically-first modules survive the cap')
+  assert.equal(big.sections.length, 100, 'sections are capped per module')
+  assert.equal(big.sectionsTruncated, true)
+  assert.equal(big.sections[0].key, 'lib/a.mjs')
+  assert.equal(big.sections[0].members.length, 50, 'section members are capped')
+  assert.equal(big.sections[0].membersTruncated, true)
+
+  assert.equal(framework.slices.length, 200, 'slices are capped at 200')
+  assert.equal(framework.slicesTruncated, true, 'the slice cut must be flagged, never silent')
+  assert.equal(framework.slices[0].id, 's000', 'the alphabetically-first slice survives the cap')
+  assert.equal(framework.slices[0].files.length, 200, 'one slice keeps at most 200 declared files')
+  assert.equal(framework.slices[0].filesTruncated, true)
+  assert.equal(framework.slices[0].missingFiles.length, 200, 'missingFiles is bounded by the same cap')
+  assert.equal(framework.slices[0].missingFilesTruncated, true)
+  assert.equal(framework.slices[0].files[0].path, 'docs/UNOWNED.md')
+  assert.equal(framework.slices[0].files[0].moduleName, null, 'a file no module owns must report moduleName:null')
+  assert.equal(framework.slices[0].files[1].path, 'README.md')
+  assert.equal(framework.slices[0].files[1].exists, true, 'existence is checked against the requested root')
+
+  assert.equal(framework.roles.length, 200, 'roles are capped at 200')
+  assert.equal(framework.rolesTruncated, true)
+  assert.deepEqual(framework.roles[0].modules, ['big-module'])
+  assert.ok(framework.warnings.includes('role-module-dangling: r000 -> ghost-module'))
+
+  assert.equal(framework.unmanaged.length, 200, 'the unmanaged list keeps at most 200 rows')
+  assert.equal(framework.unmanagedTruncated, true)
+  // summary 计的是真实总数，不是截断后的行数。
+  assert.equal(framework.summary.graphModules, 201)
+  assert.equal(framework.summary.graphSlices, 201, 'graph counters report the real map total, not the capped rows')
+  assert.equal(framework.summary.graphRoles, 201)
+  assert.equal(framework.summary.graphUnmanaged, 250)
+  assert.equal(framework.summary.files, 7)
+  assert.equal(framework.summary.describedModules, 2)
+  assert.equal(framework.summary.missingSemantics, 1)
+  assert.equal(framework.summary.plans, 0)
+})
+
+// -------------------------------- framework 结构投影：模块图缺失 / 解析失败降级
+test('framework 结构投影：模块图缺失或解析失败时 degraded=true 且只回 summary', async () => {
+  const counts = { files: 9, modules: 3, missingSemantics: 2, plans: 1 }
+  const missingRoot = tempDir('framework-degraded-missing')
+  const brokenRoot = tempDir('framework-degraded-broken')
+  fs.mkdirSync(path.join(brokenRoot, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(brokenRoot, 'docs', 'module-domain.json'), '{ not json', 'utf8')
+  for (const root of [missingRoot, brokenRoot]) {
+    const framework = await snapshots.projectFrameworkState(root, counts)
+    assertFrameworkShape(framework)
+    assert.equal(framework.degraded, true)
+    assert.deepEqual(Object.keys(framework).sort(), ['degraded', 'summary'], 'a degraded section never falls back to another project map')
+    assert.equal(framework.summary.files, 9, 'the description counters survive a broken map')
+    assert.equal(framework.summary.describedModules, 3)
+    assert.equal(framework.summary.missingSemantics, 2)
+    assert.equal(framework.summary.plans, 1)
+    for (const key of ['graphModules', 'graphSlices', 'graphRoles', 'graphUnmanaged']) {
+      assert.equal(framework.summary[key], null, 'an unreadable map must report ' + key + ' as null (not a fake 0)')
+    }
+  }
+})
+
 
 // -------------------------------------------------- 降级 ②：core 形状坏掉
 test('降级（core.mjs 可加载但形状坏）：读 store 失败也降级为同形状空 payload 并给原因', async () => {
