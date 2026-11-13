@@ -39,6 +39,21 @@ const ROW_KEYS = [
   'acceptance', 'commits', 'created_at', 'updated_at', 'parent', 'depth', 'stage', 'branch',
 ]
 
+/** §9.1.5：有工单时追加的第 16 键（dispatch 11 键，顺序即契约）。 */
+const DISPATCH_KEYS = ['id', 'round', 'attempt', 'agent', 'role', 'status', 'expiresAt', 'stale', 'orphan', 'outcome', 'closedAt']
+
+/** 从 selftest 源码里按常量名解析 `const NAME = [...]` 的字符串键数组。 */
+function readSelftestKeys(src, name) {
+  const marker = `const ${name} = [`
+  const start = src.indexOf(marker)
+  assert.ok(start >= 0, `.selftest/host2-tools.mjs 找不到 ${name} 常量（源码形状变了？）`)
+  const end = src.indexOf(']', start)
+  assert.ok(end > start, `${name} 常量没有闭合方括号`)
+  const keys = [...src.slice(start, end).matchAll(/'([A-Za-z_][A-Za-z0-9_]*)'/g)].map((match) => match[1])
+  assert.ok(keys.length > 0, `${name} 常量解析为空（源码形状变了？）`)
+  return keys
+}
+
 test('P2-2 A1：CONTRACT §9.1.4 逐字写出 15 键且顺序一致', () => {
   const text = fs.readFileSync(path.join(REPO, 'CONTRACT.md'), 'utf8')
   const start = text.indexOf('#### 9.1.4')
@@ -77,12 +92,50 @@ test('P2-2 A3：test 侧 ROW_KEYS 与 §9.1.4 一致（防三处之一漏改）'
   assert.deepEqual(keys, ROW_KEYS, 'archive-panel 的 ROW_KEYS 与 §9.1.4 不一致')
 })
 
-test('P2-2 A4：host2-tools.taskRowOk 的键序与 §9.1.4 一致', () => {
+test('P2-2 A4：host2-tools 的 15 键 + 工单 11 键与 §9.1.5 一致', () => {
   const src = fs.readFileSync(path.join(REPO, '.selftest', 'host2-tools.mjs'), 'utf8')
+  const taskKeys = readSelftestKeys(src, 'TASK_ROW_KEYS')
+  assert.deepEqual(taskKeys, ROW_KEYS, `TASK_ROW_KEYS 必须与 §9.1.5 的 15 键逐字一致，实际：${taskKeys.join(', ')}`)
+  const dispatchKeys = readSelftestKeys(src, 'DISPATCH_ROW_KEYS')
+  assert.deepEqual(
+    dispatchKeys,
+    DISPATCH_KEYS,
+    `DISPATCH_ROW_KEYS 必须与 §9.1.5 的 11 键逐字一致，实际：${dispatchKeys.join(', ')}`,
+  )
+
+  // taskRowOk 的组装顺序：15 键 → dispatch（有工单才 push）→ gate（recentDone 才 push）。
   const start = src.indexOf('function taskRowOk(')
-  const body = src.slice(start, src.indexOf('if (gate) keys.push', start))
-  const keys = [...body.matchAll(/^ {4}'(\w+)',/gm)].map((m) => m[1])
-  assert.deepEqual(keys, ROW_KEYS, 'taskRowOk 的键序与 §9.1.4 不一致')
+  assert.ok(start > 0, '.selftest/host2-tools.mjs 找不到 taskRowOk')
+  const body = src.slice(start, src.indexOf('\n}', start))
+  const steps = [
+    'const keys = [...TASK_ROW_KEYS]',
+    "if (hasDispatch) keys.push('dispatch')",
+    "if (gate) keys.push('gate')",
+  ]
+  let cursor = -1
+  for (const step of steps) {
+    const at = body.indexOf(step)
+    assert.ok(at > cursor, `taskRowOk 必须按「15 键 → dispatch → gate」组装；缺失或错序：${step}`)
+    cursor = at
+  }
+  assert.ok(
+    /JSON\.stringify\(Object\.keys\(row\)\) !== JSON\.stringify\(keys\)/.test(body),
+    'taskRowOk 必须比较完整键序（不能只查前缀/至少 15 键）',
+  )
+
+  // 文档侧：§9.1.5 必须同时写出 15 键与 dispatch 11 键，并明确 gate 在 dispatch 之后。
+  const text = fs.readFileSync(path.join(REPO, 'CONTRACT.md'), 'utf8')
+  const docStart = text.indexOf('#### 9.1.5')
+  assert.ok(docStart > 0, 'CONTRACT 找不到 §9.1.5')
+  const docEnd = text.indexOf('\n### 9.2', docStart)
+  assert.ok(docEnd > docStart, '§9.1.5 到 §9.2 之间找不到边界')
+  const flat = text.slice(docStart, docEnd).replace(/\s+/g, ' ')
+  const rowText = ROW_KEYS.join(', ')
+  assert.ok(flat.includes(rowText), `§9.1.5 未按顺序写出 15 键；期望含：${rowText}`)
+  const dispatchText = DISPATCH_KEYS.join(', ')
+  assert.ok(flat.includes(dispatchText), `§9.1.5 未按顺序写出 dispatch 11 键；期望含：${dispatchText}`)
+  assert.ok(/有工单时追加第 16 键\s*`dispatch`/.test(flat), '§9.1.5 应写明「有工单时追加第 16 键 dispatch」')
+  assert.ok(/`gate` 在 `dispatch` 之后/.test(flat), '§9.1.5 应写明 recentDone 的 gate 在 dispatch 之后')
 })
 
 test('P2-2 A5：行里不许再出现 goal（§3.2 已合并进 title）', () => {

@@ -2906,10 +2906,17 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 
 - **行形状**：`tasks.active` / `tasks.draft` / `tasks.recentDone` 的行是**固定键序**的 15 键
   `id, type, title, status, owner, notes, scope, acceptance, commits, created_at, updated_at,
-  parent, depth, stage, branch`（`recentDone` 行尾再追加 `gate`）——**顺序即契约**，`panelTaskRow`、
-  `.selftest/host2-tools.mjs` 与本节三处逐字一致。第 15 键 `branch`（2026-11-09，审计项 11）
+  parent, depth, stage, branch`——**顺序即契约**；唯一投影点是 `panelTaskRow`
+  （`.selftest/host2-tools.mjs` 断言同一形状，该文件不在本节写域）。
+  **有工单时追加第 16 键 `dispatch`**（T-20261113155234 阶段 3）：11 键固定顺序
+  `id, round, attempt, agent, role, status, expiresAt, stale, orphan, outcome, closedAt`
+  （`panelDispatchOf` 投影；`status` 是 `closed|acked|pending` 三态）。**没有工单时该键不出现**
+  （不是 `null`），旧读者看到的行与 15 键时逐字一致。
+  `recentDone` 的行在上面形状之后**最后**追加 `gate`——即「15 键 + 有工单时的 `dispatch` + `gate`」，
+  **`gate` 在 `dispatch` 之后**（`recentDoneOf` 先展开 `panelTaskRow`，再补 `gate`）。
+  第 15 键 `branch`（2026-11-09，审计项 11）
   是捕获建卡时的工作分支（`source.branch`）；手写/旧记录与分离 HEAD 一律 `null`，客户端不渲染
-  徽标（不占位）。`stages` 的九个桶里也是同一 15 键行。第 14 键 `stage`（task-71）是**投影值**：
+  徽标（不占位）。`stages` 的九个桶里也是同一 15 键行（有工单时同样带 `dispatch`，但**不带 `gate`**）。第 14 键 `stage`（task-71）是**投影值**：
   记录带合法 `stage` 就用它，旧记录用 `lib/stage.mjs` 的 `legacyStageFromStatus(status)` 推导
   （唯一真源；客户端与快照都不另写第二套 status→stage 映射），恒为九个 id 之一。行里
   **没有 `goal`**（§3.2：已合并进 `title`）。`type` 取记录字段的裁剪值：缺失或非字符串一律投影为
@@ -2919,6 +2926,12 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
   父失效/成环时读投影为 `null`）与 `depth: 0..3`（相对根的深度，超过 3 截断）是 T-13 A3 起的
   树字段；数组仍按各自既有顺序（active/draft FIFO、`recentDone` 按 `updated_at` 倒序）——树
   只由行上的 `parent`/`depth` 表达，**不改数组顺序、不新增 `children` 数组**，前端据此嵌套渲染。
+- **`dispatch.orphan` 的证据源（面板 vs CLI）**：判定是同一份实现（tasks 域的 `dispatchStateOf`
+  → `openClaimOf` + 注入的 `isSessionLive`），但**注入源不同**：面板用宿主 `agents` 注册表的
+  活会话集合（`lib/host/state.mjs:964` 传 `liveSessions`，`lib/state-snapshot.mjs:1946-1952`
+  翻成探针），CLI 用**心跳判活**（`lib/cli/tasks.mjs:80-90` 的 `livenessProbe` →
+  `heartbeatStatus`）。因此存在刻意差异：**注册表说会话活着、但没有心跳行**时，面板**不**标
+  `orphan`，CLI 会标 `orphan`。两者都只影响展示/列出，不改台账。
 - **九阶段视图（task-71）**：`tasks` 另带两个字段。`stageCounts` = 九个阶段 id 的计数
   （**由 `STAGE_IDS` 生成，不手写九个键**；全部任务按有效阶段计数，旧记录用
   `legacyStageFromStatus` 推导）。`stages` = 九键 → 行数组（同一 15 键行；管线阶段按

@@ -67,33 +67,74 @@ async function throws(label, fn, include) {
   }
 }
 
+const TASK_ROW_KEYS = [
+  'id',
+  'type',
+  'title',
+  'status',
+  'owner',
+  'notes',
+  'scope',
+  'acceptance',
+  'commits',
+  'created_at',
+  'updated_at',
+  'parent',
+  'depth',
+  'stage',
+  'branch',
+]
+
+// 工单投影（90086d8 起）：有工单的行在第 16 键位置多出固定 11 键的 `dispatch`。
+const DISPATCH_ROW_KEYS = [
+  'id',
+  'round',
+  'attempt',
+  'agent',
+  'role',
+  'status',
+  'expiresAt',
+  'stale',
+  'orphan',
+  'outcome',
+  'closedAt',
+]
+
+function dispatchRowOk(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  if (JSON.stringify(Object.keys(value)) !== JSON.stringify(DISPATCH_ROW_KEYS)) return false
+  if (typeof value.id !== 'string' || value.id === '') return false
+  if (!Number.isInteger(value.round) || value.round < 1) return false
+  if (!Number.isInteger(value.attempt) || value.attempt < 1) return false
+  for (const key of ['agent', 'role', 'expiresAt']) {
+    if (typeof value[key] !== 'string') return false
+  }
+  if (value.status !== 'pending' && value.status !== 'acked' && value.status !== 'closed') return false
+  if (typeof value.stale !== 'boolean' || typeof value.orphan !== 'boolean') return false
+  if (value.outcome !== null && typeof value.outcome !== 'string') return false
+  if (value.closedAt !== null && typeof value.closedAt !== 'string') return false
+  return true
+}
+
 /**
- * `tasks.active` / `tasks.draft` / `tasks.recentDone` row shape: every display
- * and detail field is present, the string fields are strings and the list
- * fields are arrays (recentDone additionally carries `gate`).
+ * `tasks.active` / `tasks.draft` / `tasks.recentDone` 行形状。
+ * - `dispatch: false` → 必须恰好 15 键（无工单）；
+ * - `dispatch: true`  → 必须恰好 16 键，且第 16 键是固定 11 键的 dispatch；
+ * - `dispatch: 'auto'`（默认）→ 有 dispatch 就必须合法、无则按 15 键。
+ * recentDone 的 `gate` 永远追加在最后（有工单时是 dispatch 后）。
  */
-function taskRowOk(row, { gate = false } = {}) {
+function taskRowOk(row, { gate = false, dispatch = 'auto' } = {}) {
   if (row === null || typeof row !== 'object') return false
+  const hasDispatch = Object.hasOwn(row, 'dispatch')
+  if (dispatch === true && hasDispatch === false) return false
+  if (dispatch === false && hasDispatch === true) return false
+  if (hasDispatch && dispatchRowOk(row.dispatch) === false) return false
   // 顺序即契约，改一处必改三处（面板行 / 本断言 / CONTRACT §9.1.4）。
-  const keys = [
-    'id',
-    'type',
-    'title',
-    'status',
-    'owner',
-    'notes',
-    'scope',
-    'acceptance',
-    'commits',
-    'created_at',
-    'updated_at',
-    'parent',
-    'depth',
-    'stage',
-    'branch',
-  ]
+  const keys = [...TASK_ROW_KEYS]
+  if (hasDispatch) keys.push('dispatch')
   if (gate) keys.push('gate')
   if (JSON.stringify(Object.keys(row)) !== JSON.stringify(keys)) return false
+  if (gate && Object.keys(row).at(-1) !== 'gate') return false
   for (const key of ['id', 'type', 'title', 'status', 'owner', 'notes', 'created_at', 'updated_at', 'stage']) {
     if (typeof row[key] !== 'string') return false
   }
@@ -934,6 +975,34 @@ for (const [task, stamp] of [
   writeFileSync(join(storeRoot, '.agents', 'tasks', `${task.id}.json`), JSON.stringify({ ...task, updated_at: stamp }))
 }
 
+// 工单投影夹具（90086d8）：active 卡一条已关闭工单 → 行 16 键；done 卡手工补工单 →
+// recentDone 行 dispatch 后追加 gate。draft 卡不挂工单，保持 15 键。
+const panelContract = core.loadContract(storeRoot).contract
+core.queueDispatch(storeRoot, panelContract, activeDetailId, { agent: 'analyzer', role: 'analyzer' })
+core.ackDispatch(storeRoot, panelContract, activeDetailId, { agent: 'analyzer', session: 'selftest-active-child' })
+core.closeDispatch(storeRoot, panelContract, activeDetailId, { outcome: 'ok', reason: 'selftest fixture' })
+const doneRecord = core.getTask(storeRoot, panelContract, taskId)
+writeFileSync(
+  join(storeRoot, '.agents', 'tasks', `${taskId}.json`),
+  JSON.stringify({
+    ...doneRecord,
+    dispatch: {
+      id: `D-${taskId}-r1-a1`,
+      createdAt: '2026-10-28T10:00:00+08:00',
+      expiresAt: '2026-10-28T10:10:00+08:00',
+      requester: 'session-selftest',
+      agent: 'reviewer',
+      role: 'reviewer',
+      round: 1,
+      attempt: 1,
+      ackedAt: '2026-10-28T10:00:01+08:00',
+      closedAt: '2026-10-28T10:05:00+08:00',
+      outcome: 'ok',
+      reason: 'selftest fixture',
+    },
+  }),
+)
+
 const storeRes = await call(route, `${route.path}?root=${encodeURIComponent(storeRoot)}`)
 const store = storeRes.json ?? {}
 eq('store payload: 200', storeRes.status, 200)
@@ -975,10 +1044,28 @@ eq('store payload: tasks draft updated_at kept', olderDraftRow.updated_at, '2026
 // ---- three row groups carry bounded detail fields -------------------------
 check(
   'store payload: active/draft/recentDone row shapes',
-  store.tasks?.active?.every((row) => taskRowOk(row)) &&
-    store.tasks?.draft?.every((row) => taskRowOk(row)) &&
-    store.tasks?.recentDone?.every((row) => taskRowOk(row, { gate: true })),
+  store.tasks?.active?.every((row) => taskRowOk(row, { dispatch: true })) &&
+    store.tasks?.draft?.every((row) => taskRowOk(row, { dispatch: false })) &&
+    store.tasks?.recentDone?.every((row) => taskRowOk(row, { gate: true, dispatch: true })),
   JSON.stringify({ active: store.tasks?.active, draft: store.tasks?.draft, recentDone: store.tasks?.recentDone }),
+)
+const activeKeys = Object.keys(store.tasks?.active?.[0] ?? {})
+check(
+  'store payload: active row has exactly 16 keys with dispatch last',
+  activeKeys.length === 16 && activeKeys.at(-1) === 'dispatch',
+  JSON.stringify(activeKeys),
+)
+const draftKeys = Object.keys(store.tasks?.draft?.[0] ?? {})
+check(
+  'store payload: draft rows stay exactly 15 keys without dispatch',
+  draftKeys.length === 15 && Object.hasOwn(store.tasks?.draft?.[0] ?? {}, 'dispatch') === false,
+  JSON.stringify(draftKeys),
+)
+const doneKeys = Object.keys(store.tasks?.recentDone?.[0] ?? {})
+check(
+  'store payload: recentDone dispatch comes before gate',
+  doneKeys.length === 17 && doneKeys.at(-2) === 'dispatch' && doneKeys.at(-1) === 'gate',
+  JSON.stringify(doneKeys),
 )
 
 const activeRow = store.tasks?.active?.[0] ?? {}
