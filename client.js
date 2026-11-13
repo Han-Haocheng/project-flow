@@ -265,6 +265,30 @@ window.__ModuleLoader__.load({
       'framework.summary': '文件 {files} · 模块 {modules} · 缺语义 {missing} · 计划 {plans}',
       'framework.plans': '最近语义变更',
       'framework.plansEmpty': '还没有已实现的语义变更计划。',
+      'framework.summaryDescription': '文件 {files} · 已描述模块 {described} · 缺语义 {missing} · 计划 {plans}',
+      'framework.summaryGraph': '图模块 {modules} · 切片 {slices} · 角色 {roles} · 未归属 {unmanaged}',
+      'framework.modules': '模块',
+      'framework.slices': '横向切片',
+      'framework.roles': '角色',
+      'framework.unmanaged': '未归属文件',
+      'framework.owns': '归属',
+      'framework.sections': '区段',
+      'framework.relatedSlices': '相关切片',
+      'framework.semantics': '语义',
+      'framework.ownerRole': '负责角色',
+      'framework.rationale': '理由',
+      'framework.files': '文件',
+      'framework.missingFiles': '缺失文件',
+      'framework.missing': '文件不存在',
+      'framework.notOwned': '未归属模块',
+      'framework.more': '还有更多',
+      'framework.degraded': '模块图不可用（docs/module-domain.json 缺失或无法解析），仅显示描述摘要。',
+      'framework.empty': '模块图里还没有模块。',
+      'framework.slicesEmpty': '还没有横向切片。',
+      'framework.selectHint': '选择左侧模块或下方切片查看语义与归属。',
+      'framework.expand': '展开模块',
+      'framework.collapse': '收起模块',
+      'framework.warnings': '模块图警告',
       'aspect.title': 'aspect 锁',
       'aspect.summary': '占用 {held} / 共 {total}',
       'aspect.releasable': '可回收 {n}',
@@ -456,6 +480,30 @@ window.__ModuleLoader__.load({
       'framework.summary': '{files} files · {modules} modules · {missing} missing semantics · {plans} plans',
       'framework.plans': 'Recent semantic changes',
       'framework.plansEmpty': 'No implemented semantic-change plans yet.',
+      'framework.summaryDescription': '{files} files · {described} described modules · {missing} missing semantics · {plans} plans',
+      'framework.summaryGraph': 'Graph modules {modules} · slices {slices} · roles {roles} · unmanaged {unmanaged}',
+      'framework.modules': 'Modules',
+      'framework.slices': 'Cross-module slices',
+      'framework.roles': 'Roles',
+      'framework.unmanaged': 'Unmanaged files',
+      'framework.owns': 'Owns',
+      'framework.sections': 'Sections',
+      'framework.relatedSlices': 'Related slices',
+      'framework.semantics': 'Semantics',
+      'framework.ownerRole': 'Owner role',
+      'framework.rationale': 'Rationale',
+      'framework.files': 'Files',
+      'framework.missingFiles': 'Missing files',
+      'framework.missing': 'file missing',
+      'framework.notOwned': 'no owning module',
+      'framework.more': 'more not shown',
+      'framework.degraded': 'Module graph unavailable (docs/module-domain.json missing or unparsable); showing the description summary only.',
+      'framework.empty': 'The module graph has no modules yet.',
+      'framework.slicesEmpty': 'No cross-module slices yet.',
+      'framework.selectHint': 'Select a module on the left or a slice below to see its semantics and ownership.',
+      'framework.expand': 'Expand module',
+      'framework.collapse': 'Collapse module',
+      'framework.warnings': 'Module graph warnings',
       'aspect.title': 'Aspect locks',
       'aspect.summary': '{held} held / {total} total',
       'aspect.releasable': '{n} releasable',
@@ -1069,6 +1117,111 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Framework graph projection (T-20261113162857): the viewed workspace's
+     * docs/module-domain.json as projected by the host. Every list is tolerant;
+     * `degraded:true` means only `summary` is trustworthy, so the card must hide
+     * the tree and the slices instead of inventing an empty graph.
+     */
+    function normalizeFramework(raw) {
+      const src = asObject(raw);
+      if (Object.keys(src).length === 0) return null;
+      const countOf = (value) => {
+        const number = asNumber(value, null);
+        return Number.isFinite(number) ? Math.max(0, Math.trunc(number)) : null;
+      };
+      const summarySrc = asObject(src.summary);
+      const summary = {
+        files: countOf(summarySrc.files),
+        describedModules: countOf(summarySrc.describedModules),
+        missingSemantics: countOf(summarySrc.missingSemantics),
+        plans: countOf(summarySrc.plans),
+        graphModules: countOf(summarySrc.graphModules),
+        graphSlices: countOf(summarySrc.graphSlices),
+        graphRoles: countOf(summarySrc.graphRoles),
+        graphUnmanaged: countOf(summarySrc.graphUnmanaged),
+      };
+      const degraded = src.degraded === true;
+      const textList = (value) => asArray(value).map(asText).filter(Boolean);
+      const modules = degraded
+        ? []
+        : asArray(src.modules)
+            .map((entry) => asObject(entry))
+            .map((module) => ({
+              name: asText(module.name),
+              title: asText(module.title),
+              owns: asArray(module.owns)
+                .map((item) => asObject(item))
+                .map((item) => ({ path: asText(item.path), kind: asText(item.kind) === 'dir' ? 'dir' : 'file' }))
+                .filter((item) => item.path !== ''),
+              sections: asArray(module.sections)
+                .map((section) => asObject(section))
+                .map((section) => ({
+                  key: asText(section.key),
+                  members: textList(section.members),
+                  membersTruncated: section.membersTruncated === true,
+                }))
+                .filter((section) => section.key !== ''),
+              sectionsTruncated: module.sectionsTruncated === true,
+              slices: textList(module.slices),
+            }))
+            .filter((module) => module.name !== '');
+      const slices = degraded
+        ? []
+        : asArray(src.slices)
+            .map((entry) => asObject(entry))
+            .map((slice) => ({
+              id: asText(slice.id),
+              title: asText(slice.title),
+              semantics: asText(slice.semantics),
+              ownerRole: asText(slice.ownerRole),
+              rationale: asText(slice.rationale),
+              files: asArray(slice.files)
+                .map((file) => asObject(file))
+                .map((file) => ({
+                  path: asText(file.path),
+                  moduleName: asText(file.moduleName) || null,
+                  exists: file.exists !== false,
+                }))
+                .filter((file) => file.path !== ''),
+              modules: textList(slice.modules),
+              missingFiles: textList(slice.missingFiles),
+              filesTruncated: slice.filesTruncated === true,
+              missingFilesTruncated: slice.missingFilesTruncated === true,
+            }))
+            .filter((slice) => slice.id !== '');
+      const roles = degraded
+        ? []
+        : asArray(src.roles)
+            .map((entry) => asObject(entry))
+            .map((role) => ({
+              id: asText(role.id),
+              title: asText(role.title),
+              semantics: asText(role.semantics),
+              modules: textList(role.modules),
+            }))
+            .filter((role) => role.id !== '');
+      const unmanaged = degraded
+        ? []
+        : asArray(src.unmanaged)
+            .map((entry) => asObject(entry))
+            .map((row) => ({ path: asText(row.path), reason: asText(row.reason) }))
+            .filter((row) => row.path !== '');
+      return {
+        summary,
+        degraded,
+        modules,
+        slices,
+        roles,
+        unmanaged,
+        warnings: textList(src.warnings),
+        modulesTruncated: src.modulesTruncated === true,
+        slicesTruncated: src.slicesTruncated === true,
+        rolesTruncated: src.rolesTruncated === true,
+        unmanagedTruncated: src.unmanagedTruncated === true,
+      };
+    }
+
+    /**
      * aspect 锁段（T-20261112211817）：宿主富化产物（数据来自 `flow aspect list --json`）。
      * 键缺席、available!==true 或没有锁 → null，PanelView 不挂载整张卡（隐藏而不是报错）。
      */
@@ -1243,6 +1396,8 @@ window.__ModuleLoader__.load({
         decisions: normalizeDecisions(src.decisions),
         /* Read-only framework view over the description ledger; null hides it. */
         description: normalizeDescription(src.description),
+        /* Module-map graph for the framework card; degraded carries summary only. */
+        framework: normalizeFramework(src.framework),
         warnings,
       };
     }
@@ -2603,19 +2758,529 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Read-only 「框架视图」: the description-ledger summary plus the latest
-     * implemented semantic-change plans. Every field is optional at render time:
-     * a missing counter shows "—", a missing plan timestamp drops the time, and
-     * the whole card is not mounted at all when `normalize` returned null.
+     * Read-only 「框架视图」 (T-20261113171442). The host projects
+     * payload.framework from the viewed workspace's docs/module-domain.json:
+     * a summary, a foldable module tree (module -> owns -> sections), the
+     * cross-module slices, roles, unmanaged files and map warnings. A degraded
+     * section has summary only, so the tree/slices are hidden and an explicit
+     * 「模块图不可用」 line replaces them. An older payload without `framework`
+     * keeps the legacy description-only card (summary + recent plans).
      */
     function FrameworkCard(props) {
-      const description = asObject(props.description);
-      const counts = asObject(description.counts);
-      const plans = asArray(description.plans);
       const t = props.t;
       const now = props.now;
       const dash = t('misc.dash');
       const countText = (value) => (Number.isFinite(value) ? String(value) : dash);
+      const framework = props.framework && typeof props.framework === 'object' ? props.framework : null;
+      /* Hooks are unconditional: React forbids a changing hook order, and a later
+         poll may add a framework section to an already mounted card. */
+      const [selection, setSelection] = useState(null);
+      const [openModules, setOpenModules] = useState({});
+      const description = asObject(props.description);
+      const legacyCounts = asObject(description.counts);
+      const legacyPlans = asArray(description.plans);
+
+      if (framework === null) {
+        /* Legacy payload: only the description ledger exists. */
+        return React.createElement(
+          'section',
+          { className: 'project-flow-card' },
+          props.showTitle === false
+            ? null
+            : React.createElement('h2', { className: 'project-flow-cardTitle' }, t('framework.title')),
+          React.createElement(
+            'p',
+            { className: 'project-flow-muted project-flow-frameworkSummary' },
+            t('framework.summary', {
+              files: countText(legacyCounts.files),
+              modules: countText(legacyCounts.modules),
+              missing: countText(legacyCounts.missingSemantics),
+              plans: countText(legacyCounts.plans),
+            })
+          ),
+          React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.plans')),
+          legacyPlans.length === 0
+            ? React.createElement(EmptyLine, null, t('framework.plansEmpty'))
+            : React.createElement(
+                'ul',
+                { className: 'project-flow-list project-flow-frameworkList' },
+                legacyPlans.map((plan, index) => {
+                  const when = Number.isFinite(plan.atMs) ? relativeMoment(plan.atMs, now, t) : null;
+                  const timeText = when || asText(plan.at);
+                  return React.createElement(
+                    'li',
+                    { className: 'project-flow-frameworkRow', key: asText(plan.task) || 'plan-' + index },
+                    React.createElement('span', { className: 'project-flow-frameworkId', title: plan.task }, plan.task),
+                    React.createElement(
+                      'span',
+                      { className: 'project-flow-frameworkTitle', title: plan.title || undefined },
+                      plan.title || dash
+                    ),
+                    timeText
+                      ? React.createElement(
+                          'span',
+                          { className: 'project-flow-muted project-flow-frameworkTime' },
+                          timeText
+                        )
+                      : null
+                  );
+                })
+              )
+        );
+      }
+
+      const MAX_UI_FILES = 8;
+      const summary = asObject(framework.summary);
+      const modules = asArray(framework.modules);
+      const slices = asArray(framework.slices);
+      const roles = asArray(framework.roles);
+      const unmanaged = asArray(framework.unmanaged);
+      const warnings = asArray(framework.warnings);
+      const degraded = framework.degraded === true;
+      const selected = asObject(selection);
+      const selectedKind = asText(selected.kind);
+      const selectedId = asText(selected.id);
+      const moduleByName = (name) => modules.find((module) => asText(module.name) === name) || null;
+      const sliceById = (id) => slices.find((slice) => asText(slice.id) === id) || null;
+      const roleById = (id) => roles.find((role) => asText(role.id) === id) || null;
+      const selectedModule = selectedKind === 'module' ? moduleByName(selectedId) : null;
+      const selectedSlice = selectedKind === 'slice' ? sliceById(selectedId) : null;
+      const activeModules = new Set(
+        selectedModule
+          ? [asText(selectedModule.name)]
+          : selectedSlice
+            ? asArray(selectedSlice.modules).map(asText)
+            : []
+      );
+      const activeSlices = new Set(
+        selectedModule
+          ? asArray(selectedModule.slices).map(asText)
+          : selectedSlice
+            ? [asText(selectedSlice.id)]
+            : []
+      );
+      const toggleOpen = (name) => {
+        const table = asObject(openModules);
+        const next = Object.assign({}, table);
+        next[name] = table[name] !== true;
+        setOpenModules(next);
+      };
+      const select = (kind, id) => setSelection({ kind, id });
+      const controlsOf = (name) => 'project-flow-frameworkModuleBody-' + asText(name).replace(/[^A-Za-z0-9_-]/g, '-');
+      const moreLine = (key) =>
+        React.createElement('p', { className: 'project-flow-muted project-flow-frameworkMore', key }, t('framework.more'));
+      const chips = (values, onPick, prefix) =>
+        values.map((value, index) =>
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'project-flow-frameworkChip',
+              key: prefix + index,
+              title: value,
+              onClick: () => onPick(value),
+            },
+            value
+          )
+        );
+
+      const renderModule = (module) => {
+        const name = asText(module.name);
+        const open = asObject(openModules)[name] === true;
+        const controlsId = controlsOf(name);
+        const active = activeModules.has(name);
+        const owns = asArray(module.owns);
+        const sections = asArray(module.sections);
+        const sliceIds = asArray(module.slices);
+        const sectionNodes = sections.map((section) =>
+          React.createElement(
+            'span',
+            {
+              className: 'project-flow-frameworkSection',
+              key: 'section-' + section.key,
+              title: asArray(section.members).join(', '),
+            },
+            section.key,
+            asArray(section.members).length === 0
+              ? null
+              : React.createElement('span', { className: 'project-flow-frameworkMembers' }, ' · ' + asArray(section.members).join(', ')),
+            section.membersTruncated === true
+              ? React.createElement('span', { className: 'project-flow-frameworkMoreMark' }, ' · ' + t('framework.more'))
+              : null
+          )
+        );
+        if (module.sectionsTruncated === true) {
+          sectionNodes.push(
+            React.createElement('span', { className: 'project-flow-frameworkMoreMark', key: 'sections-more' }, t('framework.more'))
+          );
+        }
+        const body = [
+          React.createElement(
+            'div',
+            { className: 'project-flow-frameworkField', key: 'owns' },
+            React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.owns')),
+            owns.length === 0
+              ? React.createElement('span', { className: 'project-flow-muted' }, dash)
+              : owns.map((item, index) =>
+                  React.createElement(
+                    'span',
+                    { className: 'project-flow-frameworkPath', key: 'own-' + index, title: item.path },
+                    item.path
+                  )
+                )
+          ),
+          React.createElement(
+            'div',
+            { className: 'project-flow-frameworkField', key: 'sections' },
+            React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.sections')),
+            sectionNodes.length === 0 ? React.createElement('span', { className: 'project-flow-muted' }, dash) : sectionNodes
+          ),
+        ];
+        if (sliceIds.length > 0) {
+          body.push(
+            React.createElement(
+              'div',
+              { className: 'project-flow-frameworkField', key: 'slices' },
+              React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.relatedSlices')),
+              sliceIds.map((id) =>
+                React.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'project-flow-frameworkChip' + (activeSlices.has(id) ? ' project-flow-frameworkChip--active' : ''),
+                    key: 'slice-chip-' + id,
+                    title: id,
+                    onClick: () => select('slice', id),
+                  },
+                  (sliceById(id) || {}).title || id
+                )
+              )
+            )
+          );
+        }
+        return React.createElement(
+          'li',
+          { className: 'project-flow-frameworkModule' + (active ? ' project-flow-frameworkModule--active' : ''), key: name },
+          React.createElement(
+            'div',
+            { className: 'project-flow-frameworkModuleHead' },
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'project-flow-frameworkModuleToggle',
+                'aria-expanded': open === true,
+                'aria-controls': controlsId,
+                'aria-label': t(open === true ? 'framework.collapse' : 'framework.expand') + ' ' + name,
+                onClick: () => toggleOpen(name),
+              },
+              open === true ? '\u25BE' : '\u25B8'
+            ),
+            React.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'project-flow-frameworkModuleSelect',
+                'aria-pressed': active === true,
+                onClick: () => select('module', name),
+              },
+              React.createElement('span', { className: 'project-flow-frameworkModuleName' }, name),
+              asText(module.title)
+                ? React.createElement('span', { className: 'project-flow-frameworkModuleTitle' }, module.title)
+                : null
+            )
+          ),
+          React.createElement('div', { className: 'project-flow-frameworkModuleBody', id: controlsId, hidden: open === true ? undefined : true }, body)
+        );
+      };
+
+      const renderSlice = (slice) => {
+        const id = asText(slice.id);
+        const titleText = asText(slice.title);
+        const active = activeSlices.has(id);
+        const ownerRole = asText(slice.ownerRole);
+        const role = ownerRole === '' ? null : roleById(ownerRole);
+        const files = asArray(slice.files);
+        const shown = files.slice(0, MAX_UI_FILES);
+        const fileNodes = shown.map((file, index) => {
+          const path = asText(file.path);
+          const unowned = file.moduleName === null;
+          const missing = file.exists === false;
+          return React.createElement(
+            'span',
+            {
+              className:
+                'project-flow-frameworkFile' +
+                (unowned ? ' project-flow-frameworkFile--unowned' : '') +
+                (missing ? ' project-flow-frameworkFile--missing' : ''),
+              key: 'file-' + index,
+              title: path,
+            },
+            path,
+            unowned ? ' · ' + t('framework.notOwned') : '',
+            missing ? ' · ' + t('framework.missing') : ''
+          );
+        });
+        if (slice.filesTruncated === true || files.length > shown.length) {
+          fileNodes.push(React.createElement('span', { className: 'project-flow-frameworkMoreMark', key: 'files-more' }, t('framework.more')));
+        }
+        const sliceModules = asArray(slice.modules);
+        return React.createElement(
+          'li',
+          { className: 'project-flow-frameworkSlice' + (active ? ' project-flow-frameworkSlice--active' : ''), key: id },
+          React.createElement(
+            'button',
+            {
+              type: 'button',
+              className: 'project-flow-frameworkSliceHead',
+              'aria-pressed': active === true,
+              onClick: () => select('slice', id),
+            },
+            React.createElement('span', { className: 'project-flow-frameworkId' }, id),
+            React.createElement('span', { className: 'project-flow-frameworkTitle' }, titleText || id),
+            ownerRole
+              ? React.createElement(
+                  'span',
+                  { className: 'project-flow-frameworkRole' },
+                  t('framework.ownerRole') + ': ' + (role && asText(role.title) ? role.title : ownerRole)
+                )
+              : null
+          ),
+          React.createElement(
+            'div',
+            { className: 'project-flow-frameworkSliceMeta' },
+            sliceModules.length > 0
+              ? React.createElement(
+                  'span',
+                  { className: 'project-flow-frameworkModules' },
+                  t('framework.modules') + ':',
+                  sliceModules.map((name) =>
+                    React.createElement(
+                      'button',
+                      {
+                        type: 'button',
+                        className:
+                          'project-flow-frameworkChip' +
+                          (activeModules.has(name) ? ' project-flow-frameworkChip--active' : ''),
+                        key: 'slice-module-' + name,
+                        title: name,
+                        onClick: () => select('module', name),
+                      },
+                      name
+                    )
+                  )
+                )
+              : null,
+            fileNodes.length > 0 ? React.createElement('span', { className: 'project-flow-frameworkFiles' }, fileNodes) : null
+          )
+        );
+      };
+
+      const detail = (() => {
+        if (selectedModule !== null) {
+          const name = asText(selectedModule.name);
+          const owns = asArray(selectedModule.owns);
+          const sections = asArray(selectedModule.sections);
+          const sliceIds = asArray(selectedModule.slices);
+          return React.createElement(
+            'div',
+            { className: 'project-flow-frameworkDetailPanel' },
+            React.createElement('h4', { className: 'project-flow-frameworkDetailTitle' }, name),
+            asText(selectedModule.title) ? React.createElement('p', { className: 'project-flow-frameworkDetailText' }, selectedModule.title) : null,
+            React.createElement('div', { className: 'project-flow-frameworkDetailLabel' }, t('framework.owns')),
+            owns.length === 0
+              ? React.createElement('p', { className: 'project-flow-muted' }, dash)
+              : React.createElement(
+                  'ul',
+                  { className: 'project-flow-list' },
+                  owns.map((item, index) =>
+                    React.createElement(
+                      'li',
+                      { className: 'project-flow-frameworkPath', key: 'detail-own-' + index },
+                      item.path
+                    )
+                  )
+                ),
+            React.createElement('div', { className: 'project-flow-frameworkDetailLabel' }, t('framework.sections')),
+            sections.length === 0
+              ? React.createElement('p', { className: 'project-flow-muted' }, dash)
+              : React.createElement(
+                  'ul',
+                  { className: 'project-flow-list' },
+                  sections.map((section) =>
+                    React.createElement(
+                      'li',
+                      { className: 'project-flow-frameworkSection', key: 'detail-section-' + section.key },
+                      section.key,
+                      asArray(section.members).length === 0
+                        ? null
+                        : React.createElement('span', { className: 'project-flow-frameworkMembers' }, ' · ' + asArray(section.members).join(', ')),
+                      section.membersTruncated === true
+                        ? React.createElement('span', { className: 'project-flow-frameworkMoreMark' }, ' · ' + t('framework.more'))
+                        : null
+                    )
+                  )
+                ),
+            selectedModule.sectionsTruncated === true ? moreLine('detail-sections-more') : null,
+            sliceIds.length > 0
+              ? React.createElement(
+                  'div',
+                  { className: 'project-flow-frameworkField' },
+                  React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.relatedSlices')),
+                  sliceIds.map((id) =>
+                    React.createElement(
+                      'button',
+                      { type: 'button', className: 'project-flow-frameworkChip', key: 'detail-slice-' + id, onClick: () => select('slice', id) },
+                      (sliceById(id) || {}).title || id
+                    )
+                  )
+                )
+              : null
+          );
+        }
+        if (selectedSlice !== null) {
+          const id = asText(selectedSlice.id);
+          const role = roleById(asText(selectedSlice.ownerRole));
+          const files = asArray(selectedSlice.files);
+          const shown = files.slice(0, MAX_UI_FILES);
+          const missing = asArray(selectedSlice.missingFiles);
+          const shownMissing = missing.slice(0, MAX_UI_FILES);
+          return React.createElement(
+            'div',
+            { className: 'project-flow-frameworkDetailPanel' },
+            React.createElement(
+              'h4',
+              { className: 'project-flow-frameworkDetailTitle' },
+              id + (asText(selectedSlice.title) ? ' · ' + selectedSlice.title : '')
+            ),
+            React.createElement('div', { className: 'project-flow-frameworkDetailLabel' }, t('framework.semantics')),
+            React.createElement('p', { className: 'project-flow-frameworkDetailText' }, asText(selectedSlice.semantics) || dash),
+            asText(selectedSlice.ownerRole)
+              ? React.createElement(
+                  'p',
+                  { className: 'project-flow-muted project-flow-frameworkDetailText' },
+                  t('framework.ownerRole') + ': ' + asText(selectedSlice.ownerRole) + (role && asText(role.title) ? ' · ' + role.title : '')
+                )
+              : null,
+            asText(selectedSlice.rationale)
+              ? React.createElement(
+                  React.Fragment,
+                  { key: 'rationale' },
+                  React.createElement('div', { className: 'project-flow-frameworkDetailLabel' }, t('framework.rationale')),
+                  React.createElement('p', { className: 'project-flow-frameworkDetailText' }, selectedSlice.rationale)
+                )
+              : null,
+            asArray(selectedSlice.modules).length > 0
+              ? React.createElement(
+                  'div',
+                  { className: 'project-flow-frameworkField' },
+                  React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.modules')),
+                  chips(asArray(selectedSlice.modules), (name) => select('module', name), 'detail-module-')
+                )
+              : null,
+            React.createElement('div', { className: 'project-flow-frameworkDetailLabel' }, t('framework.files')),
+            shown.length === 0
+              ? React.createElement('p', { className: 'project-flow-muted' }, dash)
+              : React.createElement(
+                  'ul',
+                  { className: 'project-flow-list' },
+                  shown.map((file, index) =>
+                    React.createElement(
+                      'li',
+                      {
+                        className:
+                          'project-flow-frameworkFile' +
+                          (file.moduleName === null ? ' project-flow-frameworkFile--unowned' : '') +
+                          (file.exists === false ? ' project-flow-frameworkFile--missing' : ''),
+                        key: 'detail-file-' + index,
+                      },
+                      asText(file.path),
+                      file.moduleName === null ? ' · ' + t('framework.notOwned') : ' · ' + asText(file.moduleName),
+                      file.exists === false ? ' · ' + t('framework.missing') : ''
+                    )
+                  )
+                ),
+            selectedSlice.filesTruncated === true || files.length > shown.length
+              ? moreLine('detail-files-more')
+              : null,
+            shownMissing.length > 0
+              ? React.createElement(
+                  'div',
+                  { className: 'project-flow-frameworkField' },
+                  React.createElement('span', { className: 'project-flow-frameworkLabel' }, t('framework.missingFiles')),
+                  shownMissing.map((path, index) =>
+                    React.createElement('span', { className: 'project-flow-frameworkFile project-flow-frameworkFile--missing', key: 'missing-' + index }, path)
+                  )
+                )
+              : null,
+            selectedSlice.missingFilesTruncated === true || missing.length > shownMissing.length
+              ? moreLine('detail-missing-more')
+              : null
+          );
+        }
+        return React.createElement('p', { className: 'project-flow-muted project-flow-frameworkHint' }, t('framework.selectHint'));
+      })();
+
+      const rolesBlock = roles.length === 0
+        ? null
+        : React.createElement(
+            'div',
+            { className: 'project-flow-frameworkRoles' },
+            React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.roles')),
+            React.createElement(
+              'ul',
+              { className: 'project-flow-list' },
+              roles.map((role) =>
+                React.createElement(
+                  'li',
+                  { className: 'project-flow-frameworkRoleRow', key: asText(role.id) },
+                  React.createElement('span', { className: 'project-flow-frameworkId' }, role.id),
+                  asText(role.title) ? React.createElement('span', { className: 'project-flow-frameworkTitle' }, role.title) : null,
+                  asArray(role.modules).length > 0
+                    ? React.createElement('span', { className: 'project-flow-muted' }, asArray(role.modules).join(', '))
+                    : null
+                )
+              )
+            ),
+            framework.rolesTruncated === true ? moreLine('roles-more') : null
+          );
+
+      const unmanagedBlock = unmanaged.length === 0
+        ? null
+        : React.createElement(
+            'div',
+            { className: 'project-flow-frameworkUnmanaged' },
+            React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.unmanaged')),
+            React.createElement(
+              'ul',
+              { className: 'project-flow-list' },
+              unmanaged.map((row, index) =>
+                React.createElement(
+                  'li',
+                  { className: 'project-flow-frameworkFile', key: 'unmanaged-' + index },
+                  row.path,
+                  asText(row.reason) ? React.createElement('span', { className: 'project-flow-muted' }, ' · ' + row.reason) : null
+                )
+              )
+            ),
+            framework.unmanagedTruncated === true ? moreLine('unmanaged-more') : null
+          );
+
+      const warningsBlock = warnings.length === 0
+        ? null
+        : React.createElement(
+            'div',
+            { className: 'project-flow-frameworkWarnings' },
+            React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.warnings')),
+            React.createElement(
+              'ul',
+              { className: 'project-flow-list' },
+              warnings.map((line, index) =>
+                React.createElement('li', { className: 'project-flow-muted project-flow-frameworkWarning', key: 'warning-' + index }, line)
+              )
+            )
+          );
+
       return React.createElement(
         'section',
         { className: 'project-flow-card' },
@@ -2625,41 +3290,51 @@ window.__ModuleLoader__.load({
         React.createElement(
           'p',
           { className: 'project-flow-muted project-flow-frameworkSummary' },
-          t('framework.summary', {
-            files: countText(counts.files),
-            modules: countText(counts.modules),
-            missing: countText(counts.missingSemantics),
-            plans: countText(counts.plans),
+          t('framework.summaryDescription', {
+            files: countText(summary.files),
+            described: countText(summary.describedModules),
+            missing: countText(summary.missingSemantics),
+            plans: countText(summary.plans),
           })
         ),
-        React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.plans')),
-        plans.length === 0
-          ? React.createElement(EmptyLine, null, t('framework.plansEmpty'))
+        React.createElement(
+          'p',
+          { className: 'project-flow-muted project-flow-frameworkSummary' },
+          t('framework.summaryGraph', {
+            modules: countText(summary.graphModules),
+            slices: countText(summary.graphSlices),
+            roles: countText(summary.graphRoles),
+            unmanaged: countText(summary.graphUnmanaged),
+          })
+        ),
+        degraded === true
+          ? React.createElement('p', { className: 'project-flow-frameworkDegraded' }, t('framework.degraded'))
           : React.createElement(
-              'ul',
-              { className: 'project-flow-list project-flow-frameworkList' },
-              plans.map((plan, index) => {
-                const when = Number.isFinite(plan.atMs) ? relativeMoment(plan.atMs, now, t) : null;
-                const timeText = when || asText(plan.at);
-                return React.createElement(
-                  'li',
-                  { className: 'project-flow-frameworkRow', key: asText(plan.task) || 'plan-' + index },
-                  React.createElement('span', { className: 'project-flow-frameworkId', title: plan.task }, plan.task),
-                  React.createElement(
-                    'span',
-                    { className: 'project-flow-frameworkTitle', title: plan.title || undefined },
-                    plan.title || dash
-                  ),
-                  timeText
-                    ? React.createElement(
-                        'span',
-                        { className: 'project-flow-muted project-flow-frameworkTime' },
-                        timeText
-                      )
-                    : null
-                );
-              })
-            )
+              'div',
+              { className: 'project-flow-frameworkGrid' },
+              React.createElement(
+                'div',
+                { className: 'project-flow-frameworkCol' },
+                React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.modules')),
+                modules.length === 0
+                  ? React.createElement(EmptyLine, null, t('framework.empty'))
+                  : React.createElement('ul', { className: 'project-flow-list project-flow-frameworkTree' }, modules.map(renderModule)),
+                framework.modulesTruncated === true ? moreLine('modules-more') : null
+              ),
+              React.createElement('div', { className: 'project-flow-frameworkCol' }, detail)
+            ),
+        degraded === true
+          ? null
+          : React.createElement('h4', { className: 'project-flow-subTitle' }, t('framework.slices')),
+        degraded === true
+          ? null
+          : slices.length === 0
+            ? React.createElement(EmptyLine, null, t('framework.slicesEmpty'))
+            : React.createElement('ul', { className: 'project-flow-list project-flow-frameworkSlices' }, slices.map(renderSlice)),
+        degraded === true ? null : framework.slicesTruncated === true ? moreLine('slices-more') : null,
+        degraded === true ? null : rolesBlock,
+        degraded === true ? null : unmanagedBlock,
+        warningsBlock
       );
     }
 
@@ -3763,9 +4438,15 @@ window.__ModuleLoader__.load({
           ? foldCard(
               'framework',
               'framework.title',
-              React.createElement(FrameworkCard, { description: view.description, t, now, showTitle: false })
+              React.createElement(FrameworkCard, { framework: view.framework, description: view.description, t, now, showTitle: false })
             )
-          : null,
+          : view.framework
+            ? foldCard(
+                'framework',
+                'framework.title',
+                React.createElement(FrameworkCard, { framework: view.framework, description: view.description, t, now, showTitle: false })
+              )
+            : null,
         React.createElement(
           'div',
           /* The base class stays a literal (a selftest pins it); a closed
@@ -4494,6 +5175,46 @@ window.__ModuleLoader__.load({
 .project-flow-decisionAge{flex:none;margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:10px;}
 .project-flow-decisionCopy{flex:none;height:22px;padding:0 8px;font-size:10.5px;}
 .project-flow-frameworkSummary{margin:0 0 6px;}
+.project-flow-frameworkGrid{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;margin-top:4px;}
+.project-flow-frameworkCol{display:flex;flex-direction:column;min-width:0;}
+.project-flow-frameworkTree,.project-flow-frameworkSlices{display:flex;flex-direction:column;gap:4px;margin:0;padding:0;list-style:none;}
+.project-flow-frameworkModule,.project-flow-frameworkSlice{min-width:0;border-radius:6px;}
+.project-flow-frameworkModule--active,.project-flow-frameworkSlice--active{background:var(--dsw-alias-bg-layer-2);box-shadow:inset 2px 0 0 var(--dsw-alias-brand-primary);}
+.project-flow-frameworkModuleHead{display:flex;align-items:baseline;gap:2px;min-width:0;}
+.project-flow-frameworkModuleToggle{flex:none;width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:1;}
+.project-flow-frameworkModuleToggle:hover{color:var(--dsw-alias-label-primary);}
+.project-flow-frameworkModuleToggle:focus-visible,.project-flow-frameworkModuleSelect:focus-visible,.project-flow-frameworkSliceHead:focus-visible,.project-flow-frameworkChip:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px;}
+.project-flow-frameworkModuleSelect{flex:1 1 auto;min-width:0;display:flex;align-items:baseline;gap:6px;padding:2px 3px;border:0;border-radius:4px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
+.project-flow-frameworkModuleSelect:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-frameworkModuleName{flex:none;font-family:${MONO};font-weight:600;font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.project-flow-frameworkModuleTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
+.project-flow-frameworkModuleBody{padding:2px 0 4px 18px;border-left:1px solid var(--dsw-alias-border-l2);margin-left:7px;}
+.project-flow-frameworkField{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;min-width:0;margin:2px 0;}
+.project-flow-frameworkLabel{flex:none;color:var(--dsw-alias-label-secondary);font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;}
+.project-flow-frameworkPath{font-family:${MONO};font-size:10px;line-height:1.5;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);}
+.project-flow-frameworkSection{font-family:${MONO};font-size:10px;line-height:1.6;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);overflow-wrap:anywhere;}
+.project-flow-frameworkMembers{color:var(--dsw-alias-label-secondary);font-family:inherit;}
+.project-flow-frameworkMoreMark{color:var(--dsw-alias-label-secondary);font-size:9.5px;}
+.project-flow-frameworkChip{flex:none;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);padding:0 4px;font-size:9.5px;line-height:16px;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.project-flow-frameworkChip--active{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);}
+.project-flow-frameworkDetailPanel{min-width:0;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);}
+.project-flow-frameworkDetailTitle{margin:0 0 4px;font-size:12px;line-height:1.4;overflow-wrap:anywhere;}
+.project-flow-frameworkDetailLabel{margin:6px 0 2px;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-secondary);}
+.project-flow-frameworkDetailText{margin:0 0 4px;font-size:11px;line-height:1.5;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);}
+.project-flow-frameworkHint{margin:0;font-size:11px;}
+.project-flow-frameworkSliceHead{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;width:100%;padding:3px 4px;border:0;border-radius:5px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;text-align:left;cursor:pointer;}
+.project-flow-frameworkSliceHead:hover{background:var(--dsw-alias-bg-layer-2);}
+.project-flow-frameworkRole{flex:none;color:var(--dsw-alias-label-secondary);font-size:10px;}
+.project-flow-frameworkSliceMeta{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;padding:0 4px 3px;min-width:0;}
+.project-flow-frameworkModules{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:3px;font-size:10px;color:var(--dsw-alias-label-secondary);}
+.project-flow-frameworkFiles{display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:3px;min-width:0;}
+.project-flow-frameworkFile{font-family:${MONO};font-size:9.5px;line-height:1.6;padding:0 3px;border-radius:3px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere;}
+.project-flow-frameworkFile--unowned{border-style:dashed;color:var(--project-flow-warn-text);}
+.project-flow-frameworkFile--missing{color:var(--project-flow-error-text);text-decoration:line-through;}
+.project-flow-frameworkDegraded{margin:4px 0;padding:6px 8px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);color:var(--project-flow-warn-text);font-size:11px;line-height:1.5;}
+.project-flow-frameworkRoleRow{display:flex;align-items:baseline;flex-wrap:wrap;gap:2px 6px;padding:2px 0;font-size:11px;min-width:0;}
+.project-flow-frameworkRoles,.project-flow-frameworkUnmanaged,.project-flow-frameworkWarnings{min-width:0;margin-top:4px;}
+.project-flow-frameworkMore{margin:2px 0;padding-left:18px;}
 .project-flow-frameworkList{gap:2px;}
 .project-flow-frameworkRow{display:flex;align-items:baseline;flex-wrap:wrap;column-gap:6px;row-gap:1px;padding:3px 3px 3px 0;border-radius:5px;min-width:0;font-size:11.5px;}
 .project-flow-frameworkRow:hover{background:var(--dsw-alias-bg-layer-2);}
@@ -4524,6 +5245,13 @@ window.__ModuleLoader__.load({
 .project-flow-cardTitle{font-size:13px;line-height:20px;}
 .project-flow-cardTitle--spaced{margin-bottom:10px;}
 .project-flow-subTitle{margin:14px 0 6px;font-size:11px;}
+.project-flow-frameworkGrid{grid-template-columns:minmax(0,1fr) minmax(0,0.9fr);gap:12px;margin-top:6px;margin-bottom:6px;}
+.project-flow-frameworkModuleSelect{font-size:12px;}
+.project-flow-frameworkModuleName{font-size:11.5px;}
+.project-flow-frameworkDetailPanel{padding:8px 10px;border-radius:10px;}
+.project-flow-frameworkDetailTitle{font-size:12.5px;}
+.project-flow-frameworkDetailText{font-size:11.5px;}
+.project-flow-frameworkSummary{font-size:11.5px;}
 .project-flow-frameworkRow{column-gap:8px;padding:4px 4px 4px 0;font-size:12px;}
 .project-flow-frameworkId{font-size:11.5px;}
 .project-flow-frameworkTime{font-size:10.5px;}

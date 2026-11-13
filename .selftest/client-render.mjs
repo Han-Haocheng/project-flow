@@ -59,7 +59,7 @@ function check(name, fn) {
 // ------------------------------------------------------------- probe source
 const ANCHOR = "    return {\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 const PROBE_NAME =
-  "    return {\n      __probe: { zh, en, normalize, PanelView, readDisplayPrefs, writeDisplayPrefs, cardCollapsed, FoldCard, DisplayBar, DisplayRow: DisplayBar, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
+  "    return {\n      __probe: { zh, en, normalize, PanelView, readDisplayPrefs, writeDisplayPrefs, cardCollapsed, FoldCard, DisplayBar, DisplayRow: DisplayBar, Panel, PanelRoot, PanelBody, PanelTitle, HeaderAction, ExperimentTree, TasksCard, FrameworkCard, TaskRow, TaskDetail, GatesCard, SignalsCard, TopBar, Footer, ErrorState, DetailBlock, PanelIcon, PanelGlyph, relativeFromSeconds, ageText, runPanel: Panel, CSS, DecisionsCard, normalizeDecisions, decisionAnswerCommand },\n      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],";
 
 const source = readFileSync(SRC, 'utf8');
 assert.equal(source.split(ANCHOR).length - 1, 1, 'probe anchor not found exactly once');
@@ -3206,6 +3206,223 @@ check('SignalsCard: empty heartbeats render the empty copy', () => {
   assert.ok(body.includes('没有心跳文件。'), 'heartbeat empty copy missing');
   assert.equal(collect(card, 'project-flow-beat').length, 0);
   assert.equal(collect(card, 'project-flow-pre').length, 0);
+});
+
+/* ------------------------------------------------- framework graph (T-20261113171442) */
+
+const frameworkFixture = () => ({
+  degraded: false,
+  summary: {
+    files: 12,
+    describedModules: 2,
+    missingSemantics: 1,
+    plans: 3,
+    graphModules: 2,
+    graphSlices: 2,
+    graphRoles: 1,
+    graphUnmanaged: 2,
+  },
+  modules: [
+    {
+      name: 'alpha',
+      title: '阿尔法',
+      owns: [{ path: 'lib/alpha/', kind: 'dir' }, { path: 'alpha.mjs', kind: 'file' }],
+      sections: [{ key: 'core', members: ['run', 'stop'], membersTruncated: false }],
+      sectionsTruncated: false,
+      slices: ['slice-one'],
+    },
+    {
+      name: 'beta',
+      title: '贝塔',
+      owns: [{ path: 'lib/beta.mjs', kind: 'file' }],
+      sections: [{ key: 'api', members: ['invoke'], membersTruncated: true }],
+      sectionsTruncated: true,
+      slices: ['slice-two'],
+    },
+  ],
+  slices: [
+    {
+      id: 'slice-one',
+      title: '切片一',
+      semantics: '跨模块一致性',
+      ownerRole: 'owner-a',
+      rationale: '为什么一',
+      files: [
+        { path: 'lib/alpha/core.mjs', moduleName: 'alpha', exists: true },
+        { path: 'docs/UNOWNED.md', moduleName: null, exists: false },
+      ],
+      modules: ['alpha'],
+      missingFiles: ['docs/UNOWNED.md'],
+      filesTruncated: true,
+      missingFilesTruncated: true,
+    },
+    {
+      id: 'slice-two',
+      title: '切片二',
+      semantics: '第二个语义',
+      ownerRole: 'owner-a',
+      rationale: '',
+      files: [{ path: 'lib/beta.mjs', moduleName: 'beta', exists: true }],
+      modules: ['beta'],
+      missingFiles: [],
+      filesTruncated: false,
+      missingFilesTruncated: false,
+    },
+  ],
+  roles: [{ id: 'owner-a', title: '模块负责人', semantics: '负责一致性', modules: ['alpha'] }],
+  unmanaged: [{ path: 'docs/UNOWNED.md', reason: '没有模块声明' }],
+  warnings: ['role-module-dangling: owner-a -> ghost'],
+  modulesTruncated: true,
+  slicesTruncated: true,
+  rolesTruncated: false,
+  unmanagedTruncated: false,
+});
+
+const frameworkView = () => probe.normalize({ framework: frameworkFixture() }).framework;
+const frameworkCard = (graph, translate = t, reset = true) =>
+  renderWithState(probe.FrameworkCard, { framework: graph, t: translate, now: NOW, showTitle: false }, { reset });
+const frameworkModuleSelect = (card, name) =>
+  collect(card, 'project-flow-frameworkModuleSelect').find((button) => textOf(button).includes(name));
+const frameworkSliceHead = (card, id) =>
+  collect(card, 'project-flow-frameworkSliceHead').find((button) => textOf(button).includes(id));
+
+check('framework: normalize reads src.framework, keeps the eight counters and degrades to summary only', () => {
+  const view = probe.normalize({ framework: frameworkFixture() });
+  assert.equal(view.framework.degraded, false);
+  assert.equal(view.framework.summary.graphModules, 2);
+  assert.equal(view.framework.summary.graphUnmanaged, 2);
+  assert.deepEqual(view.framework.modules.map((module) => module.name), ['alpha', 'beta']);
+  assert.equal(view.framework.modules[0].owns[0].kind, 'dir');
+  assert.equal(view.framework.modules[0].sections[0].members[1], 'stop');
+  assert.equal(view.framework.slices[0].files[1].moduleName, null);
+  assert.equal(view.framework.slices[0].files[1].exists, false);
+  assert.deepEqual(view.framework.slices[0].missingFiles, ['docs/UNOWNED.md']);
+
+  const degraded = probe.normalize({
+    framework: {
+      degraded: true,
+      summary: { files: 4, describedModules: null, missingSemantics: null, plans: null, graphModules: null, graphSlices: null, graphRoles: null, graphUnmanaged: null },
+    },
+  }).framework;
+  assert.equal(degraded.degraded, true);
+  assert.equal(degraded.summary.files, 4);
+  assert.equal(degraded.summary.graphModules, null);
+  assert.deepEqual(degraded.modules, [], 'a degraded section must not invent modules');
+  assert.deepEqual(degraded.slices, []);
+  assert.deepEqual(degraded.roles, []);
+  assert.deepEqual(degraded.unmanaged, []);
+  assert.deepEqual(degraded.warnings, []);
+  assert.equal(probe.normalize({}).framework, null, 'an older payload keeps framework null');
+});
+
+check('FrameworkCard: summary, module tree and the fold toggle', () => {
+  const graph = frameworkView();
+  let card = frameworkCard(graph);
+  const text = textOf(card);
+  assert.ok(text.includes('文件 12 · 已描述模块 2 · 缺语义 1 · 计划 3'), text);
+  assert.ok(text.includes('图模块 2 · 切片 2 · 角色 1 · 未归属 2'), text);
+  assert.deepEqual(
+    collect(card, 'project-flow-frameworkModuleName').map((element) => textOf(element)),
+    ['alpha', 'beta']
+  );
+  const toggles = collect(card, 'project-flow-frameworkModuleToggle');
+  assert.equal(toggles.length, 2);
+  assert.equal(toggles[0].props['aria-expanded'], false, 'modules start folded');
+  assert.equal(toggles[0].props['aria-controls'], 'project-flow-frameworkModuleBody-alpha');
+  assert.equal(collect(card, 'project-flow-frameworkModuleBody')[0].props.hidden, true);
+
+  toggles[0].props.onClick({});
+  card = frameworkCard(graph, t, false);
+  assert.equal(collect(card, 'project-flow-frameworkModuleToggle')[0].props['aria-expanded'], true);
+  assert.equal(collect(card, 'project-flow-frameworkModuleBody')[0].props.hidden, undefined);
+  const body = textOf(collect(card, 'project-flow-frameworkModuleBody')[0]);
+  assert.ok(body.includes('lib/alpha/') && body.includes('alpha.mjs'), 'owns paths missing: ' + body);
+  assert.ok(body.includes('core') && body.includes('run, stop'), 'section members missing: ' + body);
+});
+
+check('FrameworkCard: slices show owner role, unowned/missing files and truncation markers', () => {
+  const card = frameworkCard(frameworkView());
+  assert.equal(collect(card, 'project-flow-frameworkSlice').length, 2);
+  const text = textOf(card);
+  assert.ok(text.includes('负责角色: 模块负责人'), text);
+  assert.ok(text.includes('未归属模块'), 'unowned file marker missing');
+  assert.ok(text.includes('文件不存在'), 'missing file marker missing');
+  assert.ok(text.includes('还有更多'), 'truncation marker missing');
+  assert.ok(collect(card, 'project-flow-frameworkFile--unowned').length >= 1);
+  assert.ok(collect(card, 'project-flow-frameworkFile--missing').length >= 1);
+  assert.ok(text.includes('未归属文件'), 'unmanaged block missing');
+});
+
+check('FrameworkCard: module and slice selections highlight each other both ways', () => {
+  const graph = frameworkView();
+  let card = frameworkCard(graph);
+  frameworkSliceHead(card, 'slice-one').props.onClick({});
+  card = frameworkCard(graph, t, false);
+  const activeModuleText = textOf(collect(card, 'project-flow-frameworkModule--active')[0] || {});
+  assert.ok(activeModuleText.includes('alpha'), 'selecting a slice must highlight its module');
+  assert.ok(
+    collect(card, 'project-flow-frameworkSlice--active').some((row) => textOf(row).includes('slice-one')),
+    'the selected slice must be highlighted'
+  );
+  const detail = textOf(collect(card, 'project-flow-frameworkDetailPanel')[0]);
+  assert.ok(detail.includes('跨模块一致性'), 'slice semantics missing from detail');
+  assert.ok(detail.includes('模块负责人'), 'owner role missing from detail');
+  assert.ok(detail.includes('为什么一'), 'rationale missing from detail');
+
+  frameworkModuleSelect(card, 'beta').props.onClick({});
+  card = frameworkCard(graph, t, false);
+  const modulesActive = collect(card, 'project-flow-frameworkModule--active');
+  assert.ok(modulesActive.some((row) => textOf(row).includes('beta')), 'selecting a module must highlight it');
+  assert.ok(!modulesActive.some((row) => textOf(row).includes('alpha')), 'only the selected module stays active');
+  const slicesActive = collect(card, 'project-flow-frameworkSlice--active');
+  assert.ok(slicesActive.some((row) => textOf(row).includes('slice-two')), 'the module must highlight its slices');
+  assert.ok(!slicesActive.some((row) => textOf(row).includes('slice-one')));
+  assert.ok(textOf(collect(card, 'project-flow-frameworkDetailPanel')[0]).includes('贝塔'), 'module title missing from detail');
+});
+
+check('FrameworkCard: degraded hides the tree and slices and says 模块图不可用', () => {
+  const graph = probe.normalize({
+    framework: {
+      degraded: true,
+      summary: { files: 4, describedModules: null, missingSemantics: null, plans: 1, graphModules: null, graphSlices: null, graphRoles: null, graphUnmanaged: null },
+    },
+  }).framework;
+  const card = frameworkCard(graph);
+  const text = textOf(card);
+  assert.ok(text.includes('模块图不可用'), text);
+  assert.ok(text.includes('文件 4 · 已描述模块 — · 缺语义 — · 计划 1'), text);
+  assert.equal(collect(card, 'project-flow-frameworkGrid').length, 0, 'a degraded graph must not render the tree grid');
+  assert.equal(collect(card, 'project-flow-frameworkModule').length, 0);
+  assert.equal(collect(card, 'project-flow-frameworkSlice').length, 0);
+});
+
+check('FrameworkCard: an empty graph shows the Chinese empty states', () => {
+  const graph = probe.normalize({
+    framework: {
+      degraded: false,
+      summary: { files: 0, describedModules: 0, missingSemantics: 0, plans: 0, graphModules: 0, graphSlices: 0, graphRoles: 0, graphUnmanaged: 0 },
+      modules: [],
+      slices: [],
+      roles: [],
+      unmanaged: [],
+      warnings: [],
+    },
+  }).framework;
+  const card = frameworkCard(graph);
+  const text = textOf(card);
+  assert.ok(text.includes('模块图里还没有模块。'), text);
+  assert.ok(text.includes('还没有横向切片。'), text);
+  assert.equal(collect(card, 'project-flow-frameworkModule').length, 0);
+  assert.equal(collect(card, 'project-flow-frameworkSlice').length, 0);
+});
+
+check('FrameworkCard: the English locale renders English chrome for the graph', () => {
+  const card = frameworkCard(frameworkView(), tEn);
+  const text = textOf(card);
+  assert.ok(text.includes('12 files · 2 described modules · 1 missing semantics · 3 plans'), text);
+  assert.ok(text.includes('Graph modules 2 · slices 2 · roles 1 · unmanaged 2'), text);
+  assert.ok(text.includes('Cross-module slices'));
+  assert.ok(text.includes('Owner role: 模块负责人'), 'English chrome must wrap the role title, which stays data');
 });
 
 check('GatesCard: definitions, enabled summary and last run', () => {
