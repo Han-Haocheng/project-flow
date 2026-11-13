@@ -82,7 +82,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | 命令 | data 顶层形状 |
 |---|---|
 | flow init | 对象（必填 root·created·warnings） |
-| flow status | 对象（必填 root·name·initialized·contractSource·schema·store·counts·heartbeats·decisions·recent；可选 intents·status） |
+| flow status | 对象（必填 root·name·initialized·contractSource·schema·store·counts·heartbeats·decisions·recent；可选 intents·status·health —— health={level, findings[≤20], truncated}，--no-health 时省略） |
 | flow state | 开放对象（必填 ok·generatedAt·root·roots；面板状态快照载荷） |
 | flow aspect | 联合（list：aspects/locks/counts + 可选 source·swept ；acquire：{acquired,lock} 或 {acquired,holder,waitedMs}；renew：{renewed,lock} 或 {renewed,reason}；release：{released,aspect,owner,forced?,reason?} 或 {released:false,reason}；sweep：{root,dir,dryRun,released,kept}） |
 | flow backup | 对象（必填 name·path·files·bytes·pruned） |

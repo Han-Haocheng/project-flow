@@ -58,7 +58,7 @@ const CHECK_EXIT_BY_CODE = {
 }
 
 const BOOL_FLAGS = new Set([
-  'json', 'force', 'uninstall', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all',
+  'json', 'force', 'uninstall', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all', 'no-health',
   // T-20261108 D4：`desc plan/show/rebase`、`desc render --check`、`check description --strict`
   'strict', 'show', 'rebase', 'no-semantic-change', 'check',
   // T-20261111155622：门禁步骤 expect 手误默认拒绝，只有显式开这个开关才容错
@@ -107,7 +107,7 @@ const REPEAT_FLAGS = new Set([
  */
 export const SPEC = Object.freeze({
   init: Object.freeze({ flags: ['name', 'force', 'no-gates'] }),
-  status: Object.freeze({ flags: [] }),
+  status: Object.freeze({ flags: ['no-health'] }),
   // 面板状态快照（T-20261112154725）：前端（web/TUI）唯一允许读的台账面。
   state: Object.freeze({ flags: [] }),
   backup: Object.freeze({ flags: ['keep'] }),

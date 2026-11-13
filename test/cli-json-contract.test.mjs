@@ -304,7 +304,10 @@ test('契约形状：每条命令真实 --json 输出都符合登记形状', () 
   }
 
   expect('init', ['init', '--name', 'contract'])
-  expect('status', ['status'])
+  const statusRun = expect('status', ['status'])
+  assert.equal(typeof statusRun.json.data.health.level, 'string')
+  assert.ok(Array.isArray(statusRun.json.data.health.findings))
+  assert.equal(typeof statusRun.json.data.health.truncated, 'boolean')
   expect('state', ['state'])
   expect('aspect', ['aspect', 'list'])
   expect('doctor', ['doctor'])

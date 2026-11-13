@@ -6,7 +6,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { initProject } from '../lib/core.mjs'
+import { initProject, loadContract } from '../lib/core.mjs'
+import { beginIntent } from '../lib/tasks/intents.mjs'
 import { BACKUP_DIR, backupHealthWarning, createBackup, doctorReport, listBackups } from '../lib/backup.mjs'
 
 const TEMP_ROOTS = []
@@ -145,4 +146,38 @@ test('CLI：backup --keep 与 doctor --stale-hours 是已声明 flag（VALUE_FLA
   })
   assert.equal(doctor.status, 0, `doctor --stale-hours 必须被识别：${doctor.stderr}`)
   assert.equal(JSON.parse(doctor.stdout).ok, true)
+})
+
+test('flow doctor：健康聚合常驻——未完成 intent 以 warn 出现，且原有 5 条 finding 仍在', () => {
+  const root = freshProject('doctor-health')
+  createBackup(root, { now: new Date() })
+  const { contract } = loadContract(root)
+  beginIntent(root, contract, { kind: 'probe', steps: ['step-a'] })
+  const doctor = spawnSync(process.execPath, [BIN, '--root', root, 'doctor', '--json'], { encoding: 'utf8' })
+  assert.equal(doctor.status, 0, doctor.stderr)
+  const data = JSON.parse(doctor.stdout).data
+  const ids = data.findings.map((item) => item.id)
+  for (const id of ['store', 'contract', 'records', 'git-ignored', 'backup', 'intents']) {
+    assert.ok(ids.includes(id), '缺少 finding ' + id)
+  }
+  const intents = data.findings.find((item) => item.id === 'intents')
+  assert.equal(intents.level, 'warn')
+  assert.match(intents.message, /1 条未完成动作/)
+  assert.equal(typeof data.ok, 'boolean')
+})
+
+test('flow doctor：未完成 intent 超过 10 条时提示「数量偏多」', () => {
+  const root = freshProject('doctor-health-many')
+  createBackup(root, { now: new Date() })
+  const { contract } = loadContract(root)
+  for (let index = 0; index < 11; index += 1) {
+    beginIntent(root, contract, { kind: 'probe', target: { probe: index }, steps: ['step-' + index] })
+  }
+  const doctor = spawnSync(process.execPath, [BIN, '--root', root, 'doctor', '--json'], { encoding: 'utf8' })
+  assert.equal(doctor.status, 0, doctor.stderr)
+  const data = JSON.parse(doctor.stdout).data
+  const intents = data.findings.find((item) => item.id === 'intents')
+  assert.equal(intents.level, 'warn')
+  assert.match(intents.message, /11 条未完成动作/)
+  assert.match(intents.message, /数量偏多，考虑排查/)
 })

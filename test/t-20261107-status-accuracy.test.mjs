@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { buildStatusBlock } from '../lib/capture.mjs'
 import { legacyStageFromStatus, STAGE_IDS } from '../lib/stage.mjs'
 import { getTask, initProject, listTasks, loadContract } from '../lib/core.mjs'
+import { beginIntent } from '../lib/tasks/intents.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '..')
@@ -250,4 +251,24 @@ test('effectiveStage 的 status 回退必须与 legacyStageFromStatus 逐项一�
   assert.equal(effectiveStage({ status: 'active', stage: 'reviewing' }), 'reviewing')
   assert.equal(effectiveStage({ status: 'active', stage: 'bogus' }), 'queued-analysis', '非法 stage 当作缺失，回退到 status 反推')
   assert.equal(effectiveStage({ status: 'done', stage: 'implementing' }), 'implementing', 'explicit stage wins even over done')
+})
+
+test('flow status：data.health 默认常驻、--no-health 可关，warn 有可读提示', () => {
+  const root = freshProject('status-health')
+  const { contract } = loadContract(root)
+  beginIntent(root, contract, { kind: 'probe', steps: ['step-a'] })
+
+  const on = runCli(root, ['status', '--json'])
+  assert.equal(on.code, 0, on.stdout + on.stderr)
+  assert.ok(on.json.data.health, '默认必须带 data.health')
+  assert.equal(on.json.data.health.level, 'warn')
+  assert.ok(on.json.data.health.findings.some((item) => item.id === 'intents' && item.level === 'warn'))
+  assert.equal(on.json.data.health.truncated, false)
+
+  const off = runCli(root, ['status', '--no-health', '--json'])
+  assert.equal(off.code, 0, off.stdout + off.stderr)
+  assert.equal(Object.hasOwn(off.json.data, 'health'), false, '--no-health 必须省略 health 段')
+
+  const human = runCli(root, ['status'])
+  assert.match(human.stdout, /健康\s+warn/)
 })
