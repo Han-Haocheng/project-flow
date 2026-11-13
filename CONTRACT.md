@@ -2104,6 +2104,10 @@ flow gate rules --init [--reason R] [--by agent|user]   # 建基线；已有基�
 flow gate rules --record --reason R [--by agent|user]   # 留痕并推进基线（改规则的唯一正路）
 ```
 
+- **已挂进 precommit 第 10 步**（步骤 id `rules`）：precommit 跑的就是不带参数的 `flow gate rules`（默认校验）。
+  所以改 `docs/module-domain.json`、`CONTRACT.md`、`.agents/flow/flow.json` 任一个而没 `--record`，提交前就会红——
+  这不是额外手续，是「不许悄悄改规则」的唯一闸门。
+
 - `--init` 与 `--record` 互斥（用法错误）；规则文件当前状态不干净（锚点坏/文件缺）时两者都 `invalid`（退出 2）。
 - `--record`：**理由必填且 ≥4 字**（`MIN_REASON_CHARS`），不足 `usage`；
   没有实际变化时返回 `changed:false` 且**不写盘**（不算一次留痕）；基线不存在时 `usage`（先 `init`）。
