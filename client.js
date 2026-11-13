@@ -261,6 +261,18 @@ window.__ModuleLoader__.load({
       'tasks.detail.commits': '提交',
       'tasks.detail.created': '创建于',
       'tasks.detail.updated': '更新于',
+      'tasks.detail.dispatch': '工单',
+      'tasks.dispatch.badge': '{who} · {round}/{attempt}',
+      'tasks.dispatch.unassigned': '未指派',
+      'tasks.dispatch.title': '工单 {status} · {who} · 第 {round} 轮 / 第 {attempt} 次',
+      'tasks.dispatch.status.pending': '待派工',
+      'tasks.dispatch.status.acked': '已确认',
+      'tasks.dispatch.status.closed': '已关闭',
+      'tasks.dispatch.stale': '已过期',
+      'tasks.dispatch.orphan': '孤儿工单',
+      'tasks.dispatch.expires': '到期于',
+      'tasks.dispatch.outcome': '结果',
+      'tasks.dispatch.closedAt': '关闭于',
       'framework.title': '框架视图',
       'framework.summary': '文件 {files} · 模块 {modules} · 缺语义 {missing} · 计划 {plans}',
       'framework.plans': '最近语义变更',
@@ -476,6 +488,18 @@ window.__ModuleLoader__.load({
       'tasks.detail.commits': 'Commits',
       'tasks.detail.created': 'Created',
       'tasks.detail.updated': 'Updated',
+      'tasks.detail.dispatch': 'Dispatch',
+      'tasks.dispatch.badge': '{who} · {round}/{attempt}',
+      'tasks.dispatch.unassigned': 'unassigned',
+      'tasks.dispatch.title': 'Dispatch {status} · {who} · round {round} / attempt {attempt}',
+      'tasks.dispatch.status.pending': 'pending',
+      'tasks.dispatch.status.acked': 'acked',
+      'tasks.dispatch.status.closed': 'closed',
+      'tasks.dispatch.stale': 'stale',
+      'tasks.dispatch.orphan': 'orphan',
+      'tasks.dispatch.expires': 'expires',
+      'tasks.dispatch.outcome': 'Outcome',
+      'tasks.dispatch.closedAt': 'Closed',
       'framework.title': 'Framework view',
       'framework.summary': '{files} files · {modules} modules · {missing} missing semantics · {plans} plans',
       'framework.plans': 'Recent semantic changes',
@@ -954,6 +978,33 @@ window.__ModuleLoader__.load({
       return asText(decision.kind) === 'input' ? line + '"' + choice + '"' : line + choice;
     }
 
+    /** A task row's optional dispatch work order (T-20261113155234 阶段 3). */
+    function normalizeTaskDispatch(raw) {
+      if (raw === null || raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) return null;
+      const src = raw;
+      if (Object.keys(src).length === 0) return null;
+      const positive = (value) => {
+        const number = asNumber(value, 1);
+        return Number.isFinite(number) && number > 0 ? Math.trunc(number) : 1;
+      };
+      const statusRaw = asText(src.status);
+      return {
+        id: asText(src.id),
+        round: positive(src.round),
+        attempt: positive(src.attempt),
+        agent: asText(src.agent),
+        role: asText(src.role),
+        /* The three-state panel view; outcome is a separate dimension. */
+        status: statusRaw === 'acked' || statusRaw === 'closed' ? statusRaw : 'pending',
+        expiresAt: asText(src.expiresAt),
+        /* stale and orphan are independent flags, never derived from each other. */
+        stale: src.stale === true,
+        orphan: src.orphan === true,
+        outcome: asText(src.outcome) || null,
+        closedAt: asText(src.closedAt) || null,
+      };
+    }
+
     /**
      * One task row. Title and goal are the two visible lines; notes, scope,
      * acceptance, commits and the timestamps feed the expanded detail block.
@@ -989,6 +1040,8 @@ window.__ModuleLoader__.load({
         depth: asNumber(task.depth, 0),
         /* 2026-11-09（审计项 11）：15th row key——捕获分支来源；缺失/空串 → null（不出徽标）。 */
         branch: asText(task.branch) || null,
+        /* 16th row key (optional): the card's dispatch work order; absent = no badge. */
+        dispatch: normalizeTaskDispatch(task.dispatch),
       };
     }
 
@@ -1483,6 +1536,55 @@ window.__ModuleLoader__.load({
       return React.createElement('p', { className: 'project-flow-empty' }, props.children);
     }
 
+    /** Who to show for a work order: agent, else role, else the localized fallback. */
+    function dispatchWhoOf(dispatch, t) {
+      return asText(dispatch.agent) || asText(dispatch.role) || t('tasks.dispatch.unassigned');
+    }
+
+    /** Collapsed-row badge text: who + round/attempt. */
+    function dispatchBadgeText(dispatch, t) {
+      return t('tasks.dispatch.badge', {
+        who: dispatchWhoOf(dispatch, t),
+        round: asNumber(dispatch.round, 1),
+        attempt: asNumber(dispatch.attempt, 1),
+      });
+    }
+
+    /** Full tooltip/aria text: status + who + round/attempt + stale/orphan/expiry. */
+    function dispatchTitleText(dispatch, t) {
+      const parts = [
+        t('tasks.dispatch.title', {
+          status: t('tasks.dispatch.status.' + asText(dispatch.status)),
+          who: dispatchWhoOf(dispatch, t),
+          round: asNumber(dispatch.round, 1),
+          attempt: asNumber(dispatch.attempt, 1),
+        }),
+      ];
+      if (dispatch.stale === true) parts.push(t('tasks.dispatch.stale'));
+      if (dispatch.orphan === true) parts.push(t('tasks.dispatch.orphan'));
+      if (asText(dispatch.expiresAt)) parts.push(t('tasks.dispatch.expires') + ': ' + dispatch.expiresAt);
+      return parts.join(' · ');
+    }
+
+    /**
+     * Expanded-detail one-liner: status and outcome are separate dimensions.
+     * A closed order shows its outcome and closedAt even when outcome is absent
+     * (an explicit dash, never a silently dropped result field).
+     */
+    function dispatchDetailText(dispatch, t) {
+      const parts = [t('tasks.dispatch.status.' + asText(dispatch.status)), dispatchBadgeText(dispatch, t)];
+      if (asText(dispatch.status) === 'closed') {
+        parts.push(t('tasks.dispatch.outcome') + ': ' + (asText(dispatch.outcome) || t('misc.dash')));
+        parts.push(t('tasks.dispatch.closedAt') + ': ' + (asText(dispatch.closedAt) || t('misc.dash')));
+      } else if (asText(dispatch.outcome)) {
+        parts.push(t('tasks.dispatch.outcome') + ': ' + dispatch.outcome);
+      }
+      if (dispatch.stale === true) parts.push(t('tasks.dispatch.stale'));
+      if (dispatch.orphan === true) parts.push(t('tasks.dispatch.orphan'));
+      if (asText(dispatch.expiresAt)) parts.push(t('tasks.dispatch.expires') + ': ' + dispatch.expiresAt);
+      return parts.join(' · ');
+    }
+
     /** Owner + relative update time shown as the row's small meta line. */
     function taskMetaText(task, now, t) {
       const owner = asText(task.owner);
@@ -1516,6 +1618,9 @@ window.__ModuleLoader__.load({
         { label: t('tasks.detail.created'), value: asText(task.created_at) },
         { label: t('tasks.detail.updated'), value: asText(task.updated_at) },
       ];
+      if (task.dispatch && typeof task.dispatch === 'object') {
+        rows.push({ label: t('tasks.detail.dispatch'), value: dispatchDetailText(task.dispatch, t) });
+      }
       return React.createElement(
         'div',
         { className: 'project-flow-detail project-flow-taskDetail' },
@@ -1604,6 +1709,7 @@ window.__ModuleLoader__.load({
         : null;
       const badge = asText(tree.badge);
       const branch = asText(task && task.branch);
+      const dispatch = task.dispatch && typeof task.dispatch === 'object' ? task.dispatch : null;
       return React.createElement(
         'li',
         {
@@ -1662,6 +1768,22 @@ window.__ModuleLoader__.load({
                 'span',
                 { className: 'project-flow-taskBranch', title: joinParts([t('tasks.branch'), branch]) },
                 branch
+              )
+            : null,
+          dispatch
+            ? React.createElement(
+                'span',
+                {
+                  className:
+                    'project-flow-taskDispatch project-flow-taskDispatch--' +
+                    asText(dispatch.status) +
+                    (dispatch.stale === true ? ' project-flow-taskDispatch--stale' : '') +
+                    (dispatch.orphan === true ? ' project-flow-taskDispatch--orphan' : ''),
+                  title: dispatchTitleText(dispatch, t),
+                  role: 'img',
+                  'aria-label': dispatchTitleText(dispatch, t),
+                },
+                dispatchBadgeText(dispatch, t)
               )
             : null,
           badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
@@ -4994,6 +5116,12 @@ window.__ModuleLoader__.load({
 .project-flow-taskCaret{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:1;}
 .project-flow-taskCaret:hover{color:var(--dsw-alias-label-primary);}
 .project-flow-taskBadge{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap;}
+.project-flow-taskDispatch{flex:none;max-width:26%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:9.5px;line-height:16px;padding:0 4px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary);}
+.project-flow-taskDispatch--pending{border-style:dashed;}
+.project-flow-taskDispatch--acked{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);}
+.project-flow-taskDispatch--closed{color:var(--dsw-alias-label-secondary);opacity:.8;}
+.project-flow-taskDispatch--stale{color:var(--project-flow-warn-text);border-color:currentColor;}
+.project-flow-taskDispatch--orphan{color:var(--project-flow-error-text);border-color:currentColor;text-decoration:underline dotted;}
 .project-flow-taskBranch{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:9.5px;color:var(--dsw-alias-brand-primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;opacity:.85;}
 .project-flow-trend{margin-top:8px;min-width:0;}
 .project-flow-trendHead{display:flex;align-items:baseline;gap:4px;font-size:11px;min-width:0;}

@@ -721,7 +721,7 @@ check('i18n: zh/en dictionaries stay in lockstep (keys, placeholders, ASCII-only
   assert.deepEqual(chinese, [], `en still contains Chinese: ${chinese.join(', ')}`);
   // Every literal t('…') must resolve; the dynamic prefixes are whitelisted but
   // must exist in the dictionary (so a renamed bucket cannot go silent).
-  const dynamic = ['tasks.status.', 'gates.phase.', 'hb.status.', 'tasks.stage.'];
+  const dynamic = ['tasks.status.', 'gates.phase.', 'hb.status.', 'tasks.stage.', 'tasks.dispatch.status.'];
   const used = [...source.matchAll(/\bt\(\s*'([^']+)'/g)].map((m) => m[1]);
   const missing = [...new Set(used)].filter((key) => !(key in zh) && !dynamic.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(missing, [], `t() keys with no zh definition: ${missing.join(', ')}`);
@@ -2616,6 +2616,94 @@ check('TasksCard: all rows start collapsed; one click opens one, keyboard collap
     true,
     'Space must expand the focused row'
   );
+});
+
+check('TaskRow: dispatch is an optional inline badge with status/stale/orphan', () => {
+  const payload = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { active: 2 },
+      active: [
+        {
+          id: 'T-DP1',
+          title: '工单任务',
+          stage: 'implementing',
+          dispatch: {
+            id: 'D-1',
+            round: 2,
+            attempt: 3,
+            agent: 'alice',
+            role: 'implementer',
+            status: 'acked',
+            expiresAt: '2026-11-13T20:30:00+08:00',
+            stale: true,
+            orphan: true,
+            outcome: null,
+            closedAt: null,
+          },
+        },
+        { id: 'T-DP2', title: '无工单' },
+      ],
+    },
+  }).tasks;
+  assert.equal(payload.active[0].dispatch.status, 'acked');
+  assert.equal(payload.active[0].dispatch.stale, true);
+  assert.equal(payload.active[0].dispatch.orphan, true);
+  assert.equal(payload.active[1].dispatch, null, 'a missing dispatch key normalizes to null');
+
+  const row = probe.TaskRow({ task: payload.active[0], t, now: NOW, open: false, onToggle: () => {} });
+  const badge = collect(row, 'project-flow-taskDispatch')[0];
+  assert.ok(badge, 'dispatch badge missing');
+  assert.equal(textOf(badge), 'alice · 2/3');
+  assert.ok(String(badge.props.className).includes('--acked'));
+  assert.ok(String(badge.props.className).includes('--stale'), 'stale must have its own modifier');
+  assert.ok(String(badge.props.className).includes('--orphan'), 'orphan is independent of stale');
+  assert.ok(
+    badge.props.title.includes('已确认') &&
+      badge.props.title.includes('已过期') &&
+      badge.props.title.includes('孤儿工单'),
+    badge.props.title
+  );
+  assert.equal(badge.props['aria-label'], badge.props.title, 'the badge must expose the full state to AT');
+
+  const plain = probe.TaskRow({ task: payload.active[1], t, now: NOW, open: false, onToggle: () => {} });
+  assert.equal(collect(plain, 'project-flow-taskDispatch').length, 0, 'a row without dispatch must not render an empty badge');
+});
+
+check('TaskDetail: dispatch summary keeps status and outcome as separate dimensions', () => {
+  const build = (dispatch) =>
+    probe.normalize({ tasks: { total: 1, counts: { active: 1 }, active: [{ id: 'T-DP', title: '工单', dispatch }] } })
+      .tasks.active[0];
+  const detailOf = (task) => {
+    const row = probe.TaskRow({ task, t, now: NOW, open: true, onToggle: () => {} });
+    const labels = collect(row, 'project-flow-detailLabel').map((element) => textOf(element));
+    const values = collect(row, 'project-flow-detailValue').map((element) => textOf(element));
+    return { labels, last: values[values.length - 1] };
+  };
+
+  const pending = detailOf(
+    build({ id: 'D-2', round: 1, attempt: 1, agent: 'bob', role: 'implementer', status: 'pending', stale: false, orphan: false })
+  );
+  assert.equal(pending.labels[pending.labels.length - 1], '工单', 'dispatch adds one detail row at the end');
+  assert.ok(pending.last.includes('待派工'), pending.last);
+  assert.ok(!pending.last.includes('结果'), 'a pending order must not invent an outcome');
+
+  const acked = detailOf(
+    build({ id: 'D-3', round: 1, attempt: 2, agent: 'bob', role: 'implementer', status: 'acked', outcome: 'accepted' })
+  );
+  assert.ok(acked.last.includes('已确认') && acked.last.includes('结果: accepted'), 'status and outcome are independent: ' + acked.last);
+
+  const closed = detailOf(
+    build({ id: 'D-4', round: 2, attempt: 1, agent: 'carol', role: 'reviewer', status: 'closed', outcome: 'accepted', closedAt: '2026-11-13T20:00:00+08:00' })
+  );
+  assert.ok(closed.last.includes('已关闭'), closed.last);
+  assert.ok(closed.last.includes('结果: accepted'), closed.last);
+  assert.ok(closed.last.includes('关闭于: 2026-11-13T20:00:00+08:00'), closed.last);
+
+  const closedNoOutcome = detailOf(
+    build({ id: 'D-5', round: 2, attempt: 1, agent: 'carol', role: 'reviewer', status: 'closed', outcome: null, closedAt: '2026-11-13T20:01:00+08:00' })
+  );
+  assert.ok(closedNoOutcome.last.includes('结果: —'), 'a closed order must still show the result dimension');
 });
 
 check('TaskDetail: empty fields degrade to the dash placeholder', () => {
