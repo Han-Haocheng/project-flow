@@ -1366,6 +1366,10 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 | `reviewing` | — | ✗ | ✗ | ✗ |
 | `done` | `full` | ✗ | ✗ | ✓ |
 | `archived` | — | ✗ | ✗ | ✗ |
+| `cancelled` | — | ✗ | ✗ | ✗ |
+
+`archived` / `cancelled` 都是**无出边终态**，区别是「完成退役」与「撤销（不表示完成）」：
+归档只从 `done` 进，`cancelled` 永不进入归档 sweep（详见 §3.2.1「撤销 = cancelled」与「只从 done 归档」）。
 
 **不变式**：`gate !== null` 的阶段，其门给出的修复命令（`flow desc plan` / `flow desc apply`）必须能在
 **同一阶段**执行，否则就是「永远过不去的门」——`queued-review` 因此同时是 full 门与 plan/apply 窗口
