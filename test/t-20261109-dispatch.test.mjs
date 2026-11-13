@@ -1784,6 +1784,64 @@ test('R2：ack 被挂载门拒时终止已起的子代理，不留存活子会�
   assert.equal(after.checkpoints.some((x) => (x.kind === 'claim' || x.kind === 'dispatch') && !x.closedAt), false, '不得留 open 回执')
 })
 
+
+test('R3：未关闭但已过期的工单自动 close(expired) 后允许重新入队', () => {
+  const { root, contract } = freshProject('expired-recycle')
+  const task = addTask(root, contract, { type: 'feat', title: '过期回收', stage: 'queued-analysis' })
+  core.queueDispatch(root, contract, task.id, { agent: 'analyzer:' + task.id, role: 'analyzer', ttl: 1 })
+  const first = getTask(root, contract, task.id)
+  updateTask(root, contract, task.id, {
+    dispatch: { ...first.dispatch, expiresAt: '2020-01-01T00:00:00.000Z' },
+  }, { source: 'internal' })
+  const queued = core.queueDispatch(root, contract, task.id, { agent: 'analyzer:' + task.id, role: 'analyzer' })
+  assert.match(String(queued.dispatch.id), /-r1-a2$/, '过期回收后 attempt+1 重新入队')
+  assert.equal(queued.dispatch.outcome, undefined, '新工单是 open')
+})
+
+test('R4：settle 失败重派走同阶段 allowSameStage，attempt 递增，第三次 needs-human 停派', async () => {
+  const { root, contract } = freshProject('settle-redispatch')
+  const task = addTask(root, contract, { type: 'feat', title: '重派', stage: 'analyzing' })
+  const subagents = fakeSubagents()
+  const ctx = {
+    get(name) {
+      if (name === 'subagents') return subagents
+      if (name === 'workingDirectory') return { get: () => root }
+      if (name === 'agents') return { get: () => undefined, list: () => [], roots: () => [] }
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  const agent = { id: 'session-main', session: { cwd: root, header: { origin: 'main' } } }
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    if (attempt > 1) {
+      const before = getTask(root, contract, task.id)
+      core.closeDispatch(root, contract, task.id, { outcome: 'failed', reason: '失败 ' + (attempt - 1) })
+      const settled = await settleDispatchAfterClose({
+        ctx, agent, root, contract, task: getTask(root, contract, task.id),
+        result: { outcome: 'failed', task: getTask(root, contract, task.id) }, config: { dispatch: { auto: true } },
+      })
+      if (attempt === 3) {
+        // 第三次失败后由 close 侧标 needs-human；settle 不再派。
+        const stopped = await settleDispatchAfterClose({
+          ctx, agent, root, contract, task: getTask(root, contract, task.id),
+          result: { outcome: 'failed', needsHuman: true, task: getTask(root, contract, task.id) },
+          config: { dispatch: { auto: true } },
+        })
+        assert.deepEqual(stopped, [], 'needs-human 后 must stop')
+      } else {
+        assert.equal(settled.length, 1, '失败后必须重派 analyzer')
+      }
+    } else {
+      core.queueDispatch(root, contract, task.id, { agent: 'analyzer:' + task.id, role: 'analyzer' })
+      core.ackDispatch(root, contract, task.id, { agent: 'analyzer:' + task.id, session: 'a-' + attempt })
+    }
+  }
+  assert.ok(subagents.calls.length >= 2, '同阶段重派必须真的起 analyzer')
+  assert.equal(getTask(root, contract, task.id).stage, 'analyzing')
+  const last = getTask(root, contract, task.id).dispatch
+  assert.ok(last.attempt >= 2, 'attempt 必须递增，实际 ' + String(last.attempt))
+})
+
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
   const { root, contract } = freshProject('review-approve')
   const task = addTask(root, contract, { type: 'feat', title: '审查通过', stage: 'queued-review' })
