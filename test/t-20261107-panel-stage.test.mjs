@@ -49,21 +49,24 @@ test('行形状：stage 与 branch 是两个投影键，现代记录原样保留
   assert.equal(row.branch, null, '手写任务没有捕获分支 → null（面板不渲染徽标）')
   assert.equal(row.status, 'active')
   // 四态 counts 保留，阶段计数单独成字段（done/archived 与阶段 id 同名）。
-  for (const key of ['draft', 'active', 'done', 'archived', 'other']) {
+  for (const key of ['draft', 'active', 'done', 'archived', 'cancelled', 'other']) {
     assert.equal(typeof tasks.counts[key], 'number', `four-state counts.${key} must stay`)
   }
   assert.equal(tasks.counts.active, 1)
 })
 
-test('九阶段桶：每条记录恰好落进一个桶，九键计数 == 任务总数', async () => {
+test('十阶段桶：每条记录恰好落进一个桶，十键计数 == 任务总数', async () => {
   const { root, contract } = freshProject('conservation')
   for (const stage of STAGE_IDS) {
-    addTask(root, contract, { type: 'feat', title: `stage ${stage}`, stage })
+    const input = { type: 'feat', title: `stage ${stage}`, stage }
+    /* cancelled 是撤销终态：创建即撤销必须带原因（不放宽契约）。 */
+    if (stage === 'cancelled') input.cancelReason = '面板桶测试撤销'
+    addTask(root, contract, input)
   }
   const { tasks } = await snapshotOf(root)
   assert.equal(tasks.total, STAGE_IDS.length)
 
-  // 九键由 STAGE_IDS 生成（不是手写九个字面量）且顺序稳定。
+  // 键由 STAGE_IDS 生成（不是手写字面量）且顺序稳定。
   assert.deepEqual(Object.keys(tasks.stageCounts), [...STAGE_IDS])
   assert.deepEqual(Object.keys(tasks.stages), [...STAGE_IDS])
   for (const stage of STAGE_IDS) {
@@ -79,6 +82,8 @@ test('九阶段桶：每条记录恰好落进一个桶，九键计数 == 任务�
   assert.equal(tasks.counts.done, 1)
   assert.equal(tasks.stageCounts.done, 1)
   assert.equal(tasks.counts.active, 6, 'queued-analysis..reviewing are the six active stages')
+  assert.equal(tasks.counts.cancelled, 1, 'cancelled 单列，不混入 done')
+  assert.equal(tasks.counts.done, 1)
 })
 
 test('旧记录（无 stage）：按 legacyStageFromStatus 投影，done 不会落进待办桶', async () => {

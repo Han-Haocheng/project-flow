@@ -106,7 +106,7 @@ test('任务树投影：父失效按根（depth 0）且不抛', async () => {
   const { root, contract } = freshProject('gone')
   task(root, contract, 'T-20260101-21', '父', 'active', AT(1))
   task(root, contract, 'T-20260101-22', '孤儿子', 'active', AT(2), 'T-20260101-21')
-  removeTask(root, contract, 'T-20260101-21')
+  removeTask(root, contract, 'T-20260101-21', { reason: '删父投影测试', purge: true })
 
   const payload = await snapshotOf(root)
   assert.deepEqual(ids(payload.tasks.active), ['T-20260101-22'])

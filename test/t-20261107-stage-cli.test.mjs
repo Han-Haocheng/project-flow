@@ -9,7 +9,7 @@
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { loadContract, updateTask } from '../lib/core.mjs'
+import { archiveTasks, loadContract, updateTask } from '../lib/core.mjs'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -536,3 +536,84 @@ test('art 负向：sha256/path 越界/task-id 段/绝对路径/软链全部拒�
   }
   fs.rmSync(outside, { force: true })
 })
+
+// ------------------------------- T-20261113163505：终态 cancelled（撤销）
+
+test('cancelled：任意非终态可撤销但必须带 reason；无出边；列表/统计单列', () => {
+  const root = freshProject('cancelled')
+  const task = addTaskCli(root, '要撤销的卡', ['--stage', 'analyzing'])
+
+  const missing = runCli(root, ['task', 'update', task.id, '--stage', 'cancelled', '--json'])
+  assert.equal(missing.code, 1, '缺 reason 是用法错误')
+  assert.match(missing.json.error.message, /--reason/)
+
+  const cancelled = runCli(root, ['task', 'update', task.id, '--stage', 'cancelled', '--reason', '需求取消', '--json'])
+  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr)
+  assert.equal(cancelled.json.data.stage, 'cancelled')
+  assert.equal(cancelled.json.data.status, 'cancelled')
+  assert.equal(cancelled.json.data.cancelReason, '需求取消')
+  assert.match(String(cancelled.json.data.cancelled_at), /^\d{4}-\d{2}-\d{2}T/)
+
+  const out = runCli(root, ['task', 'update', task.id, '--stage', 'done', '--json'])
+  assert.equal(out.code, 2, 'cancelled 是终态：' + out.stdout + out.stderr)
+  assert.match(out.json.error.message, /terminal|cannot move/)
+
+  const listed = runCli(root, ['task', 'list', '--json'])
+  assert.equal(listed.code, 0, listed.stderr)
+  assert.equal(listed.json.data.find((row) => row.id === task.id).status, 'cancelled')
+  const status = runCli(root, ['status', '--json'])
+  assert.equal(status.json.data.counts.tasks.cancelled, 1, '撤销必须单列计数，不混入 done')
+})
+
+test('cancelled：rm 默认撤销（台账保留），--purge 才物理删除并写审计', () => {
+  const root = freshProject('cancel-rm')
+  const task = addTaskCli(root, '移除即撤销', ['--stage', 'implementing'])
+
+  const noReason = runCli(root, ['task', 'rm', task.id, '--yes', '--json'])
+  assert.equal(noReason.code, 1, 'rm 缺 --reason 是用法错误')
+
+  const removed = runCli(root, ['task', 'rm', task.id, '--yes', '--reason', '重复卡', '--json'])
+  assert.equal(removed.code, 0, removed.stdout + removed.stderr)
+  assert.equal(removed.json.data.removed, false)
+  assert.equal(removed.json.data.cancelled, true)
+  assert.ok(fs.existsSync(taskFile(root, task.id)), '默认 rm 禁止物理删除')
+  const after = runCli(root, ['task', 'show', task.id, '--json'])
+  assert.equal(after.json.data.stage, 'cancelled')
+  assert.equal(after.json.data.cancelReason, '重复卡')
+
+  const purged = runCli(root, ['task', 'rm', task.id, '--yes', '--reason', '彻底清理', '--purge', '--json'])
+  assert.equal(purged.code, 0, purged.stdout + purged.stderr)
+  assert.equal(purged.json.data.purged, true)
+  assert.equal(fs.existsSync(taskFile(root, task.id)), false)
+  const auditDir = path.join(root, '.agents', 'flow', 'logs', 'task-purge')
+  assert.ok(fs.existsSync(auditDir), '--purge 必须写审计目录')
+  const audits = fs.readdirSync(auditDir).filter((name) => name.startsWith(task.id))
+  assert.equal(audits.length, 1, '每次 purge 一条审计')
+})
+
+test('cancelled：mergedInto 预留字段（目标须存在、禁自指）；归档只从 done', () => {
+  const root = freshProject('cancel-merge')
+  const target = addTaskCli(root, '并入目标', ['--stage', 'analyzing'])
+  const source = addTaskCli(root, '并入源', ['--stage', 'analyzing'])
+
+  const unknown = runCli(root, ['task', 'update', source.id, '--stage', 'cancelled', '--reason', '并入', '--merged-into', 'T-NOPE', '--json'])
+  assert.equal(unknown.code, 2, 'mergedInto 目标必须存在')
+  assert.match(unknown.json.error.message, /mergedInto target not found/)
+
+  const self = runCli(root, ['task', 'update', source.id, '--stage', 'cancelled', '--reason', '并入', '--merged-into', source.id, '--json'])
+  assert.equal(self.code, 2, '禁止并入自己')
+
+  const merged = runCli(root, ['task', 'update', source.id, '--stage', 'cancelled', '--reason', '并入目标卡', '--merged-into', target.id, '--json'])
+  assert.equal(merged.code, 0, merged.stdout + merged.stderr)
+  assert.equal(merged.json.data.mergedInto, target.id)
+
+  const contract = loadContract(root).contract
+  const file = taskFile(root, source.id)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.updated_at = '2026-01-01T00:00:00+08:00'
+  fs.writeFileSync(file, JSON.stringify(record, null, 1))
+  const archived = archiveTasks(root, contract, { now: Date.parse('2026-06-01T00:00:00+08:00'), days: 7 })
+  assert.equal(archived.archived.includes(source.id), false, 'cancelled 不得被归档清扫')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).stage, 'cancelled')
+})
+

@@ -136,10 +136,10 @@ function writeLegacyTask(root, id, overrides = {}) {
 
 // ---------------------------------------------------------------- 1. 表逐项一致
 
-test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终态标记逐项一致', () => {
+test('① 阶段表：十个 id、中文名、from/next 互为逆、actor 与终态标记逐项一致', () => {
   assert.deepEqual([...STAGE_IDS], [
     'created', 'queued-analysis', 'analyzing', 'queued-implementation', 'implementing',
-    'queued-review', 'reviewing', 'done', 'archived',
+    'queued-review', 'reviewing', 'done', 'archived', 'cancelled',
   ])
   assert.deepEqual(Object.keys(STAGE_MACHINE).sort(), [...STAGE_IDS].sort())
   assert.deepEqual(Object.keys(STAGE_ZH).sort(), [...STAGE_IDS].sort())
@@ -153,18 +153,18 @@ test('① 阶段表：九个 id、中文名、from/next 互为逆、actor 与终
     assert.ok(Array.isArray(node.next) && Array.isArray(node.from), `${id} 的 next/from 必须是数组`)
   }
   // 表头行（卡里的定稿）：后继与 actor 逐行一致
-  assert.deepEqual(nextStages('created'), ['queued-analysis'])
+  assert.deepEqual(nextStages('created'), ['queued-analysis', 'cancelled'])
   // queued-analysis 有两条同目标边：普通领取 + 汇总轮（normalizeTask，T-20261111170544）。
-  assert.deepEqual(nextStages('queued-analysis'), ['analyzing', 'analyzing'])
+  assert.deepEqual(nextStages('queued-analysis'), ['analyzing', 'analyzing', 'cancelled'])
   // T-20261111170544：汇总轮新增 analyzing → done（子任务全部完成后分析者收口）。
-  assert.deepEqual(nextStages('analyzing'), ['queued-implementation', 'done'])
-  assert.deepEqual(nextStages('queued-implementation'), ['implementing'])
+  assert.deepEqual(nextStages('analyzing'), ['queued-implementation', 'done', 'cancelled'])
+  assert.deepEqual(nextStages('queued-implementation'), ['implementing', 'cancelled'])
   // T-20261112151356：implementing 增汇总回边（子任务全终态后由插件聚合回待分析）。
-  assert.deepEqual(nextStages('implementing'), ['queued-review', 'queued-analysis'])
+  assert.deepEqual(nextStages('implementing'), ['queued-review', 'queued-analysis', 'cancelled'])
   // 汇总回边的逆向声明：queued-analysis.from 必须含 implementing（不变式 ①）
   assert.ok(STAGE_MACHINE['queued-analysis'].from.includes('implementing'))
-  assert.deepEqual(nextStages('queued-review'), ['reviewing'])
-  assert.deepEqual(nextStages('reviewing'), ['done', 'queued-implementation'])
+  assert.deepEqual(nextStages('queued-review'), ['reviewing', 'cancelled'])
+  assert.deepEqual(nextStages('reviewing'), ['done', 'queued-implementation', 'cancelled'])
   assert.deepEqual(nextStages('done'), ['archived'])
   assert.deepEqual(nextStages('archived'), [])
   assert.equal(STAGE_MACHINE.created.actor, 'plugin')
@@ -268,7 +268,7 @@ test('③ 结构上的后退边：reviewing 打回 + implementing 汇总回边�
 
 // ---------------------------------------------- 4. stageToStatus 九项逐一
 
-test('④ stageToStatus：九项映射逐一固定（created→draft，流水线→active，末两段同名）', () => {
+test('④ stageToStatus：十项映射逐一固定（created→draft，流水线→active，末两段同名）', () => {
   const expected = {
     created: 'draft',
     'queued-analysis': 'active',
@@ -279,8 +279,9 @@ test('④ stageToStatus：九项映射逐一固定（created→draft，流水线
     reviewing: 'active',
     done: 'done',
     archived: 'archived',
+    cancelled: 'cancelled',
   }
-  assert.deepEqual(Object.keys(expected).sort(), [...STAGE_IDS].sort(), '映射表必须覆盖九个阶段')
+  assert.deepEqual(Object.keys(expected).sort(), [...STAGE_IDS].sort(), '映射表必须覆盖全部阶段')
   for (const id of STAGE_IDS) assert.equal(stageToStatus(id), expected[id], `${id} 的 status 派生错了`)
   // 非法 stage：与 core 的校验同一条文案（列九值）
   for (const bad of ['bogus', '', null, undefined, 1]) {
@@ -363,7 +364,7 @@ test('5b-1 core 写入口：非法跳级 invalid 且文案列出合法后继，�
 
   expectInvalid(
     () => updateTask(root, contract, task.id, { stage: 'implementing' }),
-    /^stage created cannot move to "implementing"; allowed next: queued-analysis$/,
+    /^stage created cannot move to "implementing"; allowed next: queued-analysis, cancelled$/, 
   )
   assert.equal(getTask(root, contract, task.id).stage, 'created', '被拒的写入不得落盘')
 
@@ -418,7 +419,7 @@ test('5b-5 CLI --stage：非法边 exit 2，文案与 core 同源（CLI 走的�
   assert.equal(rejected.json?.error?.code, 'invalid')
   assert.match(
     rejected.json?.error?.message ?? '',
-    /stage analyzing cannot move to "implementing"; allowed next: queued-implementation, done/,
+    /stage analyzing cannot move to "implementing"; allowed next: queued-implementation, done, cancelled/,
     'CLI 报错必须就是 assertTransition 的那句话（同一道门）',
   )
   assert.equal(getTask(root, contract, id).stage, 'analyzing', 'CLI 被拒的写入不得落盘')
@@ -532,9 +533,17 @@ const EDGES = [
   { from: 'reviewing', to: 'done', actor: 'reviewer', back: undefined },
   { from: 'reviewing', to: 'queued-implementation', actor: 'reviewer', back: true },
   { from: 'done', to: 'archived', actor: 'plugin', back: undefined },
+  // T-20261113163505：撤销边（任意非终态 → cancelled；actor 为 session，插件阶段显式覆盖）。
+  { from: 'created', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'queued-analysis', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'analyzing', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'queued-implementation', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'implementing', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'queued-review', to: 'cancelled', actor: 'session', back: undefined },
+  { from: 'reviewing', to: 'cancelled', actor: 'session', back: undefined },
 ]
 
-test('⑧ 边表逐项：12 条边的 {from, to, actor} 与方案 §4 表一致', () => {
+test('⑧ 边表逐项：19 条边的 {from, to, actor} 与方案 §4 表一致', () => {
   for (const edge of EDGES) {
     const node = STAGE_MACHINE[edge.from]
     // 同目标边靠 `key` 区分：没有 key 的行必须命中**不带 key** 的那条边。
@@ -542,9 +551,9 @@ test('⑧ 边表逐项：12 条边的 {from, to, actor} 与方案 §4 表一致'
     assert.ok(found, `${edge.from} → ${edge.to} 边不见了`)
     assert.equal(found.actor, edge.actor, `${edge.from} → ${edge.to} 的 actor 错了`)
   }
-  // 边总数 = 12（没有多出来的边）
+  // 边总数 = 19（12 条原有边 + 7 条撤销边；没有多出来的边）
   const total = STAGE_IDS.reduce((sum, id) => sum + STAGE_MACHINE[id].next.length, 0)
-  assert.equal(total, EDGES.length, '边总数必须恰好 12 条（11 条阶段推进 + done→archived）')
+  assert.equal(total, EDGES.length, '边总数必须与 EDGES 表一致（12 + 7 条撤销边）')
   // 汇总回边不是回退边（back 仍由 ⑨ 锁死为唯一一条）
   assert.equal(edgeOf('implementing', 'queued-analysis').back, undefined)
 })
@@ -575,9 +584,10 @@ test('⑩ nextStages 是边表的投影，不是第二份数组', () => {
   }
   assert.deepEqual(nextStages('bogus'), [], '未知阶段返回空数组，不抛')
   assert.deepEqual(nextStages('archived'), [], '终态没有后继')
+  assert.deepEqual(nextStages('cancelled'), [], 'cancelled 是终态，没有后继')
 })
 
-test('⑪ actorForEdge：12 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
+test('⑪ actorForEdge：19 条边逐条正确；非法边返回 null（不是 undefined、不抛）', () => {
   for (const edge of EDGES) {
     assert.equal(actorForEdge(edge.from, edge.to), edge.actor, `${edge.from} → ${edge.to}`)
   }
@@ -593,22 +603,23 @@ test('⑪ actorForEdge：12 条边逐条正确；非法边返回 null（不是 u
   assert.equal(edgeOf('created', 'done'), null)
 })
 
-test('⑫ canTransition 零行为变更：9×9 全组合与硬编码真值表逐格相同', () => {
+test('⑫ canTransition：10×10 全组合与硬编码真值表逐格相同', () => {
   // 行 = from、列 = to，顺序同 STAGE_IDS。自环一律 true（幂等），其余只认真实边。
-  //            created q-ana  analyz q-impl  impl  q-rev  review  done  arch
+  //            created q-ana  analyz q-impl  impl  q-rev  review  done  arch  canc
   const TRUTH = [
-    [true,  true,  false, false, false, false, false, false, false], // created
-    [false, true,  true,  false, false, false, false, false, false], // queued-analysis
-    [false, false, true,  true,  false, false, false, true,  false], // analyzing（拆任务 + 汇总收口）
-    [false, false, false, true,  true,  false, false, false, false], // queued-implementation
-    [false, true,  false, false, true,  true,  false, false, false], // implementing（收口 + 汇总回边）
-    [false, false, false, false, false, true,  true,  false, false], // queued-review
-    [false, false, false, true,  false, false, true,  true,  false], // reviewing（打回 + 通过）
-    [false, false, false, false, false, false, false, true,  true ], // done
-    [false, false, false, false, false, false, false, false, true ], // archived
+    [true,  true,  false, false, false, false, false, false, false, true ], // created
+    [false, true,  true,  false, false, false, false, false, false, true ], // queued-analysis
+    [false, false, true,  true,  false, false, false, true,  false, true ], // analyzing（拆任务 + 汇总收口）
+    [false, false, false, true,  true,  false, false, false, false, true ], // queued-implementation
+    [false, true,  false, false, true,  true,  false, false, false, true ], // implementing（收口 + 汇总回边）
+    [false, false, false, false, false, true,  true,  false, false, true ], // queued-review
+    [false, false, false, true,  false, false, true,  true,  false, true ], // reviewing（打回 + 通过）
+    [false, false, false, false, false, false, false, true,  true,  false], // done
+    [false, false, false, false, false, false, false, false, true,  false], // archived
+    [false, false, false, false, false, false, false, false, false, true ], // cancelled
   ]
   assert.equal(TRUTH.length, STAGE_IDS.length)
-  for (const row of TRUTH) assert.equal(row.length, STAGE_IDS.length, '真值表必须是 9×9')
+  for (const row of TRUTH) assert.equal(row.length, STAGE_IDS.length, '真值表必须与 STAGE_IDS 同宽')
 
   const mismatches = []
   STAGE_IDS.forEach((from, rowIndex) => {
@@ -655,8 +666,15 @@ test('⑭ 不变式：每条边的 actor 等于其阶段默认 actor（显式覆
   )
   assert.deepEqual(
     overrides,
-    ['implementing → queued-analysis:aggregateRound'],
-    '今天只应有汇总回边一条 actorOverride（再出现就要把不变式的旁路也一起改）',
+    [
+      'created → cancelled:undefined',
+      'queued-analysis → cancelled:undefined',
+      'queued-implementation → cancelled:undefined',
+      'implementing → queued-analysis:aggregateRound',
+      'queued-review → cancelled:undefined',
+      'reviewing → cancelled:undefined',
+    ],
+    'actorOverride 必须逐条显式：汇总回边 + 五条跨 actor 的撤销边',
   )
 })
 

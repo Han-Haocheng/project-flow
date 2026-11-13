@@ -355,7 +355,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "id": "T-20261028-57",
   "title": "任务标题",                  // 必填
   "type": "feat",                       // 必填（add）：feat|fix|docs|style|refactor|perf|test|chore|build|ci
-  "status": "draft",                    // draft | active | done | archived
+  "status": "draft",                    // draft | active | done | archived | cancelled
   "owner": "",
   "parent": null,                        // 可选（T-13）：父任务 id；null/空串 = 根
   "experiment": null,                    // 可选：关联实验 id（可省略，新建任务默认不写该键）
@@ -368,6 +368,9 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "updated_at": "...",
   "done_at": null,                      // 可选（T-09）：进入 done 的时刻；回 active/draft 清空
   "archived_at": null,                  // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
+  "cancelReason": "",                   // 可选（T-20261113163505）：撤销原因，进入 cancelled 必填
+  "cancelled_at": null,                 // 可选：进入 cancelled 的时刻
+  "mergedInto": null,                   // 可选：合并去向（源卡撤销时指向目标卡；预留）
   "veto": { "by": "analysis", "reason": "...", "at": "..." }, // 可选（P4）：分析期否决记录，历史永不清
   "decision": "D-20261107-01",          // 可选（P4）：主任务否决生成的待办决策 id；答完清为 null
   "artifacts": [{                       // 可选（2026-11-13）：交接产物指针，系统字段（只存指针+摘要）
@@ -490,6 +493,12 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   - **阶段交接**：analyzer 应在 `analyzing → queued-implementation` 前写产物、implementer 在
     `implementing → queued-review` 前、reviewer 在 `reviewing → done` 前。本版只是**警告**：缺产物给
     `task-artifact-missing:`，不阻断（观察期，避免把存量卡一刀切）；硬门留待后续卡。
+  - **消息信封（七字段，唯一交接格式）**：会话之间只发信封，正文留在 artifact 与任务里，不复制叙事。
+    字段固定为 `task`（T-id）/ `role`（analyzer | implementer | reviewer）/ `status`（working | blocked |
+    done | failed）/ `artifact`（`.agents/reports/<task-id>/<role>-<ts>.md`，无产物写 `n/a`）/
+    `sha256`（正文内容的 64 位小写十六进制摘要，接受方校验一致后才引用）/ `verdict`（accept | reject |
+    request-rebase，仅审查者填）/ `needs`（一句话待办，无则 `n/a`）。`reject` / `request-rebase` 的
+    `needs` 必须指向 artifact 里逐条编号的必改项；字段缺失或指针失效视为**未交接**。
 - **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?, branch?}`。
   由捕获流水线写入；`control` 只是遗留只读值（不再写出）。`key` 是跨进程去重主料；`at` 是消息时间戳
   （payload 带 `timestamp` 时），否则是 pre-step 捕获时刻；`text` 保留整句（超过 4000 字符显式标截断）。
@@ -613,7 +622,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   → `FlowError('invalid')`；格式合法但现存实验里没有 → 只记一次 `task-experiment-missing`
   warning，**照常写入**（实验可能已被删除或尚未开启，引用不阻断任务）。`null`/空串表示解除
   关联；引用是**单向**的（任务→实验），实验记录不回写任务 id。
-- **归档 = `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived`），记录文件
+- **归档 = `status` 位**：`archived` 是合法状态之一（`draft|active|done|archived|cancelled`），记录文件
   不移动、不删除；随时可 `task update <id> --status done|active` 反向恢复。归档改 `status`、
   刷新 `updated_at`、写 `archived_at = now`，并**保留原 `done_at`**（T-09 起完成日不再被
   归档日覆盖）；`created_at`/`id`/`scope`/`acceptance`/`checkpoints`/`commits`/`notes`
@@ -627,6 +636,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   `doneAtEstimated: true` / `archivedAtEstimated: true`（**只标记副本、不写回文件**），趋势
   据此把对应日起标 `≈`（见 §9.1.4）。
   时间戳写入异常只记 `task-time-stamp` warning，不破坏任务主写入。
+- **只从 done 归档**：`cancelled` 是撤销终态，永不进入归档 sweep（`archived` 才表示完成退役）；
+  `archiveTasks` 只选 `status === 'done' && stage === 'done'`。
 - **归档判定仍按 `updated_at`**：`status === 'done'` 且
   `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（默认 **7**，边界含端点）。
   `done` 之后的 patch 仍会刷新 `updated_at`，因此判定窗口以最后一次工单活动为准；`done_at`
@@ -643,9 +654,21 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   占用（`conflict`）时跳过本次、记一条 `archive-locked` warning，命令仍退出 **0**（`--json`
   带 `locked:true`）；`--dry-run` 不写、不取锁，只报告候选。
 
+- **撤销 = `cancelled`（T-20261113163505，终态）**：与 `done`/`archived` 区分——撤销**不表示完成**，
+  归档只表示「完成退役」。规则：
+  - 边：任意非终态（`created`…`reviewing`）→ `cancelled`，actor=session；`cancelled` **无出边**，
+    `done`/`archived` 不能被撤销。写该边必须带非空 `--reason`（落 `cancelReason` + `cancelled_at`），
+    缺失 → `invalid`；`status: 'cancelled'` 不得单独写。
+  - 移除：`flow task rm <id> --reason R` = 撤销（台账保留、返回 `removed:false/cancelled:true`）；
+    物理删除只允许显式 `--purge`，删前写审计 `<logs>/task-purge/<id>-<ts>.json`。
+  - 合并（预留）：撤销时可带 `mergedInto: <目标卡 id>`（目标必须存在、禁自指）；本版只落字段，
+    不自动搬 `commits`/`acceptance`。
+  - 读投影/统计：`stageCounts.cancelled` 与 `stages.cancelled` 是独立「撤销」桶；`status` 计数单列
+    `cancelled`，**不混入 done**；`cancelled` 不进入 active/recentDone/归档候选。
+
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 
-`stage` 是行为层，`status`（`draft|active|done|archived`）是**兼容视图**——面板队列、
+`stage` 是行为层，`status`（`draft|active|done|archived|cancelled`）是**兼容视图**——面板队列、
 归档 sweep、心跳认领仍读 `status`，它们的行为不因本字段改变。
 
 | `stage` | 中文 | 后继 | 推进者 |
@@ -659,6 +682,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 | `reviewing` | 审查中 | `done`（通过）**或 `queued-implementation`（打回）** | reviewer |
 | `done` | 已完成 | `archived` | plugin |
 | `archived` | 已归档 | —（终态） | — |
+| `cancelled` | 已撤销 | —（终态，无出边） | — |
 
 **边表**（`STAGE_MACHINE[x].next` 的每一项；边级 actor 是"谁能走这条边"，为 P2 的 guard 铺路）：
 
@@ -684,10 +708,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   不直接读 `next`。未知边返回 `null`（不抛）。
 - **`stage` → `status` 派生**（写路径）：`created → draft`；`queued-analysis` / `analyzing` /
   `queued-implementation` / `implementing` / `queued-review` / `reviewing → active`；
-  `done → done`；`archived → archived`。写 `stage` 时同批把派生的 `status` 写回，保证两者
+  `done → done`；`archived → archived`；`cancelled → cancelled`。写 `stage` 时同批把派生的 `status` 写回，保证两者
   不矛盾；**同时给 `stage` 与 `status` 且不一致 → `invalid`**。
 - **只写 `status` 仍然合法**：既有调用方（归档 sweep、心跳认领、`task update --status`）不改，
-  此时 `stage` 原样不动。
+  此时 `stage` 原样不动。**例外**：`status: 'cancelled'` 不得单独写（会绕过阶段边与原因校验），
+  必须与 `stage: 'cancelled'` 同批并带 `--reason`，否则 `invalid`。
 - **存量记录**没有 `stage` 键：读投影（`listTasks`/`getTask`/`updateTask` 的返回）**按 `status`
   反推**——`archived → archived`、`done → done`、`active → queued-analysis`（唯一歧义项：`active`
   对应流水线六阶段，取最早者作"在管道中"标记）、其它 → `created`。**不写磁盘**；只有显式写
@@ -696,7 +721,7 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   反推必须按 `status`：一律补 `created` 会让 done/archived 的存量记录被当成未完成、进待办栈顶并
   虚增 §9 状态块的计数（task-68 的真 bug）。台账回填是独立的显式操作，不是读路径行为。
 - **校验**：非法值 → `invalid: stage must be one of created, queued-analysis, analyzing,
-  queued-implementation, implementing, queued-review, reviewing, done, archived`（CLI 映射
+  queued-implementation, implementing, queued-review, reviewing, done, archived, cancelled`（CLI 映射
   `exit 2`）。`stage` 在**可更新白名单**内，不在不可改清单内。
 - **实现位置**：`lib/stage.mjs` 是唯一真源（阶段表、边、派生、`canTransition`/`assertTransition`）；
   `lib/core.mjs` 只 import 它的 id/派生用于校验与投影，不复制表。
@@ -1279,7 +1304,9 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   冻结的唯一例外是 `--rebase`：只刷新 `base`（与 `updated_at`）并追加一条 `history`，语义、
   `status`、`implemented_at`、`files` 一律不变——用于「计划已 implemented、之后又补了提交」，
   让 `unplanned-change` 的比较基准跟上来；它不提供任何改语义的通道。
-  审查阶段要改计划，先按阶段机退回 `implementing`（§3.2.1）——审查者不就地改计划。
+  计划与 apply 的写窗口由 `DESCRIPTION_STAGE_POLICY` 单表决定（§3.7）：审查阶段不在窗口内，
+  要让计划可改就按阶段机的后退边回到 `queued-implementation`（§3.2.1，那里同时是 plan/apply 窗口）；
+  审查者不就地改计划。
 - `base` 是 `unplanned-change` 的**比较基准**：建计划时若 `gitCheck` 且 git 可用，工作树必须干净并
   记 `base.commit`；检查时取 `git diff --name-only <base>` ∪ `git status --porcelain` 的未跟踪项，
   `include` 命中的文件必须出现在计划 `files` 里（新增 = `add`、删除 = `remove`、其余 = `change`）。
@@ -1312,14 +1339,41 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 能力预期写计划。
 
 **强制语义：enforce 与阶段门**。`updateTask` 是描述阶段门的**唯一实现点**（`assertDescriptionGate`，
-见 §7），`flow check description` 只是同一规则的可复跑证据通道：
+见 §7），`flow check description` 只是同一规则的可复跑证据通道。**阶段门与写窗口只有一张表**：
+`lib/description/records.mjs` 的 `DESCRIPTION_STAGE_POLICY`（`gate × plan × apply × requireTests`），
+`DESCRIPTION_GATE_STAGES` / `descriptionPlanStages()` / `descriptionApplyStages()` 全部由它派生；
+本文件与实现都**不另列阶段名单**（另列即分叉）。
 
-| 目标 stage | 描述要求 |
+四列的含义：
+
+| 列 | 含义 |
 |---|---|
-| `queued-implementation` | 计划存在且合法（`files` 非空 xor `noSemanticChange` + 非空 `reason`） |
-| `queued-review` | 计划 `status = implemented`；计划内文件通过 §6.1.4 全量检查；`unplanned-change = ∅` |
-| `done` | 上一行全部 + 测试证据：`testGate` 最近一次 `ok:true` 的 `finished_at` ≥ 证据起点 |
+| `gate` | 从别的阶段**推进到**该阶段时跑哪档门：`null` 不设门；`plan` 只看计划形状；`full` 跑完整 `checkDescription`（计划落地 / 未计划改动 / 测试证据） |
+| `plan` | 该阶段能否建/改语义变更计划（`flow desc plan … --input`） |
+| `apply` | 该阶段能否把计划落进文件记录（`flow desc apply`） |
+| `requireTests` | `gate === 'full'` 时是否额外要求测试证据（只有 `done` 要） |
 
+行序取 `STAGE_IDS`，必须覆盖全部阶段（测试钉住「不多不少」）：
+
+| stage | gate | plan | apply | requireTests |
+|---|---|---|---|---|
+| `created` | — | ✗ | ✗ | ✗ |
+| `queued-analysis` | — | ✓ | ✗ | ✗ |
+| `analyzing` | — | ✓ | ✗ | ✗ |
+| `queued-implementation` | `plan` | ✓ | ✗ | ✗ |
+| `implementing` | — | ✓ | ✓ | ✗ |
+| `queued-review` | `full` | ✓ | ✓ | ✗ |
+| `reviewing` | — | ✗ | ✗ | ✗ |
+| `done` | `full` | ✗ | ✗ | ✓ |
+| `archived` | — | ✗ | ✗ | ✗ |
+
+**不变式**：`gate !== null` 的阶段，其门给出的修复命令（`flow desc plan` / `flow desc apply`）必须能在
+**同一阶段**执行，否则就是「永远过不去的门」——`queued-review` 因此同时是 full 门与 plan/apply 窗口
+（旧实现只在门名单里列了它、写窗口却没列，卡一进去就补不了计划也 apply 不了）。
+`done` 的测试证据用 `flow gate run <testGate>`（默认 `tests`）产生；没跑过就是 `tests-missing`，
+不能拿别的门禁的运行记录顶替。
+
+- **开启后的推进路径（最短链路）**：`description.enabled: true` 时，卡进入实现前用 `flow desc plan <T> --input <json>` 建合法计划；进入审查前 `flow desc build` + `flow desc apply <T>`；收口 `done` 前跑 `flow gate run <testGate>`（默认 `tests`）拿到绿记录。缺哪一步，门的错误消息会直接给对应修复命令（§7）。
 - `enforce`：`auto`（默认，store 里已有 ≥1 条文件记录才生效）| `on`（恒生效）| `off`（阶段门关闭，
   `flow check description` 仍可手动跑）。默认 `auto` 而不是 `on`：新项目第一次建任务时一条文件记录
   都没有，若恒拦，会把「先建任务后补描述」这条最自然的顺序堵死。
@@ -1454,16 +1508,17 @@ flow exp cleanup <id> [--flag F]... [--code C]... [--data D]...
 flow exp rm <id> [--yes]
 
 flow task list | show <id>
-flow task add    --title T --type <t> [--status draft|active|done|archived]
+flow task add    --title T --type <t> [--status draft|active|done|archived|cancelled]
                  [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
-flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived]
+flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived|cancelled]
                  [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
                  # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
-                 # <s>: 九阶段之一（见 §3.2.1）；写 --stage 时 status 由阶段派生并同批落盘，
-                 #      给 --stage done 会同时写 done_at（stampTaskTimes），两者同给且矛盾 → invalid
+                 # <s>: 十阶段之一（见 §3.2.1）；写 --stage 时 status 由阶段派生并同批落盘；
+                 #      给 --stage done 会同时写 done_at（stampTaskTimes），两者同给且矛盾 → invalid；
+                 #      --stage cancelled 必须同时给 --reason（撤销不是完成，台账保留）
                  # title 承载标题与目标：--goal 已删除（旧记录由 normalizeTaskFormat 迁移）；
                  # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
-flow task rm <id> [--yes]
+flow task rm <id> --reason R [--purge] [--yes]
 flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账）
 flow task unlink <TASK-ID>                   # 解除挂载（team=null）
 flow task archive [--older-than N] [--dry-run]
@@ -2502,6 +2557,10 @@ DECISION_GC_DAYS / DECISION_REMIND_MAX
 // 项目描述（`description/` 三族记录；schema/编码/build/check 规则见 §3.7/§6.1.4）
 DESCRIPTION_SCHEMA                   // 1
 DESCRIPTION_ENFORCE_MODES            // ['auto','on','off']
+DESCRIPTION_STAGE_POLICY             // 阶段 × {gate, plan, apply, requireTests} 单表（§3.7）
+descriptionStagePolicy(stage)        // 取一行；未知阶段 → null
+descriptionPlanStages()              // 派生：可写计划的阶段（STAGE_IDS 顺序）
+descriptionApplyStages()             // 派生：可 apply 的阶段（STAGE_IDS 顺序）
 readDescriptionProject(root, contract)              // project.json 或 null
 listDescriptionFiles(root, contract, {unreadable?}) // 文件记录数组，按 path 排序
 getDescriptionFile(root, contract, path)            // 无 → not-found

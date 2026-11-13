@@ -572,7 +572,7 @@ graph LR
 
 | 模块 | 语义 | 成员 |
 |---|---|---|
-| records | 解析目录；build 扫描回填哈希与 import；set 只写语义；plan/apply 维护计划与 implemented；check 复用 desc 纯规则；render 产出确定性 Markdown。 | DESCRIPTION_SCHEMA、DESCRIPTION_ENFORCE_MODES、DESCRIPTION_MIN_SEMANTICS、DESCRIPTION_MAX_SCAN_BYTES、DESCRIPTION_GATE_STAGES、DESCRIPTION_PLAN_STAGES、descriptionConfigOf、descriptionMinSemantics、descriptionMaxScanBytes、descriptionEnforce、safeRelativePath、descriptionNow、descriptionLayoutOf、descriptionPaths、readJsonRecord、compareByPath、descriptionFilesAt、descriptionRevisionOf、descriptionPlanCount、writeDescriptionProject、readDescriptionProject、listDescriptionFiles、getDescriptionFile、getDescriptionPlan、descriptionStatus、renderDescription、descriptionIssue、checkDescription、buildDescription、setDescriptionFile、setDescriptionProject、mergePlanInput、descriptionScopeMatcher、planBaseOf、setDescriptionPlan、applyDescriptionPlan |
+| records | 解析目录；build 扫描回填哈希与 import；set 只写语义；plan/apply 维护计划与 implemented；check 复用 desc 纯规则；render 产出确定性 Markdown。 | DESCRIPTION_SCHEMA、DESCRIPTION_ENFORCE_MODES、DESCRIPTION_STAGE_POLICY、descriptionStagePolicy、DESCRIPTION_GATE_STAGES、descriptionPlanStages、descriptionApplyStages、descriptionConfigOf、descriptionEnforce、descriptionPaths、readJsonRecord、descriptionFilesAt、readDescriptionProject、listDescriptionFiles、getDescriptionFile、getDescriptionPlan、descriptionStatus、renderDescription、descriptionIssue、checkDescription、buildDescription、setDescriptionFile、setDescriptionProject、setDescriptionPlan、applyDescriptionPlan |
 
 ### 3.25 lib/dispatch.mjs
 

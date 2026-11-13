@@ -126,7 +126,7 @@ test('归档后 /state 计数：archived 计入、done 减少、total 不变', a
   const before = await readState(root)
   assert.equal(before.ok, true, `fixture 读取失败：${JSON.stringify(before).slice(0, 400)}`)
   assert.equal(before.tasks.total, 3)
-  assert.deepEqual(before.tasks.counts, { draft: 0, active: 1, done: 2, archived: 0, other: 0 })
+  assert.deepEqual(before.tasks.counts, { draft: 0, active: 1, done: 2, archived: 0, cancelled: 0, other: 0 })
   assert.deepEqual(ids(before.tasks.recentDone), [freshDone.id, oldDone.id], 'sweep 前两条 done 都应在 recentDone')
 
   const swept = archiveTasks(root, contract, { days: 30, now })
@@ -134,7 +134,7 @@ test('归档后 /state 计数：archived 计入、done 减少、total 不变', a
 
   const after = await readState(root)
   assert.equal(after.ok, true, `归档后读取失败：${JSON.stringify(after).slice(0, 400)}`)
-  assert.deepEqual(after.tasks.counts, { draft: 0, active: 1, done: 1, archived: 1, other: 0 })
+  assert.deepEqual(after.tasks.counts, { draft: 0, active: 1, done: 1, archived: 1, cancelled: 0, other: 0 })
   assert.equal(after.tasks.total, before.tasks.total, '归档不得改变 total（归档是状态位，不是删除）')
   assert.equal(after.tasks.counts.done, before.tasks.counts.done - 1, 'done 应减 1')
   assert.equal(after.tasks.counts.archived, before.tasks.counts.archived + 1, 'archived 应加 1')

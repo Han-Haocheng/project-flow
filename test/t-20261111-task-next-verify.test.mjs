@@ -109,8 +109,8 @@ test('doctrine：每条合法边都有动作/验证说明，且没有幽灵键',
   // 正例守护：边表真的读到了，否则下面的集合比较会假绿。
   assert.equal(
     edges.length,
-    12,
-    `边表应有 12 条边（含 analyzing>done 汇总收口与 implementing>queued-analysis:aggregateRound 汇总回边），实际 ${edges.length}`,
+    19,
+    `边表应有 19 条边（含汇总收口/汇总回边与 7 条撤销边），实际 ${edges.length}`,
   )
   const declared = Object.keys(STAGE_EDGE_DOCTRINE)
   assert.deepEqual(
@@ -135,7 +135,10 @@ test('stageNextStep：单出边直给；reviewing 的两条边分主推荐/回�
   // T-20261112151356：主推荐仍是实现收口；汇总回边作为备选（插件推进）出现。
   assert.deepEqual(
     implementing.alternatives.map((row) => ({ stage: row.stage, actor: row.actor, back: row.back, key: row.key })),
-    [{ stage: 'queued-analysis', actor: 'plugin', back: false, key: 'aggregateRound' }],
+    [
+      { stage: 'queued-analysis', actor: 'plugin', back: false, key: 'aggregateRound' },
+      { stage: 'cancelled', actor: 'session', back: false, key: undefined },
+    ],
   )
   assert.match(implementing.alternatives[0].action, /汇总/)
   assert.match(implementing.alternatives[0].action, /done\/archived/)
@@ -146,9 +149,10 @@ test('stageNextStep：单出边直给；reviewing 的两条边分主推荐/回�
   const reviewing = stageNextStep('reviewing')
   assert.equal(reviewing.primary.stage, 'done', '主推荐必须是非回退边')
   assert.equal(reviewing.primary.actor, 'reviewer')
-  assert.equal(reviewing.alternatives.length, 1)
+  assert.equal(reviewing.alternatives.length, 2)
   assert.equal(reviewing.alternatives[0].stage, 'queued-implementation')
   assert.equal(reviewing.alternatives[0].back, true, '回退边必须由边表的 back 标记识别，不能靠猜')
+  assert.equal(reviewing.alternatives[1].stage, 'cancelled', '撤销是备选边（非主推荐）')
 
   const archived = stageNextStep('archived')
   assert.equal(archived.terminal, true)
@@ -218,8 +222,9 @@ test('task next --json：形状稳定（next/alternatives/acceptance），机器
   assert.equal(data.next.stage, 'done')
   assert.equal(data.next.actor, 'reviewer')
   assert.equal(data.next.verify, `flow task verify ${task.id}`)
-  assert.equal(data.alternatives.length, 1)
+  assert.equal(data.alternatives.length, 2)
   assert.equal(data.alternatives[0].stage, 'queued-implementation')
+  assert.equal(data.alternatives[1].stage, 'cancelled')
   assert.equal(data.acceptance.executable, 0)
   assert.equal(data.acceptance.passed, false)
 })

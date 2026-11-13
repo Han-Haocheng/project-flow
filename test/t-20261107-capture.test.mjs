@@ -330,7 +330,7 @@ test('状态块：flow_status 与 flow_heartbeat update 都带 stack/counts/team
   assert.equal(typeof status.unfinished, 'number')
   assert.equal(status.unfinished, 4)
   assert.deepEqual(Object.keys(status.counts).sort(), [
-    'analyzing', 'archived', 'created', 'done', 'implementing', 'queued-analysis',
+    'analyzing', 'archived', 'cancelled', 'created', 'done', 'implementing', 'queued-analysis',
     'queued-implementation', 'queued-review', 'reviewing',
   ])
   assert.equal(status.counts['queued-analysis'], 4)

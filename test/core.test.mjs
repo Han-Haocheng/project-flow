@@ -644,9 +644,11 @@ test('task CRUD：状态流转、scope 合并、不可变字段与 not-found', (
   expectFlowError(() => updateTask(root, contract, created.id, { acceptance: [1] }), 'invalid', /string or an object/)
   expectFlowError(() => addTask(root, contract, { id: `T-${stamp()}-09`, title: '   ' }), 'invalid', /title/)
 
-  assert.deepEqual(removeTask(root, contract, created.id), { id: created.id, removed: true })
+  assert.deepEqual(removeTask(root, contract, created.id, { reason: '测试删除', purge: true }), {
+    id: created.id, removed: true, cancelled: false, purged: true,
+  })
   expectFlowError(() => getTask(root, contract, created.id), 'not-found')
-  expectFlowError(() => removeTask(root, contract, created.id), 'not-found')
+  expectFlowError(() => removeTask(root, contract, created.id, { reason: 'x', purge: true }), 'not-found')
 })
 
 // ④ 收紧可更新字段（T-20261105225848 / A4 A5 A7）：`title`/`type` 与既有三条
@@ -3720,7 +3722,9 @@ test('T-13 task parent：删父后子读为根、行仍在、文件不变（不�
   const childFile = path.join(root, '.agents/tasks', `${child.id}.json`)
   const bytes = fs.readFileSync(childFile, 'utf8')
 
-  assert.deepEqual(removeTask(root, contract, parent.id), { id: parent.id, removed: true })
+  assert.deepEqual(removeTask(root, contract, parent.id, { reason: '删父测试', purge: true }), {
+    id: parent.id, removed: true, cancelled: false, purged: true,
+  })
   const orphan = getTask(root, contract, child.id)
   assert.equal(orphan.parent, null, '父不存在时读路径按根（parent 投影为 null）')
   assert.equal(orphan.title, '子', '子行仍完整返回')
@@ -4123,7 +4127,9 @@ test('时间戳 id：删除后不复用（下一张是新时刻）', () => {
   const { root, contract } = freshProject('ts-id-no-reuse')
   const deleted = addTask(root, contract, { title: '将被删' }, { now: FIXED_ID_TIME })
   assert.equal(deleted.id, 'T-20261105212130')
-  assert.deepEqual(removeTask(root, contract, deleted.id), { id: deleted.id, removed: true })
+  assert.deepEqual(removeTask(root, contract, deleted.id, { reason: '删除后不复用', purge: true }), {
+    id: deleted.id, removed: true, cancelled: false, purged: true,
+  })
   const nextTime = new Date(2026, 10, 5, 21, 21, 31)
   const next = addTask(root, contract, { title: '下一秒' }, { now: nextTime })
   assert.equal(next.id, 'T-20261105212131')

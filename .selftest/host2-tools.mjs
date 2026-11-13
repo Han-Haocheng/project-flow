@@ -1667,15 +1667,23 @@ const removedExp = await expTool.execute({ action: 'remove', id: expId }, exec)
 eq('flow_exp remove: removed true', removedExp.removed, true)
 await throws('flow_exp show after remove: not found', () => expTool.execute({ action: 'show', id: expId }, exec), 'not found')
 
-const removedTask = await taskTool.execute({ action: 'remove', id: taskId }, exec)
-eq('flow_task remove: removed true', removedTask.removed, true)
+/* T-20261113163505：默认 remove = 撤销（台账保留）；只有显式 purge 才是物理删除。 */
+const cancelledTask = await taskTool.execute({ action: 'remove', id: taskId, reason: 'selftest cancel' }, exec)
+eq('flow_task remove default: removed false', cancelledTask.removed, false)
+eq('flow_task remove default: cancelled true', cancelledTask.cancelled, true)
+const cancelledDetail = await taskTool.execute({ action: 'show', id: taskId }, exec)
+eq('flow_task show after cancel: ledger kept', cancelledDetail.task?.id, taskId)
+eq('flow_task show after cancel: stage cancelled', cancelledDetail.task?.stage, 'cancelled')
 
-const removedActiveDetail = await taskTool.execute({ action: 'remove', id: activeDetailId }, exec)
+const removedTask = await taskTool.execute({ action: 'remove', id: taskId, reason: 'selftest purge', purge: true }, exec)
+eq('flow_task remove purge: removed true', removedTask.removed, true)
+
+const removedActiveDetail = await taskTool.execute({ action: 'remove', id: activeDetailId, reason: 'selftest purge', purge: true }, exec)
 eq('flow_task remove: active detail true', removedActiveDetail.removed, true)
 
-const removedDraftOlder = await taskTool.execute({ action: 'remove', id: olderDraft.task?.id }, exec)
+const removedDraftOlder = await taskTool.execute({ action: 'remove', id: olderDraft.task?.id, reason: 'selftest purge', purge: true }, exec)
 eq('flow_task remove: older draft true', removedDraftOlder.removed, true)
-const removedDraftNewer = await taskTool.execute({ action: 'remove', id: newerDraft.task?.id }, exec)
+const removedDraftNewer = await taskTool.execute({ action: 'remove', id: newerDraft.task?.id, reason: 'selftest purge', purge: true }, exec)
 eq('flow_task remove: newer draft true', removedDraftNewer.removed, true)
 
 const removedGate = await gateTool.execute({ action: 'remove', id: 'smoke' }, exec)

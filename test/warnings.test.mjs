@@ -639,6 +639,6 @@ test('坏记录：移除坏文件后同一 id 可正常创建', () => {
   assert.equal(created.id, id)
   assert.equal(getTask(root, contract, id).title, 'recovered')
   assert.deepEqual(listTasks(root, contract).map((item) => item.id), [id])
-  removeTask(root, contract, id)
+  removeTask(root, contract, id, { reason: '坏记录清理', purge: true })
   assert.deepEqual(listTasks(root, contract), [])
 })

@@ -855,7 +855,7 @@ test('汇总轮 ②：analyzing → done 边存在、actor=session、doctrine �
   // 主推荐仍是拆任务边：分析者首轮的下一步不是"直接收口"。
   const step = stageNextStep('analyzing')
   assert.equal(step.primary.stage, 'queued-implementation')
-  assert.deepEqual(step.alternatives.map((row) => row.stage), ['done'])
+  assert.deepEqual(step.alternatives.map((row) => row.stage), ['done', 'cancelled'])
   // `flow task next` 看到的验证命令是真实可跑的那条。
   assert.equal(step.alternatives[0].verify, 'flow task verify {id}')
 })

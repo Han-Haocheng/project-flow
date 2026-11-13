@@ -110,7 +110,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task normalize | 对象（必填 fix·dryRun·ok·issues·fixed·counts·remaining·longTitles·typeMap） |
 | flow task next | 对象（必填 id·title·stage·stageZh·owner·terminal·actor·next·alternatives·acceptance） |
 | flow task verify | 对象（必填 id·ok·executed·passed·failed·steps·verification；可选 skipped·repair） |
-| flow task rm | 对象（必填 id·removed） |
+| flow task rm | 对象（必填 id·removed·cancelled；可选 purged·stage。默认撤销=cancelled，--purge 才 removed:true 并写审计） |
 | flow gate list | 数组<记录 gate> |
 | flow gate show | 记录 gate |
 | flow gate add | 记录 gate |
@@ -183,7 +183,7 @@ claim 追加一条 open 回执 `{kind:'claim', role, agent, session?, from, to, 
 
 `flow desc ...` 的载荷里有 core 自有的记录/骨架（`plan`、`record`、`records`、`files`），
 它们被登记为**开放对象**：契约保证外层字段，内层按 CONTRACT §3.7 的记录格式演进。
-描述模块当前 `description.enabled=false`（用户指示先忽略），所以这些形状不阻塞其它工作。
+描述模块当前 `description.enabled=true`；`desc ...` 的 `plan`/`record`/`records`/`files` 是 core 自有载荷，不阻塞其它工作。卡推进到 `queued-implementation` / `queued-review` / `done` 必须按 `CONTRACT.md` §3.7 的 `DESCRIPTION_STAGE_POLICY` 单表走 `flow desc plan` / `flow desc apply`，`done` 另需 `flow gate run tests` 的绿记录，否则阶段门以 `invalid` 拒绝。
 
 ## 5 记录形状
 
