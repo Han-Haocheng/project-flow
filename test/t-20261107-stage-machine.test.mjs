@@ -35,6 +35,18 @@ import {
   updateTask,
 } from '../lib/core.mjs'
 
+
+/* claim 协议切换点后新建的卡不再享受 legacy：测试夹具种上已闭合回执（内部写，不跑门）。 */
+const CLAIM_FIXTURE_AT = '2026-11-13T16:00:00+08:00'
+function seedClaims(root, contract, id) {
+  updateTask(root, contract, id, {
+    checkpoints: [
+      { kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: CLAIM_FIXTURE_AT },
+      { kind: 'dispatch', role: 'reviewer', childId: 'fixture-review', provider: 'test', from: 'queued-review', to: 'reviewing', at: CLAIM_FIXTURE_AT },
+    ],
+  }, { source: 'internal' })
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
 const TEMP_ROOTS = []
@@ -286,6 +298,7 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
 
   // add 直接带 stage：status 派生并写进磁盘
   const created = addTask(root, contract, { type: 'feat', title: '实现中', stage: 'implementing' })
+  seedClaims(root, contract, created.id)
   assert.equal(created.status, 'active')
   assert.equal(created.stage, 'implementing')
   assert.equal(readTaskFile(root, created.id).status, 'active', '派生结果必须落盘')
@@ -310,6 +323,7 @@ test('⑤ 写 stage → 同批派生 status 落盘；两者同给矛盾 → inva
 
   // 两者同给且一致 → 允许（archived 是终态，另起一张停在 queued-implementation 的卡）
   const staged = addTask(root, contract, { type: 'feat', title: '同给一致', stage: 'queued-implementation' })
+  seedClaims(root, contract, staged.id)
   const consistent = updateTask(root, contract, staged.id, { stage: 'implementing', status: 'active' })
   assert.equal(consistent.status, 'active')
 
@@ -382,6 +396,7 @@ test("5b-3 core 写入口：source:'internal' 豁免（插件记账写非合约�
 test('5b-4 core 写入口：reviewing → queued-implementation 打回边不得被收紧', () => {
   const { root, contract } = freshProject('edge-back')
   const task = addTask(root, contract, { type: 'feat', title: '打回', stage: 'queued-analysis' })
+  seedClaims(root, contract, task.id)
   for (const stage of ['analyzing', 'queued-implementation', 'implementing', 'queued-review', 'reviewing']) {
     updateTask(root, contract, task.id, { stage })
   }

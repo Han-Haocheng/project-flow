@@ -10,7 +10,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
 import { addTask, heartbeatStatus, initProject, listTasks, loadContract, startHeartbeat, updateHeartbeat } from '../lib/core.mjs'
-import { captureLateMountStart, heartbeatGuardReason } from '../lib/host/session.mjs'
+import {
+  bootstrapHeartbeatSupply,
+  captureLateMountStart,
+  describeHeartbeatSupply,
+  heartbeatGuardReason,
+  heartbeatTarget,
+} from '../lib/host/session.mjs'
+import { processHeartbeatSession } from '../lib/heartbeats/records.mjs'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const TEMP_ROOTS = []
@@ -133,6 +140,18 @@ function heartbeatFile(root, session) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
+}
+
+/** Minimal host context: a workspace root plus an optional agents registry. */
+function supplyCtx(root, agents) {
+  return {
+    get(name) {
+      if (name === 'workingDirectory') return { get: () => root }
+      if (name === 'agents') return agents
+      return undefined
+    },
+    logger: { warn() {} },
+  }
 }
 
 /** Create a working heartbeat, then age it so a refresh is observable. */
@@ -624,4 +643,169 @@ test('T1111-⑨ 未初始化工作区 / 坏 session id：静默跳过，不写�
   assert.equal(badDecision.kind, 'enter', '坏 session id 不得改变 decision')
   assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir).sort() : [], listing, '坏 session id 不得写出心跳文件')
   assert.deepEqual(backfillWarns(badWarn), [], '坏 session id 是静默跳过')
+})
+
+test('T1111-⑩ 环境无关供给：env-session / cli-process / 晚挂载扫描都能登记并被判活', () => {
+  const saved = process.env.DSH_SESSION_ID
+  try {
+    const { root, contract } = freshProject('supply')
+    const ctx = supplyCtx(root)
+
+    // ① env-session：宿主 agent 没有 id，但进程知道 DSH_SESSION_ID。
+    const envSession = 'session-supply-env'
+    process.env.DSH_SESSION_ID = envSession
+    const bareAgent = { id: '', session: { cwd: root, header: { origin: 'main' } } }
+    const envTarget = heartbeatTarget(ctx, { agent: bareAgent })
+    assert.equal(envTarget.session, envSession)
+    assert.equal(envTarget.provenance, 'env-session')
+    captureLateMountStart(ctx, { agent: bareAgent })
+    const envStatus = heartbeatStatus(root, contract, envSession)
+    assert.equal(envStatus.active, true, 'env-session 供给必须 active')
+    assert.equal(envStatus.record.provenance, 'env-session')
+    assert.equal(envStatus.liveness, 'live', '判活仍走 records 的 host/boot/pid 证据')
+
+    // ② cli-process：既没有 agent id 也没有 DSH_SESSION_ID。
+    delete process.env.DSH_SESSION_ID
+    const processTarget = heartbeatTarget(ctx, {})
+    assert.equal(processTarget.session, processHeartbeatSession())
+    assert.match(processTarget.session, /^cli-[a-z0-9._-]+-\d+$/, 'cli 会话名必须带 host 段，避免 WSL/Windows 同名互覆')
+    assert.equal(processTarget.provenance, 'cli-process')
+    captureLateMountStart(ctx, {})
+    const processStatus = heartbeatStatus(root, contract, processTarget.session)
+    assert.equal(processStatus.active, true, 'cli-process 供给必须 active')
+    assert.equal(processStatus.record.provenance, 'cli-process')
+    assert.equal(processStatus.liveness, 'live')
+
+    // ②b roots() 若把子代理记录当成"根"返回，也不得写幽灵行（verdict 校验）。
+    const ghost = freshProject('supply-ghost')
+    const ghostSub = { id: 'session-ghost-sub', session: { cwd: ghost.root, header: { origin: 'subagent', delegationDepth: 1 } } }
+    const ghostAgents = { roots: () => [ghostSub], list: () => [ghostSub], get: () => ghostSub }
+    bootstrapHeartbeatSupply(supplyCtx(ghost.root, ghostAgents))
+    assert.equal(
+      fs.existsSync(heartbeatFile(ghost.root, 'session-ghost-sub')),
+      false,
+      'roots() 返回子代理记录时不得补出心跳（契约禁止幽灵行）',
+    )
+
+    // ③ 插件晚于会话创建挂载：agents.roots() 已有会话但还没有记录 → 挂载扫描补开。
+    const late = freshProject('supply-late')
+    const lateAgent = { id: 'session-supply-late', session: { cwd: late.root, header: { origin: 'main' } } }
+    const agents = {
+      roots: () => [lateAgent],
+      list: () => [lateAgent],
+      get: (id) => (id === lateAgent.id ? lateAgent : undefined),
+    }
+    const lateCtx = supplyCtx(late.root, agents)
+    assert.equal(heartbeatTarget(lateCtx, { agent: lateAgent }).provenance, 'host-session')
+    bootstrapHeartbeatSupply(lateCtx)
+    const lateStatus = heartbeatStatus(late.root, late.contract, lateAgent.id)
+    assert.equal(lateStatus.active, true, '插件晚挂载也必须补出可判活心跳')
+    assert.equal(lateStatus.record.provenance, 'host-session')
+
+    const supply = describeHeartbeatSupply(lateCtx)
+    assert.equal(supply.reason, 'active-heartbeats-present')
+    assert.ok(supply.hostSessions.includes(lateAgent.id))
+    assert.equal(supply.envSession, null)
+    assert.equal(supply.active, 1)
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
+})
+
+test('T-20261113164820 guard 覆盖 env-session：无 agent id 也拦，补登记后放行', () => {
+  const saved = process.env.DSH_SESSION_ID
+  try {
+    const { root, contract } = freshProject('guard-env')
+    const envSession = 'session-guard-env'
+    process.env.DSH_SESSION_ID = envSession
+    const agent = { id: '', session: { cwd: root, header: { origin: 'main' } } }
+    const agents = {
+      roots: () => [agent],
+      list: () => [agent],
+      get: () => agent,
+    }
+    const ctx = supplyCtx(root, agents)
+
+    // 旧实现：agent.id 为空 → 直接 return undefined（门禁形同虚设）。修复后按 env 会话拦。
+    const reason = heartbeatGuardReason(ctx, { name: 'edit', agent })
+    assert.equal(typeof reason, 'string', '有 DSH_SESSION_ID 的主会话必须被心跳门禁覆盖')
+    assert.match(reason, /agent\/pre-step/)
+    assert.match(reason, new RegExp('flow heartbeat start --session ' + envSession))
+    assert.equal(heartbeatGuardReason(ctx, { name: 'read', agent }), undefined, '只读工具不拦')
+
+    // 供给后同一调用放行（证明门禁与供给用的是同一个 env 会话）。
+    captureLateMountStart(ctx, { agent })
+    assert.equal(heartbeatStatus(root, contract, envSession).active, true)
+    assert.equal(heartbeatGuardReason(ctx, { name: 'write', agent }), undefined, '补登记后必须放行')
+
+    // execution.agent 完全缺失（PTC 形状）时，也必须按 DSH_SESSION_ID 拦。
+    const bare = freshProject('guard-env-bare')
+    process.env.DSH_SESSION_ID = 'session-guard-env-bare'
+    const bareCtx = supplyCtx(bare.root)
+    assert.equal(
+      typeof heartbeatGuardReason(bareCtx, { name: 'edit' }),
+      'string',
+      'agent 缺失的主会话同样必须被心跳门禁覆盖',
+    )
+    captureLateMountStart(bareCtx, {})
+    assert.equal(heartbeatStatus(bare.root, bare.contract, 'session-guard-env-bare').active, true)
+    assert.equal(heartbeatGuardReason(bareCtx, { name: 'edit' }), undefined)
+
+    // 端到端：默认 mount config 下 guard 必须真的注册并执行到 env 会话（不是只测纯函数）。
+    let registeredGuard = null
+    const toolsService = {
+      register() {
+        return () => {}
+      },
+      guard(check) {
+        registeredGuard = check
+        return () => {}
+      },
+    }
+    const mountCtx = {
+      get(name) {
+        if (name === 'tools') return toolsService
+        if (name === 'agents') return agents
+        if (name === 'workingDirectory') return { get: () => root }
+        return undefined
+      },
+      effect(fn) {
+        const dispose = fn()
+        return typeof dispose === 'function' ? dispose : () => {}
+      },
+      on() {
+        return () => {}
+      },
+      logger: { warn() {} },
+    }
+    apply(mountCtx, {})
+    assert.equal(typeof registeredGuard, 'function', '默认 config 必须注册 host guard')
+    const mountAgent = { id: '', session: { cwd: root, header: { origin: 'main' } } }
+    // 挂载扫描已按 DSH_SESSION_ID 补出可判活心跳 → 注册后的 guard 对同一会话放行。
+    assert.equal(heartbeatStatus(root, contract, process.env.DSH_SESSION_ID).active, true, '挂载供给必须落到该 workspace')
+    assert.equal(registeredGuard({ name: 'edit', agent: mountAgent }), undefined, '供给后 guard 必须放行 env-session')
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
+})
+
+test('T-20261113164820 挂载扫描：agents.roots() 只有无 id 会话时，env-session 仍被补开', () => {
+  const saved = process.env.DSH_SESSION_ID
+  try {
+    const { root, contract } = freshProject('supply-env-late')
+    const envSession = 'session-supply-env-late'
+    process.env.DSH_SESSION_ID = envSession
+    const agent = { id: '', session: { cwd: root, header: { origin: 'main' } } }
+    const agents = { roots: () => [agent], list: () => [agent], get: () => agent }
+    bootstrapHeartbeatSupply(supplyCtx(root, agents))
+    const status = heartbeatStatus(root, contract, envSession)
+    assert.equal(status.active, true, '有 DSH_SESSION_ID 就必须补出可判活心跳')
+    assert.equal(status.record.provenance, 'env-session')
+    assert.equal(status.liveness, 'live')
+  } finally {
+    if (saved === undefined) delete process.env.DSH_SESSION_ID
+    else process.env.DSH_SESSION_ID = saved
+  }
 })

@@ -30,6 +30,9 @@ import {
   recordPreStep,
 } from '../lib/capture.mjs'
 
+/* 历史用例验的是提醒而不是派工门：进程级把 claim 门降为 warn，断言语义不变。 */
+process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+
 const TEMP_ROOTS = []
 
 // ---------------------------------------------------------------- fake host

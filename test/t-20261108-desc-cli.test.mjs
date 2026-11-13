@@ -19,6 +19,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+/* 历史用例验的是描述门而不是派工门：进程级把 claim 门降为 warn，断言语义不变。 */
+process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BIN = path.resolve(HERE, '..', 'bin', 'flow.mjs')
 const TEMP_ROOTS = []

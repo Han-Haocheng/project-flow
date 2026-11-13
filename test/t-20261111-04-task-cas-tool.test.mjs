@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { addTask, getTask, initProject, listTasks, loadContract } from '../lib/core.mjs'
+import { addTask, getTask, initProject, listTasks, loadContract, updateTask } from '../lib/core.mjs'
 import { taskRevisionOf } from '../lib/tasks/records.mjs'
 import { apply as applyTasks } from '../tasks.js'
 
@@ -155,6 +155,7 @@ test('CAS：旧 revision 只改 notes（阶段已被别人改）→ conflict，�
   const { root, contract } = freshProject('stale')
   const { tool, exec } = makeHost(root)
   const task = seedTask(root, contract, { notes: '审查前的备注' })
+  updateTask(root, contract, task.id, { checkpoints: [{ kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: '2026-11-13T16:00:00+08:00' }] }, { source: 'internal' })
 
   const stale = taskRevisionOf(root, contract, task.id)
   // 另一个会话先把阶段推到待审查（自动派工用假 subagents 吃掉）。

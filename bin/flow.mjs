@@ -58,7 +58,7 @@ const CHECK_EXIT_BY_CODE = {
 }
 
 const BOOL_FLAGS = new Set([
-  'json', 'force', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all',
+  'json', 'force', 'uninstall', 'yes', 'help', 'no-gates', 'require-active', 'dry-run', 'open', 'all',
   // T-20261108 D4：`desc plan/show/rebase`、`desc render --check`、`check description --strict`
   'strict', 'show', 'rebase', 'no-semantic-change', 'check',
   // T-20261111155622：门禁步骤 expect 手误默认拒绝，只有显式开这个开关才容错
@@ -66,14 +66,16 @@ const BOOL_FLAGS = new Set([
   // 2026-11-12 裁定 3：门禁分结构/行为；门禁运行默认跑完全部步骤，--fail-fast 才首败即停。
   // `gate rules --init/--record` 是规则文件防篡改的写命令（裁定 1），都是纯开关。
   'fail-fast', 'init', 'record',
+  // T-20261113163323：done 无 reviewer 回执时的显式覆盖（必须配 --reason）。
+  'no-dispatch',
 ])
 const VALUE_FLAGS = new Set([
   'root', 'name', 'keep', 'stale-hours',
   'title', 'hypothesis', 'factor', 'parent', 'expected', 'scale', 'notes',
   'status', 'measured', 'metrics', 'commits',
-  'owner', 'goal',
+  'owner', 'goal', 'role', 'outcome',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team', 'summary',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -135,7 +137,12 @@ export const SPEC = Object.freeze({
     show: { flags: ['id'] },
     add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage'] },
     // `--commits` 与 `flow exp update` 对齐（T-20261113110938 ①）：逗号分隔的短 sha 列表。
-    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'commits'] },
+    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'commits', 'no-dispatch', 'reason'] },
+    // T-20261113163323：派工回执原语（claim 开放 → release 闭合）。
+    claim: { flags: ['id', 'agent', 'role', 'session', 'reason'] },
+    release: { flags: ['id', 'agent', 'outcome', 'reason', 'role', 'summary', 'file'] },
+    // T-20261113170144：任务内交接产物（put/list/show；正文拷贝进 .agents/reports）。
+    art: { flags: ['id', 'role', 'summary', 'file', 'agent'] },
     archive: { flags: ['older-than', 'dry-run'] },
     sweep: { flags: ['older-than-hours', 'dry-run'] },
     normalize: { flags: ['type-map', 'dry-run'] },
@@ -164,6 +171,8 @@ export const SPEC = Object.freeze({
     rm: { flags: ['id', 'yes'] },
     run: { flags: ['id', 'phase', 'timeout', 'force', 'fail-fast'] },
     logs: { flags: ['id', 'limit'] },
+    // T-20261113163505：把 commit 阶段门禁绑到 git pre-commit（默认不自动安装）。
+    'install-hook': { flags: ['force', 'uninstall', 'phase'] },
     // 2026-11-12 裁定 1：规则文件校验和的初始化与「改规则必须留痕」。
     rules: { flags: ['init', 'record', 'reason', 'by'] },
   }),
@@ -542,6 +551,14 @@ async function main() {
 
   // show/update/rm/run/logs 允许把 id 作为位置参数：flow exp show E-xxx
   const [command, action, ...extra] = parsed.positional
+  /* flow task art <put|list|show> <id>：第三段是动词，不是多余的参数。 */
+  if (command === 'task' && action === 'art') {
+    const verb = extra.shift()
+    if (verb === undefined || ['put', 'list', 'show'].includes(verb) === false) {
+      throw new CliError('usage', '用法: flow task art <put|list|show> <id> [options]')
+    }
+    ctx.artAction = verb
+  }
   if (extra.length > 1) {
     throw new CliError('usage', `多余的参数：${extra.slice(1).join(' ')}`)
   }
@@ -557,6 +574,10 @@ async function main() {
         'plan', 'apply',
         // 2026-11-11：`flow task next T-xxx` / `flow task verify T-xxx`
         'next', 'verify',
+        // T-20261113163323：`flow task claim T-xxx` / `flow task release T-xxx`
+        'claim', 'release',
+        // T-20261113170144：`flow task art put|list|show <id>`
+        'art',
       ].includes(action) &&
       // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
       !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&

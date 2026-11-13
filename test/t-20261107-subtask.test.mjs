@@ -9,7 +9,19 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { apply } from '../index.js'
-import { addTask, getTask, initProject, loadContract } from '../lib/core.mjs'
+import { addTask, getTask, initProject, loadContract, updateTask } from '../lib/core.mjs'
+
+/* claim 协议切换点后新建的卡不再享受 legacy：测试夹具种上已闭合回执（内部写，不跑门）。 */
+const CLAIM_FIXTURE_AT = '2026-11-13T16:00:00+08:00'
+function seedClaims(root, contract, id) {
+  updateTask(root, contract, id, {
+    checkpoints: [
+      { kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: CLAIM_FIXTURE_AT },
+      { kind: 'dispatch', role: 'reviewer', childId: 'fixture-review', provider: 'test', from: 'queued-review', to: 'reviewing', at: CLAIM_FIXTURE_AT },
+    ],
+  }, { source: 'internal' })
+}
+
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -145,6 +157,7 @@ test('update：只允许 notes/stage；合法边可写，非法边抛 invalid �
   const tool = harness.tool('flow_subtask')
   const added = await tool.execute({ ...SUBTASK_ARGS, parent: parent.id }, { agent: harness.main })
   const { task } = added
+  seedClaims(root, contract, task.id)
   /* T-20261113160505：自动派工默认关——建子卡不再自动派实现者（dispatch 字段不出现）。 */
   assert.equal(added.dispatch, undefined, 'flow_subtask add 默认不派工')
 

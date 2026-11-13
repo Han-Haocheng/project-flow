@@ -51,6 +51,9 @@ import {
 import { encodePath } from '../lib/desc.mjs'
 
 // spec §1 的默认 include/exclude（契约回退必须逐字回到这里）。
+/* 历史用例验的是描述门而不是派工门：进程级把 claim 门降为 warn，断言语义不变。 */
+process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+
 const DEFAULT_INCLUDE = ['**/*.mjs', '**/*.js', '**/*.cjs', '**/*.ts', '**/*.tsx', '**/*.jsx', '**/*.py']
 const DEFAULT_EXCLUDE = [
   '**/node_modules/**',

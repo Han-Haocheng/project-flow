@@ -100,6 +100,9 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task show | 记录 task |
 | flow task add | 记录 task |
 | flow task update | 记录 task |
+| flow task claim | 记录 task（追加一条 open claim 回执） |
+| flow task release | 记录 task（关闭匹配 agent 的 claim 回执，可携带产物指针） |
+| flow task art | 联合（put：记录 task；list：数组<记录 artifact>；show：对象（必填 task·role·artifact·content）） |
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |
 | flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked；可选 closed —— archiveAfterDays=0 时 closed:true 且 cutoff 为 null） |
@@ -118,11 +121,12 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow gate run | 联合（记录 gateRun / 对象（必填 phase·runs·skipped·segments）） |
 | flow gate rules | 联合（开放对象（必填 files·baselineAt） / 开放对象（必填 ok·baselineAt） / 开放对象（必填 changed）） |
 | flow gate logs | 数组<记录 gateRun> |
+| flow gate install-hook | 对象（必填 hook·gitRoot·phase·installed·removed·changed·hooksPath —— hooksPath=core.hooksPath，null 表示 .git/hooks） |
 | flow heartbeat start | 对象（必填 heartbeat 全字段·stack·counts·team·capture·unfinished·recentCaptured） |
 | flow heartbeat update | 对象（必填 heartbeat 全字段·stack·counts·team·capture·unfinished·recentCaptured） |
 | flow heartbeat end | 记录 heartbeat |
 | flow heartbeat list | 对象（必填 root·dir·items·counts·hiddenByVisibility·livenessEvidence·leaseSeconds） |
-| flow heartbeat status | 对象（必填 active·liveness·reason·ageSeconds·livenessEvidence·leaseExpiresAt·record·taskStage·taskStageZh） |
+| flow heartbeat status | 对象（必填 active·liveness·reason·ageSeconds·livenessEvidence·leaseExpiresAt·record·taskStage·taskStageZh·session·sessionSource·supply；可选 provenance） |
 | flow heartbeat rm | 对象（必填 session·removed） |
 | flow heartbeat gc | 对象（必填 root·dir·removed·kept·dryRun·olderThanHours） |
 | flow decision ask | 对象（必填 decision·created） |
@@ -150,6 +154,16 @@ stderr 只在极少数非契约场景出现（见 §8）。
 
 **`flow task update --commits a,b`**：逗号分隔的短 sha 列表，写回任务记录的 `commits` 数组
 （与 `flow exp update --commits` 同义；`--commits ""` 清空为 `[]`）。这是参数说明，不改任何 data 形状。
+
+**`task.claim` / `task.release` 的 data 形状**（`--json`）：都是写入后的记录 task。
+claim 追加一条 open 回执 `{kind:'claim', role, agent, session?, from, to, at}`，有 `--session` 时同时把
+`owner` 写成该会话；release 关闭同一 agent 的最后一条 open claim，补 `closedAt` 与 `outcome`
+（`ok|aborted`），可选 `--reason` 写 `note`。退出码：成功 0；参数/互斥/阶段门非法 2（`invalid`）；
+任务不存在 3（`not-found`）。
+
+**`task.art` 的三种形状**（`--json`）：`put` 返回写入后的记录 task（`artifacts[]` 追加一条指针）；
+`list` 返回该卡产物指针数组（可按 `--role` 过滤）；`show` 返回 `{task, role, artifact, content}`
+（content 是报告正文，文件缺失时为 `''`）。每卡每角色只保留最近 3 条指针（正文文件不删）。
 
 **`task.verify` 的两种形状**（`--json`）：
 
@@ -185,9 +199,9 @@ stderr 只在极少数非契约场景出现（见 §8）。
 
 **gateRun** — 必填：gate、title、started_at、finished_at、durationMs、ok、steps；可选：kind、mount、failFast、segments
 
-**heartbeat** — 必填：schema、session、agent、goal、task、claims、status、turn、last_action、started_at、updated_at、ended_at、host、stats；可选：title、boot_id、pid、pid_start、branch、worktree（判活证据与分支来源，有值时才出现）
+**heartbeat** — 必填：schema、session、agent、goal、task、claims、status、turn、last_action、started_at、updated_at、ended_at、host、stats；可选：title、boot_id、pid、pid_start、branch、worktree、provenance（判活证据、分支来源与供给来源，有值时才出现）
 
-**heartbeatItem** — 必填：file、session、agent、legacy、hidden、goal、title、task、claims、status、last_action、started_at、updated_at、ended_at、ageSeconds、stale、turn、stats、mtime、liveness、reason、livenessEvidence、leaseExpiresAt、taskStage、taskStageZh；可选：branch、worktree、pid（branch/worktree 只在有值时出现，pid 旧记录为 null；started_at/updated_at/ended_at/turn/stats 可为 null）
+**heartbeatItem** — 必填：file、session、agent、legacy、hidden、goal、title、task、claims、status、last_action、started_at、updated_at、ended_at、ageSeconds、stale、turn、stats、mtime、liveness、reason、livenessEvidence、leaseExpiresAt、taskStage、taskStageZh；可选：branch、worktree、provenance、pid（branch/worktree/provenance 只在有值时出现，pid 旧记录为 null；started_at/updated_at/ended_at/turn/stats 可为 null）
 
 **decision** — 必填：schema、id、question、kind、rationale、options、recommendation、default、status、blocks、affects、supersedes、answer、answered_at、withdraw、superseded_by、fingerprint、asked_at、created_at、updated_at、asked_session、asked_turn
 
@@ -282,4 +296,4 @@ stderr 只在极少数非契约场景出现（见 §8）。
 
 | 契约版本 | 日期 | 变更 |
 |---|---|---|
-| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 66 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |
+| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 70 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |

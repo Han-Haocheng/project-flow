@@ -315,13 +315,14 @@ test('阶段入口自动派工：宿主派工失败不拖垮 update，结果里�
 test('阶段入口自动派工：queued-review 起 reviewer，派工成功才写回执', async () => {
   const { root, contract } = freshProject('auto-review')
   const task = addTask(root, contract, { type: 'docs', title: '待审', stage: 'implementing' })
+  updateTask(root, contract, task.id, { checkpoints: [{ kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: '2026-11-13T16:00:00+08:00' }] }, { source: 'internal' })
   const subagents = fakeSubagents()
   const { tool, exec } = makeHost(root, { subagents })
   const result = await tool.execute({ action: 'update', id: task.id, stage: 'queued-review', root }, exec)
   assert.equal(subagents.calls.length, 1)
   assert.equal(result.dispatch.role, 'reviewer')
   assert.equal(result.task.stage, 'reviewing')
-  assert.equal(result.task.checkpoints.length, 1)
+  assert.equal(result.task.checkpoints.filter((item) => item.kind === 'dispatch' && item.role === 'reviewer').length, 1)
 })
 
 // ------------------------------------------ P3b 第二批：团队板自动挂载（默认 off）

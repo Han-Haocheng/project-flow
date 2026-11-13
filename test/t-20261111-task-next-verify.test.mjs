@@ -29,6 +29,18 @@ import {
   updateTask,
 } from '../lib/core.mjs'
 import { STAGE_EDGE_DOCTRINE, STAGE_IDS, STAGE_MACHINE, actorForEdge, edgeDoctrineKey, edgeOf, stageNextStep } from '../lib/stage.mjs'
+
+/* claim 协议切换点后新建的卡不再享受 legacy：测试夹具种上已闭合回执（内部写，不跑门）。 */
+const CLAIM_FIXTURE_AT = '2026-11-13T16:00:00+08:00'
+function seedClaims(root, contract, id) {
+  updateTask(root, contract, id, {
+    checkpoints: [
+      { kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: CLAIM_FIXTURE_AT },
+      { kind: 'dispatch', role: 'reviewer', childId: 'fixture-review', provider: 'test', from: 'queued-review', to: 'reviewing', at: CLAIM_FIXTURE_AT },
+    ],
+  }, { source: 'internal' })
+}
+
 import { acceptancePlan, recordTaskVerification, verificationStateOf } from '../lib/tasks/records.mjs'
 import { vetoSubtask } from '../lib/veto.mjs'
 
@@ -336,6 +348,7 @@ test('task verify：兼容 {cmd, expect} / {gate} 旧对象形态', () => {
 test('阶段门：有可执行验收但没验证过 → 拒绝进入 reviewing，提示 flow task verify', () => {
   const { root, contract } = freshProject('gate-block')
   const task = addTask(root, contract, { type: 'feat', title: '门', stage: 'implementing' })
+  seedClaims(root, contract, task.id)
   setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(0)"'])
   /* implementing → reviewing 不是直接边（T-20261112151328）：先过 queued-review。 */
   assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'queued-review']).code, 0)
@@ -349,6 +362,7 @@ test('阶段门：有可执行验收但没验证过 → 拒绝进入 reviewing�
 test('阶段门：verify 通过后放行；验收被改动后记录失效（必须重跑）', () => {
   const { root, contract } = freshProject('gate-pass')
   const task = addTask(root, contract, { type: 'feat', title: '放行', stage: 'implementing' })
+  seedClaims(root, contract, task.id)
   setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(0)"'])
   assert.equal(runCli(root, ['task', 'verify', task.id]).code, 0)
   assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'queued-review']).code, 0)
@@ -368,6 +382,7 @@ test('阶段门：没有可执行验收项时默认只警告（放行 + 一条 w
   const { root, contract } = freshProject('gate-warn')
   drainWarnings()
   const task = addTask(root, contract, { type: 'feat', title: '纯文本', stage: 'implementing' })
+  seedClaims(root, contract, task.id)
   setAcceptance(root, contract, task.id, ['人能看懂的验收标准'])
   updateTask(root, contract, task.id, { stage: 'queued-review' })
   const moved = updateTask(root, contract, task.id, { stage: 'reviewing' })
@@ -383,6 +398,7 @@ test('阶段门：tasks.requireAcceptance=strict 时，没有可执行验收项 
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
   const contract = loadContract(root).contract
   const task = addTask(root, contract, { type: 'feat', title: '严格', stage: 'implementing' })
+  seedClaims(root, contract, task.id)
   setAcceptance(root, contract, task.id, ['人来判定的验收'])
   updateTask(root, contract, task.id, { stage: 'queued-review' })
   assert.throws(
@@ -528,6 +544,7 @@ test('回归 P1-3：子任务 veto 不被验收门误拦（source=internal）', 
 test('回归：插件派工进 reviewing 只警告不硬拦；reviewing→done 仍是硬门', () => {
   const { root, contract } = freshProject('plugin-review')
   const task = addTask(root, contract, { type: 'feat', title: '派工豁免', stage: 'implementing' })
+  seedClaims(root, contract, task.id)
   setAcceptance(root, contract, task.id, ['cmd:node -e "process.exit(1)"'])
   updateTask(root, contract, task.id, { stage: 'queued-review' })
 

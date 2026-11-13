@@ -308,3 +308,219 @@ test('CLI：gate run --fail-fast 覆盖默认分段执行', async () => {
   assert.equal(strictRun.failFast, true)
   assert.equal(strictRun.steps.length, 1, '--fail-fast 恢复首败即停')
 })
+
+// ------------------------------------------------------ pre-commit hook（T-20261113163505）
+const NL = String.fromCharCode(10)
+
+function gitRepo(label) {
+  const { root } = freshProject(label)
+  const init = spawnSync('git', ['init', '-q'], { cwd: root, encoding: 'utf8', env: process.env })
+  assert.equal(init.status, 0, 'git init 失败：' + init.stderr)
+  return root
+}
+
+function hookFile(root) {
+  return path.join(root, '.git', 'hooks', 'pre-commit')
+}
+
+test('gate install-hook：默认不自动安装，显式执行后写可执行 hook（无绝对路径）', () => {
+  const root = gitRepo('hook-install')
+  assert.equal(fs.existsSync(hookFile(root)), false, 'init 后不应自动安装 hook')
+
+  const result = runCli(root, ['gate', 'install-hook'])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const file = hookFile(root)
+  assert.equal(fs.existsSync(file), true)
+  const content = fs.readFileSync(file, 'utf8')
+  assert.ok(content.startsWith('#!/bin/sh' + NL), 'hook 必须自带 shebang')
+  assert.ok(content.includes('project-flow-managed-hook: pre-commit'), 'hook 必须有标记行')
+  assert.ok(content.includes('flow gate run --phase commit'), 'hook 必须调用 phase 运行')
+  assert.equal(content.includes(root), false, 'hook 不得写死安装时的绝对路径')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o111, 0o111, 'hook 必须可执行')
+  assert.ok(result.stdout.includes('已安装'))
+  assert.ok(result.stdout.includes('--uninstall'), '输出必须说明如何卸载')
+  assert.ok(result.stdout.includes('自动纳入'), '输出必须说明新增 commit 门禁自动纳入')
+})
+
+test('gate install-hook 幂等：重复安装内容不变，changed=false', () => {
+  const root = gitRepo('hook-idem')
+  assert.equal(runCli(root, ['gate', 'install-hook']).code, 0)
+  const first = fs.readFileSync(hookFile(root), 'utf8')
+  const again = runCli(root, ['gate', 'install-hook', '--json'])
+  assert.equal(again.code, 0, again.stdout + again.stderr)
+  assert.equal(fs.readFileSync(hookFile(root), 'utf8'), first, '内容必须保持不变')
+  assert.equal(JSON.parse(again.stdout).data.changed, false)
+})
+
+test('gate install-hook：已有非本工具 hook 默认不覆盖；--force 才覆盖', () => {
+  const root = gitRepo('hook-foreign')
+  const file = hookFile(root)
+  const foreign = '#!/bin/sh' + NL + 'echo custom' + NL
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, foreign, { mode: 0o755 })
+
+  const blocked = runCli(root, ['gate', 'install-hook'])
+  assert.equal(blocked.code, 1, blocked.stdout + blocked.stderr)
+  assert.ok(blocked.stderr.includes('--force'), '错误必须提示 --force')
+  assert.equal(fs.readFileSync(file, 'utf8'), foreign, '非本工具 hook 不得被改')
+
+  const forced = runCli(root, ['gate', 'install-hook', '--force'])
+  assert.equal(forced.code, 0, forced.stdout + forced.stderr)
+  assert.ok(fs.readFileSync(file, 'utf8').includes('project-flow-managed-hook: pre-commit'))
+})
+
+test('gate install-hook --uninstall：只删本工具生成；非本工具与冲突参数是可读失败', () => {
+  const root = gitRepo('hook-uninstall')
+  assert.equal(runCli(root, ['gate', 'install-hook']).code, 0)
+  const removed = runCli(root, ['gate', 'install-hook', '--uninstall'])
+  assert.equal(removed.code, 0, removed.stdout + removed.stderr)
+  assert.equal(fs.existsSync(hookFile(root)), false)
+  assert.ok(removed.stdout.includes('已卸载'))
+
+  const again = runCli(root, ['gate', 'install-hook', '--uninstall', '--json'])
+  assert.equal(again.code, 0, again.stdout + again.stderr)
+  assert.equal(JSON.parse(again.stdout).data.removed, false)
+
+  const file = hookFile(root)
+  const foreign = '#!/bin/sh' + NL + 'echo foreign' + NL
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, foreign)
+  const refused = runCli(root, ['gate', 'install-hook', '--uninstall'])
+  assert.equal(refused.code, 1, refused.stdout + refused.stderr)
+  assert.ok(refused.stderr.includes('不是本工具生成'))
+  assert.equal(fs.readFileSync(file, 'utf8'), foreign, '非本工具 hook 不得被删')
+
+  const both = runCli(root, ['gate', 'install-hook', '--uninstall', '--force'])
+  assert.equal(both.code, 1)
+  assert.ok(both.stderr.includes('不能同时使用'))
+})
+
+test('gate install-hook：--phase release 与非 git 目录都是可读失败（exit 1），不落文件', () => {
+  const root = gitRepo('hook-phase')
+  const released = runCli(root, ['gate', 'install-hook', '--phase', 'release'])
+  assert.equal(released.code, 1, released.stdout + released.stderr)
+  assert.ok(released.stderr.includes('只绑定 --phase commit'))
+  assert.equal(fs.existsSync(hookFile(root)), false)
+
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hook-nogit-'))
+  TEMP_ROOTS.push(plain)
+  initProject(plain, { name: 'nogit', noGates: true })
+  const nogit = runCli(plain, ['gate', 'install-hook'])
+  assert.equal(nogit.code, 1, nogit.stdout + nogit.stderr)
+  assert.ok(nogit.stderr.includes('不在 git 工作区'))
+  assert.equal(fs.existsSync(path.join(plain, '.git')), false)
+})
+
+test('gate install-hook：core.hooksPath（husky/自定义）命中时写到该目录并告知', () => {
+  const root = gitRepo('hook-hookspath')
+  const conf = spawnSync('git', ['-C', root, 'config', 'core.hooksPath', '.husky'], { encoding: 'utf8' })
+  assert.equal(conf.status, 0, conf.stderr)
+
+  const result = runCli(root, ['gate', 'install-hook'])
+  assert.equal(result.code, 0, result.stdout + result.stderr)
+  const file = path.join(root, '.husky', 'pre-commit')
+  assert.equal(fs.existsSync(file), true, '必须写进 core.hooksPath')
+  assert.equal(fs.existsSync(hookFile(root)), false, '不得再写 .git/hooks')
+  assert.ok(fs.readFileSync(file, 'utf8').includes('project-flow-managed-hook: pre-commit'))
+  assert.ok(result.stdout.includes('core.hooksPath'), '输出必须告知 hooksPath')
+  assert.ok(result.stdout.includes('主工作区'), '输出必须说明影响主工作区提交')
+
+  const again = runCli(root, ['gate', 'install-hook', '--json'])
+  assert.equal(again.code, 0, again.stdout + again.stderr)
+  const againData = JSON.parse(again.stdout).data
+  assert.equal(againData.hooksPath, '.husky')
+  assert.equal(againData.hook, file)
+  assert.equal(againData.changed, false, '重复安装必须幂等（changed:false）')
+
+  const removed = runCli(root, ['gate', 'install-hook', '--uninstall'])
+  assert.equal(removed.code, 0, removed.stdout + removed.stderr)
+  assert.equal(fs.existsSync(file), false, '卸载也必须按 hooksPath 走')
+})
+
+test('gate install-hook：core.hooksPath 的 ~ 由 git --path 展开（不得写成 <repo>/~/hooks）', () => {
+  const root = gitRepo('hook-tilde')
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-hook-home-'))
+  TEMP_ROOTS.push(home)
+  const previousHome = process.env.HOME
+  process.env.HOME = home
+  try {
+    const conf = spawnSync('git', ['-C', root, 'config', 'core.hooksPath', '~/hooks'], { encoding: 'utf8', env: process.env })
+    assert.equal(conf.status, 0, conf.stderr)
+
+    const result = runCli(root, ['gate', 'install-hook', '--json'])
+    assert.equal(result.code, 0, result.stdout + result.stderr)
+    const data = JSON.parse(result.stdout).data
+    const expected = path.join(home, 'hooks')
+    assert.equal(data.hooksPath, expected, '~ 必须展开成绝对路径')
+    assert.equal(data.hook, path.join(expected, 'pre-commit'))
+    assert.equal(fs.existsSync(path.join(expected, 'pre-commit')), true)
+    assert.equal(fs.existsSync(path.join(root, '~', 'hooks', 'pre-commit')), false, '不得写成 <repo>/~/hooks')
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+  }
+})
+
+test('hook：--json 缺 data.runs 时 fail-closed（不能因 every([]) 放行）', () => {
+  const root = gitRepo('hook-no-runs')
+  const fakeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-fake-bin-'))
+  TEMP_ROOTS.push(fakeDir)
+  const fakeFlow = path.join(fakeDir, 'flow')
+  const payload = JSON.stringify({ schemaVersion: 1, ok: true, warnings: [] })
+  fs.writeFileSync(fakeFlow, '#!/bin/sh\nprintf %s ' + "'" + payload + "'" + '\nexit 0\n', { mode: 0o755 })
+  assert.equal(runCli(root, ['gate', 'install-hook']).code, 0)
+
+  const env = { ...process.env, PATH: fakeDir + ':' + (process.env.PATH ?? '') }
+  const result = spawnSync('sh', [hookFile(root)], { cwd: root, encoding: 'utf8', env })
+  assert.equal(result.status, 1, '缺 data.runs 必须拦下：' + result.stdout + result.stderr)
+  assert.ok(result.stderr.includes('提交被拦下'), '必须给出可读原因')
+})
+
+
+test('E2E：装 hook 后 commit 阶段红门禁真的拦下 git commit；改绿后放行', () => {
+  const root = gitRepo('hook-e2e')
+  const bin = path.join(root, 'bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.symlinkSync(BIN, path.join(bin, 'flow.mjs'))
+
+  const added = runCli(root, ['gate', 'add', '--id', 'red', '--title', '红门禁', '--phase', 'commit', '--step', 'bad=exit 1'])
+  assert.equal(added.code, 0, added.stdout + added.stderr)
+  assert.equal(runCli(root, ['gate', 'install-hook']).code, 0)
+
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'flow-test', GIT_AUTHOR_EMAIL: 'flow@test',
+    GIT_COMMITTER_NAME: 'flow-test', GIT_COMMITTER_EMAIL: 'flow@test',
+  }
+  const blocked = spawnSync('git', ['-C', root, 'commit', '--allow-empty', '-m', 'blocked'], { encoding: 'utf8', env })
+  assert.notEqual(blocked.status, 0, '红门禁必须拦下提交：' + blocked.stdout + blocked.stderr)
+  assert.ok((blocked.stdout + blocked.stderr).includes('提交被拦下'), 'hook 必须给出可读原因')
+  const count = spawnSync('git', ['-C', root, 'rev-list', '--count', '--all'], { encoding: 'utf8', env })
+  assert.equal(count.stdout.trim(), '0', '被拦下的提交不得落库')
+
+  assert.equal(runCli(root, ['gate', 'update', 'red', '--step', 'ok=exit 0']).code, 0)
+  const allowed = spawnSync('git', ['-C', root, 'commit', '--allow-empty', '-m', 'allowed'], { encoding: 'utf8', env })
+  assert.equal(allowed.status, 0, '绿门禁必须放行：' + allowed.stdout + allowed.stderr)
+})
+
+test('hook 判定收窄：步骤 stdout 出现 "ok":false 但门禁通过时 commit 放行（不误伤）', () => {
+  const root = gitRepo('hook-noise')
+  const bin = path.join(root, 'bin')
+  fs.mkdirSync(bin, { recursive: true })
+  fs.symlinkSync(BIN, path.join(bin, 'flow.mjs'))
+  fs.writeFileSync(path.join(root, 'print-noise.mjs'), 'process.stdout.write(' + JSON.stringify('"ok":false') + ')')
+
+  const added = runCli(root, ['gate', 'add', '--id', 'noisy', '--title', '噪声', '--phase', 'commit', '--step', 'noise=node print-noise.mjs'])
+  assert.equal(added.code, 0, added.stdout + added.stderr)
+  assert.equal(runCli(root, ['gate', 'install-hook']).code, 0)
+
+  const env = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'flow-test', GIT_AUTHOR_EMAIL: 'flow@test',
+    GIT_COMMITTER_NAME: 'flow-test', GIT_COMMITTER_EMAIL: 'flow@test',
+  }
+  const committed = spawnSync('git', ['-C', root, 'commit', '--allow-empty', '-m', 'ok'], { encoding: 'utf8', env })
+  assert.equal(committed.status, 0, '步骤输出里的 "ok":false 不应误拦：' + committed.stdout + committed.stderr)
+})
+
+

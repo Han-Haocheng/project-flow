@@ -193,6 +193,7 @@ core 缺失时仍可装配，成员退化为调用即抛的可读错误（`FlowE
 | `tasks` | object：`source` / `dir` string、`current` string\|null、`recentLimit` / `archiveAfterDays` number | 逐字段回退 |
 | `tasks.archiveAfterDays` | 有限 number（manifest **只校验类型**，不校验范围；`0` = 关闭自动归档） | 非 number / 非有限 → 回退默认值 7 并记 `manifest-invalid`；负数与越界不在 loadContract 报错，运行期降级（见下） |
 | `tasks.requireAcceptance` | string：`warn`（默认）\| `strict` \| `off`；控制「任务没有可执行验收项（`cmd:` / `gate:`）」时的推进策略 | 非 string → 回退 `warn` 并记 `manifest-invalid`；未知值按 `warn` 处理 |
+| `claims.enforce` | string：`hard`（默认）\| `warn` \| `off`；派工回执阶段门的强制模式（§3.2 claim/release） | 缺省/非 string/未知值 → `hard`；测试入口可用环境变量 `PROJECT_FLOW_CLAIM_GATE` 覆盖（注意与写域门禁的 `PROJECT_FLOW_CLAIMS_GATE` 不是同一个开关） |
 | `gates` | object：`dir` / `logs` 为 string | 逐字段回退 |
 | `heartbeats` | object：`source` / `dir` string、`max` number | 逐字段回退 |
 | `decisions` | object：`dir` 为 string | 逐字段回退 |
@@ -369,6 +370,10 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   "archived_at": null,                  // 可选（T-09）：进入 archived 的时刻；归档保留 done_at
   "veto": { "by": "analysis", "reason": "...", "at": "..." }, // 可选（P4）：分析期否决记录，历史永不清
   "decision": "D-20261107-01",          // 可选（P4）：主任务否决生成的待办决策 id；答完清为 null
+  "artifacts": [{                       // 可选（2026-11-13）：交接产物指针，系统字段（只存指针+摘要）
+    "role": "implementer", "stage": "implementing", "summary": "…",
+    "path": ".agents/reports/<task-id>/implementer-<ts>.md", "sha256": "…", "agent": "…", "at": "…"
+  }],
   "verification": {                     // 可选（2026-11-11）：flow task verify 的回执，系统字段
     "ok": true, "at": "...", "stage": "implementing",
     "signature": "…",                   // acceptance 内容的指纹：验收项改过即视为过期
@@ -420,6 +425,71 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
     插件在 `agent/created` 扫描把该会话的任务 `owner` 清空为 `''`，供其他会话领取。外主机心跳
     （`liveness:'foreign'`）与没有心跳记录的 owner（角色名/手写值）**不释放**——"无法证明死了"不是"死了"。
   - `owner` 仍是可更新白名单字段，但改写要过上述会话守卫；`owner` 不参与阶段机，改它不触发描述门禁。
+- **派工回执 claim / release（T-20261113163323）**：`checkpoints` 里的回执协议，阶段门据此判定
+  「这张卡现在由谁在做、做完了没有」。
+  - **open 回执（claim）**：`flow task claim <id> --agent <name> --role analyzer|implementer|reviewer`
+    `[--session <会话id>] [--reason <说明>]` 追加
+    `{kind:'claim', role, agent, session?, note?, from, to, at}`（`--reason` 写 `note`）；`from` 是当前阶段，`to` 是该角色对应的
+    working 阶段（analyzer→analyzing、implementer→implementing、reviewer→reviewing）。给了
+    `--session` 时同一次写入把 `owner` 设为该会话（旧 owner 是别的**活**会话时拒绝抢占）。
+  - **闭合（release）**：`flow task release <id> --agent <name> --outcome ok|aborted [--reason <说明>]`
+    关闭同一 agent 的**最后一条** open claim，补 `closedAt` 与 `outcome`（`--reason` 写 `note`）；
+    写入后不可再改。没有匹配的 open claim → `invalid`（exit 2）。
+  - **互斥**：同一 agent **全局**只能有 1 条 open claim（跨卡扫描，冲突文案点名对方任务 id）；
+    同一卡同时只能有 1 条 open claim（冲突文案点名当前持有者）。派工器写的
+    `kind:'dispatch'` 回执（§10.1）也计入「同卡 open」，但只有阶段门能自动收口它。
+  - **阶段门（硬校验，`FlowError('invalid')`，不是 warning）**：
+    | 边 | 要求 |
+    |---|---|
+    | → `implementing` | 必须存在 role=`implementer` 的 open claim（claim 或 dispatch 回执） |
+    | → `queued-review` | 必须存在已关闭 `outcome:'ok'` 的 `implementer` claim；`aborted` 不算 |
+    | `reviewing` → `done` | 必须存在已关闭 `outcome:'ok'` 的 `reviewer` claim；没有时可用
+      `flow task update <id> --stage done --no-dispatch --reason <原因>` 显式覆盖（写一条
+      `{kind:'no-dispatch', stage:'done', reason, at, from}` 回执 + 一条
+      `task-dispatch-override` warning）。`--no-dispatch` 缺 `--reason` 是 usage（exit 1）。 |
+    拒绝文案必须点名缺哪一步与补法（`flow task claim …` / `flow task release …`）。
+  - **强制模式（`claims.enforce`，T-20261113163323）**：`hard`（默认）= 上面的 `invalid` 拒绝；
+    `warn` = 同一条边只发 `task-dispatch-warn:` warning 后放行（不改台账、不写 legacy 标记）；
+    `off` = 完全不检查。优先级：显式 `claimGate` 选项 > 环境变量 `PROJECT_FLOW_CLAIM_GATE` >
+    契约 `claims.enforce` > `hard`。**非 hard 绝不静默**：生效模式不是 hard 时，同一次写入的
+    warnings 必带 `claim-gate-bypassed: mode=<mode>（降级来源）`；`PROJECT_FLOW_CLAIM_GATE`
+    只用于测试/排障，**不是生产开关**（它能让任何进程绕过三道门）。
+    **历史测试为什么用 warn**：描述门/提醒/决策用例验的是别的门，
+    不应被派工门改写语义，所以这些文件在进程入口设 `PROJECT_FLOW_CLAIM_GATE=warn`；claim 的
+    三条边仍有专门 hard 用例与 warn 放行用例，不靠环境变量掩盖。
+    `source:'internal'`（插件记账）豁免；`analyzing → done`（汇总轮收口）不要求父卡自己的
+    reviewer 回执，审查证据在子任务上。
+  - **派工回执的自动收口**：`kind:'dispatch'` 是插件回执，不要求人工 release；
+    `implementing → queued-review` 自动把 open 的 `implementer` dispatch 回执补成
+    `closedAt + outcome:'ok'`，`reviewing → done` 同样处理 `reviewer` 回执。
+  - **legacy 放行（一次性）**：只有 **`LEGACY_CUTOFF_AT` = 2026-11-13T17:00:00+08:00 之前创建**的卡
+    （常量单一真源在 `lib/tasks/records.mjs`，改它必须同步本节与测试夹具）、且没有任何
+    `kind:'claim'` 与 `kind:'legacy-bypass'` 回执时，三条门写一条
+    `task-dispatch-legacy:` warning 并在**同一次写入**追加
+    `{kind:'legacy-bypass', stage, from, at}` 标记后放行。标记落盘后该卡不再享受 legacy，
+    之后的每条边都必须 claim/release 闭合。`owner` 不参与 legacy 判定——存量 owner 卡
+    同样享受这一次放行，不会一上来就被硬拦。
+  - **孤儿检测（读投影）**：`flow task list` 给有 open 回执的行补可选字段
+    `claim:{kind, role, agent, session?, at, orphan}`；`session` 非空且心跳 liveness 不是
+    `live`（`dead`/`stale`/`unknown`）时 `orphan:true`，文本列表行尾加 `[orphan]`。
+    没有 session 的回执无法判活，不算孤儿。面板另片。
+  - 工具面：`flow_task` 本片**不**加 claim/release 动作（只有 CLI）；`task add --stage <目标>` 是
+    创建而非阶段推进，不跑派工门（验收门在 add 有单独挂载，后续卡再统一）。
+- **交接产物 artifacts（T-20261113170144）**：代理间的大量信息写进**任务**（任务随阶段在角色间流转），
+  记录里只放指针 + 摘要，正文落 `.agents/reports/<task-id>/<role>-<ts>.md`（`.agents/` 不进 git）。
+  - **形状**：可选 `artifacts: [{role, stage, summary, path, sha256, agent, at}]`；`path` 必须是
+    `.agents/reports/<task-id>/` 下的相对路径（必须含**本卡 id 段**、不含 `..`），`sha256` 是正文
+    64 位小写十六进制摘要。写入源只接受**项目根内普通文件**：`lstat().isFile()` + `realpath`
+    必须落在根内，绝对路径/`../`/软链一律拒绝。
+  - **写入口**：`flow task art put <id> --role R --summary S --file <报告>` 拷贝正文并追加指针；
+    `flow task art list <id> [--role R]` 列指针；`flow task art show <id> --role R` 返回最近一条指针
+    + 正文（`content`，文件缺失时为空串）。每卡每角色只保留最近 **3** 条指针，超出剪枝最旧指针
+    （报告文件不删）。
+  - **与 claim/release 对齐**：`flow task release <id> --agent A --outcome ok --file <报告> --summary S`
+    在同一次写入里登记产物，并把指针挂到被关闭的 claim 回执的 `artifact` 字段——不另造第二套回执。
+  - **阶段交接**：analyzer 应在 `analyzing → queued-implementation` 前写产物、implementer 在
+    `implementing → queued-review` 前、reviewer 在 `reviewing → done` 前。本版只是**警告**：缺产物给
+    `task-artifact-missing:`，不阻断（观察期，避免把存量卡一刀切）；硬门留待后续卡。
 - **`source`（捕获来源，create-only）**：`{kind:'utterance'|'control', key, at, text?, attachments?, branch?}`。
   由捕获流水线写入；`control` 只是遗留只读值（不再写出）。`key` 是跨进程去重主料；`at` 是消息时间戳
   （payload 带 `timestamp` 时），否则是 pre-step 捕获时刻；`text` 保留整句（超过 4000 字符显式标截断）。
@@ -452,7 +522,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   `decision` 是待办指针：否决时写入，用户答 `modify`/`delete` 后清为 `null`。
 - **系统维护键例外**：`updated_at`（每次 patch 恒刷新）、`done_at`、`archived_at`
   （`stampTaskTimes` 权威管理）**接受**写入但被写路径覆盖，**不**列入不可改清单。
-  `checkpoints` 本版不动：不在白名单、无 CLI flag/工具参数，写入属未定义行为，仅供存量只读。
+  `checkpoints` 由 `flow task claim/release`（派工回执）与派工器写入；普通 `task update` 没有
+  `--checkpoints` 参数，手工改该键仍属未定义行为。
 - **`type`（必填，T-15）**：conventional commit 类型，枚举 `feat` / `fix` / `docs` / `style` /
   `refactor` / `perf` / `test` / `chore` / `build` / `ci`。`task add` **必须**
   提供（缺 → `invalid: type is required`），非法值 → `invalid: type must be one of …`；
@@ -737,6 +808,58 @@ flow gate update release --step '<原步骤>' \
 `undescribed-file` 的欠账）。注意 `enforce` 只约束 `updateTask` 的阶段门，**不改变**这两步的判定：
 记录一旦存在就照常检查；跳过只发生在「关掉 `description.enabled`」或「`auto` 且零记录」时。
 
+### 3.3.2 强制点矩阵与 git pre-commit hook（T-20261113163505）
+
+门禁定义本身不是强制点：它只有在被某个**事件**触发、且失败能让该事件失败时才成立。
+本项目同时存在（也允许并存）下面几层，各管一段，不要把任何一个说成「唯一的门禁」：
+
+| 强制点 | 触发事件 | 覆盖范围 | 失败后果 | 现状 |
+|---|---|---|---|---|
+| 任务验收 `gate:<id>` | `flow task verify <T-id>` 的 acceptance 项 | 单条任务完成前 | verify 退出 1，任务不能算完成 | 已有 |
+| git pre-commit | `git commit`（`.git/hooks/pre-commit`） | 所有 `phase=commit` 且 `enabled !== false` 的门禁 | hook 打印失败并退出 1，提交被拦下 | 本版新增，**默认不自动安装** |
+| CI | push / PR（未来接入） | 由 CI 配置挑 phase（通常 commit + release） | CI job 失败 | 未来；CI 现在就可以直接跑 `flow gate run --phase ...` |
+| 插件写入门禁 | `updateTask` 等宿主写路径 | 记录写入期 | 抛 `FlowError` 拒绝写入 | **不建议**，理由见下 |
+
+- **为什么并存**：验收 gate 只覆盖单条任务；pre-commit 覆盖「人真的在本机敲 git commit」；CI 覆盖
+  「`--no-verify` 绕过本地 hook、或换一台机器提交」。重叠是**冗余**，不是重复；任何一层单独绿
+  都不能证明整体绿。
+- **新增 commit 阶段门禁自动纳入 hook**：hook 执行的是按 phase 动态取数的
+  `flow gate run --phase commit`，所以 `flow gate add --phase commit ...` 之后**不需要重装 hook**；
+  phase 不是 commit 的门禁不会进 pre-commit。
+- **插件写入门禁不建议**：那会把「写台账」的成败绑到任意命令的退出码上，在锁内执行慢命令、失败
+  语义变成「拒绝记录」而不是「拒绝提交」，还可能递归触发写入。宿主写入已有 P2 权限面与阶段门
+  （`config.enforce`），不要再由 gate 定义动态扩大。
+
+#### 安装 / 幂等 / 卸载
+
+```bash
+flow gate install-hook                # 写 .git/hooks/pre-commit（可执行，自带 shebang）
+flow gate install-hook --force        # 已有非本工具生成的 hook 时才需要：显式覆盖
+flow gate install-hook --uninstall    # 只删带标记行的本工具 hook
+flow gate install-hook --phase commit # 唯一支持的 phase（pre-commit 只对应 commit）
+```
+
+- **落点按 git 根解析**：安装时用 `git rev-parse --show-toplevel` 找根。**先认 `core.hooksPath`**
+  （husky / 自定义 hooks 目录）：`git config --path --get core.hooksPath` 命中就写到该目录（`~` 由 git 自己展开，
+  相对路径按 git 根解析），并在命令输出里明确告知；未配置时才用
+  `git rev-parse --git-path hooks/pre-commit` 解析 `.git/hooks`（linked worktree 的 `.git` 是文件，
+  直接拼会写错位置）。hook 运行时也先 `cd` 到 git 根再执行，**不写死安装机的绝对路径**。
+- **影响面是全仓库**：linked worktree 共享同一份 `.git/hooks`（或同一个 hooksPath），从 worktree
+  安装的 hook 会让主工作区的提交也走它；hook 运行时门禁的 root 是 `cd` 到的 git 根（worktree），
+  不是安装时的会话工作区。
+- **调用**：hook 优先用 PATH 上的 `flow`，否则回退 `node bin/flow.mjs`（相对 git 根）；两者都
+  找不到时打印可读错误并退出 1。
+- **幂等与覆盖**：hook 用标记行 `# project-flow-managed-hook: pre-commit` 自证身份。内容一致时
+  重复安装不改文件（`changed: false`）；已有**非本工具生成**的 hook 默认不覆盖（退出 1 并提示
+  `--force`），`--force` 才覆盖；`--uninstall` 只删带标记行的文件，非本工具 hook 拒绝卸载。
+- **默认不自动安装**：`flow init` / `flow gate add` 都不写 `.git/hooks/`；装 hook 是显式动作。
+- **失败判定**：`gate run` 对门禁失败仍 `exit 0`（§5.2），因此 hook 把
+  `flow gate run --phase commit --json` 交给 `node -e` 解析：只有信封 `ok===true` 且
+  `data.runs[].ok` 全为 true 才放行（步骤 stdout 里出现 `ok:false` 字样不会误拦；`data.runs`
+  缺失同样拦截）。缺 `node` 时
+  fail-closed：打印可读原因并退出 1。成功时 hook 保持安静，失败时把 JSON 与一行可读原因打到
+  stderr 并退出 1。
+
 ### 3.4 运行记录 `logs/<gateId>/<timestamp>.json`
 
 ```jsonc
@@ -816,9 +939,18 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   "pid_start": 9943211,                 // /proc/<pid>/stat 第 22 字段（pid 复用判定）
   // 分支溯源（2026-11-08，可选）：台账由项目所有 worktree 共享，心跳记录会话实际所在分支
   "branch": "main",                     // 会话 cwd 的分支；detached/非 git 时缺省
-  "worktree": ".agents/worktrees/abc"   // linked worktree 相对主工作区的路径；主工作区时缺省
+  "worktree": ".agents/worktrees/abc",  // linked worktree 相对主工作区的路径；主工作区时缺省
+  // 供给来源（2026-11-13，可选）：记录这条心跳由哪种环境下文登记
+  "provenance": "host-session"          // host-session | env-session | cli-process；旧记录缺省
 }
 ```
+
+- **`provenance`（可选，2026-11-13）**：只描述**来源**，不参与判活——判活仍是
+  `host`/`boot_id`/`pid`/`pid_start` + TTL。三种取值：`host-session`（宿主 agent id）、
+  `env-session`（`DSH_SESSION_ID`）、`cli-process`（无会话上下文的 CLI 进程，session 为
+  `cli-<host>-<pid>`，host 段让 WSL 与 Windows 共挂 /mnt/d 时不同名）。旧记录没有该键；读投影
+  （`heartbeat list` 行、`heartbeat status`）只在有值时透出，
+  面板/CLI 据此显示供给来源。
 
 - **`claims` 语义**：本主会话**独占写入的文件域**，默认取所属任务的 `scope.allow`。自
   2026-11-08 起它既是广播约定、也是**强制写域**：`edit` / `write` 的目标必须落在本会话心跳的
@@ -1340,6 +1472,11 @@ flow task sweep [--older-than-hours N] [--dry-run]
                  # 默认 24 小时，--dry-run 只报告不写盘
 flow task next <id> [--json]   # 查表给唯一下一步：目标阶段/actor/动作/验证命令；终态 exit 3
 flow task verify <id>          # 按 acceptance 顺序执行 cmd:/gate:，回填 verification；失败 exit 1
+ flow task claim <id> --agent <name> --role analyzer|implementer|reviewer [--session <id>] [--reason <文本>]
+ flow task release <id> --agent <name> --outcome ok|aborted [--reason <文本>] [--file <报告>] [--summary <摘要>]
+ flow task art put <id> --role analyzer|implementer|reviewer --summary <摘要> --file <报告> [--agent <name>]
+ flow task art list <id> [--role <角色>]
+ flow task art show <id> --role <角色>
 flow task normalize [--type-map <file.json>] [--dry-run]
                  # 归一旧记录：goal 并入 title、按 map 补 type；--dry-run 只报告不改盘，
                  # 恒 exit 0（报告不是门禁）。写盘成功 → exit 0，残留见 data.ok:false。
@@ -1356,6 +1493,8 @@ flow gate rm <id> [--yes]
 flow gate run  <id> [--timeout SECONDS] [--force]
 flow gate run  --phase commit|release|manual [--timeout SECONDS] [--force]
 flow gate logs <id> [--limit N]
+flow gate install-hook [--force] [--uninstall] [--phase commit]
+                 # 把 commit 阶段门禁绑到 git pre-commit；默认不自动安装
 
 flow heartbeat start  [--goal G] [--task ID] [--claim PATH]... [--agent A]
                       [--session S] [--note T]
@@ -1643,6 +1782,27 @@ task / claims / goal；「存活」列是 `live|dead|stale|foreign|unknown` 加 
 claims 内（§3.5）；空 claims = 拒绝全部编辑，无心跳记录同样拒绝。子代理豁免（它们不做心跳，由父
 会话文件域负责）；目标逃出项目根直接拒绝。拒绝文案给出「先 `flow_heartbeat update --claim <path>`」。
 该门与 `config.enforce`、`config.heartbeatGate` 相互独立：三者任一开启就会注册 guard。
+
+**心跳门禁覆盖矩阵（2026-11-13，T-20261113164820）**：`heartbeatGuardReason` 的会话身份原先只认
+`agent.id`，导致「有 `DSH_SESSION_ID`、agent 记录没有可用 id」的主会话**完全没有被门禁覆盖**（表现为
+无心跳也不拦写）。修复后身份顺序与供给一致：`agent.id` → `DSH_SESSION_ID`；只有**可证明的子会话**
+（`rootSessionVerdict === false`）豁免，判定不出来（`null`）不再等于放行。
+
+| 会话类型 | guard 是否拦 | 依据 |
+|---|---|---|
+| 主会话，`agent.id` 可用，且有 working 心跳 | 放行 | agent id + `livenessOf` |
+| 主会话，`agent.id` 可用，无心跳 / 非 working | **拦** | agent id |
+| 主会话，`agent.id` 不可用但 `DSH_SESSION_ID` 可用（含 `execution.agent` 缺失的 PTC 调用） | **拦**（本次修复） | env id |
+| 主会话，既无 `agent.id` 也无 `DSH_SESSION_ID` | 放行（**无门禁**），但 supply 会写 `cli-<host>-<pid>` 心跳行 | 无法判定身份，宁可不误伤；这是「**有心跳行、无门禁**」的组合 |
+| 显式子会话（`rootSessionVerdict === false` / header `origin:"subagent"`） | 放行 | 子会话不登记心跳 |
+| synthetic 前缀（`mnemon-task-`/`bg-task-`/`task-subagent-`） | 放行 | 不登记心跳 |
+| 非写工具（`read` / `bash` / `terminal_send` / 只读 ops） | 放行 | 不在 `HEARTBEAT_GATE_TOOLS` |
+| 无项目根 / 无 store | 放行 | 读不到心跳，降级不误伤 |
+
+guard 的注册本身不变：`index.js` 用 `heartbeatGateEnabled(config)`（默认 **true**）决定
+`registerTools` 是否挂 guard；只有 mount config `heartbeatGate:false` / `enforceHeartbeat:false` 或
+`PROJECT_FLOW_HEARTBEAT_GATE=off` 才不挂。claims 门仍只认心跳 claims（子代理/无 identity 时放行），
+与心跳门是两条独立判据。
 
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|
@@ -2659,6 +2819,21 @@ web 面板对 `GET state` 的轮询是一条**单飞链**：任一时刻至多�
 心跳是**主会话之间**的协作面：同一项目的多个主会话（不同窗口、不同工作树）靠它登记
 goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）**没有心跳**。
 
+- **环境无关供给（2026-11-13）**：心跳必须在**每个环境**下都真的存在，不再依赖某一个宿主事件。
+  - `agent/created` 为主会话开记录（历史路径，`provenance: host-session`）；
+  - 插件晚于会话创建挂载时，**挂载即扫描** `agents.roots()`，为没有记录的主会话补开
+    （与 `agent/created` 共用 `startSessionHeartbeat`，不重置已有记录）；
+  - agent 没有可用 id、但进程带 `DSH_SESSION_ID` 时，按 env 会话登记（`env-session`）；
+  - 既无 agent id 又无 `DSH_SESSION_ID` 的 CLI 进程用 `cli-<host>-<pid>`（`cli-process`）；
+    `flow heartbeat start/update/end` 不再因缺 session 报 usage，而是回落到 env/进程会话；
+  - 判活仍只走 `lib/heartbeats/records.mjs` 的 `livenessOf`（host/boot_id/pid/pid_start），
+    **不另造第二套判据**。
+  - **仍不覆盖**：子会话与 synthetic 前缀（`mnemon-task-`/`bg-task-`/`task-subagent-`）按设计
+    不登记；没有 store 的工作区、拿不到 workspace/`agents` 服务的宿主不写（宁缺不造幽灵行）。
+  - **可观测**：`flow heartbeat status` 在无人为 session 时按「显式 `--session` → `DSH_SESSION_ID`
+    → 项目唯一活跃心跳 → `cli-<host>-<pid>`」解析，并回显 `sessionSource`/`supply`；没有记录时打印
+    「原因」（缺哪种环境下文 / 多条候选无法判定）；面板 state 载荷新增 `heartbeatSupply`
+    （`hostSessions` / `envSession` / `processSession` / `active` / `total` / `reason`）。
 - **生命周期由插件持有**：`agent/created` 自动开（栈顶任务作 goal/task/claims），
   `agent/disposed` 自动关（`status: done` + `ended_at` + 「会话结束（插件自动关闭）」）。
   **开与关都与 `capture` 开关无关**（对称）：那个开关只停「捕获话」，不停台账维护。
@@ -2917,7 +3092,8 @@ H7/H8/H10/H11 新口径。
   `request = { cwd: 项目根, prompt: [{type:'text', text: 角色提示词}], parent: exec.agent }`。
 - **回执**：任务 `checkpoints` 追加
   `{kind:'dispatch', role, childId, provider, from, to, at}`（`checkpoints` 是 core 系统键，
-  面板/CLI 直接可读，不另设登记处）。
+  面板/CLI 直接可读，不另设登记处）。阶段门在实现/审查收口时会把对应角色的 open 派工回执
+  自动补成 `closedAt + outcome:'ok'`（§3.2 claim/release），使正常流水线不需要人工 release。
 - **配置**：`config.dispatch.enabled`（默认 `true`；`false` 时 `dispatch` 动作报错并提示人工处理）、
   `config.dispatch.provider`（默认 `spawn`，`subagent-spawn-in-process` 注册的名字）。
 - **失败语义**：宿主没有 `subagents` 服务 → `usage` 错误并要求人工处理；`startActivation` 抛错 →

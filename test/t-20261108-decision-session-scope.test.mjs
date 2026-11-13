@@ -32,6 +32,9 @@ import {
 import { composeTurnReminder } from '../lib/host/session.mjs'
 import { vetoTask } from '../lib/veto.mjs'
 
+/* 历史用例验的是决策会话隔离而不是派工门：进程级把 claim 门降为 warn。 */
+process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+
 const TEMP_ROOTS = []
 const harness = makeHarness()
 

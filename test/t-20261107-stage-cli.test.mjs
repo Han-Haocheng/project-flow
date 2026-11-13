@@ -8,6 +8,8 @@
 
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { loadContract, updateTask } from '../lib/core.mjs'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -64,6 +66,12 @@ function taskFile(root, id) {
 
 function readTask(root, id) {
   return JSON.parse(fs.readFileSync(taskFile(root, id), 'utf8'))
+}
+
+function backdateTask(root, id, when = '2026-11-13T16:00:00+08:00') {
+  const record = readTask(root, id)
+  record.created_at = when
+  fs.writeFileSync(taskFile(root, id), JSON.stringify(record, null, 1))
 }
 
 function addTaskCli(root, title, extra = []) {
@@ -204,4 +212,327 @@ test('回归：VALUE_FLAGS / SPEC / handler 三处登记齐备（少一处就静
     .map((match) => match[1].split(',').map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean))
     .filter((members) => wanted.every((field) => members.includes(field)))
   assert.equal(loops.length, 2, `handler 的 add/update 字段循环都必须含 stage（实际 ${loops.length} 处）`)
+})
+
+test('warn 模式：同一条边放行但带 task-dispatch-warn（hard 用例仍在上面）', () => {
+  const root = freshProject('claim-warn')
+  const task = addTaskCli(root, 'warn 模式', ['--stage', 'implementing', '--owner', 'someone'])
+  process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+  try {
+    const moved = runCli(root, ['task', 'update', task.id, '--stage', 'queued-review', '--json'])
+    assert.equal(moved.code, 0, 'warn 模式必须放行：' + moved.stdout + moved.stderr)
+    assert.ok(
+      (moved.json.warnings || []).some((line) => line.startsWith('task-dispatch-warn:')),
+      '放行必须带 task-dispatch-warn：' + JSON.stringify(moved.json.warnings),
+    )
+    assert.equal(moved.json.data.stage, 'queued-review')
+    assert.ok(
+      (moved.json.warnings || []).some((line) => line.startsWith('claim-gate-bypassed: mode=warn')),
+      '非 hard 模式必须显式写 claim-gate-bypassed：' + JSON.stringify(moved.json.warnings),
+    )
+    assert.equal(
+      (moved.json.data.checkpoints || []).some((item) => item.kind === 'legacy-bypass'),
+      false,
+      'warn 模式不得偷偷写 legacy-bypass 标记',
+    )
+  } finally {
+    delete process.env.PROJECT_FLOW_CLAIM_GATE
+  }
+})
+
+// ------------------------------- T-20261113163323：claim/release 与派工回执阶段门
+
+function claimCli(root, id, args) {
+  return runCli(root, ['task', 'claim', id, ...args, '--json'])
+}
+
+function releaseCli(root, id, args) {
+  return runCli(root, ['task', 'release', id, ...args, '--json'])
+}
+
+test('claim/release：回执形状（kind/role/agent/session/from/to/at）、owner 与两条互斥', () => {
+  const root = freshProject('claim')
+  const a = addTaskCli(root, '甲卡', ['--stage', 'queued-implementation'])
+  const b = addTaskCli(root, '乙卡', ['--stage', 'queued-implementation'])
+
+  const claimed = claimCli(root, a.id, ['--agent', 'agent-x', '--role', 'implementer', '--session', 'session-x', '--reason', '领取实现'])
+  assert.equal(claimed.code, 0, claimed.stdout + claimed.stderr)
+  const record = claimed.json.data
+  assert.equal(record.owner, 'session-x', 'claim 有 session 时把 owner 设为该会话')
+  const entry = record.checkpoints.at(-1)
+  assert.deepEqual(Object.keys(entry).sort(), ['agent', 'at', 'from', 'kind', 'note', 'role', 'session', 'to'])
+  assert.equal(entry.kind, 'claim')
+  assert.equal(entry.role, 'implementer')
+  assert.equal(entry.agent, 'agent-x')
+  assert.equal(entry.session, 'session-x')
+  assert.equal(entry.from, 'queued-implementation')
+  assert.equal(entry.to, 'implementing')
+  assert.match(entry.at, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(Object.hasOwn(entry, 'closedAt'), false, 'open 回执没有 closedAt')
+  assert.equal(entry.note, '领取实现', '--reason 必须落盘为 note（不再静默丢弃）')
+
+  // 同一卡第二条 open claim：点名当前持有者
+  const again = claimCli(root, a.id, ['--agent', 'agent-y', '--role', 'reviewer'])
+  assert.equal(again.code, 2, again.stdout + again.stderr)
+  assert.equal(again.json?.error?.code, 'invalid')
+  assert.match(again.json.error.message, /already has an open claim/)
+  assert.match(again.json.error.message, /agent-x/)
+
+  // 同一 agent 跨卡：点名对方任务 id
+  const other = claimCli(root, b.id, ['--agent', 'agent-x', '--role', 'analyzer'])
+  assert.equal(other.code, 2, other.stdout + other.stderr)
+  assert.match(other.json.error.message, new RegExp('open claim on task ' + a.id))
+
+  // release 只关闭匹配 agent 的 claim，写 closedAt + outcome
+  const released = releaseCli(root, a.id, ['--agent', 'agent-x', '--outcome', 'ok'])
+  assert.equal(released.code, 0, released.stdout + released.stderr)
+  const closed = released.json.data.checkpoints.at(-1)
+  assert.equal(closed.outcome, 'ok')
+  assert.match(closed.closedAt, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(released.json.data.owner, 'session-x', 'release 不清 owner')
+
+  const noClaim = releaseCli(root, a.id, ['--agent', 'agent-x', '--outcome', 'ok'])
+  assert.equal(noClaim.code, 2, '已闭合后再 release 必须报没有 open claim')
+  assert.match(noClaim.json.error.message, /no open claim/)
+})
+
+test('阶段门：→implementing 必须有 open claim；legacy 一次性放行并落标记', () => {
+  const root = freshProject('gate-implementing')
+  /* 新建卡不算 legacy（评审必修 1）：legacy 只看 created_at 是否早于协议切换点。 */
+  const fresh = addTaskCli(root, '新卡', ['--stage', 'queued-implementation', '--owner', 'someone'])
+  const freshBlocked = runCli(root, ['task', 'update', fresh.id, '--stage', 'implementing', '--json'])
+  assert.equal(freshBlocked.code, 2, '切换点之后创建的卡不放行：' + freshBlocked.stdout + freshBlocked.stderr)
+  assert.match(freshBlocked.json.error.message, /open claim/)
+
+  /* 存量 owner 卡同样享受一次迁移放行（评审必修 4：owner 不参与 legacy 判定）。 */
+  const legacy = addTaskCli(root, '老卡', ['--stage', 'queued-implementation', '--owner', 'old-owner'])
+  backdateTask(root, legacy.id)
+  const moved = runCli(root, ['task', 'update', legacy.id, '--stage', 'implementing', '--json'])
+  assert.equal(moved.code, 0, moved.stdout + moved.stderr)
+  assert.ok(
+    (moved.json.warnings || []).some((line) => line.startsWith('task-dispatch-legacy:')),
+    '切换点前的卡要写 legacy warning：' + JSON.stringify(moved.json.warnings),
+  )
+  assert.equal(moved.json.data.checkpoints.at(-1).kind, 'legacy-bypass', '放行必须落一次性标记')
+  const second = runCli(root, ['task', 'update', legacy.id, '--stage', 'queued-review', '--json'])
+  assert.equal(second.code, 2, '标记落盘后不再享受 legacy：' + second.stdout + second.stderr)
+  assert.match(second.json.error.message, /本轮|缺少已关闭|尚未闭合/)
+
+  const owned = addTaskCli(root, '有主卡', ['--stage', 'queued-implementation', '--owner', 'someone'])
+  const blocked = runCli(root, ['task', 'update', owned.id, '--stage', 'implementing', '--json'])
+  assert.equal(blocked.code, 2, blocked.stdout + blocked.stderr)
+  assert.equal(blocked.json.error.code, 'invalid')
+  assert.match(blocked.json.error.message, /open claim/)
+  assert.match(blocked.json.error.message, new RegExp('flow task claim ' + owned.id))
+
+  const claimed = claimCli(root, owned.id, ['--agent', 'impl', '--role', 'implementer'])
+  assert.equal(claimed.code, 0, claimed.stdout + claimed.stderr)
+  const ok = runCli(root, ['task', 'update', owned.id, '--stage', 'implementing', '--json'])
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr)
+})
+
+test('阶段门：→queued-review 必须有已关闭 outcome=ok 的 implementer claim', () => {
+  const root = freshProject('gate-review')
+  const task = addTaskCli(root, '实现卡', ['--stage', 'queued-implementation', '--owner', 'someone'])
+  assert.equal(claimCli(root, task.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  assert.equal(runCli(root, ['task', 'update', task.id, '--stage', 'implementing', '--json']).code, 0)
+
+  const open = runCli(root, ['task', 'update', task.id, '--stage', 'queued-review', '--json'])
+  assert.equal(open.code, 2, open.stdout + open.stderr)
+  assert.match(open.json.error.message, /尚未闭合|不是 outcome=ok/)
+
+  assert.equal(releaseCli(root, task.id, ['--agent', 'impl', '--outcome', 'aborted']).code, 0)
+  const aborted = runCli(root, ['task', 'update', task.id, '--stage', 'queued-review', '--json'])
+  assert.equal(aborted.code, 2, 'aborted 不算实现完成')
+  assert.match(aborted.json.error.message, /尚未闭合|不是 outcome=ok/)
+
+  assert.equal(claimCli(root, task.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  assert.equal(releaseCli(root, task.id, ['--agent', 'impl', '--outcome', 'ok']).code, 0)
+  const ok = runCli(root, ['task', 'update', task.id, '--stage', 'queued-review', '--json'])
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr)
+
+  /* 轮次隔离（评审必修 2）：上一轮 closed ok 不能被本轮复用——新 claim 一开，
+     最后一条回执就是 open，queued-review 必须再次要求 release。 */
+  const reopened = addTaskCli(root, '轮次卡', ['--stage', 'queued-implementation', '--owner', 'someone'])
+  assert.equal(claimCli(root, reopened.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  assert.equal(releaseCli(root, reopened.id, ['--agent', 'impl', '--outcome', 'ok']).code, 0)
+  assert.equal(claimCli(root, reopened.id, ['--agent', 'impl', '--role', 'implementer']).code, 0, '新一轮 claim')
+  assert.equal(runCli(root, ['task', 'update', reopened.id, '--stage', 'implementing', '--json']).code, 0)
+  const reused = runCli(root, ['task', 'update', reopened.id, '--stage', 'queued-review', '--json'])
+  assert.equal(reused.code, 2, '本轮 open claim 未闭合，不得复用上一轮 closed ok')
+  assert.match(reused.json.error.message, /尚未闭合|不是 outcome=ok/)
+})
+
+test('阶段门：reviewing→done 必须有已关闭 reviewer claim；--no-dispatch 覆盖写原因', () => {
+  const root = freshProject('gate-done')
+  const task = addTaskCli(root, '审查卡', ['--stage', 'reviewing', '--owner', 'someone'])
+  const blocked = runCli(root, ['task', 'update', task.id, '--stage', 'done', '--json'])
+  assert.equal(blocked.code, 2, blocked.stdout + blocked.stderr)
+  assert.match(blocked.json.error.message, /尚未闭合|不是 outcome=ok/)
+  assert.match(blocked.json.error.message, /--no-dispatch/)
+
+  const noReason = runCli(root, ['task', 'update', task.id, '--stage', 'done', '--no-dispatch', '--json'])
+  assert.equal(noReason.code, 1, '--no-dispatch 缺 --reason 是用法错误')
+  assert.equal(noReason.json?.error?.code, 'usage')
+  assert.match(noReason.json.error.message, /--reason/)
+
+  const overridden = runCli(root, ['task', 'update', task.id, '--stage', 'done', '--no-dispatch', '--reason', '紧急修复，由 lead 复核', '--json'])
+  assert.equal(overridden.code, 0, overridden.stdout + overridden.stderr)
+  const last = overridden.json.data.checkpoints.at(-1)
+  assert.equal(last.kind, 'no-dispatch')
+  assert.equal(last.reason, '紧急修复，由 lead 复核')
+  assert.equal(last.stage, 'done')
+  assert.ok((overridden.json.warnings || []).some((line) => line.startsWith('task-dispatch-override:')),
+    '覆盖必须留 warning：' + JSON.stringify(overridden.json.warnings))
+
+  const reviewed = addTaskCli(root, '正常审查', ['--stage', 'reviewing', '--owner', 'someone'])
+  assert.equal(claimCli(root, reviewed.id, ['--agent', 'rev', '--role', 'reviewer']).code, 0)
+  assert.equal(releaseCli(root, reviewed.id, ['--agent', 'rev', '--outcome', 'ok']).code, 0)
+  const done = runCli(root, ['task', 'update', reviewed.id, '--stage', 'done', '--json'])
+  assert.equal(done.code, 0, done.stdout + done.stderr)
+})
+
+test('孤儿检测：open claim 的 owner 会话判死不活 → list JSON orphan + 文本 [orphan]', () => {
+  const root = freshProject('orphan')
+  const task = addTaskCli(root, '孤儿卡', ['--stage', 'implementing'])
+  const claimed = claimCli(root, task.id, ['--agent', 'impl', '--role', 'implementer', '--session', 'ghost-session'])
+  assert.equal(claimed.code, 0, claimed.stdout + claimed.stderr)
+
+  const listed = runCli(root, ['task', 'list', '--json'])
+  assert.equal(listed.code, 0, listed.stdout + listed.stderr)
+  const row = listed.json.data.find((item) => item.id === task.id)
+  assert.ok(row !== undefined)
+  assert.equal(row.claim.kind, 'claim')
+  assert.equal(row.claim.agent, 'impl')
+  assert.equal(row.claim.session, 'ghost-session')
+  assert.equal(row.claim.orphan, true, '没有心跳的会话不能证明活，open claim 必须标 orphan')
+
+  const text = runCli(root, ['task', 'list'])
+  assert.equal(text.code, 0, text.stderr)
+  assert.match(text.stdout, /\[orphan\]/)
+})
+
+// ------------------------------- T-20261113170144：任务内交接产物 artifacts
+
+test('art put/list/show：拷贝正文、指针形状与 sha256、每角色保留最近 3 条', () => {
+  const root = freshProject('art')
+  const task = addTaskCli(root, '产物卡', ['--stage', 'implementing'])
+  const taskFile = path.join(root, 'report.md')
+  fs.writeFileSync(taskFile, '实现报告正文\n')
+  const put = runCli(root, ['task', 'art', 'put', task.id, '--role', 'implementer', '--summary', '实现完成', '--file', 'report.md', '--json'])
+  assert.equal(put.code, 0, put.stdout + put.stderr)
+  const artifact = put.json.data.artifacts.at(-1)
+  assert.equal(artifact.role, 'implementer')
+  assert.equal(artifact.stage, 'implementing')
+  assert.equal(artifact.summary, '实现完成')
+  assert.match(artifact.path, new RegExp('^\\.agents/reports/' + task.id + '/implementer-'))
+  assert.equal(artifact.sha256, createHash('sha256').update(fs.readFileSync(taskFile)).digest('hex'))
+  assert.ok(fs.existsSync(path.join(root, artifact.path)), '正文必须拷贝进 .agents/reports')
+
+  const listed = runCli(root, ['task', 'art', 'list', task.id, '--json'])
+  assert.equal(listed.code, 0, listed.stdout + listed.stderr)
+  assert.equal(listed.json.data.length, 1)
+  assert.equal(listed.json.data[0].sha256, artifact.sha256)
+
+  const shown = runCli(root, ['task', 'art', 'show', task.id, '--role', 'implementer', '--json'])
+  assert.equal(shown.code, 0, shown.stdout + shown.stderr)
+  assert.equal(shown.json.data.task, task.id)
+  assert.equal(shown.json.data.artifact.sha256, artifact.sha256)
+  assert.match(shown.json.data.content, /实现报告正文/)
+
+  // 每角色只保留最近 3 条：第 4 条把最旧的挤掉，其它角色不受影响。
+  for (const summary of ['第二版', '第三版', '第四版']) {
+    const again = runCli(root, ['task', 'art', 'put', task.id, '--role', 'implementer', '--summary', summary, '--file', 'report.md', '--json'])
+    assert.equal(again.code, 0, again.stdout + again.stderr)
+  }
+  const latest = runCli(root, ['task', 'art', 'list', task.id, '--role', 'implementer', '--json'])
+  assert.equal(latest.json.data.length, 3, '每卡每角色最多保留 3 条')
+  assert.deepEqual(latest.json.data.map((item) => item.summary), ['第二版', '第三版', '第四版'])
+})
+
+test('art：release 携带产物指针（不造第二套回执）', () => {
+  const root = freshProject('art-release')
+  const task = addTaskCli(root, '释放带产物', ['--stage', 'queued-implementation'])
+  fs.writeFileSync(path.join(root, 'review.md'), '审查结论：accept\n')
+  assert.equal(claimCli(root, task.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  const released = runCli(root, [
+    'task', 'release', task.id, '--agent', 'impl', '--outcome', 'ok',
+    '--file', 'review.md', '--summary', '审查结论 accept', '--json',
+  ])
+  assert.equal(released.code, 0, released.stdout + released.stderr)
+  const closed = released.json.data.checkpoints.at(-1)
+  assert.equal(closed.outcome, 'ok')
+  assert.equal(closed.artifact.role, 'implementer')
+  assert.match(closed.artifact.path, new RegExp('^\\.agents/reports/' + task.id + '/'))
+  assert.equal(released.json.data.artifacts.length, 1, '指针同时进 task.artifacts')
+  assert.equal(released.json.data.artifacts[0].sha256, closed.artifact.sha256)
+})
+
+test('art：缺交接产物只警告 task-artifact-missing，不阻断阶段门', () => {
+  const root = freshProject('art-warn')
+  const missing = addTaskCli(root, '缺产物', ['--stage', 'implementing'])
+  assert.equal(claimCli(root, missing.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  assert.equal(releaseCli(root, missing.id, ['--agent', 'impl', '--outcome', 'ok']).code, 0)
+  const warned = runCli(root, ['task', 'update', missing.id, '--stage', 'queued-review', '--json'])
+  assert.equal(warned.code, 0, warned.stdout + warned.stderr)
+  assert.ok(
+    (warned.json.warnings || []).some((line) => line.startsWith('task-artifact-missing:')),
+    '缺产物必须给 warning：' + JSON.stringify(warned.json.warnings),
+  )
+
+  const withArt = addTaskCli(root, '有产物', ['--stage', 'implementing'])
+  fs.writeFileSync(path.join(root, 'impl.md'), '实现细节\n')
+  assert.equal(runCli(root, ['task', 'art', 'put', withArt.id, '--role', 'implementer', '--summary', '实现完成', '--file', 'impl.md', '--json']).code, 0)
+  assert.equal(claimCli(root, withArt.id, ['--agent', 'impl2', '--role', 'implementer']).code, 0)
+  assert.equal(releaseCli(root, withArt.id, ['--agent', 'impl2', '--outcome', 'ok']).code, 0)
+  const clean = runCli(root, ['task', 'update', withArt.id, '--stage', 'queued-review', '--json'])
+  assert.equal(clean.code, 0, clean.stdout + clean.stderr)
+  assert.equal(
+    (clean.json.warnings || []).some((line) => line.startsWith('task-artifact-missing:')),
+    false,
+    '已有 implementer 产物时不应再警告：' + JSON.stringify(clean.json.warnings),
+  )
+})
+
+test('art 负向：sha256/path 越界/task-id 段/绝对路径/软链全部拒绝', () => {
+  const root = freshProject('art-negative')
+  const contract = loadContract(root).contract
+  const task = addTaskCli(root, '负向产物', ['--stage', 'implementing'])
+  const base = {
+    role: 'implementer',
+    stage: 'implementing',
+    summary: '摘要',
+    path: '.agents/reports/' + task.id + '/ok.md',
+    sha256: 'a'.repeat(64),
+    agent: '',
+    at: '2026-11-13T16:00:00+08:00',
+  }
+  const writeArtifacts = (artifacts) => updateTask(root, contract, task.id, { artifacts }, { source: 'internal' })
+  // 合法基线先过，证明拒绝来自具体字段而不是整体坏掉。
+  assert.equal(writeArtifacts([base]).artifacts.length, 1)
+  assert.throws(() => writeArtifacts([{ ...base, sha256: 'xyz' }]), /sha256/)
+  assert.throws(() => writeArtifacts([{ ...base, path: '.agents/reports/' + task.id + '/../other/a.md' }]), /path/)
+  assert.throws(() => writeArtifacts([{ ...base, path: '.agents/reports/T-OTHER/x.md' }]), /path/)
+  assert.throws(() => writeArtifacts([{ ...base, path: '/tmp/abs.md' }]), /path/)
+
+  // 拷贝源：仓外绝对路径、软链（即使是根内路径）都必须拒绝。
+  const outside = path.join(os.tmpdir(), 'pf-art-outside-' + Date.now() + '.md')
+  fs.writeFileSync(outside, 'outside bytes\n')
+  const abs = runCli(root, ['task', 'art', 'put', task.id, '--role', 'implementer', '--summary', '越界', '--file', outside, '--json'])
+  assert.equal(abs.code, 2, abs.stdout + abs.stderr)
+  assert.equal(abs.json?.error?.code, 'invalid')
+
+  const link = path.join(root, 'link-report.md')
+  let symlinked = true
+  try {
+    fs.symlinkSync(outside, link)
+  } catch {
+    symlinked = false
+  }
+  if (symlinked) {
+    const sym = runCli(root, ['task', 'art', 'put', task.id, '--role', 'implementer', '--summary', '软链', '--file', 'link-report.md', '--json'])
+    assert.equal(sym.code, 2, '软链必须被拒：' + sym.stdout + sym.stderr)
+    assert.match(sym.json.error.message, /symlink|regular file/)
+  }
+  fs.rmSync(outside, { force: true })
 })

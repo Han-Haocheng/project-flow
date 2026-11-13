@@ -39,6 +39,18 @@ import {
   setDescriptionPlan,
   updateTask,
 } from '../lib/core.mjs'
+
+/* claim 协议切换点后新建的卡不再享受 legacy：测试夹具种上已闭合回执（内部写，不跑门）。 */
+const CLAIM_FIXTURE_AT = '2026-11-13T16:00:00+08:00'
+function seedClaims(root, contract, id) {
+  updateTask(root, contract, id, {
+    checkpoints: [
+      { kind: 'dispatch', role: 'implementer', childId: 'fixture-impl', provider: 'test', from: 'queued-implementation', to: 'implementing', at: CLAIM_FIXTURE_AT },
+      { kind: 'dispatch', role: 'reviewer', childId: 'fixture-review', provider: 'test', from: 'queued-review', to: 'reviewing', at: CLAIM_FIXTURE_AT },
+    ],
+  }, { source: 'internal' })
+}
+
 import {
   DESCRIPTION_GATE_STAGES,
   DESCRIPTION_STAGE_POLICY,
@@ -249,6 +261,7 @@ function gitRun(root, args) {
 test('auto + 无记录：三条目标边全部放行（守住现有大量 updateTask 调用）', () => {
   const { root, contract } = bareProject('gate-auto-empty')
   const task = addTask(root, contract, { title: '空台账', type: 'feat' })
+  seedClaims(root, contract, task.id)
   for (const stage of ['queued-analysis', 'analyzing', 'queued-implementation', 'implementing', 'queued-review', 'reviewing', 'done']) {
     assert.equal(updateTask(root, contract, task.id, { stage }).stage, stage)
   }
@@ -340,6 +353,7 @@ test('enforce=auto 两态：无记录放行、有记录拦截（同一段调用�
 test('queued-review：计划还没 apply → 拒绝；apply 且台账全绿 → 放行', () => {
   const { root, contract } = describedProject('gate-qr')
   const task = addTask(root, contract, { title: '待审查', type: 'feat', stage: 'analyzing' })
+  seedClaims(root, contract, task.id)
   setDescriptionPlan(root, contract, task.id, {
     files: [{ path: 'lib/a.mjs', op: 'change', semantics: NEW_SEMANTICS }],
   })
@@ -366,6 +380,7 @@ test('queued-review：失败消息最多 3 条 + 总数 + 修复命令', () => {
   }
   const { root, contract } = describedProject('gate-qr-many', files)
   const task = addTask(root, contract, { title: '多条失败', type: 'feat', stage: 'analyzing' })
+  seedClaims(root, contract, task.id)
   setDescriptionPlan(root, contract, task.id, {
     files: Object.keys(files).map((relative) => ({ path: relative, op: 'change', semantics: NEW_SEMANTICS })),
   })
@@ -396,6 +411,7 @@ test('queued-review：失败消息最多 3 条 + 总数 + 修复命令', () => {
 test('done：没有测试证据 → 拒绝；补一条晚于 implemented_at 的绿记录 → 放行', () => {
   const { root, contract } = describedProject('gate-done')
   const task = addTask(root, contract, { title: '收口', type: 'feat', stage: 'analyzing' })
+  seedClaims(root, contract, task.id)
   setDescriptionPlan(root, contract, task.id, {
     files: [{ path: 'lib/a.mjs', op: 'change', semantics: NEW_SEMANTICS }],
   })
@@ -419,6 +435,7 @@ test('done：没有测试证据 → 拒绝；补一条晚于 implemented_at 的�
 test('done 时间边界：绿记录早于 implemented_at → 仍拒绝；失败的记录不算证据', () => {
   const { root, contract } = describedProject('gate-done-window')
   const task = addTask(root, contract, { title: '时间窗', type: 'feat', stage: 'analyzing' })
+  seedClaims(root, contract, task.id)
   setDescriptionPlan(root, contract, task.id, {
     files: [{ path: 'lib/a.mjs', op: 'change', semantics: NEW_SEMANTICS }],
   })
@@ -561,6 +578,7 @@ test('unplanned-change：计划外的新文件让 queued-review 失败', (t) => 
   assert.equal(clean.ok, true, JSON.stringify(clean.failed))
 
   const task = addTask(root, contract, { title: '未计划改动', type: 'feat', stage: 'analyzing' })
+  seedClaims(root, contract, task.id)
   setDescriptionPlan(root, contract, task.id, {
     files: [{ path: 'lib/a.mjs', op: 'change', semantics: NEW_SEMANTICS }],
   })

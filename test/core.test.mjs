@@ -1494,6 +1494,30 @@ test('heartbeat start：显式任务下标 goal 取任务标题、claims 取 sco
   }
 })
 
+test('heartbeat provenance：可选字段、非法值拒绝、status 透出、重复 start 保留', () => {
+  const { root, contract } = freshProject('hb-provenance')
+  const session = 'session-hb-provenance'
+
+  const withProvenance = startHeartbeat(root, contract, { session, provenance: 'env-session', createTask: false })
+  assert.equal(withProvenance.provenance, 'env-session')
+  assert.equal(heartbeatStatus(root, contract, session).provenance, 'env-session', 'status 必须透出供给来源')
+
+  // 重复 start 不传 provenance：沿用首次登记，不被清空。
+  startHeartbeat(root, contract, { session, createTask: false })
+  assert.equal(readJson(heartbeatPath(root, session)).provenance, 'env-session')
+
+  // 可选：没有 provenance 的旧调用/旧记录读到 null，不写入该键。
+  const plain = startHeartbeat(root, contract, { session: 'session-hb-plain', createTask: false })
+  assert.equal(Object.hasOwn(plain, 'provenance'), false, '未提供来源时不落盘 provenance 键')
+  assert.equal(heartbeatStatus(root, contract, 'session-hb-plain').provenance, null)
+
+  expectFlowError(
+    () => startHeartbeat(root, contract, { session: 'session-hb-bad', provenance: 'bogus', createTask: false }),
+    'invalid',
+    /provenance must be one of/,
+  )
+})
+
 test('heartbeat start：没有任务时自动建 draft 任务并回填 task；createTask:false 不建', () => {
   const { root, contract } = freshProject('hb-create')
   const started = startHeartbeat(root, contract, { session: SESSION, goal: '自动建任务' })
@@ -2964,6 +2988,7 @@ test('CLI heartbeat：start 自动建任务、status --require-active 退出码�
     assert.ok(human.stdout.includes('第二轮'), human.stdout)
     assert.ok(human.stdout.includes('working'), human.stdout)
     assert.ok(human.stdout.includes('lib/core.mjs, bin/flow.mjs'), human.stdout)
+    assert.ok(human.stdout.includes('cli-process'), 'human start 必须显示供给来源（provenance）')
 
     const active = runCli(root, ['heartbeat', 'status', '--session', session, '--require-active'])
     assert.equal(active.code, 0)
@@ -3009,9 +3034,16 @@ test('CLI heartbeat：start 自动建任务、status --require-active 退出码�
     const neverStarted = runCli(root, ['heartbeat', 'status', '--session', 'session-never', '--require-active'])
     assert.equal(neverStarted.code, 1, '没有心跳文件时 --require-active 也退出 1')
 
+    // 2026-11-13：没有 --session / DSH_SESSION_ID 时 status 不再报 usage——它
+    // 会回落到「项目唯一活跃心跳」或本 CLI 进程（cli-<pid>），并解释来源。
     const noSession = runCli(root, ['heartbeat', 'status', '--json'])
-    assert.equal(noSession.code, 1)
-    assert.equal(noSession.json.error.code, 'usage')
+    assert.equal(noSession.code, 0)
+    assert.equal(noSession.json.data.active, false)
+    assert.ok(['env-session', 'single-active', 'cli-process'].includes(noSession.json.data.sessionSource))
+    assert.ok(noSession.json.data.supply, 'status 必须带 supply 解释块')
+    const noSessionText = runCli(root, ['heartbeat', 'status'])
+    assert.equal(noSessionText.code, 0)
+    assert.ok(noSessionText.stdout.includes('原因'), '无记录时必须说明「为什么没有心跳」：' + noSessionText.stdout)
     const badSub = runCli(root, ['heartbeat', 'bogus', '--json'])
     assert.equal(badSub.code, 1)
   } finally {
