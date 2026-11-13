@@ -143,7 +143,10 @@ test('update：只允许 notes/stage；合法边可写，非法边抛 invalid �
   const harness = makeHarness(root)
   const parent = addParent(root, contract, 'implementing')
   const tool = harness.tool('flow_subtask')
-  const { task } = await tool.execute({ ...SUBTASK_ARGS, parent: parent.id }, { agent: harness.main })
+  const added = await tool.execute({ ...SUBTASK_ARGS, parent: parent.id }, { agent: harness.main })
+  const { task } = added
+  /* T-20261113160505：自动派工默认关——建子卡不再自动派实现者（dispatch 字段不出现）。 */
+  assert.equal(added.dispatch, undefined, 'flow_subtask add 默认不派工')
 
   const noted = await tool.execute({ action: 'update', id: task.id, notes: '补充说明' }, { agent: harness.main })
   assert.equal(noted.task.notes, '补充说明')

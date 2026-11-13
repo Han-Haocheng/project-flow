@@ -80,7 +80,8 @@ function makeHost(root, { subagents } = {}) {
     },
     logger: { warn() {} },
   }
-  applyTasks(ctx, {})
+  // T-20261113160505：插件自动派工默认关，本用例验证自动流水线，夹具显式打开。
+  applyTasks(ctx, { dispatch: { auto: true } })
   // 子任务工具走宿主装配路径（lib/host/tools.mjs 的 deps 形状）：这里直接构造同形 deps。
   const subtask = buildSubtaskDefinition({ ctx, toolRoot: () => root }, { autoDispatch: true })
   registered.set('flow_subtask', subtask)

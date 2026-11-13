@@ -89,7 +89,8 @@ function makeHost(root, { subagents = fakeSubagents() } = {}) {
     },
     logger: { warn() {} },
   }
-  applyTasks(ctx, {})
+  // T-20261113160505：插件自动派工默认关；本夹具的用例依赖「update 自动推进阶段」。
+  applyTasks(ctx, { dispatch: { auto: true } })
   const tool = registered.get('flow_task')
   assert.ok(tool, 'flow_task must be registered')
   const exec = { agent: { id: 'session-cas', session: { cwd: root, header: { origin: 'main', delegationDepth: 0 } } } }

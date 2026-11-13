@@ -39,6 +39,7 @@ import {
   DEFAULT_DISPATCH_MODEL,
   DISPATCH_ROLES,
   WORKING_STAGE,
+  autoDispatchEnabled,
   autoDispatchTask,
   dispatchCheckpoint,
   dispatchEnabled,
@@ -81,7 +82,7 @@ function fakeSubagents(fail = false) {
  * Service API（startActivation 等）。所以这里把声明的能力并到 get 返回的对象上，
  * 与真实宿主一致。
  */
-function makeHost(root, { subagents, team, config, capabilities } = {}) {
+function makeHost(root, { subagents, team, config, capabilities, autoDefault = true } = {}) {
   const registered = new Map()
   const tools = {
     register(definition) {
@@ -118,7 +119,18 @@ function makeHost(root, { subagents, team, config, capabilities } = {}) {
     },
     logger: { warn() {} },
   }
-  applyTasks(ctx, config)
+  /* T-20261113160505：插件自动派工默认关。本文件的用例验证的是自动派工链路，
+     所以夹具默认把它打开；显式传入的 config 里没有 dispatch 段时补 auto:true；要断言
+     「默认就是关」的用例传 `autoDefault: false`。 */
+  const resolved =
+    config === undefined
+      ? autoDefault === true
+        ? { dispatch: { auto: true } }
+        : {}
+      : config.dispatch === undefined
+        ? { ...config, dispatch: { auto: true } }
+        : config
+  applyTasks(ctx, resolved)
   const tool = registered.get('flow_task')
   assert.ok(tool, 'flow_task 应注册')
   const exec = { agent: { id: 'session-main', session: { cwd: root, header: { origin: 'main', delegationDepth: 0 } } } }
@@ -145,7 +157,7 @@ test('派工映射：只有 queued-* 可派，角色/working 阶段与 stage 表
   assert.equal(dispatchPlan({ id: 'T-2', stage: 'queued-analysis', parent: 'T-1' }).ok, true, '子任务各自派工（2026-11-11 流程）')
 })
 
-test('配置：dispatch 默认开，false 关闭，provider 空值回落 spawn', () => {
+test('配置：dispatch 默认开（显式动作），auto 默认关，provider 空值回落 spawn', () => {
   assert.equal(dispatchEnabled(undefined), true)
   assert.equal(dispatchEnabled({}), true)
   assert.equal(dispatchEnabled({ dispatch: { enabled: false } }), false)
@@ -153,6 +165,19 @@ test('配置：dispatch 默认开，false 关闭，provider 空值回落 spawn',
   assert.equal(dispatchProvider(undefined), 'spawn')
   assert.equal(dispatchProvider({ dispatch: { provider: '  ' } }), 'spawn')
   assert.equal(dispatchProvider({ dispatch: { provider: ' fork ' } }), 'fork')
+  /* T-20261113160505：自动派工默认关——缺失/空/非 true 一律 false，只有显式 true 才开。 */
+  assert.equal(autoDispatchEnabled(undefined), false, '缺 config → 自动派工关')
+  assert.equal(autoDispatchEnabled(null), false, 'null → 自动派工关')
+  assert.equal(autoDispatchEnabled({}), false, '空 config → 自动派工关')
+  assert.equal(autoDispatchEnabled({ dispatch: {} }), false, 'dispatch 段没有 auto → 自动派工关')
+  assert.equal(autoDispatchEnabled({ dispatch: { auto: false } }), false, '显式 false 仍关')
+  assert.equal(autoDispatchEnabled({ dispatch: { auto: 'yes' } }), false, '非布尔 true 不算开')
+  assert.equal(autoDispatchEnabled({ dispatch: { auto: true } }), true, '显式 true 才开')
+  assert.equal(
+    autoDispatchEnabled({ dispatch: { enabled: false, auto: true } }),
+    false,
+    'enabled:false 连自动一起关（与语义）',
+  )
 })
 
 test('提示词：带仓库/任务/验收/职责/纪律，子代理零上下文也能独立开工', () => {
@@ -260,6 +285,18 @@ test('阶段入口自动派工：只改 notes / 建卡不触发；auto=false 关
   const queued = await off.tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, off.exec)
   assert.equal(queued.task.stage, 'queued-analysis', 'auto=false 时不替调用方推进阶段')
   assert.equal(queued.dispatch, undefined)
+
+  /* T-20261113160505：不传 dispatch.auto 时（生产默认）也不自动派工。 */
+  const plainSubagents = fakeSubagents()
+  const plain = makeHost(root, { subagents: plainSubagents, autoDefault: false })
+  const plainTask = addTask(root, contract, { type: 'fix', title: '默认不派工', stage: 'created' })
+  const plainResult = await plain.tool.execute(
+    { action: 'update', id: plainTask.id, stage: 'queued-analysis', root },
+    plain.exec,
+  )
+  assert.equal(plainSubagents.calls.length, 0, '默认配置下不自动派工')
+  assert.equal(plainResult.dispatch, undefined)
+  assert.equal(plainResult.task.stage, 'queued-analysis', '不派工就不替调用方推进阶段')
 })
 
 test('阶段入口自动派工：宿主派工失败不拖垮 update，结果里带 ok:false 与原因', async () => {
@@ -455,7 +492,7 @@ test('派工不校验终态 ①：手里是旧快照、台账已到 done → 不
   const { tool, exec } = makeHost(root, { subagents })
   const result = await autoDispatchTask({
     c: core, ctx: { get: (name) => (name === 'subagents' ? subagents : undefined) },
-    agent: exec.agent, root, contract, task: stale, config: undefined,
+    agent: exec.agent, root, contract, task: stale, config: { dispatch: { auto: true } },
   })
   assert.equal(result.dispatch.ok, false)
   assert.equal(result.dispatch.code, 'conflict')
@@ -1113,7 +1150,7 @@ test('派工模型：阶段入口自动派工也按角色透传模型（autoDisp
   const { tool, exec } = makeHost(root, {
     subagents,
     capabilities: MODEL_CAPABLE,
-    config: { dispatch: { model: 'opencode-go/longcat-2.5-free' } },
+    config: { dispatch: { auto: true, model: 'opencode-go/longcat-2.5-free' } },
   })
   const result = await tool.execute({ action: 'update', id: task.id, stage: 'queued-analysis', root }, exec)
   assert.equal(subagents.calls.length, 1)
@@ -1127,7 +1164,7 @@ test('派工模型：阶段入口自动派工也按角色透传模型（autoDisp
   const badTask = addTask(badRoot, badContract, { type: 'feat', title: '自动派工失败', stage: 'created' })
   const badHost = makeHost(badRoot, {
     subagents: fakeSubagents(),
-    config: { dispatch: { model: 'longcat-2.5-free', requireModel: true } },
+    config: { dispatch: { auto: true, model: 'longcat-2.5-free', requireModel: true } },
   })
   const bad = await badHost.tool.execute(
     { action: 'update', id: badTask.id, stage: 'queued-analysis', root: badRoot },

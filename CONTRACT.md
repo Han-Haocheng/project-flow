@@ -109,6 +109,10 @@ orchestrator 的 core shim 收进 api。**至此全部后端 adapter（CLI / MCP
 网关（`requireCore`/`coreModule`/`coreAvailable`）只作**降级探测**保留在
 `lib/state-snapshot.mjs`（`index.js` 启动时的一条 `core-unavailable` 警告、
 `test/t-20261107-state-degradation.test.mjs` 的降级断言），正常读写路径不再经过它。
+**api 软加载（T-20261113125709）**：`lib/backend/api.mjs` 用顶层 `await import('../core.mjs')`；
+core 缺失时仍可装配，成员退化为调用即抛的可读错误（`FlowError` 形状、`code:'io'`，文案与
+`state-snapshot.requireCore` 一致）。降级语义固定为：`TASK_TYPES`/`DESCRIPTION_ENFORCE_MODES`
+空表、`drainWarnings()` 空数组、`noteWarning` no-op、`initialized()` false；其余成员调用即抛。
 ⚠ 搬的时候**不要动** `clip`/`isoLocal`/`timeValue`/`toPosix`/`isPlainObject`——它们与
 `util` 同名不同契约，`index.js` 依赖的是快照变体。
 
@@ -2934,9 +2938,17 @@ H7/H8/H10/H11 新口径。
   自动派工失败不拖垮写入（台账已写成功）：结果带 `dispatch: {auto:true, ok:false, error}`，
   阶段停在 queued，调用方可用显式 `dispatch` 重试。
 - **配置（完整）**：`config.dispatch.enabled`（默认 `true`；`false` 连显式 dispatch 都关）、
-  `config.dispatch.auto`（默认 `true`；`false` 只关阶段入口自动派工，保留显式 dispatch）、
+  `config.dispatch.auto`（**默认 `false`**，T-20261113160505：要开阶段入口自动派工必须显式写
+  `true`；`false` 只保留显式 dispatch）、
   `config.dispatch.provider`（默认 `spawn`）；
   模型三兄弟 `config.dispatch.model` / `models` / `requireModel` 见 §10.1.1。
+- **配置真值（2026-11-13 审计结论，T-20261113160505）**：派工配置的**唯一真源是插件的
+  mount config**（宿主 settings / `apply(ctx, config)` 的 config 参数）。`.agents/flow/flow.json`
+  的 `dispatch` 段（如 `{"auto": false}`）**对插件无效**——插件不读那个文件，`lib/store/contract.mjs`
+  也不处理该段，它是死配置。因此：**两边语义不同时以 mount config 为准**；修改 flow.json 的
+  `dispatch` 段不会改变插件行为，反之亦然。默认值以本节为准（`enabled: true`、`auto: false`、
+  `provider: 'spawn'`、`requireModel: false`）；子任务工具（`flow_subtask` add 即派）跟随同一个
+  `autoDispatch` settings 值，同样默认关。
 - **团队板自动挂载（第二批，默认 off，`config.team.mount === true` 才开）**：计划 §16 的
   「默认 off、dispatch 模式、建一次 + 终态一次」。
   - 派工成功、插件走完 queued→working 后，`mountTaskOnBoard` 调 `agentTeams.createTask`

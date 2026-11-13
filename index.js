@@ -617,7 +617,9 @@ export function apply(ctx, config) {
     // actually dispatches analyzer/implementer/reviewer work.
     actorMode: resolveActorMode(config, ctx),
     boardMode: resolveBoardMode(config, ctx),
-    // 捕获即派工（2026-11-11）：默认跟随 config.dispatch.auto；宿主没有 subagents 服务时自动跳过。
+    // 捕获即派工（2026-11-11；T-20261113160505 起默认关）：只有 mount config 显式
+    // `dispatch.auto: true` 才开，宿主没有 subagents 服务时自动跳过。注意
+    // `.agents/flow/flow.json` 的 dispatch 段对插件无效（那里没有消费点）。
     allowMainDispatch: allowMainDispatchOf(config),
     autoDispatch: autoDispatchEnabled(config),
     dispatchProvider: dispatchProvider(config),
