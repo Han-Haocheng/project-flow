@@ -180,6 +180,7 @@
         "docs/",
         "scripts/commit-scope.mjs",
         "lib/host/",
+        "test/t-20261113-aspect-waiter.test.mjs",
         "scripts/doc-counts.mjs"
       ],
       "shared": [
