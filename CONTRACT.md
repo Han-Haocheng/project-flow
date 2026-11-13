@@ -887,6 +887,59 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
   （`visibility:'all'` 时为 0；空目录/`source:'none'` 也是 0）。读路径**零写入**：不删文件、
   不改内容、不动 mtime——隐藏只发生在内存投影里。
 
+### 3.5.1 判活口径：claims/心跳 与 aspect 锁是两套（2026-11-13）
+
+两处都叫「判活」，但回答的问题不同，**证据次序与过期语义也不同**。把一处的结论套到另一处，会误回收（抢走活会话的写域）或死锁（被死会话占住 6 小时）。本节把两套口径写成正文，真源以实现为准。
+
+**A. claims / 心跳：回答「这个会话还在不在」**
+
+真源 `lib/heartbeats/records.mjs` 的 `livenessOf(record, {now, host, bootId, mtime, registryLive})`（:342-380），证据次序固定为 **foreign → registry → boot → pid → ttl**：
+
+| 次序 | 证据 | 结论 | 实现 |
+|---|---|---|---|
+| 1 | 记录 `host` ≠ 本机 | `foreign`（跨机只标记，绝不判死） | :355-357 |
+| 2 | 宿主注册表 `sessionLive(session)` = true | `live` / `agent-live` | :359-361 |
+| 2 | 注册表 = false（只对同 host 且 `pid === ownerPid` 的记录） | `dead` / `session-gone` | :362-364、:396-417 |
+| 3 | 同机 `boot_id` 不同 | `dead` / `boot-changed` | :365-367 |
+| 4 | `pid` 不存在 | `dead` / `pid-gone` | :368-369 |
+| 4 | `pid_start` 不匹配 | `dead` / `pid-reused` | :370-373 |
+| 4 | `pid` 存活且 `pid_start` 匹配（或无 `pid_start`） | `live` / `pid-alive` | :374 |
+| 5 | 以上全无证据 | age ≤ 6h → `unknown`；> 6h → `stale` | :376-379 |
+
+- **`pid` 或注册表证明存在即判活**：一条 7 小时没续期的心跳，只要 pid 还在、或注册表说该会话还在，仍是 `live`，不因「没刷新」变死。
+- **6 小时老化只是最后的兜底**：`HEARTBEAT_STALE_SECONDS = 6 * 60 * 60`（`lib/heartbeats/records.mjs:33`）只在**没有任何存活证据**（legacy 记录、CLI 只写了 host 的记录）时生效。
+- claims 的使用方按同一判据决定「是否还占着写域」：`foreignClaimActive`（`lib/host/session.mjs:2181-2190`）——`dead`/`foreign`/`stale` 不再占域，`live` 即使记录旧也照样占域，`unknown` 退回 6h 兜底；跨会话冲突见 `foreignClaimOwner`（同文件 :2202-2219）。面板与 claims 门禁共用这一条判据（`lib/state-snapshot.mjs:1066`、`lib/host/state.mjs:950-951`）。
+- 负证据边界：`registryVerdictOf`（`lib/heartbeats/records.mjs:396-417`）的 `false` 只对**本进程**（`pid === ownerPid`）写下的记录生效——别的 DSH 进程里的会话不在本进程注册表里但可能活着，不能判死；跨机记录一律 `undefined`。
+
+**B. aspect 锁：回答「这个会话还在不在干这个 aspect」**
+
+真源 `lib/host/aspect-lock.mjs` 的 `aspectLockStateOf(record, {now, sessionLive, host, bootId})`（:217-281）：
+
+1. **先按存活判据回收**：复用同一份 `livenessOf`（:237-252），`dead` / `foreign` 立即 `releasable = true`（:257-259）；
+2. **再判租约**：`leaseExpiresAt = renewed_at + ttl_seconds`（:149-154，缺 `renewed_at` 回退 `acquired_at`），`now > leaseExpiresAt` → `expired`、`releasable = true`（:253、:260-262）；
+3. 其余才是 `held`（:263-265）。
+
+**关键差异：租约过期即 `expired`，哪怕 pid 还活着。** 锁是租约而不是存在证明——停止续期就等于放弃这个 aspect（:205-212 注释原文「停止续期即视为放弃」）。默认租约 **1800 秒**（`ASPECT_LOCK_DEFAULT_TTL_SECONDS`，:30），`acquire` 可逐次覆盖（:144-148）。
+
+- **续租**：宿主在 `agent/turn-stopping` 对**本会话全部锁**续一次（`lib/host/session.mjs:943-950` → `renewAspectLocksForSession`，`lib/host/aspect-lock.mjs:708`）。因此**长于默认 1800s 的实现/审查必须靠 turn-stopping 续上**，否则做到一半会被别的会话接管。
+- **回收**：`sweepAspectLocks`（`lib/host/aspect-lock.mjs:540-574`）只删 `releasable === true` 的锁，`held` 一律保留；活锁里 `since` 超期的排队者会被顺手清掉（:555-561），锁本身不动——清理不替人做决定。
+- **`waiters` 语义（排队可见 + 按 `since` 过期）**：被 `held` 挡住时，`acquire` 把 `{session, since}` 幂等登记进 `waiters`（`lib/host/aspect-lock.mjs:361-375`；`since` 只记首次入队时间，轮询期间不刷新，内容没变时不写盘），最多保留最近 **20** 条（`ASPECT_WAITER_MAX`，:54；FIFO 上限截断）。排队登记超过 **10 分钟**按过期丢弃（`ASPECT_WAITER_TTL_MS`，:60；可用 `PROJECT_FLOW_ASPECT_WAITER_TTL_MS` 或调用参数 `waiterTtlMs` 覆盖，:157-163；`since` 解析不了也按过期处理、不抛错），读路径 `freshAspectWaiters`（:177-190）与清扫都会过滤。面板/CLI 只读展示「排队 n（最早 xx 前）」（`client.js:3236-3247`、`tui-panel.js:337-364`）。**排队仍只是可见性**：`acquire` 是轮询争抢（`ASPECT_POLL_MS = 100`，:50），不承诺严格 FIFO 交接。
+- **`evidence`**：调用方没给注册表探针时整条标 `ttl-only`（:254），可靠性降一档；`flow aspect list` 是独立 CLI 进程，因此恒为 `ttl-only`（宿主富化层可用自己的 `agents` 服务升级，见 T-20261112183138 实现记录⑦）。
+
+**C. 不要把锁的 `expired` 类推到 claims（反之亦然）**
+
+两套口径的差别是**刻意的**，混用会造成两类事故：
+
+- **反例（锁 → claims 是错的）**：宿主重启后 pid 变、记录里的旧 pid 已不存在，但会话仍被宿主注册表证明存在 → 心跳/claims 应判 `live`（注册表证据在 pid 之前，`lib/heartbeats/records.mjs:359-361`）；而 aspect 锁在重启窗口里没人续租，租约过期 → `expired`。此时正确行为是：**claims 继续占域，锁被回收/重抢**。
+- **反例（claims → 锁 是错的）**：「pid 还在就算活」只适用于 claims；套到锁上就回到本卡要修的事故——死会话或停止干活的会话会凭 pid 占着 aspect **最长 6 小时**，而这正是 `ASPECT_LOCK_DEFAULT_TTL_SECONDS` 存在的目的。
+- 一句话：**claims 判「会话在不在」，锁判「会话还在不在干这个 aspect」**；前者允许「活着但很久没刷新」，后者不允许「占着但不再续期」。
+
+**D. 操作纪律**
+
+- 判 claims 不要读 `.agents/aspect-locks/`；判锁不要看 6h 年龄。
+- `lib/lock.mjs` 是 **store 写锁**（`open(wx)` + 30s/60s 接管宽限，:1-8、:33、:36），与上面两套存活判据都不是一回事，不能拿来判活。
+- aspect 锁的消费边界（只读、先 verify、锁键用 `aspectId`、缺键降级）见 `docs/module-boundaries.md` §4.3（:154-164）。
+
 ### 3.6 决策 `decisions/D-YYYYMMDD-NN.json`
 
 需要用户拍板的事建一条 `D-` 记录（规格见 `docs/decision-log.md`）：**提问即建记录，回答当轮
