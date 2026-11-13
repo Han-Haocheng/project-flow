@@ -11,6 +11,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 import {
   addTask,
@@ -242,7 +244,7 @@ test('flow_task dispatch：起子代理 + 走 plugin 边到 working + 写回执'
   assert.equal(typeof checkpoints[0].closedAt, 'string')
   assert.equal(checkpoints[1].kind, 'claim', 'ack 的 open claim 必须是最后一条本角色回执')
   assert.equal(checkpoints[1].role, 'analyzer')
-  assert.equal(checkpoints[1].agent, 'analyzer')
+  assert.equal(checkpoints[1].agent, `analyzer:${task.id}`, 'agent 唯一化：role:taskId')
   assert.equal(checkpoints[1].session, 'child-1', 'ack 的执行权落在子会话上')
   assert.match(String(result.dispatch.order), /-r\d+-a\d+$/, '结果回报 round/attempt 工单号')
   // 已在 working 阶段：再派一次要被拒绝，避免第二个 worker
@@ -1405,3 +1407,84 @@ test('aspect 接入③：空 scope.allow 是 no-op（不占用、不影响派工
   assert.equal(listAspectLocks(root, contract).counts.total, 0)
   assert.equal(result.task.stage, 'reviewing')
 })
+
+// ======================== T-20261113205947：agent 唯一化（同角色并行） ========================
+
+const CLI_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'flow.mjs')
+
+function runDispatchCli(root, args) {
+  const result = spawnSync(process.execPath, [CLI_BIN, ...args], { cwd: root, encoding: 'utf8' })
+  let body = null
+  try {
+    body = JSON.parse(result.stdout)
+  } catch {
+    // 下面统一带原始输出断言
+  }
+  assert.ok(body !== null, 'CLI 没有输出 JSON：' + (result.stdout || result.stderr).slice(0, 400))
+  return { code: result.status, body }
+}
+
+test('派工 agent 唯一化：同角色两卡可同时 queue+ack，同卡仍拒，close 只收本卡', () => {
+  const { root, contract } = freshProject('unique-agent')
+  const a = addTask(root, contract, { type: 'feat', title: '同角色 A', stage: 'queued-analysis' })
+  const b = addTask(root, contract, { type: 'feat', title: '同角色 B', stage: 'queued-analysis' })
+  const agentA = 'analyzer:' + a.id
+  const agentB = 'analyzer:' + b.id
+
+  core.queueDispatch(root, contract, a.id, { agent: agentA, role: 'analyzer' })
+  core.queueDispatch(root, contract, b.id, { agent: agentB, role: 'analyzer' })
+  core.ackDispatch(root, contract, a.id, { agent: agentA, session: 'child-a' })
+  // ack 名字必须与工单精确一致，不能被同角色的另一张卡冒领（在 ack 之前验）。
+  assert.throws(
+    () => core.ackDispatch(root, contract, b.id, { agent: agentA, session: 'child-x' }),
+    /agent 不匹配/,
+    'ack 必须精确匹配 role:taskId',
+  )
+  // 关键断言：同角色、不同卡，各自持有 open claim，不因「全局 1 条 open/agent」串行。
+  core.ackDispatch(root, contract, b.id, { agent: agentB, session: 'child-b' })
+
+  // 同一张卡的第二个未关闭工单仍被拒绝（互斥落在卡上）。
+  assert.throws(
+    () => core.queueDispatch(root, contract, a.id, { agent: agentA, role: 'analyzer' }),
+    /已有未关闭工单/,
+    '同卡并发仍必须拒绝',
+  )
+
+  core.closeDispatch(root, contract, a.id, { outcome: 'ok' })
+  const rows = core.listDispatches(root, contract)
+  const rowA = rows.find((row) => row.taskId === a.id)
+  const rowB = rows.find((row) => row.taskId === b.id)
+  assert.equal(rowA.status, 'ok', 'closed 工单的 status 直接投影 outcome')
+  assert.equal(rowA.claim.outcome, 'ok', 'close(ok) 收口本卡 claim')
+  assert.equal(typeof rowA.claim.closedAt, 'string', '本卡 claim 必须被同一次写入关闭')
+  assert.equal(rowB.status, 'acked', '另一张卡不受影响')
+  assert.equal(rowB.claim.closedAt, null)
+  assert.equal(rowB.claim.agent, agentB)
+})
+
+test('dispatch-list --agent：精确名 role:taskId 与角色前缀都可用', () => {
+  const { root, contract } = freshProject('list-agent')
+  const a = addTask(root, contract, { type: 'feat', title: '列表 A', stage: 'queued-analysis' })
+  const b = addTask(root, contract, { type: 'fix', title: '列表 B', stage: 'queued-review' })
+  const agentA = 'analyzer:' + a.id
+  const agentB = 'reviewer:' + b.id
+  core.queueDispatch(root, contract, a.id, { agent: agentA, role: 'analyzer' })
+  core.ackDispatch(root, contract, a.id, { agent: agentA, session: 'child-a' })
+  core.queueDispatch(root, contract, b.id, { agent: agentB, role: 'reviewer' })
+  core.ackDispatch(root, contract, b.id, { agent: agentB, session: 'child-b' })
+
+  const exact = runDispatchCli(root, ['task', 'dispatch-list', '--agent', agentA, '--json'])
+  assert.equal(exact.code, 0)
+  assert.deepEqual(exact.body.data.map((row) => row.taskId), [a.id], '精确名只命中本卡')
+
+  const prefixAnalyzer = runDispatchCli(root, ['task', 'dispatch-list', '--agent', 'analyzer', '--json'])
+  assert.equal(prefixAnalyzer.code, 0)
+  assert.deepEqual(prefixAnalyzer.body.data.map((row) => row.taskId), [a.id], '角色前缀命中该角色全部卡')
+
+  const prefixReviewer = runDispatchCli(root, ['task', 'dispatch-list', '--agent', 'reviewer', '--json'])
+  assert.deepEqual(prefixReviewer.body.data.map((row) => row.taskId), [b.id])
+
+  const wrongExact = runDispatchCli(root, ['task', 'dispatch-list', '--agent', 'reviewer:' + a.id, '--json'])
+  assert.deepEqual(wrongExact.body.data, [], '精确名不得被前缀误伤')
+})
+

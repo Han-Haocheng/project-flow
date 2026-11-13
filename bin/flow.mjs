@@ -157,7 +157,7 @@ export const SPEC = Object.freeze({
     'dispatch-queue': { flags: ['id', 'agent', 'role', 'ttl'] },
     'dispatch-ack': { flags: ['id', 'agent', 'session', 'requester'] },
     'dispatch-close': { flags: ['id', 'outcome', 'reason', 'force'] },
-    'dispatch-list': { flags: ['stale', 'orphan', 'session'] },
+    'dispatch-list': { flags: ['stale', 'orphan', 'session', 'agent'] },
   }),
   gate: Object.freeze({
     list: { flags: [] },

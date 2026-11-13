@@ -51,10 +51,12 @@ function fakeSubagents() {
  * fake subagents 服务不发 `subagent/end`，因此用例手动收口：先 release(ok) 执行权，
  * 再 close(ok) 工单——等价于插件在子会话结束时走的 closeDispatchedChild。
  */
-function finishChild(root, contract, id, agent) {
+function finishChild(root, contract, id, role) {
   const task = getTask(root, contract, id)
   const order = task === null || task === undefined ? null : task.dispatch
   if (order === null || order === undefined || order.closedAt) return
+  // T-20261113205947：插件派工的 agent 是 role:taskId，release 必须用同一个名字。
+  const agent = role + ':' + id
   try {
     releaseTask(root, contract, id, { agent, outcome: 'ok' })
   } catch {

@@ -717,14 +717,16 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
     ok→`ok`，failed/expired→`aborted`）——**插件完成路径只需 `dispatch-close --outcome ok` 一次**，
     claim 同批收口，不必再单独 release。agent 不一致 → `invalid`，确认释放需 `--force` 且**必须带
     `--reason`**，reason 写进 claim 的 note（审计）。
-  - `dispatch-list [--stale] [--orphan] [--session <会话id>]`：跨卡列出工单；`status` 为 closed 的
+  - `dispatch-list [--stale] [--orphan] [--session <会话id>] [--agent <name|role>]`：跨卡列出工单；`status` 为 closed 的
     outcome 或 `pending/acked`；`stale` = 未关闭且已过期（`restartExpired:true` 即「重启后仍 open 且已过期」）；
     `orphan` = 已 ack 但没有 open claim，或 open claim 的 session 心跳判死不活。`--stale` 只保留
     stale 或 orphan；`--orphan` 只保留孤儿；`--session` 按执行权 claim.session（或 requester）找回工单。
     行投影带 `taskId` 与 `claim:{agent,session,at,closedAt,outcome}`（最新一条本工单角色的 claim）。
+    `--agent` 支持**精确名**（`role:taskId`，含 `:`）与**角色前缀**（只写 `analyzer|implementer|reviewer`，
+    匹配该角色的全部卡）；精确名永远不会被前缀匹配误伤。
 
 **插件派工走队列（T-20261113155234 阶段 2）**：`dispatchTaskRecord` 在任何 spawn 之前先
-`dispatch-queue`（`agent=role`、`requester=父会话`）；同卡未关闭工单 / 同轮 attempt 用尽 → **不 spawn**、
+`dispatch-queue`（`agent=<role>:<taskId>`、`requester=父会话`）；同卡未关闭工单 / 同轮 attempt 用尽 → **不 spawn**、
 记 `dispatch-queue skipped:` warning、卡留原阶段。spawn 成功后立即 `dispatch-ack --session <childId>`
 （显式传 session/requester，不依赖 `DSH_SESSION_ID`）；`checkpoints` 顺序为
 `dispatch(closed, outcome ok)` 后接 `claim(open)`——阶段门按最后一条本角色回执判定执行权。阶段推进仍走
@@ -732,6 +734,12 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 `agent/disposed`）由插件 `dispatch-close` **一次**收口：任务仍停在本角色 working 阶段 → `failed`，
 已离开该阶段 → `ok`；进程重启后按 `dispatch-list --session <child>` 找回工单。`lib/dispatch.mjs`
 只经 `lib/backend/api.mjs` 的 `tasks`（api∩core 同引用）消费队列，不直接 import 记录层。
+
+**agent 命名与互斥（T-20261113205947）**：插件派工的 agent 统一为 `role + ':' + taskId`
+（`queue` / `ack` / `close` 三处同一个名字；工单的 `role` 字段仍只存角色）。claim 的互斥规则
+保持「全局 1 条 open claim / agent」不变，因此互斥落在**同一张卡**而不是同一角色：同角色的两张卡
+可以同时 queue + ack，各自持有自己的 open claim；同一张卡的第二个未关闭工单仍被拒绝。
+`closeDispatch` 用 claim 与**本卡工单**的 agent 精确比对释放，不会碰另一张卡同角色 agent 的 claim。
 
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 
@@ -1597,7 +1605,7 @@ flow task rm <id> --reason R [--purge] [--yes]
 flow task dispatch-queue <id> --agent A --role analyzer|implementer|reviewer [--ttl 秒]
 flow task dispatch-ack <id> --agent A [--session <id>] [--requester <name>]
 flow task dispatch-close <id> --outcome ok|failed|expired [--reason R] [--force]
-flow task dispatch-list [--stale]
+flow task dispatch-list [--stale] [--orphan] [--session <id>] [--agent <name|role>]
 flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账）
 flow task unlink <TASK-ID>                   # 解除挂载（team=null）
 flow task archive [--older-than N] [--dry-run]
