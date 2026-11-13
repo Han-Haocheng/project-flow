@@ -106,7 +106,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |
 | flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked；可选 closed —— archiveAfterDays=0 时 closed:true 且 cutoff 为 null） |
-| flow task sweep | 对象（必填 olderThanHours·scanned·closed·skipped·dryRun·locked） |
+| flow task sweep | 对象（必填 olderThanHours·scanned·closed·skipped·dryRun·locked）；`closed` 是历史字段名，内容为本次直接归档（`archived`）的卡 |
 | flow task normalize | 对象（必填 fix·dryRun·ok·issues·fixed·counts·remaining·longTitles·typeMap） |
 | flow task next | 对象（必填 id·title·stage·stageZh·owner·terminal·actor·next·alternatives·acceptance） |
 | flow task verify | 对象（必填 id·ok·executed·passed·failed·steps·verification；可选 skipped·repair） |

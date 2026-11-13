@@ -386,13 +386,16 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 }
 ```
 
-- **消息卡收口（2026-11-09，任务模块）**：`flow task sweep [--older-than-hours N]`（默认 24 小时，
-  `--dry-run` 只报告）把「只是某句话」的捕获卡收口——严格同时满足才动：`source.kind === 'utterance'`、
-  `stage === 'queued-analysis'`、`notes`/`commits`/`acceptance`/`checkpoints` 全空、不是子任务也没有
-  子任务、`owner === ''`（活会话的待办不动）、年龄超过阈值。收口 = `stage: 'done'`（status 派生 done，
-  写 `done_at`）+ `notes` 追加 `[auto-close] …` 说明；`source: 'internal'`，不走描述门（这不是语义变更
-  完成）。之后由 `tasks.archiveAfterDays` 的归档 sweep 接手。宿主在每次捕获落盘后自动跑一遍，
-  窗口由 `config.tasks.autoSweepHours` 控制（默认 24；`0`/`false` 关闭，非法值回落默认）。
+- **消息卡归档（2026-11-09，任务模块；2026-11-12 M4 改为直接归档）**：`flow task sweep
+  [--older-than-hours N]`（默认 24 小时，`--dry-run` 只报告）把「只是某句话」的捕获卡**归档**——严格
+  同时满足才动：`source.kind === 'utterance'`、`stage === 'queued-analysis'`、
+  `notes`/`commits`/`acceptance`/`checkpoints` 全空、不是子任务也没有子任务、`owner === ''`
+  （活会话的待办不动）、年龄超过阈值。归档 = `stage/status: archived` + `archived_at` + `notes`
+  追加 `[auto-archive] …`（**不先落 `done`，也不写 `done_at`**；噪声卡不进「完成」统计）；
+  `source: 'internal'`，不走描述门。结果里的 `closed` 是**历史字段名**，内容就是本次归档的卡。
+  这与 `tasks.archiveAfterDays` 的归档 sweep 是两条路：后者只把 `done → archived`（§3.2.1），
+  **`cancelled` 永不被任何 sweep 清扫**。宿主在每次捕获落盘后自动跑一遍，窗口由
+  `config.tasks.autoSweepHours` 控制（默认 24；`0`/`false` 关闭，非法值回落默认）。
   另有结构性排除：`background job …` 开头的后台任务完成通知在捕获阶段就按 `prefix` 丢弃，不建卡。
 
 - **验收门（2026-11-11，任务模块）**：`acceptance` 条目支持可执行形式 `cmd:<shell 命令>` 与
@@ -637,7 +640,8 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   据此把对应日起标 `≈`（见 §9.1.4）。
   时间戳写入异常只记 `task-time-stamp` warning，不破坏任务主写入。
 - **只从 done 归档**：`cancelled` 是撤销终态，永不进入归档 sweep（`archived` 才表示完成退役）；
-  `archiveTasks` 只选 `status === 'done' && stage === 'done'`。
+  `archiveTasks` 只选 `status === 'done' && stage === 'done'`。`flow task sweep`（§3.2 消息卡归档）
+  同样不清扫 `cancelled`——撤销是终态，任何 sweep 都不改它。
 - **归档判定仍按 `updated_at`**：`status === 'done'` 且
   `now - Date.parse(updated_at) >= archiveAfterDays * 86400e3`（默认 **7**，边界含端点）。
   `done` 之后的 patch 仍会刷新 `updated_at`，因此判定窗口以最后一次工单活动为准；`done_at`
@@ -1556,7 +1560,7 @@ flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地
 flow task unlink <TASK-ID>                   # 解除挂载（team=null）
 flow task archive [--older-than N] [--dry-run]
 flow task sweep [--older-than-hours N] [--dry-run]
-                 # 消息卡收口（见 §3.2）：把过期且从没被领取的捕获卡标完成；
+                 # 消息卡归档（见 §3.2）：把过期且从没被领取的捕获卡直接归入 archived；
                  # 默认 24 小时，--dry-run 只报告不写盘
 flow task next <id> [--json]   # 查表给唯一下一步：目标阶段/actor/动作/验证命令；终态 exit 3
 flow task verify <id>          # 按 acceptance 顺序执行 cmd:/gate:，回填 verification；失败 exit 1
