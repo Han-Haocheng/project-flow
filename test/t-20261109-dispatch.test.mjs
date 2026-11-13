@@ -55,6 +55,7 @@ import {
   closeDispatchedChild,
   dispatchTaskRecord,
   analyzerSplitIssues,
+  settleDispatchAfterClose,
 } from '../lib/dispatch.mjs'
 import { buildDefinition as buildSubtaskDefinition } from '../lib/tools/subtasks.mjs'
 
@@ -1648,6 +1649,44 @@ test('review reject：走 reviewing → queued-implementation，工单 ok（roun
       }
     }
   })
+})
+
+
+test('settleDispatchAfterClose：analyzer ok 派子卡实现者；幂等；reviewer 回退派新实现者；不抛', async () => {
+  const { root, contract } = freshProject('settle-after-close')
+  const parent = addTask(root, contract, { type: 'feat', title: '父卡', stage: 'analyzing' })
+  const child = addTask(root, contract, {
+    type: 'feat', title: '子卡', parent: parent.id, stage: 'queued-implementation',
+    mount: { kind: 'module', id: 'dispatch' }, scope: { allow: ['lib/dispatch.mjs'] },
+  })
+  const subagents = fakeSubagents()
+  const ctx = {
+    get(name) {
+      if (name === 'subagents') return subagents
+      if (name === 'workingDirectory') return { get: () => root }
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  const agent = { id: 'session-main', session: { cwd: root, header: { origin: 'main', delegationDepth: 0 } } }
+  const first = await settleDispatchAfterClose({ ctx, agent, root, contract, task: getTask(root, contract, parent.id), result: { outcome: 'ok' }, config: { dispatch: { auto: true } } })
+  assert.equal(subagents.calls.length, 1, 'analyzer ok 必须派子卡实现者')
+  assert.equal(first.length, 1)
+  assert.equal(getTask(root, contract, child.id).stage, 'implementing')
+
+  const again = await settleDispatchAfterClose({ ctx, agent, root, contract, task: getTask(root, contract, parent.id), result: { outcome: 'ok' }, config: { dispatch: { auto: true } } })
+  assert.equal(subagents.calls.length, 1, '同卡同角色已有 open 工单 → 幂等跳过')
+  assert.deepEqual(again, [])
+
+  const reviewTask = addTask(root, contract, { type: 'feat', title: '打回卡', stage: 'queued-implementation' })
+  const before = subagents.calls.length
+  const settled = await settleDispatchAfterClose({ ctx, agent, root, contract, task: getTask(root, contract, reviewTask.id), result: { outcome: 'ok', decision: 'reject' }, config: { dispatch: { auto: true } } })
+  assert.equal(subagents.calls.length, before + 1, 'reviewer 打回后必须派新一轮实现者')
+  assert.equal(settled[0].role, 'implementer')
+
+  // 没有 subagents 服务：只 warning，不抛。
+  const bare = { get: () => undefined, logger: { warn() {} } }
+  await settleDispatchAfterClose({ ctx: bare, agent, root, contract, task: getTask(root, contract, parent.id), result: { outcome: 'ok' }, config: {} })
 })
 
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {

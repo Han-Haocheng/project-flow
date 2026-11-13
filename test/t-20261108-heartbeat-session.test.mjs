@@ -421,7 +421,7 @@ test('心跳守卫：父心跳 live → 子写放行；父死且注册表无记�
   const execution = (agent) => ({ name: 'write', agent, args: { file_path: path.join(root, 'x.txt') } })
   assert.equal(heartbeatGuardReason(harness.ctx, execution(child)), undefined, '父心跳 live 放行')
 
-  removeHeartbeat(root, loadContract(root).contract, { session: parent.id })
+  removeHeartbeat(root, loadContract(root).contract, parent.id)
   harness.removeLive(parent.id)
   assert.match(String(heartbeatGuardReason(harness.ctx, execution(child))), /父会话心跳未登记且不在宿主注册表存活/)
 })
@@ -449,16 +449,18 @@ test('心跳供给：子代理列表只读进 payload，结束后清空；重启
   const harness = makeHarness(root)
   const parent = harness.addAgent('session-t1131-sup-root')
   const child = harness.addChildAgent('session-t1131-sup-leaf', parent.id)
+  const baseline = describeHeartbeatSupply(harness.ctx).subagentCount
   harness.handler('subagent/start')[0]({ local: true, id: child.id })
   const supply = describeHeartbeatSupply(harness.ctx)
-  assert.equal(supply.subagentCount, 1)
-  assert.equal(supply.subagents[0].session, child.id)
-  assert.equal(supply.subagents[0].parent, parent.id)
+  assert.equal(supply.subagentCount, baseline + 1)
+  const row = supply.subagents.find((item) => item.session === child.id)
+  assert.ok(row !== undefined)
+  assert.equal(row.parent, parent.id)
   assert.equal(fs.existsSync(heartbeatFile(root, child.id)), false, '注册表不落盘')
 
   harness.handler('subagent/end')[0]({ local: true, id: child.id, stopReason: 'completed' })
   const afterEnd = describeHeartbeatSupply(harness.ctx)
-  assert.equal(afterEnd.subagentCount, 0, '结束即清空')
+  assert.equal(afterEnd.subagentCount, baseline, '结束即清空本行')
   assert.equal(fs.existsSync(heartbeatFile(root, child.id)), false, '重启/结束都不留行')
 })
 

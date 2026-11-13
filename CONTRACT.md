@@ -1942,6 +1942,13 @@ claims 内（§3.5）；空 claims = 拒绝全部编辑，无心跳记录同样�
 会话文件域负责）；目标逃出项目根直接拒绝。拒绝文案给出「先 `flow_heartbeat update --claim <path>`」。
 该门与 `config.enforce`、`config.heartbeatGate` 相互独立：三者任一开启就会注册 guard。
 
+**子会话双证据（2026-11-13，T-20261113211131）**：子会话心跳**只在宿主内存注册表**，不写盘；
+重启即清空，不产生幽灵行。`heartbeatGuardReason` 不再无条件豁免显式子会话：沿 `header.parentSession`
+上溯（限深 8 防环），父会话磁盘心跳 `working` **或** 父会话仍在宿主 `agents` 注册表 / 内存子会话注册表存活
+（解决「父在等子干活、心跳暂时 stale」的误杀）即放行；双证据都失败才拦。注册表经
+`payload.heartbeatSupply.subagents`（`session/parent/role/startedAt/state`，最多 20 条）只读展示，不落盘；
+子代理结束后从注册表删除。事后审计用 `flow task art put` 的 artifact，而不是心跳行。
+
 **心跳门禁覆盖矩阵（2026-11-13，T-20261113164820）**：`heartbeatGuardReason` 的会话身份原先只认
 `agent.id`，导致「有 `DSH_SESSION_ID`、agent 记录没有可用 id」的主会话**完全没有被门禁覆盖**（表现为
 无心跳也不拦写）。修复后身份顺序与供给一致：`agent.id` → `DSH_SESSION_ID`；只有**可证明的子会话**
@@ -1953,7 +1960,7 @@ claims 内（§3.5）；空 claims = 拒绝全部编辑，无心跳记录同样�
 | 主会话，`agent.id` 可用，无心跳 / 非 working | **拦** | agent id |
 | 主会话，`agent.id` 不可用但 `DSH_SESSION_ID` 可用（含 `execution.agent` 缺失的 PTC 调用） | **拦**（本次修复） | env id |
 | 主会话，既无 `agent.id` 也无 `DSH_SESSION_ID` | 放行（**无门禁**），但 supply 会写 `cli-<host>-<pid>` 心跳行 | 无法判定身份，宁可不误伤；这是「**有心跳行、无门禁**」的组合 |
-| 显式子会话（`rootSessionVerdict === false` / header `origin:"subagent"`） | 放行 | 子会话不登记心跳 |
+| 显式子会话（header `origin:"subagent"` / `delegationDepth>0`） | **双证据**：父会话心跳 working **或** 父会话在宿主注册表/内存注册表存活 → 放行；否则**拦** | 解析 `header.parentSession` 上溯（限深 8） |
 | synthetic 前缀（`mnemon-task-`/`bg-task-`/`task-subagent-`） | 放行 | 不登记心跳 |
 | 非写工具（`read` / `bash` / `terminal_send` / 只读 ops） | 放行 | 不在 `HEARTBEAT_GATE_TOOLS` |
 | 无项目根 / 无 store | 放行 | 读不到心跳，降级不误伤 |
@@ -3009,7 +3016,8 @@ goal/task/claims 并互相避让。子会话（subagent / teammate 子代理）*
   - **可观测**：`flow heartbeat status` 在无人为 session 时按「显式 `--session` → `DSH_SESSION_ID`
     → 项目唯一活跃心跳 → `cli-<host>-<pid>`」解析，并回显 `sessionSource`/`supply`；没有记录时打印
     「原因」（缺哪种环境下文 / 多条候选无法判定）；面板 state 载荷新增 `heartbeatSupply`
-    （`hostSessions` / `envSession` / `processSession` / `active` / `total` / `reason`）。
+    （`hostSessions` / `envSession` / `processSession` / `active` / `total` / `reason`，以及只读的
+    `subagents` / `subagentCount`：内存注册表里的活子会话，不写盘）。
 - **生命周期由插件持有**：`agent/created` 自动开（栈顶任务作 goal/task/claims），
   `agent/disposed` 自动关（`status: done` + `ended_at` + 「会话结束（插件自动关闭）」）。
   **开与关都与 `capture` 开关无关**（对称）：那个开关只停「捕获话」，不停台账维护。
