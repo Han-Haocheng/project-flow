@@ -780,5 +780,64 @@ test('mount：模块图改名/删条目后重校错误带迁移命令', () => {
   assert.match(moved.json.error.message, /--mount-kind/)
 })
 
+test('mount legacy：warn 只警告不写标记；切 hard 后仍算首次，第二次被拦', () => {
+  const root = freshProject('mount-legacy-warn')
+  writeModuleDomain(root)
+  const contract = loadContract(root).contract
+  const old = addTask(root, contract, {
+    type: 'feat', title: 'warn 存量主卡', stage: 'queued-implementation',
+    created_at: '2026-11-13T16:00:00+08:00',
+  })
+
+  process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+  try {
+    const warned = claimCli(root, old.id, ['--agent', 'w1', '--role', 'implementer'])
+    assert.equal(warned.code, 0, warned.stdout + warned.stderr)
+    assert.ok((warned.json.warnings || []).some((line) => line.startsWith('task-mount-legacy:')), 'warn 下也要警告')
+    assert.equal(
+      (warned.json.data.checkpoints || []).some((item) => item.kind === 'mount-legacy-claim'),
+      false,
+      'warn 模式不得写 mount-legacy-claim 标记',
+    )
+    assert.equal(releaseCli(root, old.id, ['--agent', 'w1', '--outcome', 'ok']).code, 0)
+  } finally {
+    delete process.env.PROJECT_FLOW_CLAIM_GATE
+  }
+
+  // 切回 hard：因为没有 warn 标记，仍然算首次放行；这次写标记，第二次被拦。
+  const first = claimCli(root, old.id, ['--agent', 'w1', '--role', 'implementer'])
+  assert.equal(first.code, 0, first.stdout + first.stderr)
+  assert.equal(first.json.data.checkpoints.some((item) => item.kind === 'mount-legacy-claim'), true)
+  assert.equal(releaseCli(root, old.id, ['--agent', 'w1', '--outcome', 'ok']).code, 0)
+  assert.equal(claimCli(root, old.id, ['--agent', 'w1', '--role', 'implementer']).code, 2, 'hard 第二次必须拦')
+
+  // implementing 门同样：warn 不写标记，hard 首次放行写标记，第二次拦。
+  const old2 = addTask(root, contract, {
+    type: 'feat', title: 'warn 存量 implementing', stage: 'queued-implementation',
+    created_at: '2026-11-13T16:00:00+08:00',
+  })
+  process.env.PROJECT_FLOW_CLAIM_GATE = 'warn'
+  try {
+    const moved = runCli(root, ['task', 'update', old2.id, '--stage', 'implementing', '--json'])
+    assert.equal(moved.code, 0, moved.stdout + moved.stderr)
+    assert.equal(
+      (moved.json.data.checkpoints || []).some((item) => item.kind === 'mount-legacy-implementing'),
+      false,
+      'warn 模式不得写 mount-legacy-implementing 标记',
+    )
+  } finally {
+    delete process.env.PROJECT_FLOW_CLAIM_GATE
+  }
+  updateTask(root, contract, old2.id, { stage: 'queued-implementation' }, { source: 'internal' })
+  assert.equal(claimCli(root, old2.id, ['--agent', 'h2', '--role', 'implementer']).code, 0)
+  const hardFirst = runCli(root, ['task', 'update', old2.id, '--stage', 'implementing', '--json'])
+  assert.equal(hardFirst.code, 0, hardFirst.stdout + hardFirst.stderr)
+  assert.equal(hardFirst.json.data.checkpoints.at(-1).kind, 'mount-legacy-implementing')
+  updateTask(root, contract, old2.id, { stage: 'queued-implementation' }, { source: 'internal' })
+  const hardSecond = runCli(root, ['task', 'update', old2.id, '--stage', 'implementing', '--json'])
+  assert.equal(hardSecond.code, 2, 'hard 第二次必须拦')
+})
+
+
 
 
