@@ -314,7 +314,8 @@
         "test/t-20261111-04-task-cas-tool.test.mjs",
         "test/t-20261111-task-next-verify.test.mjs",
         "test/t-20261112-tool-output-e2e.test.mjs",
-        "test/t-20261112-tool-output-render.test.mjs"
+        "test/t-20261112-tool-output-render.test.mjs",
+        "test/t-20261113-acceptance-exec.test.mjs"
       ],
       "semantics": "任务模块：任务 CRUD、九阶段状态机、捕获、子任务、团队板对账。"
     },

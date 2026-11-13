@@ -148,6 +148,9 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow check tasks | 对象（必填 check·exitCode·stdout·stderr·durationMs·ok·counts·issues·typeMap） |
 | flow check description | 对象（必填 check·exitCode·stdout·stderr·durationMs·mode·counts·failed·warnings） |
 
+**`flow task update --commits a,b`**：逗号分隔的短 sha 列表，写回任务记录的 `commits` 数组
+（与 `flow exp update --commits` 同义；`--commits ""` 清空为 `[]`）。这是参数说明，不改任何 data 形状。
+
 **`task.verify` 的两种形状**（`--json`）：
 
 - 有可执行验收项（`cmd:<shell>` / `gate:<id>`）：`{id, ok, executed, passed, failed[], steps[], verification, repair}`，
