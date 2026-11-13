@@ -735,6 +735,11 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 已离开该阶段 → `ok`；进程重启后按 `dispatch-list --session <child>` 找回工单。`lib/dispatch.mjs`
 只经 `lib/backend/api.mjs` 的 `tasks`（api∩core 同引用）消费队列，不直接 import 记录层。
 
+**自动派工开关单一真源（T-20261113234534）**：自动派工只认契约 `dispatch.auto`（`lib/dispatch.mjs`
+的 `resolveAutoDispatch`）；`config.autoDispatch` 与宿主 `settings.autoDispatch` 是**已废弃旧键**，仍被尊重
+（优先级 `dispatch.auto` > `config.autoDispatch` > `settings.autoDispatch`），但读到时写一次
+`deprecation warning`（按进程去重）。都没写时按当前 hard 默认 **关**；默认值本卡不翻转。
+
 **派工入口矩阵（T-20261113212311）**：analyzer = `queued-analysis | analyzing`；implementer =
 `queued-implementation | implementing`；reviewer = `queued-review | reviewing`；其它组合仍拒绝。
 同阶段重派（如 analyzing → analyzing）不写阶段边，只追加 dispatch/claim 回执，因此可安全用于

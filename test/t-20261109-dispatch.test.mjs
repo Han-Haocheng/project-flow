@@ -55,6 +55,7 @@ import {
   closeDispatchedChild,
   dispatchTaskRecord,
   analyzerSplitIssues,
+  resolveAutoDispatch,
   settleDispatchAfterClose,
 } from '../lib/dispatch.mjs'
 import { buildDefinition as buildSubtaskDefinition } from '../lib/tools/subtasks.mjs'
@@ -1840,6 +1841,33 @@ test('R4：settle 失败重派走同阶段 allowSameStage，attempt 递增，第
   assert.equal(getTask(root, contract, task.id).stage, 'analyzing')
   const last = getTask(root, contract, task.id).dispatch
   assert.ok(last.attempt >= 2, 'attempt 必须递增，实际 ' + String(last.attempt))
+})
+
+
+test('R5：自动派工单一真源 dispatch.auto，旧键尊重但只警告一次', () => {
+  drainWarnings()
+  assert.equal(resolveAutoDispatch({ dispatch: { auto: true } }), true)
+  assert.equal(resolveAutoDispatch({ dispatch: { auto: false } }), false)
+  assert.equal(resolveAutoDispatch({}), false, '未设 = hard 默认关，三处一致')
+  assert.equal(resolveAutoDispatch(undefined), false)
+  assert.equal(autoDispatchEnabled({ dispatch: { auto: true } }), true, 'autoDispatchEnabled 走同一 resolver')
+  assert.equal(autoDispatchEnabled({}), false)
+
+  // 优先级：dispatch.auto 压过旧键（旧键不触发警告）。
+  assert.equal(resolveAutoDispatch({ dispatch: { auto: false }, autoDispatch: true }), false)
+  assert.deepEqual(drainWarnings(), [], 'dispatch.auto 存在时旧键不得告警')
+
+  // 旧 config.autoDispatch：尊重 + 一次 deprecation warning。
+  assert.equal(resolveAutoDispatch({ autoDispatch: true }), true)
+  const firstWarn = drainWarnings()
+  assert.equal(firstWarn.some((line) => /config.autoDispatch.*废弃/.test(line)), true) //\.autoDispatch.*废弃/.test(line)), true)
+  assert.equal(resolveAutoDispatch({ autoDispatch: true }), true)
+  assert.deepEqual(drainWarnings(), [], '同一键只警告一次')
+
+  // 旧 settings.autoDispatch（子卡入口）：同一 resolver + 警告。
+  assert.equal(resolveAutoDispatch({ dispatch: {} }, { autoDispatch: true }), true)
+  // settings 旧键在更早的子卡用例里已触发过；这里只验证同一 resolver 仍尊重 + 去重不刷屏。
+  assert.deepEqual(drainWarnings(), [], 'settings 旧键警告已在前面按进程去重')
 })
 
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
