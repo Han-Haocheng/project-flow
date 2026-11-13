@@ -709,12 +709,15 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   - `dispatch-ack`：必须 agent 匹配且未过期；**复用 claimTask 的同一次写入**写 open claim，工单只补
     `ackedAt`——不造第二套回执。阶段仍要过阶段门（ack 不替代 claim/挂载/验收门）。
   - `dispatch-close`：写 `closedAt/outcome(ok|failed|expired)/reason`。**ok 只允许已 ack 的工单**；
-    pending 只能 `failed|expired`。`failed|expired` 在**同一次写入**释放匹配的 open claim
-    （claim.agent === dispatch.agent，claim outcome=aborted）；agent 不一致 → `invalid`，
-    确认释放需 `--force`（claim 的 note 写审计）。
-  - `dispatch-list [--stale]`：跨卡列出工单；`status` 为 closed 的 outcome 或 `pending/acked`；
-    `stale` = 未关闭且已过期；`orphan` = 已 ack 但没有 open claim，或 open claim 的 session 心跳判死不活。
-    `--stale` 只保留 stale 或 orphan。
+    pending 只能 `failed|expired`；已过期但 open 的工单允许 `--outcome expired` 兜底。任何 outcome
+    都在**同一次写入**释放匹配的 open claim（claim.agent === dispatch.agent；claim outcome：
+    ok→`ok`，failed/expired→`aborted`）；agent 不一致 → `invalid`，确认释放需 `--force`
+    （claim 的 note 写审计）。
+  - `dispatch-list [--stale] [--orphan] [--session <会话id>]`：跨卡列出工单；`status` 为 closed 的
+    outcome 或 `pending/acked`；`stale` = 未关闭且已过期（`restartExpired:true` 即「重启后仍 open 且已过期」）；
+    `orphan` = 已 ack 但没有 open claim，或 open claim 的 session 心跳判死不活。`--stale` 只保留
+    stale 或 orphan；`--orphan` 只保留孤儿；`--session` 按执行权 claim.session（或 requester）找回工单。
+    行投影带 `taskId` 与 `claim:{agent,session,at,closedAt,outcome}`（最新一条本工单角色的 claim）。
 
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 

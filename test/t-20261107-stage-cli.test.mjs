@@ -989,6 +989,58 @@ test('dispatch 1.5：pending 不许 ok、stage 白名单、ttl 上限、非法 e
   assert.match(String(forced.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1).note), /force/)
 })
 
+test('dispatch API/投影：taskId+claim、--session/--orphan、close ok 释放 claim、过期 expired 兜底', () => {
+  const root = freshProject('dispatch-api')
+  const contract = loadContract(root).contract
+  const task = addTaskCli(root, 'API 工单', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'c1', '--role', 'implementer', '--json']).code, 0)
+  assert.equal(runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'c1', '--session', 's-1', '--json']).code, 0)
+
+  const listed = runCli(root, ['task', 'dispatch-list', '--json']).json.data
+  const row = listed.find((item) => item.task === task.id)
+  assert.equal(row.taskId, task.id, '投影必须带 taskId')
+  assert.equal(row.claim.agent, 'c1')
+  assert.equal(row.claim.session, 's-1')
+  assert.equal(row.claim.outcome, null, 'open claim 还没有 outcome')
+
+  const bySession = runCli(root, ['task', 'dispatch-list', '--session', 's-1', '--json']).json.data
+  assert.equal(bySession.some((item) => item.task === task.id), true, '--session 按 claim.session 找回')
+  const otherSession = runCli(root, ['task', 'dispatch-list', '--session', 'nope', '--json']).json.data
+  assert.equal(otherSession.some((item) => item.task === task.id), false)
+
+  const closed = runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'ok', '--json'])
+  assert.equal(closed.code, 0, closed.stdout + closed.stderr)
+  assert.equal(closed.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1).outcome, 'ok', 'ok 关闭也必须同批释放 claim')
+  const after = runCli(root, ['task', 'dispatch-list', '--json']).json.data.find((item) => item.task === task.id)
+  assert.equal(after.claim.outcome, 'ok')
+  assert.match(String(after.claim.closedAt), /^\d{4}-/)
+
+  // --orphan：acked 无 claim。
+  const orphan = addTaskCli(root, '孤儿过滤', ['--stage', 'queued-implementation'])
+  const now = '2026-11-13T18:00:00+08:00'
+  updateTask(root, contract, orphan.id, {
+    dispatch: { id: 'D-' + orphan.id + '-1', createdAt: now, expiresAt: '2099-01-01T00:00:00+08:00', requester: '', agent: 'o9', role: 'implementer', attempt: 1, ackedAt: now },
+  }, { source: 'internal' })
+  const orphans = runCli(root, ['task', 'dispatch-list', '--orphan', '--json']).json.data
+  assert.equal(orphans.every((item) => item.orphan === true), true, '--orphan 只留孤儿')
+  assert.equal(orphans.some((item) => item.task === orphan.id), true)
+
+  // 过期兜底：open 工单 expiresAt 已过 → close --outcome expired 成功，--stale 标 restartExpired。
+  const expiredTask = addTaskCli(root, '过期兜底', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', expiredTask.id, '--agent', 'e9', '--role', 'implementer', '--json']).code, 0)
+  const file = taskFile(root, expiredTask.id)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.dispatch.expiresAt = '2026-01-01T00:00:00+08:00'
+  fs.writeFileSync(file, JSON.stringify(record, null, 1))
+  const staleRows = runCli(root, ['task', 'dispatch-list', '--stale', '--json']).json.data
+  const staleRow = staleRows.find((item) => item.task === expiredTask.id)
+  assert.equal(staleRow.restartExpired, true, '重启后仍 open 且已过期必须标 restartExpired')
+  const expiredClose = runCli(root, ['task', 'dispatch-close', expiredTask.id, '--outcome', 'expired', '--json'])
+  assert.equal(expiredClose.code, 0, expiredClose.stdout + expiredClose.stderr)
+  assert.equal(expiredClose.json.data.dispatch.outcome, 'expired')
+})
+
+
 
 
 

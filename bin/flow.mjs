@@ -65,7 +65,7 @@ const BOOL_FLAGS = new Set([
   'allow-unknown-expect',
   // 2026-11-12 裁定 3：门禁分结构/行为；门禁运行默认跑完全部步骤，--fail-fast 才首败即停。
   // `gate rules --init/--record` 是规则文件防篡改的写命令（裁定 1），都是纯开关。
-  'fail-fast', 'init', 'record', 'purge', 'stale', 'force',
+  'fail-fast', 'init', 'record', 'purge', 'stale', 'force', 'orphan',
   // T-20261113163323：done 无 reviewer 回执时的显式覆盖（必须配 --reason）。
   'no-dispatch',
 ])
@@ -157,7 +157,7 @@ export const SPEC = Object.freeze({
     'dispatch-queue': { flags: ['id', 'agent', 'role', 'ttl'] },
     'dispatch-ack': { flags: ['id', 'agent', 'session', 'requester'] },
     'dispatch-close': { flags: ['id', 'outcome', 'reason', 'force'] },
-    'dispatch-list': { flags: ['stale'] },
+    'dispatch-list': { flags: ['stale', 'orphan', 'session'] },
   }),
   gate: Object.freeze({
     list: { flags: [] },

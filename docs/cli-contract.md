@@ -106,7 +106,7 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task dispatch-queue | 记录 task（写入一条未关闭工单） |
 | flow task dispatch-ack | 记录 task（工单 ackedAt + 同批 open claim；可选 session/requester） |
 | flow task dispatch-close | 记录 task（closedAt·outcome·reason?；failed/expired 同批释放 claim，--force 可覆盖 agent 不匹配） |
-| flow task dispatch-list | 数组<记录 dispatchOrder> |
+| flow task dispatch-list | 数组<记录 dispatchOrder>（含 taskId·claim；可选 --stale/--orphan/--session） |
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |
 | flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked；可选 closed —— archiveAfterDays=0 时 closed:true 且 cutoff 为 null） |
