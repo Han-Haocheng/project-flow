@@ -2301,7 +2301,7 @@ check('TasksCard: chips, current task, folded groups and one row per task', () =
   assert.ok(!rowText.includes('12556a8'), 'collapsed rows must not show a commit');
 });
 
-check('TasksCard: 首行是 type: title、第二行是 notes、署名是 id，行 key 仍是业务 id', () => {
+check('TasksCard: 折叠行只有 type: title 与 id，notes 只在展开后的详情里', () => {
   const payload = probe.normalize({
     tasks: {
       total: 2,
@@ -2347,11 +2347,13 @@ check('TasksCard: 首行是 type: title、第二行是 notes、署名是 id，�
     'the tooltip must show the same composite string'
   );
   assert.equal(collect(opened, 'project-flow-taskTitle')[1].props.title, '标题乙', 'a missing type must not add a prefix');
-  // 第二行 = notes：非空才渲染，空则整行不出现。
-  const notes = collect(opened, 'project-flow-taskNotes');
-  assert.equal(notes.length, 1, 'a row without notes must not reserve the second line');
-  assert.equal(notes[0].children[0], '备注甲', 'notes missing from the second line');
-  assert.equal(notes[0].props.title, '备注甲', 'notes needs a full-text tooltip');
+  // 折叠态只有一行：notes 不再占第二行，展开后进入详情。
+  assert.equal(collect(opened, 'project-flow-taskNotes').length, 0, 'collapsed rows must not render a notes line');
+  assert.ok(!textOf(opened).includes('备注甲'), 'collapsed rows must not print notes');
+  collect(opened, 'project-flow-taskHead')[0].props.onClick({});
+  const expanded = renderWithState(probe.TasksCard, { tasks: payload.tasks, t, now: NOW });
+  assert.equal(collect(expanded, 'project-flow-taskDetail').length, 1, 'the clicked row must reveal its detail');
+  assert.equal(collect(expanded, 'project-flow-detailValue')[3].children[0], '备注甲', 'notes must live in the detail');
   // 署名 = id，每行都有，tooltip 同一个 id。
   const signatures = collect(opened, 'project-flow-taskSignature');
   assert.deepEqual(signatures.map((element) => element.children[0]), ['T-A9', 'T-D9'], 'every row signs its id');
@@ -2378,12 +2380,22 @@ check('TasksCard: a row whose type is not a string degrades to the bare title', 
   assert.equal(title.props.title, '标题丙');
 });
 
-check('TasksCard: the notes line is clamped to two lines by the stylesheet', () => {
-  const rule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskNotes{'));
-  assert.ok(rule, 'notes CSS rule missing');
-  assert.ok(rule.includes('-webkit-line-clamp:2'), 'notes is not clamped to two lines');
-  assert.ok(rule.includes('-webkit-box-orient:vertical'), 'notes clamp box missing');
-  assert.ok(rule.includes('overflow:hidden'), 'notes clamp does not hide the overflow');
+check('TaskRow: the collapsed head is one nowrap line and has no notes row', () => {
+  const headRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskHead{'));
+  assert.ok(headRule, 'task head CSS rule missing');
+  assert.ok(headRule.includes('flex-wrap:nowrap'), 'the collapsed head must not wrap to a second line');
+  assert.equal(probe.CSS.includes('.project-flow-taskNotes{'), false, 'the old notes line rule must be gone');
+  const row = probe.TaskRow({
+    task: { id: 'T-L1', type: 'feat', title: '单行', notes: '不应出现在行里', updated_at: '2026-10-28T10:00:00+08:00' },
+    t,
+    now: NOW,
+    open: false,
+    onToggle: () => {},
+  });
+  assert.equal(collect(row, 'project-flow-taskNotes').length, 0);
+  assert.ok(!textOf(row).includes('不应出现在行里'), 'notes leaked into the collapsed head');
+  assert.equal(collect(row, 'project-flow-taskDetail').length, 0, 'collapsed row rendered a detail');
+  assert.equal(textOf(collect(row, 'project-flow-taskSignature')[0]), 'T-L1');
   const titleRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskTitle{'));
   assert.ok(titleRule && titleRule.includes('text-overflow:ellipsis'), 'title has no ellipsis');
   const signatureRule = probe.CSS.split('\n').find((line) => line.startsWith('.project-flow-taskSignature{'));
@@ -2391,6 +2403,104 @@ check('TasksCard: the notes line is clamped to two lines by the stylesheet', () 
   assert.ok(signatureRule.includes('max-width:40%'), 'the signature must cap its width');
   assert.ok(signatureRule.includes('text-overflow:ellipsis'), 'a long id must ellipsize');
   assert.ok(signatureRule.includes('color:var(--dsw-alias-label-secondary)'), 'the signature must stay secondary');
+});
+
+check('TaskRow: a 300px narrow column clips a long branch instead of overflowing the card', () => {
+  const ruleOf = (selector) => probe.CSS.split('\n').find((line) => line.startsWith(selector + '{'));
+  const headRule = ruleOf('.project-flow-taskHead');
+  assert.ok(headRule, 'task head CSS rule missing');
+  assert.ok(headRule.includes('overflow:hidden'), 'the head needs a horizontal overflow boundary');
+  assert.ok(headRule.includes('flex-wrap:nowrap'), 'the head must stay one line');
+  for (const selector of [
+    '.project-flow-taskBranch',
+    '.project-flow-taskMeta',
+    '.project-flow-taskStage',
+    '.project-flow-taskBadge',
+    '.project-flow-taskSignature',
+  ]) {
+    const rule = ruleOf(selector);
+    assert.ok(rule, selector + ' CSS rule missing');
+    assert.ok(rule.includes('max-width:'), selector + ' needs a width cap');
+    assert.ok(rule.includes('overflow:hidden'), selector + ' needs to clip its overflow');
+    assert.ok(rule.includes('text-overflow:ellipsis'), selector + ' needs an ellipsis');
+  }
+
+  // A fictional 300px sidebar: the branch is 180 chars and every non-title item
+  // is bounded, so the row can be clipped but never widen the card.
+  const longBranch = 'feature/' + 'x'.repeat(180);
+  const row = probe.TaskRow({
+    task: {
+      id: 'T-N1',
+      type: 'feat',
+      title: '窄栏任务',
+      stage: 'implementing',
+      owner: 'alice',
+      branch: longBranch,
+      updated_at: '2026-10-28T10:00:00+08:00',
+    },
+    t,
+    now: NOW,
+    open: false,
+    onToggle: () => {},
+  });
+  const branch = collect(row, 'project-flow-taskBranch')[0];
+  assert.ok(branch, 'the long branch badge must still render');
+  assert.equal(textOf(branch), longBranch, 'the full branch text stays in the DOM for the tooltip');
+  assert.equal(branch.props.title, t('tasks.branch') + ' · ' + longBranch, 'the branch keeps its full-text tooltip');
+  assert.equal(textOf(collect(row, 'project-flow-taskTitle')[0]), 'feat: 窄栏任务');
+  assert.equal(textOf(collect(row, 'project-flow-taskSignature')[0]), 'T-N1');
+  assert.equal(collect(row, 'project-flow-taskHead')[0].children.filter((child) => child && child.props && child.props.className === 'project-flow-taskBranch').length, 1);
+});
+
+check('TasksCard: two rows without business ids get distinct detail targets', () => {
+  const tasks = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { active: 2 },
+      active: [{ title: '无 id 甲' }, { title: '无 id 乙' }],
+    },
+  }).tasks;
+  const card = renderWithState(probe.TasksCard, { tasks, t, now: NOW }, { reset: true });
+  const slots = collect(card, 'project-flow-taskDetailSlot');
+  assert.equal(slots.length, 2, 'both id-less rows must render');
+  const ids = slots.map((slot) => slot.props.id);
+  assert.deepEqual(ids, ['project-flow-taskDetail-row-todo-0', 'project-flow-taskDetail-row-todo-1'], 'id-less rows need unique group-scoped forest keys');
+  assert.equal(new Set(ids).size, ids.length, 'duplicate DOM ids would break aria-controls');
+  assert.deepEqual(
+    collect(card, 'project-flow-taskHead').map((element) => element.props['aria-controls']),
+    ids,
+    'every head must control its own slot'
+  );
+});
+
+check('TasksCard: two id-less rows in different stage groups also get distinct detail ids', () => {
+  const tasks = probe.normalize({
+    tasks: {
+      total: 2,
+      counts: { active: 2 },
+      active: [
+        { title: '无 id 待办', stage: 'created' },
+        { title: '无 id 分析', stage: 'analyzing' },
+      ],
+    },
+  }).tasks;
+  const card = mountTasks(tasks);
+  assert.equal(collect(card, 'project-flow-taskDetailSlot').length, 1, 'the analyzing group starts folded');
+  const made = toggleGroup(card, 'analyzing', tasks);
+  const slots = collect(made, 'project-flow-taskDetailSlot');
+  assert.equal(slots.length, 2, 'both stage groups must render one row after expanding');
+  const ids = slots.map((slot) => slot.props.id);
+  assert.deepEqual(
+    ids,
+    ['project-flow-taskDetail-row-todo-0', 'project-flow-taskDetail-row-analyzing-0'],
+    'the fallback key needs the group kind'
+  );
+  assert.equal(new Set(ids).size, 2, 'group-local row indexes must not collide across groups');
+  assert.deepEqual(
+    collect(made, 'project-flow-taskHead').map((element) => element.props['aria-controls']),
+    ids,
+    'each head must control its own group-scoped slot'
+  );
 });
 
 check('TaskRow: expanded detail carries every ledger field including the id', () => {
@@ -2422,16 +2532,29 @@ check('TaskRow: expanded detail carries every ledger field including the id', ()
   assert.equal(values[9], '2026-10-28T10:00:00+08:00');
 });
 
-check('TaskRow: aria-expanded, click and keyboard Enter/Space toggle the detail', () => {
+check('TaskRow: aria-expanded/aria-controls, click and keyboard Enter/Space toggle the detail', () => {
   const calls = [];
   const onToggle = (id) => calls.push(id);
   const task = view.tasks.draft[0];
+  const detailId = 'project-flow-taskDetail-T-D1';
   const collapsed = probe.TaskRow({ task, t, now: NOW, open: false, onToggle });
   const head = collect(collapsed, 'project-flow-taskHead')[0];
+  const keyed = probe.TaskRow({ task, t, now: NOW, open: false, onToggle, rowKey: 'row-9' });
+  assert.equal(
+    collect(keyed, 'project-flow-taskHead')[0].props['aria-controls'],
+    'project-flow-taskDetail-row-9',
+    'the forest key must win over the business id (unique DOM ids)'
+  );
   assert.equal(head.type, 'div', 'row head should be a focusable div (role=button)');
   assert.equal(head.props.role, 'button');
   assert.equal(head.props.tabIndex, 0, 'row head is not keyboard reachable');
   assert.equal(head.props['aria-expanded'], false);
+  assert.equal(head.props['aria-controls'], detailId, 'the head must point at its detail slot');
+  const collapsedSlot = collect(collapsed, 'project-flow-taskDetailSlot')[0];
+  assert.ok(collapsedSlot, 'the aria-controls target must exist while collapsed');
+  assert.equal(collapsedSlot.props.id, detailId);
+  assert.equal(collapsedSlot.props.hidden, true, 'the detail slot stays hidden while collapsed');
+  assert.equal(collapsedSlot.children.filter(Boolean).length, 0, 'collapsed rows must not build detail content');
   assert.equal(collect(collapsed, 'project-flow-taskDetail').length, 0, 'collapsed row rendered a detail');
   head.props.onClick({});
   assert.deepEqual(calls, ['T-D1'], 'click did not toggle the draft id');
@@ -2448,7 +2571,51 @@ check('TaskRow: aria-expanded, click and keyboard Enter/Space toggle the detail'
   const expanded = probe.TaskRow({ task, t, now: NOW, open: true, onToggle });
   const openHead = collect(expanded, 'project-flow-taskHead')[0];
   assert.equal(openHead.props['aria-expanded'], true);
+  assert.equal(openHead.props['aria-controls'], detailId);
+  const openSlot = collect(expanded, 'project-flow-taskDetailSlot')[0];
+  assert.equal(openSlot.props.hidden, undefined, 'the open detail slot must not be hidden');
   assert.equal(collect(expanded, 'project-flow-taskDetail').length, 1, 'expanded row has no detail');
+  assert.equal(openSlot.children.filter(Boolean).length, 1, 'the open slot must hold the detail');
+});
+
+check('TasksCard: all rows start collapsed; one click opens one, keyboard collapses it and the cache remembers', () => {
+  const root = '/tmp/pf-task-fold-remember';
+  const render = () => renderWithState(probe.TasksCard, { tasks: view.tasks, t, now: NOW, stateRoot: root });
+  const card = renderWithState(probe.TasksCard, { tasks: view.tasks, t, now: NOW, stateRoot: root }, { reset: true });
+  const heads = collect(card, 'project-flow-taskHead');
+  assert.ok(heads.length >= 2, 'the fixture needs at least two rows');
+  for (const head of heads) assert.equal(head.props['aria-expanded'], false, 'every row starts collapsed');
+  assert.equal(collect(card, 'project-flow-taskDetail').length, 0, 'no detail may render by default');
+
+  heads[0].props.onClick({});
+  const firstOpen = render();
+  const firstHeads = collect(firstOpen, 'project-flow-taskHead');
+  assert.equal(firstHeads[0].props['aria-expanded'], true, 'the clicked row did not expand');
+  assert.equal(firstHeads[1].props['aria-expanded'], false, 'only one detail opens at a time');
+  assert.equal(collect(firstOpen, 'project-flow-taskDetail').length, 1, 'exactly one detail must render');
+
+  // The per-root cache remembers the open row across a remount in this session.
+  const remounted = renderWithState(probe.TasksCard, { tasks: view.tasks, t, now: NOW, stateRoot: root }, { reset: true });
+  assert.equal(
+    collect(remounted, 'project-flow-taskHead')[0].props['aria-expanded'],
+    true,
+    'the open row was forgotten by the per-root cache'
+  );
+
+  collect(remounted, 'project-flow-taskHead')[0].props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  const collapsed = render();
+  for (const head of collect(collapsed, 'project-flow-taskHead')) {
+    assert.equal(head.props['aria-expanded'], false, 'keyboard Enter must collapse the row');
+  }
+  assert.equal(collect(collapsed, 'project-flow-taskDetail').length, 0);
+
+  collect(collapsed, 'project-flow-taskHead')[1].props.onKeyDown({ key: ' ', preventDefault() {} });
+  const secondOpen = render();
+  assert.equal(
+    collect(secondOpen, 'project-flow-taskHead')[1].props['aria-expanded'],
+    true,
+    'Space must expand the focused row'
+  );
 });
 
 check('TaskDetail: empty fields degrade to the dash placeholder', () => {
@@ -2527,11 +2694,8 @@ check('TasksCard: the active group comes first, then the folded draft group', ()
     ['active one', 'draft one', 'draft two'],
     'active rows must render before draft rows inside the bucket'
   );
-  assert.deepEqual(
-    collect(opened, 'project-flow-taskNotes').map((element) => element.children[0]),
-    ['活动备注', '草稿一的备注'],
-    'notes must render on the second line (an empty notes row is skipped)'
-  );
+  assert.equal(collect(opened, 'project-flow-taskNotes').length, 0, 'collapsed rows must not render a notes line');
+  assert.ok(!textOf(opened).includes('活动备注'), 'collapsed rows must not print notes');
   assert.ok(textOf(opened).includes('会话 alice'), 'draft owner missing');
   // 用户 ③ 决策：id 作为署名常驻，不再是「默认隐藏」。
   assert.deepEqual(

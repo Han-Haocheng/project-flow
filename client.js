@@ -54,9 +54,10 @@
  *     framework card entirely instead of drawing zero counters;
  *   - every row in `tasks.active` / `tasks.draft` / `tasks.recentDone` carries
  *     `goal` plus bounded detail fields (`notes`, `scope`, `acceptance`,
- *     `commits`, `created_at`, `updated_at`). A row renders its title and a
- *     two-line clamped goal, hides the business id until the detail opens, and
- *     toggles that detail on click or Enter/Space (`aria-expanded`).
+ *     `commits`, `created_at`, `updated_at`). A row is one line by default
+ *     (`type: title`, stage badge, owner/time meta and the business id) and only
+ *     renders the detail — notes and every ledger field — after a click or
+ *     Enter/Space (`aria-expanded` / `aria-controls`).
  *
  * Layout is container-query driven: the same component serves a 300 px docked
  * right bar (single column, compact) and a wide/full-screen bar (two columns).
@@ -1375,10 +1376,11 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One task row: `type: title` first, notes second (two clamped lines, omitted
-     * when the ledger has no notes), owner/time as small meta and the business id
-     * as a right-aligned signature. The head is a focusable `role="button"`
-     * with `aria-expanded`, toggled by click or Enter/Space.
+     * One task row: a single collapsed line — `type: title`, the stage badge,
+     * owner/time as small meta and the business id as a right-aligned signature.
+     * Everything else (notes, scope, acceptance, commits, timestamps) lives in
+     * the detail, revealed by the head — a focusable `role="button"` with
+     * `aria-expanded` and `aria-controls`, toggled by click or Enter/Space.
      */
     function TaskRow(props) {
       const task = asObject(props.task);
@@ -1402,8 +1404,10 @@ window.__ModuleLoader__.load({
       /* `': '` is hardcoded on purpose (D-6): a missing type shows the bare
          title, with no prefix and no placeholder. */
       const heading = type ? type + ': ' + title : title;
-      const notes = asText(task.notes);
       const signature = asText(task.id);
+      /* `rowKey` is the forest's unique node id (`row-<index>` for a legacy record
+         without a business id), so two id-less rows never share a DOM id. */
+      const detailId = 'project-flow-taskDetail-' + (asText(props.rowKey) || signature || 'row');
       const stage = asText(task.stage);
       const stageLabel =
         stage === '' ? '' : STAGE_LABEL_KEYS[stage] ? t(STAGE_LABEL_KEYS[stage]) : t('tasks.stage.' + stage);
@@ -1460,6 +1464,7 @@ window.__ModuleLoader__.load({
             role: 'button',
             tabIndex: 0,
             'aria-expanded': open ? true : false,
+            'aria-controls': detailId,
             title: heading || undefined,
             onClick: toggle,
             onKeyDown: (event) => {
@@ -1506,10 +1511,16 @@ window.__ModuleLoader__.load({
             : null,
           badge ? React.createElement('span', { className: 'project-flow-taskBadge', title: badge }, badge) : null,
           meta ? React.createElement('span', { className: 'project-flow-taskMeta' }, meta) : null,
-          React.createElement('span', { className: 'project-flow-taskSignature', title: signature || undefined }, signature),
-          notes ? React.createElement('span', { className: 'project-flow-taskNotes', title: notes }, notes) : null
+          React.createElement('span', { className: 'project-flow-taskSignature', title: signature || undefined }, signature)
         ),
-        open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null,
+        /* The slot exists in both states so `aria-controls` always points at a
+           real element; its content is created only while open, keeping the
+           collapsed row a single line and out of the accessibility tree. */
+        React.createElement(
+          'div',
+          { id: detailId, className: 'project-flow-taskDetailSlot', hidden: open ? undefined : true },
+          open ? React.createElement(TaskDetail, { task, t, now: props.now }) : null
+        ),
         tree.childrenList || null
       );
     }
@@ -2214,8 +2225,11 @@ window.__ModuleLoader__.load({
       }
 
       /** Parent-linked forest for one group; a cycle or dangling parent re-roots. */
-      const buildForest = (rows) => {
-        const nodes = rows.map((task, index) => ({ task, id: asText(task.id) || 'row-' + index, children: [] }));
+      const buildForest = (rows, kind) => {
+        /* A record without a business id still needs a unique node key. The
+           index restarts per stage group, so the group kind is part of it —
+           two id-less rows in different groups must not share a DOM id. */
+        const nodes = rows.map((task, index) => ({ task, id: asText(task.id) || 'row-' + kind + '-' + index, children: [] }));
         const byId = new Map();
         for (const node of nodes) if (!byId.has(node.id)) byId.set(node.id, node);
         const roots = [];
@@ -2257,7 +2271,7 @@ window.__ModuleLoader__.load({
       /** Rows of one group; business ids are the React keys, never row indexes. */
       const renderRows = (kind, rows) => {
         const limit = groupLimit(kind);
-        const roots = buildForest(rows);
+        const roots = buildForest(rows, kind);
         const countVisible = (nodes, depth) =>
           nodes.reduce(
             (sum, node) => sum + 1 + (collapsedOf(node.id, depth) ? 0 : countVisible(node.children, depth + 1)),
@@ -2296,6 +2310,7 @@ window.__ModuleLoader__.load({
             : null;
           return React.createElement(TaskRow, {
             key: id,
+            rowKey: id,
             task: node.task,
             t,
             now,
@@ -4297,7 +4312,8 @@ window.__ModuleLoader__.load({
 .project-flow-taskChildren{list-style:none;margin:0;padding:0;border-left:1px solid var(--dsw-alias-border-l2);margin-left:12px;}
 .project-flow-taskCaret{flex:none;width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:none;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:10px;line-height:1;}
 .project-flow-taskCaret:hover{color:var(--dsw-alias-label-primary);}
-.project-flow-taskBadge{flex:none;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap;}
+.project-flow-taskBadge{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;font-size:10px;line-height:14px;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap;}
+.project-flow-taskBranch{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:${MONO};font-size:9.5px;color:var(--dsw-alias-brand-primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;opacity:.85;}
 .project-flow-trend{margin-top:8px;min-width:0;}
 .project-flow-trendHead{display:flex;align-items:baseline;gap:4px;font-size:11px;min-width:0;}
 .project-flow-trendApprox{color:var(--dsw-alias-label-secondary);font-weight:600;cursor:help;}
@@ -4364,17 +4380,17 @@ window.__ModuleLoader__.load({
 .project-flow-list{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
 .project-flow-taskList{display:flex;flex-direction:column;gap:1px;margin:0;padding:0;list-style:none;}
 .project-flow-taskRow{display:flex;flex-direction:column;min-width:0;border-radius:6px;}
-.project-flow-taskHead{box-sizing:border-box;display:flex;align-items:baseline;flex-wrap:wrap;column-gap:8px;row-gap:1px;width:100%;padding:3px 4px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;line-height:1.45;text-align:left;cursor:pointer;}
+.project-flow-taskHead{box-sizing:border-box;display:flex;align-items:baseline;flex-wrap:nowrap;column-gap:8px;width:100%;overflow:hidden;padding:3px 4px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;line-height:1.45;text-align:left;cursor:pointer;}
 .project-flow-taskHead:hover{background:var(--dsw-alias-bg-layer-2);}
 .project-flow-taskHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px;}
 .project-flow-taskMark{flex:none;width:1em;text-align:center;font-size:10.5px;line-height:1.6;}
 .project-flow-taskTitle{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;}
 .project-flow-teamLine{margin-top:6px;font-size:11px;}
-.project-flow-taskStage{flex:none;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:10px;line-height:1.6;white-space:nowrap;}
+.project-flow-taskStage{flex:none;max-width:30%;overflow:hidden;text-overflow:ellipsis;padding:0 4px;border-radius:4px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:10px;line-height:1.6;white-space:nowrap;}
 .project-flow-taskStage--closed{color:var(--dsw-alias-label-secondary);}
-.project-flow-taskMeta{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.project-flow-taskMeta{flex:none;max-width:35%;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);font-size:10.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .project-flow-taskSignature{flex:none;margin-left:auto;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:10.5px;}
-.project-flow-taskNotes{flex:1 1 100%;min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
+.project-flow-taskDetailSlot{min-width:0;}
 .project-flow-taskDetail{margin-left:12px;}
 .project-flow-gateMark{font-size:11px;line-height:1;}
 .project-flow-gateMark--ok{color:var(--project-flow-ok-text);}
@@ -4520,7 +4536,6 @@ window.__ModuleLoader__.load({
 .project-flow-taskStage{font-size:10.5px;}
 .project-flow-taskBranch{flex:none;font-family:${MONO};font-size:9.5px;color:var(--dsw-alias-brand-primary);border:1px solid currentColor;border-radius:3px;padding:0 3px;opacity:.85;}
 .project-flow-taskSignature{font-size:11px;}
-.project-flow-taskNotes{font-size:11.5px;}
 .project-flow-taskDetail{margin-left:42px;}
 .project-flow-guide{margin-top:6px;padding:14px;border-radius:10px;}
 .project-flow-guideTitle{font-size:13px;margin-bottom:4px;}
