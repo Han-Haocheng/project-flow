@@ -9,7 +9,7 @@
 import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { archiveTasks, loadContract, updateTask } from '../lib/core.mjs'
+import { addTask, archiveTasks, drainWarnings, loadContract, updateTask } from '../lib/core.mjs'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -239,6 +239,20 @@ test('warn 模式：同一条边放行但带 task-dispatch-warn（hard 用例仍
     delete process.env.PROJECT_FLOW_CLAIM_GATE
   }
 })
+
+
+/** 写一份最小 docs/module-domain.json 夹具（mount 校验只读它）。 */
+function writeModuleDomain(root) {
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify({
+    schema: 1,
+    modules: {
+      'mod-a': { title: 'A', owns: ['lib/a.mjs'] },
+      'mod-b': { title: 'B', owns: ['lib/b.mjs'] },
+    },
+    aspects: { 'slice-x': { title: 'X', files: ['lib/a.mjs', 'lib/b.mjs'] } },
+  }, null, 1))
+}
 
 // ------------------------------- T-20261113163323：claim/release 与派工回执阶段门
 
@@ -616,4 +630,155 @@ test('cancelled：mergedInto 预留字段（目标须存在、禁自指）；归
   assert.equal(archived.archived.includes(source.id), false, 'cancelled 不得被归档清扫')
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).stage, 'cancelled')
 })
+
+function claimedMountOf(record) {
+  return record?.mount ?? null
+}
+
+// ------------------------------- T-20261113165239：挂载 mount 语义
+
+test('mount：无 mount 主卡不能 claim implementer / →implementing；有 mount 放行', () => {
+  const root = freshProject('mount-gate')
+  writeModuleDomain(root)
+  const bare = addTaskCli(root, '无挂载主卡', ['--stage', 'queued-implementation'])
+
+  const claimBare = claimCli(root, bare.id, ['--agent', 'impl', '--role', 'implementer'])
+  assert.equal(claimBare.code, 2, claimBare.stdout + claimBare.stderr)
+  assert.match(claimBare.json.error.message, /没有 mount/)
+
+  const moveBare = runCli(root, ['task', 'update', bare.id, '--stage', 'implementing', '--json'])
+  assert.equal(moveBare.code, 2, moveBare.stdout + moveBare.stderr)
+  assert.match(moveBare.json.error.message, /没有 mount/)
+
+  const mounted = addTaskCli(root, '有挂载主卡', [
+    '--stage', 'queued-implementation', '--mount-kind', 'module', '--mount', 'mod-a',
+  ])
+  assert.deepEqual(claimedMountOf(mounted), { kind: 'module', id: 'mod-a' })
+  assert.equal(claimCli(root, mounted.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  const moved = runCli(root, ['task', 'update', mounted.id, '--stage', 'implementing', '--json'])
+  assert.equal(moved.code, 0, moved.stdout + moved.stderr)
+})
+
+test('mount：id 不存在/多值/双挂拒绝；缺一对参数是 usage；aspect 跨模块放行', () => {
+  const root = freshProject('mount-shape')
+  writeModuleDomain(root)
+  const contract = loadContract(root).contract
+  const task = addTaskCli(root, '形状卡', ['--stage', 'queued-implementation'])
+
+  const missing = runCli(root, [
+    'task', 'add', '--type', 'feat', '--title', 'x', '--stage', 'queued-implementation',
+    '--mount-kind', 'module', '--mount', 'nope', '--json',
+  ])
+  assert.equal(missing.code, 2, missing.stdout + missing.stderr)
+  assert.match(missing.json.error.message, /挂载校验失败|重新挂载/)
+
+  const halfPair = runCli(root, ['task', 'update', task.id, '--mount', 'mod-a', '--json'])
+  assert.equal(halfPair.code, 1, '缺 --mount-kind 是用法错误')
+
+  assert.throws(
+    () => updateTask(root, contract, task.id, { mount: { kind: 'module', id: 'mod-a', aspect: 'slice-x' } }, { source: 'internal' }),
+    /only supports kind\/id/,
+  )
+  assert.throws(
+    () => updateTask(root, contract, task.id, { mount: [{ kind: 'module', id: 'mod-a' }, { kind: 'aspect', id: 'slice-x' }] }, { source: 'internal' }),
+    /mount must be an object/,
+  )
+
+  // aspect 天生横向：挂 aspect 的子卡跨模块也不校验 files。
+  const parent = addTaskCli(root, '父卡', ['--stage', 'analyzing'])
+  const child = addTaskCli(root, 'aspect 子卡', [
+    '--stage', 'queued-implementation', '--parent', parent.id,
+    '--mount-kind', 'aspect', '--mount', 'slice-x',
+  ])
+  assert.deepEqual(claimedMountOf(child), { kind: 'aspect', id: 'slice-x' })
+  assert.equal(claimCli(root, child.id, ['--agent', 'impl', '--role', 'implementer']).code, 0)
+  assert.equal(runCli(root, ['task', 'update', child.id, '--stage', 'implementing', '--json']).code, 0)
+})
+
+test('mount：kind=module 时 files 不在 owns 内只 warning（观察期）', () => {
+  const root = freshProject('mount-owns')
+  writeModuleDomain(root)
+  const contract = loadContract(root).contract
+  drainWarnings()
+  const task = addTask(root, contract, {
+    type: 'feat',
+    title: '越界写域',
+    stage: 'queued-implementation',
+    scope: { allow: ['lib/b.mjs'], deny: [] },
+    mount: { kind: 'module', id: 'mod-a' },
+  })
+  const warnings = drainWarnings().join('\n')
+  assert.match(warnings, /task-mount-files-outside: .*lib\/b\.mjs/)
+  assert.equal(task.mount.id, 'mod-a')
+})
+
+test('mount-only：单独设置与单独清空都合法（空 patch 检查在 mount 之后）', () => {
+  const root = freshProject('mount-only')
+  writeModuleDomain(root)
+  const task = addTaskCli(root, '只改挂载', ['--stage', 'queued-implementation'])
+  const set = runCli(root, ['task', 'update', task.id, '--mount-kind', 'module', '--mount', 'mod-a', '--json'])
+  assert.equal(set.code, 0, set.stdout + set.stderr)
+  assert.deepEqual(set.json.data.mount, { kind: 'module', id: 'mod-a' })
+  const clear = runCli(root, ['task', 'update', task.id, '--mount', 'none', '--json'])
+  assert.equal(clear.code, 0, clear.stdout + clear.stderr)
+  assert.equal(clear.json.data.mount, null)
+})
+
+test('mount legacy：切换点前的主卡第一次 claim/implementing 放行并落标记，第二次硬拦', () => {
+  const root = freshProject('mount-legacy')
+  writeModuleDomain(root)
+  const contract = loadContract(root).contract
+  const old = addTask(root, contract, {
+    type: 'feat', title: '存量主卡', stage: 'queued-implementation',
+    created_at: '2026-11-13T16:00:00+08:00',
+  })
+  // 先 claim（同样走 mount legacy），再推 implementing（两个门各有自己的 legacy 标记）。
+  const claimOld = claimCli(root, old.id, ['--agent', 'impl', '--role', 'implementer'])
+  assert.equal(claimOld.code, 0, claimOld.stdout + claimOld.stderr)
+  const first = runCli(root, ['task', 'update', old.id, '--stage', 'implementing', '--json'])
+  assert.equal(first.code, 0, first.stdout + first.stderr)
+  assert.ok((first.json.warnings || []).some((line) => line.startsWith('task-mount-legacy:')), 'legacy 放行必须留 warning')
+  assert.equal(first.json.data.checkpoints.at(-1).kind, 'mount-legacy-implementing')
+  updateTask(root, contract, old.id, { stage: 'queued-implementation' }, { source: 'internal' })
+  const second = runCli(root, ['task', 'update', old.id, '--stage', 'implementing', '--json'])
+  assert.equal(second.code, 2, '标记落盘后不再享受 legacy')
+
+  const oldClaim = addTask(root, contract, {
+    type: 'feat', title: '存量 claim 主卡', stage: 'queued-implementation',
+    created_at: '2026-11-13T16:00:00+08:00',
+  })
+  const claim = claimCli(root, oldClaim.id, ['--agent', 'impl2', '--role', 'implementer'])
+  assert.equal(claim.code, 0, claim.stdout + claim.stderr)
+  assert.ok((claim.json.warnings || []).some((line) => line.startsWith('task-mount-legacy:')))
+  assert.equal(releaseCli(root, oldClaim.id, ['--agent', 'impl2', '--outcome', 'ok']).code, 0)
+  const again = claimCli(root, oldClaim.id, ['--agent', 'impl2', '--role', 'implementer'])
+  assert.equal(again.code, 2, 'legacy 标记后再次 claim 必须硬拦')
+})
+
+test('mount：坏 JSON 不再 fail-open（invalid）；add --stage implementing 也过门', () => {
+  const root = freshProject('mount-corrupt')
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), '{ not json')
+  const task = addTaskCli(root, '坏图卡', ['--stage', 'queued-implementation'])
+  const moved = runCli(root, ['task', 'update', task.id, '--stage', 'implementing', '--json'])
+  assert.equal(moved.code, 2, moved.stdout + moved.stderr)
+  assert.match(moved.json.error.message, /无法解析/)
+
+  const badAdd = runCli(root, ['task', 'add', '--type', 'feat', '--title', 'add 绕过', '--stage', 'implementing', '--json'])
+  assert.equal(badAdd.code, 2, badAdd.stdout + badAdd.stderr)
+  assert.match(badAdd.json.error.message, /无法解析|没有 mount/)
+})
+
+test('mount：模块图改名/删条目后重校错误带迁移命令', () => {
+  const root = freshProject('mount-migrate')
+  writeModuleDomain(root)
+  const task = addTaskCli(root, '挂载卡', ['--stage', 'queued-implementation', '--mount-kind', 'module', '--mount', 'mod-a'])
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify({ schema: 1, modules: {}, aspects: {} }, null, 1))
+  const moved = runCli(root, ['task', 'update', task.id, '--notes', 'x', '--json'])
+  assert.equal(moved.code, 2, moved.stdout + moved.stderr)
+  assert.match(moved.json.error.message, /--mount none/)
+  assert.match(moved.json.error.message, /--mount-kind/)
+})
+
+
 

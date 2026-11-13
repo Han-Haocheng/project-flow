@@ -75,7 +75,7 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal', 'role', 'outcome',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team', 'summary', 'merged-into',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team', 'summary', 'merged-into', 'mount', 'mount-kind',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -135,9 +135,9 @@ export const SPEC = Object.freeze({
   task: Object.freeze({
     list: { flags: [] },
     show: { flags: ['id'] },
-    add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'reason', 'merged-into'] },
+    add: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'reason', 'merged-into', 'mount', 'mount-kind'] },
     // `--commits` 与 `flow exp update` 对齐（T-20261113110938 ①）：逗号分隔的短 sha 列表。
-    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'commits', 'no-dispatch', 'reason', 'merged-into'] },
+    update: { flags: ['id', 'title', 'type', 'status', 'owner', 'notes', 'experiment', 'parent', 'stage', 'commits', 'no-dispatch', 'reason', 'merged-into', 'mount', 'mount-kind'] },
     // T-20261113163323：派工回执原语（claim 开放 → release 闭合）。
     claim: { flags: ['id', 'agent', 'role', 'session', 'reason'] },
     release: { flags: ['id', 'agent', 'outcome', 'reason', 'role', 'summary', 'file'] },

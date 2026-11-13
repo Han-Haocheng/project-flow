@@ -666,6 +666,33 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   - 读投影/统计：`stageCounts.cancelled` 与 `stages.cancelled` 是独立「撤销」桶；`status` 计数单列
     `cancelled`，**不混入 done**；`cancelled` 不进入 active/recentDone/归档候选。
 
+- **挂载语义 `mount`（T-20261113165239，单值）**：任务可选字段 `mount: {kind:'module'|'aspect', id}`。
+  - **单值**：只能挂一个切片/模块；`kind` 只能是 `module`/`aspect`，不允许同时挂两者或多值
+    （形状里多一个键、传数组都 → `invalid`）。
+  - **主卡无 mount 不能直接处理**：`parent === null` 的卡没有 `mount` 时，
+    `flow task claim --role implementer` 与任何 → `implementing` 一律 `invalid`，文案要求先拆子卡
+    （`flow_subtask add`）或显式 `--mount-kind module|aspect --mount <id>` 并在 notes 写明理由；
+    有 mount 的卡按普通卡处理。子卡（有 parent）不受这条约束。
+  - **责任冲突**：`id` 在 `docs/module-domain.json` 的对应表（module→`modules`、aspect→`aspects`）
+    里不存在 → `invalid`，提示可能是切片/模块划分冲突；文件缺失时只记
+    `task-mount-unverifiable` warning（无法校验≠冲突）。
+  - **观察期口径**：`kind:'module'` 时 `scope.allow` 与模块 `owns`/`shared` 的一致性本轮只记
+    `task-mount-files-outside` warning，**不阻断**（避免存量卡被一刀切）；`kind:'aspect'` 天生横向，
+    不校验跨模块/跨层 files。
+  - **「无 mount 主卡不可实现」只在项目存在模块图时强制**：有 `docs/module-domain.json` 的项目，
+    无 mount 主卡的 claim/implementing 硬门照上表执行；**无图项目降级为 `task-mount-required` warning**，
+    原因是无法校验挂载目标（挂不了也验不了），硬拦会让刚 `flow init` 的新项目连 `implementing`
+    都进不去。`task-mount-unverifiable` 只用于「已经给了 mount、但无图可校验 id」这一种情况。
+  - **存量兼容**：与 claim 门同口径，切换点（`LEGACY_CUTOFF_AT`）之前创建的主卡第一次走
+    claim/implementing 时按 legacy 放行并写 `legacy-bypass` 标记（warning `task-mount-legacy`），
+    之后必须显式挂载或拆子卡。`add --stage implementing` 同样跑这道门（不能靠 add 绕过）。
+  - **模块图坏文件**：`docs/module-domain.json` 存在但 JSON 无法解析 → `invalid`（不再 fail-open
+    降级）；文件不存在才按无图降级。
+  - **与 `claims.enforce` 同闸**：挂载门复用 claim 门的 hard/warn/off 模式（含
+    `PROJECT_FLOW_CLAIM_GATE` 测试降级），避免同一批测试开关对这条门无效。
+  - CLI：`flow task add|update … --mount-kind module|aspect --mount <id>`（成对给出；
+    `--mount none|null` 清空）。
+
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 
 `stage` 是行为层，`status`（`draft|active|done|archived|cancelled`）是**兼容视图**——面板队列、
@@ -1514,8 +1541,10 @@ flow exp rm <id> [--yes]
 flow task list | show <id>
 flow task add    --title T --type <t> [--status draft|active|done|archived|cancelled]
                  [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--mount-kind module|aspect --mount <id>]
 flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archived|cancelled]
                  [--stage <s>] [--owner <会话|none>] [--notes N] [--experiment E-id] [--parent T-id]
+                 [--mount-kind module|aspect --mount <id>]
                  # <t>: feat|fix|docs|style|refactor|perf|test|chore|build|ci（add 必填）
                  # <s>: 十阶段之一（见 §3.2.1）；写 --stage 时 status 由阶段派生并同批落盘；
                  #      给 --stage done 会同时写 done_at（stampTaskTimes），两者同给且矛盾 → invalid；
