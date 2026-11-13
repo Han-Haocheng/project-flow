@@ -1730,7 +1730,7 @@ timestamp 时取 pre-step 捕获时刻。**残留**：`stale` 规则依赖消息
 
 ### 5.6 `flow_*` 工具输出渲染（2026-11-12）
 
-**问题**：九个 `toolOutput()` 调用点原本把 `render` 写成 `JSON.stringify(value, null, 2)`，
+**问题**：八个 `toolOutput()` 调用点原本把 `render` 写成 `JSON.stringify(value, null, 2)`，
 于是**人**在对话里看到的结果是一坨 JSON——清单里每行的 id/标题/阶段要靠肉眼在缩进里找。
 
 **结论**：只改 `render`，**不动 schema、不动规范值**。宿主契约（`dsh-tools` 的 Register a tool）
@@ -1750,10 +1750,16 @@ timestamp 时取 pre-step 捕获时刻。**残留**：`stale` 规则依赖消息
 - `renderToolText(name, value, action)`：**纯函数**，不读宿主服务、不修改传入的 `value`；
 - `toolOutput(name)`：返回
   `{ schema: {type:'object'}, render: (args, value) => [{type:'text', text: renderToolText(name, value, toolAction(args))}] }`；
-- **九条 `toolOutput()` 调用点**（对应**八条工具线**：`flow_task` 在 `tasks.js` 与
-  `lib/host/tools.mjs` 各一处，线名相同）——各调用点传自己的 `definition.name`：
-  `flow_status` / `flow_heartbeat` / `flow_decision` / `flow_veto`（`lib/host/tools.mjs` 四处）、
-  `flow_task` / `flow_subtask` / `flow_gate` / `flow_exp`（`lib/tools/*.mjs` 四条）。
+- **八条 `toolOutput()` 调用点 = 八条工具线**（一一对应）——各调用点传自己的
+  `definition.name`：`flow_status` / `flow_heartbeat` / `flow_decision` / `flow_veto`
+  （`lib/host/tools.mjs` 四条）、`flow_task` / `flow_subtask` / `flow_gate` / `flow_exp`
+  （`lib/tools/*.mjs` 四条）。`flow_task` 只注册一次（`lib/tools/tasks.mjs`），别处没有第二处。
+- **不在本节范围**：MCP 服务端自己注册的工具（`lib/cli/mcp-server.mjs`）走 CLI 文本输出，
+  不经 `toolOutput`；其中 `flow_desc` / `flow_check` / `flow_doctor` / `flow_backup` /
+  `flow_init` / `flow_orchestrate` 只在 MCP 侧存在。数「几个工具」时先把这两个集合分开，
+  否则口径会在 8 与 13 之间反复漂。
+- **口径自证**：`test/t-20261112-tool-output-e2e.test.mjs` 断言「注册面里 `/^flow_/` 且
+  非 MCP 包装器的集合」恰好等于上面八条；新增第九条工具却没登记渲染时，该用例会红。
 
 **四条渲染规则（可测）**：
 
