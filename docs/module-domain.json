@@ -259,7 +259,7 @@
       "owns": ["lib/backend/"],
       "shared": [],
       "sections": {},
-      "tests": ["test/t-20261113-backend-api.test.mjs"],
+      "tests": ["test/t-20261113-backend-api.test.mjs", "test/t-20261113-api-soft-load.test.mjs"],
       "semantics": "后端 API 层（T-20261112154526）：CLI/工具/MCP 等 adapter 只调本层；本层是 lib/ 下唯一 import lib/core.mjs 的 adapter 入口，只做按命名空间转发（锁、校验、写盘、警告仍在 core），不做 DTO/缓存/跨调用事务。"
     },
     "tasks": {
