@@ -74,7 +74,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/tools/subtasks.mjs` | P4 `flow_subtask` 工具：`add`（子任务直接落 `queued-analysis`）/ `update`（仅 notes+stage，走 `assertTransition`）/ `remove`（**软关闭**：`stage=done` + `notes` 追加 `[removed]`，不物理删除）；写入一律走 core 的 `addTask`/`updateTask` | index.js |
 | `lib/commands.mjs` | D-02 命令解析（`建议/继续/暂停/开始/决策/状态`）：**只识别、不执行**；capture 对 `/` 前缀不入账，reminder 只注入一行给模型看 | `index.js`（reminder） |
 | `lib/veto.mjs` | P4 分析期否决：`vetoSubtask`（会话自决、不建决策）/ `vetoTask`（建 modify\|delete 决策、任务停在 analyzing）/ `applyVetoAnswer`（modify 回 queued-analysis，delete 到 done）；**不碰团队板** | `index.js`（`flow_veto`） |
-| `lib/team-sync.mjs` | P3a **只读**团队板对账：`readTeamBoard(ctx, agent)`（真实宿主 API 以 `caller` 为授权凭据）与 `reconcile`（matched/missing/orphaned，零写入）；**不映射** `TeamTaskView.status` 与九阶段 | `index.js`（工具/面板读路径） |
+| `lib/team-sync.mjs` | 团队板对账 + 本地挂载：读面 `readTeamBoard(ctx, agent)`（真实宿主 API 以 `caller` 为授权凭据）与 `reconcile`（matched/missing/orphaned）**零写入**；`linkTask`/`unlinkTask` 是**本地写者**（只改记录的 `team` 字段，经 `api.tasks.updateTask`，每次调用各自取锁，不碰 Team 服务）；**不映射** `TeamTaskView.status` 与九阶段 | `index.js`（工具/面板读路径）、`lib/cli/tasks.mjs`、`lib/tools/tasks.mjs` |
 
 | `lib/tools/*.mjs` | 模型侧工具定义（function schema + 处理函数） | `index.js` |
 | `lib/plugin/*.mjs` | 子插件挂载骨架（`mount`）与共享参数（`shared`） | `tasks.js`/`gates.js`/`experiments.js` |
