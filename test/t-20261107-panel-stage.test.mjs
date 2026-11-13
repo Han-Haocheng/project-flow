@@ -142,3 +142,114 @@ test('行形状：捕获卡的 source.branch 投影到第 15 键，非法/缺失
   const broken = again.tasks.stages['queued-analysis'].find((entry) => entry.id === tagged.id)
   assert.equal(broken.branch, null, '非字符串 branch 投影为 null')
 })
+
+// ------------------------------------- dispatch 摘要（T-20261113155234 阶段 3）
+const DISPATCH_KEYS = ['id', 'round', 'attempt', 'agent', 'role', 'status', 'expiresAt', 'stale', 'orphan', 'outcome', 'closedAt']
+
+/** 一条合法工单（snapshotOf 的 now = 2026-11-07T10:00+08:00）。 */
+function dispatchOrder(overrides = {}) {
+  return {
+    id: 'D-1',
+    createdAt: '2026-11-07T09:00:00+08:00',
+    expiresAt: '2026-11-07T09:10:00+08:00',
+    requester: 'parent-session',
+    agent: 'analyzer',
+    role: 'analyzer',
+    round: 1,
+    attempt: 1,
+    ...overrides,
+  }
+}
+
+/** 直接改写任务记录（绕过写命令），用来造 stale/orphan/closed 的确定态。 */
+function patchTaskRecord(root, id, patch) {
+  const file = path.join(root, '.agents', 'tasks', id + '.json')
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  Object.assign(record, patch)
+  fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n')
+}
+
+/** 工单三态/界的固定时钟（buildSnapshot 只认毫秒数，不认 Date）。 */
+const DISPATCH_NOW = Date.parse('2026-11-07T10:00:00+08:00')
+
+/** 与 snapshotOf 同参，但用固定时钟并注入宿主注册表证据（liveSessions）。 */
+function snapshotAt(root, liveSessions = []) {
+  return buildSnapshot({
+    root,
+    realRoot: root,
+    entry: { path: root, name: path.basename(root) },
+    hostWarnings: [],
+    now: DISPATCH_NOW,
+    liveSessions,
+  })
+}
+
+test('每卡 dispatch 摘要：pending/acked/closed 三态 + stale/orphan 复用任务域口径', async () => {
+  const { root, contract } = freshProject('dispatch-summary')
+  const pending = addTask(root, contract, { type: 'feat', title: '待领单', stage: 'queued-analysis' })
+  const acked = addTask(root, contract, { type: 'feat', title: '已领单', stage: 'queued-analysis' })
+  const closed = addTask(root, contract, { type: 'feat', title: '已关闭', stage: 'queued-analysis' })
+  const bare = addTask(root, contract, { type: 'feat', title: '没工单', stage: 'queued-analysis' })
+
+  // expiresAt 09:10 < now 10:00 → 未关闭 = stale（口径来自 dispatchStateOf，不在这里重算）。
+  patchTaskRecord(root, pending.id, { dispatch: dispatchOrder() })
+  // 已 ack、未过期、但 checkpoints 里没有 open claim → orphan。
+  patchTaskRecord(root, acked.id, {
+    dispatch: dispatchOrder({ id: 'D-2', expiresAt: '2026-11-07T11:00:00+08:00', ackedAt: '2026-11-07T09:05:00+08:00' }),
+  })
+  patchTaskRecord(root, closed.id, {
+    dispatch: dispatchOrder({ id: 'D-3', closedAt: '2026-11-07T09:06:00+08:00', outcome: 'ok' }),
+  })
+
+  const { tasks } = await snapshotAt(root)
+  const rows = tasks.stages['queued-analysis']
+  const rowOf = (id) => rows.find((entry) => entry.id === id)
+
+  const pendingRow = rowOf(pending.id)
+  assert.ok(pendingRow && pendingRow.dispatch, '有工单的卡必须带 dispatch 摘要')
+  assert.deepEqual(Object.keys(pendingRow.dispatch), DISPATCH_KEYS, 'dispatch 是固定 11 键投影，顺序即契约')
+  assert.equal(pendingRow.dispatch.status, 'pending')
+  assert.equal(pendingRow.dispatch.stale, true, '过期且未关闭 = stale')
+  assert.equal(pendingRow.dispatch.orphan, false, 'pending 不判 orphan')
+  assert.equal(pendingRow.dispatch.outcome, null)
+  assert.equal(pendingRow.dispatch.closedAt, null)
+  assert.equal(pendingRow.dispatch.round, 1)
+  assert.equal(pendingRow.dispatch.attempt, 1)
+  assert.equal(pendingRow.dispatch.agent, 'analyzer')
+  assert.equal(pendingRow.dispatch.role, 'analyzer')
+  assert.equal(pendingRow.dispatch.expiresAt, '2026-11-07T09:10:00+08:00')
+
+  const ackedRow = rowOf(acked.id)
+  assert.equal(ackedRow.dispatch.status, 'acked')
+  assert.equal(ackedRow.dispatch.orphan, true, 'acked 且没有 open claim = orphan')
+  assert.equal(ackedRow.dispatch.stale, false, '未过期不 stale')
+
+  const closedRow = rowOf(closed.id)
+  assert.equal(closedRow.dispatch.status, 'closed')
+  assert.equal(closedRow.dispatch.outcome, 'ok')
+  assert.equal(closedRow.dispatch.closedAt, '2026-11-07T09:06:00+08:00')
+  assert.equal(closedRow.dispatch.stale, false, '已关闭的工单永不 stale')
+  assert.equal(closedRow.dispatch.orphan, false)
+
+  const bareRow = rowOf(bare.id)
+  assert.equal(Object.hasOwn(bareRow, 'dispatch'), false, '无工单的卡不出现 dispatch 字段')
+  assert.deepEqual(Object.keys(bareRow), ROW_KEYS, '无工单的行仍是 15 键契约（只增不改）')
+})
+
+test('dispatch.orphan 复用 liveness 口径：同一张卡，注册表判死 → orphan，判活 → 不 orphan', async () => {
+  const { root, contract } = freshProject('dispatch-liveness')
+  const task = addTask(root, contract, { type: 'feat', title: '已 ack 且在跑', stage: 'queued-analysis' })
+  patchTaskRecord(root, task.id, {
+    dispatch: dispatchOrder({ id: 'D-9', expiresAt: '2026-11-07T11:00:00+08:00', ackedAt: '2026-11-07T09:05:00+08:00' }),
+    checkpoints: [
+      { kind: 'claim', role: 'analyzer', agent: 'analyzer', session: 'child-live', at: '2026-11-07T09:05:00+08:00' },
+    ],
+  })
+
+  const deadRow = (await snapshotAt(root, [])).tasks.stages['queued-analysis'].find((entry) => entry.id === task.id)
+  assert.equal(deadRow.dispatch.orphan, true, 'claim 的 session 心跳判死 → orphan')
+
+  const liveRow = (await snapshotAt(root, ['child-live'])).tasks.stages['queued-analysis'].find((entry) => entry.id === task.id)
+  assert.equal(liveRow.dispatch.orphan, false, '同一张卡在注册表判活时不 orphan（同一 liveness 口径）')
+})
+
