@@ -222,3 +222,34 @@ test('flow doctor：心跳目录不可读时心跳项是 warn（不再假绿「0
   assert.equal(missing.level, 'warn')
   assert.match(missing.message, /不存在/)
 })
+
+test('flow init：创建 .agents/heartbeat，刚 init 的项目 status 心跳项不再报 warn', () => {
+  const root = freshProject('heartbeat-init')
+  assert.equal(fs.existsSync(path.join(root, '.agents', 'heartbeat')), true, 'init 必须创建心跳目录')
+
+  const result = spawnSync(process.execPath, [BIN, '--root', root, 'status', '--json'], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  const heartbeats = JSON.parse(result.stdout).data.health.findings.find((item) => item.id === 'heartbeats')
+  assert.equal(heartbeats.level, 'ok')
+  assert.doesNotMatch(heartbeats.message, /不存在/)
+})
+
+test('flow doctor：心跳目录 hint 使用实际 heartbeats.dir（自定义目录不指错）', () => {
+  const root = freshProject('heartbeat-custom-dir')
+  createBackup(root, { now: new Date() })
+  const configFile = path.join(root, '.agents', 'flow', 'flow.json')
+  const config = JSON.parse(fs.readFileSync(configFile, 'utf8'))
+  config.heartbeats.dir = 'custom-beats'
+  fs.writeFileSync(configFile, JSON.stringify(config, null, 2))
+
+  const custom = path.join(root, 'custom-beats')
+  fs.rmSync(custom, { recursive: true, force: true })
+  fs.writeFileSync(custom, 'not a directory')
+
+  const result = spawnSync(process.execPath, [BIN, '--root', root, 'doctor', '--json'], { encoding: 'utf8' })
+  assert.equal(result.status, 0, result.stderr)
+  const heartbeats = JSON.parse(result.stdout).data.findings.find((item) => item.id === 'heartbeats')
+  assert.equal(heartbeats.level, 'warn')
+  assert.match(heartbeats.hint, /custom-beats/)
+  assert.doesNotMatch(heartbeats.hint, /\.agents\/heartbeat/)
+})
