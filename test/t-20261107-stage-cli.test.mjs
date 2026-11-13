@@ -990,9 +990,13 @@ test('dispatch 1.5：pending 不许 ok、stage 白名单、ttl 上限、非法 e
   const denied = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--json'])
   assert.equal(denied.code, 2, 'agent 不匹配必须拒绝')
   assert.match(denied.json.error.message, /--force/)
-  const forced = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--force', '--json'])
+  const forceNoReason = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--force', '--json'])
+  assert.equal(forceNoReason.code, 1, '--force 缺 --reason 是 usage 错')
+  assert.match(forceNoReason.json.error.message, /--reason/)
+  const forced = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--force', '--reason', '跨代理接管', '--json'])
   assert.equal(forced.code, 0, forced.stdout + forced.stderr)
   assert.match(String(forced.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1).note), /force/)
+  assert.match(String(forced.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1).note), /跨代理接管/)
 })
 
 test('dispatch API/投影：taskId+claim、--session/--orphan、close ok 释放 claim、过期 expired 兜底', () => {
@@ -1080,6 +1084,21 @@ test('dispatch round/attempt：ok 回到入口可无限开新轮；failed 同轮
   const rows = runCli(root, ['task', 'dispatch-list', '--json']).json.data
   assert.equal(rows.find((row) => row.task === legacy.id).round, 1, '缺 round 的旧卡按 1 投影')
 })
+
+test('dispatch-close：pending failed 不改变原记录形状（不凭空注入 checkpoints）', () => {
+  const root = freshProject('dispatch-close-shape')
+  const task = addTaskCli(root, '形状不变', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 's1', '--role', 'implementer', '--json']).code, 0)
+  const file = taskFile(root, task.id)
+  const before = JSON.parse(fs.readFileSync(file, 'utf8'))
+  const closed = runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'failed', '--json'])
+  assert.equal(closed.code, 0, closed.stdout + closed.stderr)
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(after.checkpoints, before.checkpoints, '没有 open claim 时不得改写 checkpoints')
+  assert.equal('checkpoints' in after, 'checkpoints' in before, '不得凭空注入 checkpoints 字段')
+  assert.equal(after.dispatch.outcome, 'failed')
+})
+
 
 
 

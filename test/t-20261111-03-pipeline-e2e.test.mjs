@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getTask, initProject, listTasks, loadContract } from '../lib/core.mjs'
+import { closeDispatch, getTask, initProject, listTasks, loadContract, releaseTask } from '../lib/core.mjs'
 import { apply as applyTasks } from '../tasks.js'
 import { buildDefinition as buildSubtaskDefinition } from '../lib/tools/subtasks.mjs'
 
@@ -45,6 +45,22 @@ function fakeSubagents() {
       return { childId: `child-${calls.length}` }
     },
   }
+}
+
+/**
+ * fake subagents 服务不发 `subagent/end`，因此用例手动收口：先 release(ok) 执行权，
+ * 再 close(ok) 工单——等价于插件在子会话结束时走的 closeDispatchedChild。
+ */
+function finishChild(root, contract, id, agent) {
+  const task = getTask(root, contract, id)
+  const order = task === null || task === undefined ? null : task.dispatch
+  if (order === null || order === undefined || order.closedAt) return
+  try {
+    releaseTask(root, contract, id, { agent, outcome: 'ok' })
+  } catch {
+    // 已经收口过：交给 close 兜底
+  }
+  closeDispatch(root, contract, id, { outcome: 'ok', reason: 'fake 服务不发 end，fixture 手动收口' })
 }
 
 function makeHost(root, { subagents } = {}) {
@@ -113,6 +129,10 @@ test('流水线：add 即派分析者，子任务自动派实现者/审查者，
   assert.equal(child.task.parent, main.task.id)
   assert.equal(child.dispatch.role, 'implementer')
   assert.equal(subagents.calls.length, 2)
+  // 分析者完成拆任务：收口父任务的 analyzer 执行权。
+  finishChild(root, contract, main.task.id, 'analyzer')
+  // 实现者完成：收口子任务执行权后才允许推进 queued-review。
+  finishChild(root, contract, child.task.id, 'implementer')
 
   // ③ 实现者推进到待审查 → 插件派审查者
   const review = await host.tools
@@ -121,6 +141,8 @@ test('流水线：add 即派分析者，子任务自动派实现者/审查者，
   assert.equal(review.task.stage, 'reviewing')
   assert.equal(review.dispatch.role, 'reviewer')
   assert.equal(subagents.calls.length, 3)
+  // 审查者完成：收口 reviewer 执行权后才允许推进 done。
+  finishChild(root, contract, child.task.id, 'reviewer')
 
   // ④ 审查通过 → 子任务 done → 父任务聚合回待分析，再派分析者做汇总轮
   const done = await host.tools
@@ -149,9 +171,11 @@ test('流水线：子任务没全部完成时父任务不聚合（第二个子�
     .get('flow_subtask')
     .execute({ action: 'add', parent: main.task.id, title: 'B', type: 'feat' }, host.exec)
 
+  finishChild(root, contract, a.task.id, 'implementer')
   await host.tools
     .get('flow_task')
     .execute({ action: 'update', id: a.task.id, root, stage: 'queued-review' }, host.exec)
+  finishChild(root, contract, a.task.id, 'reviewer')
   await host.tools.get('flow_task').execute({ action: 'update', id: a.task.id, root, stage: 'done' }, host.exec)
 
   const parent = getTask(root, contract, main.task.id)

@@ -397,7 +397,8 @@ test('派工端到端：显式配置 dispatch.model → startActivation 收到 a
   assert.equal(Object.hasOwn(spec.request.agentOptions, 'provider'), false, 'provider 不塞进 agentOptions')
   assert.equal(spec.provider, 'spawn', 'provider 仍走顶层')
   assert.equal(result.dispatch.model, 'longcat-2.5-free', '结果回报实际用的模型')
-  assert.equal(result.task.checkpoints.at(-1).model, 'longcat-2.5-free', '回执记录实际用的模型')
+  const receipt = [...result.task.checkpoints].reverse().find((item) => item.kind === 'dispatch')
+  assert.equal(receipt.model, 'longcat-2.5-free', '回执记录实际用的模型')
 })
 
 test('派工端到端：不配置 model/models → request 里没有 agentOptions（零回归），回执不带 model', async () => {
@@ -423,7 +424,8 @@ test('派工端到端：不配置 model/models → request 里没有 agentOption
     'agentOptions 只在 request 里，不在 startActivation 顶层',
   )
   assert.equal(result.dispatch.model, '', '实际用的是父模型')
-  assert.equal(Object.hasOwn(result.task.checkpoints.at(-1), 'model'), false, '没配模型时回执不写 model 键')
+  const plainReceipt = [...result.task.checkpoints].reverse().find((item) => item.kind === 'dispatch')
+  assert.equal(Object.hasOwn(plainReceipt, 'model'), false, '没配模型时回执不写 model 键')
 })
 
 test('派工端到端：models 按角色覆盖，reviewer 用覆盖值、实现者回落 model', async () => {

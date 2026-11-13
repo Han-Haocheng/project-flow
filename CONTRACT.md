@@ -714,13 +714,24 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   - `dispatch-close`：写 `closedAt/outcome(ok|failed|expired)/reason`。**ok 只允许已 ack 的工单**；
     pending 只能 `failed|expired`；已过期但 open 的工单允许 `--outcome expired` 兜底。任何 outcome
     都在**同一次写入**释放匹配的 open claim（claim.agent === dispatch.agent；claim outcome：
-    ok→`ok`，failed/expired→`aborted`）；agent 不一致 → `invalid`，确认释放需 `--force`
-    （claim 的 note 写审计）。
+    ok→`ok`，failed/expired→`aborted`）——**插件完成路径只需 `dispatch-close --outcome ok` 一次**，
+    claim 同批收口，不必再单独 release。agent 不一致 → `invalid`，确认释放需 `--force` 且**必须带
+    `--reason`**，reason 写进 claim 的 note（审计）。
   - `dispatch-list [--stale] [--orphan] [--session <会话id>]`：跨卡列出工单；`status` 为 closed 的
     outcome 或 `pending/acked`；`stale` = 未关闭且已过期（`restartExpired:true` 即「重启后仍 open 且已过期」）；
     `orphan` = 已 ack 但没有 open claim，或 open claim 的 session 心跳判死不活。`--stale` 只保留
     stale 或 orphan；`--orphan` 只保留孤儿；`--session` 按执行权 claim.session（或 requester）找回工单。
     行投影带 `taskId` 与 `claim:{agent,session,at,closedAt,outcome}`（最新一条本工单角色的 claim）。
+
+**插件派工走队列（T-20261113155234 阶段 2）**：`dispatchTaskRecord` 在任何 spawn 之前先
+`dispatch-queue`（`agent=role`、`requester=父会话`）；同卡未关闭工单 / 同轮 attempt 用尽 → **不 spawn**、
+记 `dispatch-queue skipped:` warning、卡留原阶段。spawn 成功后立即 `dispatch-ack --session <childId>`
+（显式传 session/requester，不依赖 `DSH_SESSION_ID`）；`checkpoints` 顺序为
+`dispatch(closed, outcome ok)` 后接 `claim(open)`——阶段门按最后一条本角色回执判定执行权。阶段推进仍走
+`updateTask` 的 plugin 边，ack 不替代 claim/挂载/验收门。子会话结束（`subagent/end`，兜底
+`agent/disposed`）由插件 `dispatch-close` **一次**收口：任务仍停在本角色 working 阶段 → `failed`，
+已离开该阶段 → `ok`；进程重启后按 `dispatch-list --session <child>` 找回工单。`lib/dispatch.mjs`
+只经 `lib/backend/api.mjs` 的 `tasks`（api∩core 同引用）消费队列，不直接 import 记录层。
 
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 
