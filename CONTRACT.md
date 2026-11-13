@@ -1154,7 +1154,7 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 
 - **`pid` 或注册表证明存在即判活**：一条 7 小时没续期的心跳，只要 pid 还在、或注册表说该会话还在，仍是 `live`，不因「没刷新」变死。
 - **6 小时老化只是最后的兜底**：`HEARTBEAT_STALE_SECONDS = 6 * 60 * 60`（`lib/heartbeats/records.mjs:33`）只在**没有任何存活证据**（legacy 记录、CLI 只写了 host 的记录）时生效。
-- claims 的使用方按同一判据决定「是否还占着写域」：`foreignClaimActive`（`lib/host/session.mjs:2181-2190`）——`dead`/`foreign`/`stale` 不再占域，`live` 即使记录旧也照样占域，`unknown` 退回 6h 兜底；跨会话冲突见 `foreignClaimOwner`（同文件 :2202-2219）。面板与 claims 门禁共用这一条判据（`lib/state-snapshot.mjs:1066`、`lib/host/state.mjs:950-951`）。
+- claims 的使用方按同一判据决定「是否还占着写域」：`foreignClaimActive`（`lib/host/session.mjs:2392`）——`dead`/`foreign`/`stale` 不再占域，`live` 即使记录旧也照样占域，`unknown` 退回 6h 兜底；跨会话冲突见 `foreignClaimOwner`（同文件 :2413）。面板与 claims 门禁共用这一条判据（`lib/state-snapshot.mjs:1067`、`lib/host/state.mjs:952`）。
 - 负证据边界：`registryVerdictOf`（`lib/heartbeats/records.mjs:396-417`）的 `false` 只对**本进程**（`pid === ownerPid`）写下的记录生效——别的 DSH 进程里的会话不在本进程注册表里但可能活着，不能判死；跨机记录一律 `undefined`。
 
 **B. aspect 锁：回答「这个会话还在不在干这个 aspect」**
@@ -1165,11 +1165,13 @@ worktree 即主工作区；失败时用 `git rev-parse --git-common-dir` 推导�
 2. **再判租约**：`leaseExpiresAt = renewed_at + ttl_seconds`（:149-154，缺 `renewed_at` 回退 `acquired_at`），`now > leaseExpiresAt` → `expired`、`releasable = true`（:253、:260-262）；
 3. 其余才是 `held`（:263-265）。
 
+**优先级与超时释放**：`dead`/`foreign` 先于租约判定（立即 `releasable`）；租约过期则 `expired`——`pid` 证活**不能**压过过期租约。可回收的锁只在下一次 `acquire`（接管）或 `sweepAspectLocks` 清扫时释放（读路径不改盘）。
+
 **关键差异：租约过期即 `expired`，哪怕 pid 还活着。** 锁是租约而不是存在证明——停止续期就等于放弃这个 aspect（:205-212 注释原文「停止续期即视为放弃」）。默认租约 **1800 秒**（`ASPECT_LOCK_DEFAULT_TTL_SECONDS`，:30），`acquire` 可逐次覆盖（:144-148）。
 
-- **续租**：宿主在 `agent/turn-stopping` 对**本会话全部锁**续一次（`lib/host/session.mjs:943-950` → `renewAspectLocksForSession`，`lib/host/aspect-lock.mjs:708`）。因此**长于默认 1800s 的实现/审查必须靠 turn-stopping 续上**，否则做到一半会被别的会话接管。
+- **续租**：宿主在 `agent/turn-stopping` 对**本会话全部锁**续一次（`lib/host/session.mjs:934`（hook 入口 :906）→ `renewAspectLocksForSession`，`lib/host/aspect-lock.mjs:708`）。因此**长于默认 1800s 的实现/审查必须靠 turn-stopping 续上**，否则做到一半会被别的会话接管。
 - **回收**：`sweepAspectLocks`（`lib/host/aspect-lock.mjs:540-574`）只删 `releasable === true` 的锁，`held` 一律保留；活锁里 `since` 超期的排队者会被顺手清掉（:555-561），锁本身不动——清理不替人做决定。
-- **`waiters` 语义（排队可见 + 按 `since` 过期）**：被 `held` 挡住时，`acquire` 把 `{session, since}` 幂等登记进 `waiters`（`lib/host/aspect-lock.mjs:361-375`；`since` 只记首次入队时间，轮询期间不刷新，内容没变时不写盘），最多保留最近 **20** 条（`ASPECT_WAITER_MAX`，:54；FIFO 上限截断）。排队登记超过 **10 分钟**按过期丢弃（`ASPECT_WAITER_TTL_MS`，:60；可用 `PROJECT_FLOW_ASPECT_WAITER_TTL_MS` 或调用参数 `waiterTtlMs` 覆盖，:157-163；`since` 解析不了也按过期处理、不抛错），读路径 `freshAspectWaiters`（:177-190）与清扫都会过滤。面板/CLI 只读展示「排队 n（最早 xx 前）」（`client.js:3236-3247`、`tui-panel.js:337-364`）。**排队仍只是可见性**：`acquire` 是轮询争抢（`ASPECT_POLL_MS = 100`，:50），不承诺严格 FIFO 交接。
+- **`waiters` 语义（排队可见 + 按 `since` 过期）**：被 `held` 挡住时，`acquire` 把 `{session, since}` 幂等登记进 `waiters`（`lib/host/aspect-lock.mjs:361-375`；`since` 只记首次入队时间，轮询期间不刷新，内容没变时不写盘），最多保留最近 **20** 条（`ASPECT_WAITER_MAX`，:54；FIFO 上限截断）。排队登记超过 **10 分钟**按过期丢弃（`ASPECT_WAITER_TTL_MS`，:60；可用 `PROJECT_FLOW_ASPECT_WAITER_TTL_MS` 或调用参数 `waiterTtlMs` 覆盖，:157-163；`since` 解析不了也按过期处理、不抛错），读路径 `freshAspectWaiters`（:177-190）与清扫都会过滤。面板/CLI 只读展示「排队 n（最早 xx 前）」（`client.js:3929-3937`、`tui-panel.js:337-364`）。**排队仍只是可见性**：`acquire` 是轮询争抢（`ASPECT_POLL_MS = 100`，:50），不承诺严格 FIFO 交接。
 - **`evidence`**：调用方没给注册表探针时整条标 `ttl-only`（:254），可靠性降一档；`flow aspect list` 是独立 CLI 进程，因此恒为 `ttl-only`（宿主富化层可用自己的 `agents` 服务升级，见 T-20261112183138 实现记录⑦）。
 
 **C. 不要把锁的 `expired` 类推到 claims（反之亦然）**
@@ -1934,7 +1936,7 @@ claims 内（§3.5）；空 claims = 拒绝全部编辑，无心跳记录同样�
 guard 的注册本身不变：`index.js` 用 `heartbeatGateEnabled(config)`（默认 **true**）决定
 `registerTools` 是否挂 guard；只有 mount config `heartbeatGate:false` / `enforceHeartbeat:false` 或
 `PROJECT_FLOW_HEARTBEAT_GATE=off` 才不挂。claims 门仍只认心跳 claims（子代理/无 identity 时放行），
-与心跳门是两条独立判据。
+与心跳门是两条独立判据。判活证据次序只用 §3.5.1 A（claims 只认心跳 `claims`）；aspect 锁的租约优先与 `expired` 规则见 §3.5.1 B——本节不复述，避免两套口径分叉。
 
 **隐藏（`tools.restrict`）**：主会话（`rootSessionVerdict === true`）在 `agent/created` 时对该
 agent 的 scope 调用 `tools.restrict({deny})`，移除 `spawn_teammate`、`team_task_create|update|

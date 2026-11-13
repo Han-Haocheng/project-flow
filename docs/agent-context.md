@@ -26,7 +26,7 @@
 
 - `aspect` 是横切关注面：一句话不变量 + 复核角色 + 文件清单，用来回答「改它要通知谁」。
 - aspect **不参与越界判定**，也**不是审批闸**；不得用 aspect 决定「这个文件我能不能改」，更不得把 `ownerRole` 当放行条件。
-- aspect 锁（`flow aspect list|acquire|renew|release|sweep`，状态存 `.agents/aspect-locks/`）是**占用登记 + 租约**，不是第二套写权：它只防止同一个 aspect 被两个会话同时改。占用方的租约到期即视为放弃，即使进程还活着；长于默认租约的工作必须持续续租（宿主在 `turn-stopping` 会为本会话持有的锁续期），结束或放弃时释放。
+- aspect 锁（`flow aspect list|acquire|renew|release|sweep`，状态存 `.agents/aspect-locks/`）是**占用登记 + 租约**，不是第二套写权：它只防止同一个 aspect 被两个会话同时改。占用方的租约到期即视为放弃，即使进程还活着；长于默认租约的工作必须持续续租（宿主在 `turn-stopping` 会为本会话持有的锁续期），结束或放弃时释放（判活优先级与 claims 的差异见 `CONTRACT.md` §3.5.1）。
 
 ### 1.3 台账与派生数据
 
