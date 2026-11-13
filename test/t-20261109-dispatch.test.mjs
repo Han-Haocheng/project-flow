@@ -1756,6 +1756,34 @@ test('settle reviewer 打回：以 result.task（子卡）为目标补派实现�
   assert.equal(getTask(root, contract, parent.id).stage, 'analyzing', '父卡不得被当成实现者目标')
 })
 
+
+test('R2：ack 被挂载门拒时终止已起的子代理，不留存活子会话', async () => {
+  const { root, contract } = freshProject('ack-fail-terminate')
+  // 让 mount 校验有数据源：模块表里没有 nope，ack 的挂载门必然拒绝。
+  fs.mkdirSync(path.join(root, 'docs'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'docs', 'module-domain.json'),
+    JSON.stringify({ schema: 1, modules: { nope: { title: '临时', owns: [] } }, aspects: {} }),
+  )
+  const task = addTask(root, contract, {
+    type: 'feat', title: '错 mount 主卡', stage: 'queued-implementation', mount: { kind: 'module', id: 'nope' },
+  })
+  // 建卡后模块被删：ack 的挂载门此时必须拒绝。
+  fs.writeFileSync(path.join(root, 'docs', 'module-domain.json'), JSON.stringify({ schema: 1, modules: {}, aspects: {} }))
+  const terminated = []
+  const subagents = fakeSubagents()
+  subagents.interruptActivation = async (id) => { terminated.push(id) }
+  const { deps } = recordDeps(root, contract, subagents, getTask(root, contract, task.id))
+  const caught = await dispatchTaskRecord(deps).then(() => null, (error) => error)
+  assert.ok(caught !== null, 'ack 失败必须抛错')
+  assert.match(String(caught.message), /派工-ack 失败|mount/)
+  assert.deepEqual(terminated, ['child-1'], 'ack/阶段写入失败必须终止刚起的子代理；err=' + String(caught.message))
+  assert.match(String(caught.message), /已启动/)
+  const after = getTask(root, contract, task.id)
+  assert.equal(after.stage, 'queued-implementation', '阶段不推进')
+  assert.equal(after.checkpoints.some((x) => (x.kind === 'claim' || x.kind === 'dispatch') && !x.closedAt), false, '不得留 open 回执')
+})
+
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
   const { root, contract } = freshProject('review-approve')
   const task = addTask(root, contract, { type: 'feat', title: '审查通过', stage: 'queued-review' })

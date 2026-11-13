@@ -156,11 +156,23 @@ test('auto 端到端：同角色并行 + analyzer 拆卡→settle 实现者→ap
     const closed = closeDispatchedChild(host.ctx, rclaim.session, { reason: '打回 ' + cycle })
     assert.equal(closed.decision, 'reject', 'cycle ' + cycle + ' 必须走 reject 分支')
     const beforeSettle = subagents.calls.length
-    await settleDispatchAfterClose({ ctx: host.ctx, root, contract, task: getTask(root, contract, rejectParent.task.id), result: closed, config: { dispatch: { auto: true } } })
-    assert.equal(subagents.calls.length, beforeSettle + 1, 'reject 后 settle 必须补派实现者')
+    const afterSettle = await settleDispatchAfterClose({ ctx: host.ctx, root, contract, task: getTask(root, contract, rejectParent.task.id), result: closed, config: { dispatch: { auto: true } } })
     if (cycle === 3) {
       assert.equal(closed.needsHuman, true, '第 3 次 reject 必须 needs-human')
       assert.match(String(getTask(root, contract, rejectChild.task.id).notes), /\[needs-human\]/)
+      assert.deepEqual(afterSettle, [], 'needs-human 命中后不得再自动派工')
+      assert.equal(subagents.calls.length, beforeSettle, 'needs-human 后不得起新子代理')
+    } else {
+      assert.equal(subagents.calls.length, beforeSettle + 1, 'reject 后 settle 必须补派实现者')
     }
   }
+  // 第 4 次 reject：needs-human 命中后 settle 不得再派工。
+  core.queueDispatch(root, contract, rejectChild.task.id, { agent: 'reviewer:' + rejectChild.task.id, role: 'reviewer' })
+  core.ackDispatch(root, contract, rejectChild.task.id, { agent: 'reviewer:' + rejectChild.task.id, session: 'review-4' })
+  const fourth = closeDispatchedChild(host.ctx, 'review-4', { reason: '第 4 次打回' })
+  assert.equal(fourth.needsHuman, true)
+  const beforeFourth = subagents.calls.length
+  const settledFourth = await settleDispatchAfterClose({ ctx: host.ctx, root, contract, task: getTask(root, contract, rejectParent.task.id), result: fourth, config: { dispatch: { auto: true } } })
+  assert.deepEqual(settledFourth, [], 'needs-human 后 settle 必须不再派工')
+  assert.equal(subagents.calls.length, beforeFourth, '第 4 次 reject 不得起新子代理')
 })
