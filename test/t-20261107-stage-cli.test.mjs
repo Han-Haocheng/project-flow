@@ -925,6 +925,71 @@ test('dispatch：过期 ack 拒绝；孤儿 = ack 无 claim 或 claim 心跳不�
   assert.equal(staleRows.find((row) => row.task === orphanA.id).orphan, true)
 })
 
+test('dispatch 1.5：retry 端到端（ack→failed 释放 claim→attempt2 ack 成功）', () => {
+  const root = freshProject('dispatch-retry')
+  const task = addTaskCli(root, '重试工单', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'r1', '--role', 'implementer', '--json']).code, 0)
+
+  const acked = runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'r1', '--session', 'sess-r1', '--requester', 'req-1', '--json'])
+  assert.equal(acked.code, 0, acked.stdout + acked.stderr)
+  assert.equal(acked.json.data.dispatch.requester, 'req-1', 'ack --requester 覆盖工单 requester')
+  const claim = acked.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1)
+  assert.equal(claim.session, 'sess-r1', 'ack --session 写进 claim')
+
+  const failed = runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'failed', '--reason', '崩了', '--json'])
+  assert.equal(failed.code, 0, failed.stdout + failed.stderr)
+  const released = failed.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1)
+  assert.equal(released.outcome, 'aborted', 'failed 必须同批释放 claim')
+  assert.match(String(released.closedAt), /^\d{4}-/)
+  assert.match(String(released.note), /dispatch-close:failed/)
+
+  const retry = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'r1', '--role', 'implementer', '--json'])
+  assert.equal(retry.code, 0, retry.stdout + retry.stderr)
+  assert.equal(retry.json.data.dispatch.attempt, 2)
+  const again = runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'r1', '--session', 'sess-r1', '--json'])
+  assert.equal(again.code, 0, 'claim 已释放，attempt2 的 ack 必须成功：' + again.stdout + again.stderr)
+})
+
+test('dispatch 1.5：pending 不许 ok、stage 白名单、ttl 上限、非法 expiresAt 视为 stale、--force', () => {
+  const root = freshProject('dispatch-guards')
+  const pending = addTaskCli(root, 'pending 工单', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', pending.id, '--agent', 'g1', '--role', 'implementer', '--json']).code, 0)
+  const badOk = runCli(root, ['task', 'dispatch-close', pending.id, '--outcome', 'ok', '--json'])
+  assert.equal(badOk.code, 2, 'pending 不能 ok 关闭')
+  assert.match(badOk.json.error.message, /还未 ack/)
+
+  const done = addTaskCli(root, '完成卡', ['--stage', 'done'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', done.id, '--agent', 'g1', '--role', 'implementer', '--json']).code, 2, '终态禁止下单')
+  const tooLong = runCli(root, ['task', 'dispatch-queue', pending.id, '--agent', 'g1', '--role', 'implementer', '--ttl', '3601', '--json'])
+  assert.equal(tooLong.code, 2, 'ttl 上限 3600 秒')
+
+  const broken = addTaskCli(root, '坏时间戳', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', broken.id, '--agent', 'g2', '--role', 'implementer', '--json']).code, 0)
+  const file = taskFile(root, broken.id)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.dispatch.expiresAt = 'not-a-time'
+  fs.writeFileSync(file, JSON.stringify(record, null, 1))
+  const stale = runCli(root, ['task', 'dispatch-list', '--stale', '--json'])
+  assert.equal(stale.json.data.find((row) => row.task === broken.id).stale, true, '非法 expiresAt 视为 stale')
+  assert.equal(runCli(root, ['task', 'dispatch-ack', broken.id, '--agent', 'g2', '--json']).code, 2, '非法 expiresAt 不能 ack')
+
+  // 非本工单 agent 的 claim：默认拒绝，--force 才释放。
+  const forceTask = addTaskCli(root, '强制释放', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', forceTask.id, '--agent', 'x1', '--role', 'implementer', '--json']).code, 0)
+  assert.equal(runCli(root, ['task', 'dispatch-ack', forceTask.id, '--agent', 'x1', '--json']).code, 0)
+  const forceFile = taskFile(root, forceTask.id)
+  const forceRecord = JSON.parse(fs.readFileSync(forceFile, 'utf8'))
+  forceRecord.dispatch.agent = 'y1'
+  fs.writeFileSync(forceFile, JSON.stringify(forceRecord, null, 1))
+  const denied = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--json'])
+  assert.equal(denied.code, 2, 'agent 不匹配必须拒绝')
+  assert.match(denied.json.error.message, /--force/)
+  const forced = runCli(root, ['task', 'dispatch-close', forceTask.id, '--outcome', 'failed', '--force', '--json'])
+  assert.equal(forced.code, 0, forced.stdout + forced.stderr)
+  assert.match(String(forced.json.data.checkpoints.filter((item) => item.kind === 'claim').at(-1).note), /force/)
+})
+
+
 
 
 

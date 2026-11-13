@@ -104,8 +104,8 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task release | 记录 task（关闭匹配 agent 的 claim 回执，可携带产物指针） |
 | flow task art | 联合（put：记录 task；list：数组<记录 artifact>；show：对象（必填 task·role·artifact·content）） |
 | flow task dispatch-queue | 记录 task（写入一条未关闭工单） |
-| flow task dispatch-ack | 记录 task（工单 ackedAt + 同批 open claim） |
-| flow task dispatch-close | 记录 task（closedAt·outcome·reason?） |
+| flow task dispatch-ack | 记录 task（工单 ackedAt + 同批 open claim；可选 session/requester） |
+| flow task dispatch-close | 记录 task（closedAt·outcome·reason?；failed/expired 同批释放 claim，--force 可覆盖 agent 不匹配） |
 | flow task dispatch-list | 数组<记录 dispatchOrder> |
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |

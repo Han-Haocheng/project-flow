@@ -65,7 +65,7 @@ const BOOL_FLAGS = new Set([
   'allow-unknown-expect',
   // 2026-11-12 裁定 3：门禁分结构/行为；门禁运行默认跑完全部步骤，--fail-fast 才首败即停。
   // `gate rules --init/--record` 是规则文件防篡改的写命令（裁定 1），都是纯开关。
-  'fail-fast', 'init', 'record', 'purge', 'stale',
+  'fail-fast', 'init', 'record', 'purge', 'stale', 'force',
   // T-20261113163323：done 无 reviewer 回执时的显式覆盖（必须配 --reason）。
   'no-dispatch',
 ])
@@ -75,7 +75,7 @@ const VALUE_FLAGS = new Set([
   'status', 'measured', 'metrics', 'commits',
   'owner', 'goal', 'role', 'outcome',
   'id', 'phase', 'step', 'enabled', 'timeout', 'limit',
-  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team', 'summary', 'merged-into', 'mount', 'mount-kind',
+  'allow', 'marker', 'threshold', 'file', 'type', 'type-map', 'stage', 'team', 'summary', 'merged-into', 'mount', 'mount-kind', 'requester',
   'session', 'agent', 'claim', 'note', 'task',
   'question', 'kind', 'option', 'default', 'recommendation', 'rationale',
   'blocks', 'affects', 'supersedes', 'choice', 'reason', 'by', 'days',
@@ -155,8 +155,8 @@ export const SPEC = Object.freeze({
     rm: { flags: ['id', 'yes', 'reason', 'purge'] },
     // T-20261113155234：派工工单队列（阶段 1：CLI + 台账字段，不接插件）。
     'dispatch-queue': { flags: ['id', 'agent', 'role', 'ttl'] },
-    'dispatch-ack': { flags: ['id', 'agent'] },
-    'dispatch-close': { flags: ['id', 'outcome', 'reason'] },
+    'dispatch-ack': { flags: ['id', 'agent', 'session', 'requester'] },
+    'dispatch-close': { flags: ['id', 'outcome', 'reason', 'force'] },
     'dispatch-list': { flags: ['stale'] },
   }),
   gate: Object.freeze({

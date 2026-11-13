@@ -702,10 +702,16 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
   - 形状：`dispatch: {id, createdAt, expiresAt, requester, agent, role, attempt, ackedAt?, closedAt?, outcome?, reason?}`；
     每卡最多 **1 条未关闭**工单；`attempt` 上限 **3**；`expiresAt` 默认 `createdAt + 10min`（`--ttl` 秒可改）。
   - `dispatch-queue`：只写工单，不 spawn、不推进阶段；同卡已有未关闭工单 → `invalid` 并点名持有者
-    （id/agent/role/createdAt）；attempt 用尽 → `invalid`。
+    （id/agent/role/createdAt）；`done/archived/cancelled` 禁止下单；attempt 用尽 → `invalid`；
+    `--ttl` 上限 **3600 秒**。
+  - `dispatch-ack` 支持显式 `--session`/`--requester`（多会话/宿主派发不依赖 `DSH_SESSION_ID`）。
+    读侧 `expiresAt` 非法时按 **stale** 处理，ack 也会拒绝。
   - `dispatch-ack`：必须 agent 匹配且未过期；**复用 claimTask 的同一次写入**写 open claim，工单只补
     `ackedAt`——不造第二套回执。阶段仍要过阶段门（ack 不替代 claim/挂载/验收门）。
-  - `dispatch-close`：写 `closedAt/outcome(ok|failed|expired)/reason`；不动物理执行权。
+  - `dispatch-close`：写 `closedAt/outcome(ok|failed|expired)/reason`。**ok 只允许已 ack 的工单**；
+    pending 只能 `failed|expired`。`failed|expired` 在**同一次写入**释放匹配的 open claim
+    （claim.agent === dispatch.agent，claim outcome=aborted）；agent 不一致 → `invalid`，
+    确认释放需 `--force`（claim 的 note 写审计）。
   - `dispatch-list [--stale]`：跨卡列出工单；`status` 为 closed 的 outcome 或 `pending/acked`；
     `stale` = 未关闭且已过期；`orphan` = 已 ack 但没有 open claim，或 open claim 的 session 心跳判死不活。
     `--stale` 只保留 stale 或 orphan。
@@ -1570,8 +1576,8 @@ flow task update <id> [--title T] [--type <t>] [--status draft|active|done|archi
                  # update 的 --title/--type 可解析但恒 exit 2（invalid: task <key> cannot be changed）
 flow task rm <id> --reason R [--purge] [--yes]
 flow task dispatch-queue <id> --agent A --role analyzer|implementer|reviewer [--ttl 秒]
-flow task dispatch-ack <id> --agent A
-flow task dispatch-close <id> --outcome ok|failed|expired [--reason R]
+flow task dispatch-ack <id> --agent A [--session <id>] [--requester <name>]
+flow task dispatch-close <id> --outcome ok|failed|expired [--reason R] [--force]
 flow task dispatch-list [--stale]
 flow task link <TASK-ID> --team <BOARD-ID>   # 挂载团队板 id（只写本地台账）
 flow task unlink <TASK-ID>                   # 解除挂载（team=null）
