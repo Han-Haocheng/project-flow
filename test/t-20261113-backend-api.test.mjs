@@ -1,4 +1,4 @@
-// 2026-11-13（T-20261112154526 切片 1+2）：后端单一 API 层 + CLI/域助手迁移。
+// 2026-11-13（T-20261112154526 切片 1–4）：后端单一 API 层 + CLI/域助手/工具/宿主/会话迁移。
 //
 // 本文件守三层，且每层都先证「断言会咬人」再证「当前是绿的」：
 //   ① 正例：api 从 ../core.mjs 取能力；已迁文件确实 import api（防文件消失/改名后假绿）；
@@ -44,6 +44,7 @@ const MIGRATED = [
   'lib/tools/experiments.mjs',
   'lib/host/tools.mjs',
   'lib/host/routes.mjs',
+  'lib/host/session.mjs',
 ]
 /** 已迁文件中唯一不 import api 的例外（面板读网关，切片 1 裁定）。 */
 const NO_API_IMPORT_EXCEPTIONS = new Set(['lib/cli/state.mjs'])
@@ -151,15 +152,26 @@ test('结构：api 是 core 的唯一 adapter 入口；已迁文件只 import ap
   assert.deepEqual(importers, [API_FILE, 'lib/cli/mcp-server.mjs'].sort(), 'core import 入口白名单漂移')
 })
 
-test('结构：bin/state-snapshot 仍是仅有的两个 URL/CORE_URL 加载点（非 import 说明符，单独守）', () => {
-  assert.match(readRepo('bin/flow.mjs'), /\.\.\/lib\/core\.mjs/, 'bin 的 URL loader 不可静默消失')
-  assert.match(readRepo('lib/state-snapshot.mjs'), /core\.mjs/, 'state-snapshot 的 core 网关不可静默消失')
-  // 切片 3 才收 bin 的注入面：现在 bin 仍 setCoreRef（本断言防止有人提前删坏）。
-  assert.match(readRepo('bin/flow.mjs'), /setCoreRef\(core\)/, '切片 3 前 bin 仍应注入 coreRef')
+test('结构：bin 的 coreRef/ctx.core 注入面已退场，加载点只剩 api 与 state-snapshot', () => {
+  const bin = readRepo('bin/flow.mjs')
+  const shared = readRepo('lib/cli/shared.mjs')
+  // 判定样本先自证会咬人。
+  assert.match('setCoreRef(core)', /\bsetCoreRef\s*\(/)
+  assert.doesNotMatch('const ctx = { root }', /\bsetCoreRef\s*\(/)
+  assert.match('const c = loadCore()', /\bloadCore\s*\(/)
+  // 反例：bin 不再加载/注入 core；shared 不再持有 coreRef。
+  assert.doesNotMatch(bin, /\bsetCoreRef\s*\(/, 'bin 不得再 setCoreRef')
+  assert.doesNotMatch(bin, /\bloadCore\s*\(/, 'bin 不得再自带 core loader')
+  assert.doesNotMatch(bin, /\bctx\.core\b|\bcore:\s*core\b/, 'ctx 不得再注入 core')
+  assert.doesNotMatch(shared, /\bcoreRef\b|\bsetCoreRef\s*\(/, 'shared 不得再持有 coreRef')
+  // warnings 仍是单通道：shared 直接转发 api（其成员就是 core.drainWarnings 本身）。
+  assert.match(shared, /backendWarnings\.drainWarnings\(\)/, 'drainCoreWarnings 必须走 api 单通道')
+  // 降级加载点仍在 state-snapshot（未迁移的 enforce/team/index 与降级测试依赖）。
+  assert.match(readRepo('lib/state-snapshot.mjs'), /CORE_URL/, 'state-snapshot 的降级加载点必须在')
 })
 
 test('结构：降级网关保留在 state-snapshot，tools/host 不再走 requireCore/coreModule', () => {
-  // 网关本身必须在：session.mjs 与 state-degradation 测试依赖它和它的两条文案。
+  // 网关本身必须在：state-degradation 测试（与尚未迁移的 enforce/team/index）依赖它和两条文案。
   const snapshot = readRepo('lib/state-snapshot.mjs')
   assert.match(snapshot, /function requireCore\(/, 'requireCore 不得删除（session/降级测试依赖）')
   assert.match(snapshot, /function coreModule\(/, 'coreModule 不得删除')

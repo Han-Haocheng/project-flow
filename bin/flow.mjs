@@ -20,7 +20,6 @@ import {
   out,
   pendingWarnings,
   printWarnings,
-  setCoreRef,
   setJsonMode,
 } from '../lib/cli/shared.mjs'
 import { cmdExp } from '../lib/cli/exp.mjs'
@@ -492,22 +491,6 @@ async function runState(ctx) {
   return await mod.cmdState(ctx)
 }
 
-async function loadCore() {
-  try {
-    return await import(new URL('../lib/core.mjs', import.meta.url).href)
-  } catch (error) {
-    const missing = error?.code === 'ERR_MODULE_NOT_FOUND' && /lib[/\\]core\.mjs/.test(String(error.message))
-    const detail = missing
-      ? '缺少 lib/core.mjs（project-flow 的核心模块未随包提供或被删除）'
-      : error?.message || String(error)
-    throw new CliError(
-      'io',
-      `无法加载 project-flow 核心：${detail}\n` +
-        '处理：确认安装的是完整包（lib/ 与 bin/ 同级），或从仓库根重新安装 project-flow。',
-    )
-  }
-}
-
 function exitCodeOf(code) {
   return EXIT_BY_CODE[code] ?? EXIT.io
 }
@@ -539,10 +522,7 @@ async function main() {
   assertFlagsAllowed(parsed)
 
   const root = parsed.flags.root === undefined ? process.cwd() : path.resolve(String(parsed.flags.root))
-  const core = await loadCore()
-  setCoreRef(core)
   const ctx = {
-    core,
     root,
     flags: parsed.flags,
     steps: parsed.steps,
