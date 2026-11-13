@@ -1870,6 +1870,55 @@ test('R5：自动派工单一真源 dispatch.auto，旧键尊重但只警告一�
   assert.deepEqual(drainWarnings(), [], 'settings 旧键警告已在前面按进程去重')
 })
 
+
+test('settle 复用派工时 auto 决议，不受后续 config 变化影响', async () => {
+  const build = async (label, autoAtDispatch) => {
+    const { root, contract } = freshProject(label)
+    const parent = addTask(root, contract, { type: 'feat', title: '父卡', stage: 'analyzing' })
+    const child = addTask(root, contract, {
+      type: 'feat', title: '子卡', parent: parent.id, stage: 'queued-implementation',
+      mount: { kind: 'module', id: 'dispatch' }, scope: { allow: ['lib/dispatch.mjs'] },
+    })
+    const subagents = fakeSubagents()
+    const ctx = {
+      get(name) {
+        if (name === 'subagents') return subagents
+        if (name === 'workingDirectory') return { get: () => root }
+        if (name === 'agents') return { get: () => undefined, list: () => [], roots: () => [] }
+        return undefined
+      },
+      logger: { warn() {} },
+    }
+    const agent = { id: 'session-main', session: { cwd: root, header: { origin: 'main' } } }
+    await dispatchTaskRecord({ c: core, ctx, agent, root, contract, task: getTask(root, contract, parent.id), config: { dispatch: { auto: autoAtDispatch } }, provider: 'spawn' })
+    const session = getTask(root, contract, parent.id).checkpoints.filter((x) => x.kind === 'claim' && !x.closedAt).at(-1)?.session
+    const closed = closeDispatchedChild(ctx, session)
+    return { root, contract, parent, child, subagents, ctx, agent, closed }
+  }
+
+  // 派工时 auto=true；settle 时 config auto=false 也必须派。
+  const on = await build('settle-auto-on', true)
+  const settled = await settleDispatchAfterClose({
+    ctx: on.ctx, agent: on.agent, root: on.root, contract: on.contract,
+    task: getTask(on.root, on.contract, on.parent.id), result: on.closed,
+    config: { dispatch: { auto: false } },
+  })
+  assert.equal(on.subagents.calls.length, 2, '派工时决议 true → settle 仍派实现者')
+  assert.equal(settled.length, 1)
+  assert.equal(getTask(on.root, on.contract, on.child.id).stage, 'implementing')
+
+  // 派工时 auto=false；settle 时 config auto=true 也不得派。
+  const off = await build('settle-auto-off', false)
+  const stopped = await settleDispatchAfterClose({
+    ctx: off.ctx, agent: off.agent, root: off.root, contract: off.contract,
+    task: getTask(off.root, off.contract, off.parent.id), result: off.closed,
+    config: { dispatch: { auto: true } },
+  })
+  assert.deepEqual(stopped, [], '派工时决议 false → settle 不派')
+  assert.equal(off.subagents.calls.length, 1, '只起 analyzer')
+  assert.equal(getTask(off.root, off.contract, off.child.id).stage, 'queued-implementation')
+})
+
 test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
   const { root, contract } = freshProject('review-approve')
   const task = addTask(root, contract, { type: 'feat', title: '审查通过', stage: 'queued-review' })
