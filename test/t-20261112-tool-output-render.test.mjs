@@ -332,3 +332,49 @@ test('flow_heartbeat：心跳列表与单条状态都走中文', () => {
   assert.doesNotMatch(status, BARE_JSON)
   assert.match(status, /活跃/)
 })
+
+test('BARE_JSON 探测器自检：JSON.stringify 的输出必须被判定为裸 JSON', () => {
+  const json = JSON.stringify({ root: '/r', items: [] }, null, 2)
+  assert.match(json, BARE_JSON, '探测器命中不了 JSON 的话，本文件的「不落兜底 JSON」断言都是恒真')
+})
+
+test('flow_subtask：子任务单条走中文摘要与字段渲染，不落兜底 JSON', () => {
+  const text = renderToolText(
+    'flow_subtask',
+    {
+      root: '/r',
+      task: {
+        id: 'T-20261112152355-01',
+        title: '子任务渲染',
+        type: 'fix',
+        status: 'active',
+        stage: 'implementing',
+        parent: 'T-20261112151914',
+        acceptance: ['cmd:node --test test/'],
+      },
+    },
+    'show',
+  )
+  assert.doesNotMatch(text, BARE_JSON, '已登记形状不许落兜底 JSON')
+  assert.match(text, HAS_CJK)
+  assert.match(text, /T-20261112152355-01/)
+  assert.match(text, /实现中/, '阶段显示中文名')
+  assert.match(text, /cmd:node --test test\//, 'acceptance 每条要出现')
+})
+
+test('flow_veto：否决结果给出任务与决定，不落兜底 JSON', () => {
+  const text = renderToolText(
+    'flow_veto',
+    {
+      root: '/r',
+      task: { id: 'T-20261112152356', title: '被否决的任务', stage: 'analyzing' },
+      decision: { id: 'D-20261112120000', kind: 'choice', status: 'open' },
+      created: true,
+    },
+    'veto',
+  )
+  assert.doesNotMatch(text, BARE_JSON, '已登记形状不许落兜底 JSON')
+  assert.match(text, HAS_CJK)
+  assert.match(text, /否决决定：D-20261112120000/, '决定 id 必须出现')
+  assert.match(text, /（新建）/, 'created=true 要标出来')
+})

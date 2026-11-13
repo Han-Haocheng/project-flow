@@ -3,9 +3,13 @@
 // 这一层**不重复** S1/S2 的单模块断言（它们已各自覆盖渲染分支与 dispatchTaskRecord
 // 的 agentOptions 形状）。本文件只钉「跨模块」的那一层：
 //
-// 1. 九条 flow_* 工具线在**真实注册面上**（tasks.js / gates.js / experiments.js /
+// 1. 八条 flow_* 工具线在**真实注册面上**（tasks.js / gates.js / experiments.js /
 //    index.js 的 apply）各自的 `output.render` 必须产出 text 块、首行是中文摘要，
 //    且 `render` **不修改**传入的 value（宿主契约：规范值属于执行侧，render 只产人看的文本）。
+//    依据：`grep "toolOutput('" lib` 命中 8 处（lib/host/tools.mjs 4 处 +
+//    lib/tools/{tasks,experiments,gates,subtasks}.mjs 各 1 处）= 8 条工具线 8 个调用点；
+//    MCP 包装器（flow_desc/check/doctor/backup/init/orchestrate，见 lib/cli/mcp-server.mjs）
+//    是 CLI 的壳，不共用 toolOutput，不在本文件的断言范围。
 // 2. 派工模型从 `config` 一路走到宿主 `subagents.startActivation` 的 request：
 //    显式配置 model 时 agentOptions.model 必须正确；未配置时 request 里**一个
 //    agentOptions 键都不能有**（零回归），且台账回执带上实际用的 model。
@@ -115,8 +119,14 @@ async function mountAll(ctx, config) {
   applyExperiments(ctx, config)
 }
 
-/** 九个 flow_* 工具线（MCP 包装器不在内：它是 CLI 的壳，不共用 toolOutput）。 */
-const NINE_TOOLS = [
+/**
+ * 八条 flow_* 工具线（MCP 包装器不在内：它是 CLI 的壳，不共用 toolOutput）。
+ *
+ * 数量的真源是注册面本身：`grep "toolOutput('" lib` 命中 8 处，对应 8 条工具线、
+ * 8 个调用点（早前写「九个」是笔误）。第 9 条工具若出现，下面的注册面自证用例会红，
+ * 而不是静默漏测。
+ */
+const FLOW_TOOL_LINES = [
   'flow_status',
   'flow_task',
   'flow_subtask',
@@ -174,17 +184,44 @@ function assertReadableReport(name, definition, value, action) {
   return textBlock.text
 }
 
-test('渲染端到端：九条 flow_* 工具都在真实注册面上，且都用带名字的 output.render', async () => {
+test('渲染端到端：八条 flow_* 工具都在真实注册面上，且都用带名字的 output.render', async () => {
   const { root } = freshProject('render-register')
   const { ctx, registered } = makeHost(root, { subagents: fakeSubagents() })
   await mountAll(ctx, {})
 
-  for (const name of NINE_TOOLS) {
+  for (const name of FLOW_TOOL_LINES) {
     const definition = registered.get(name)
     assert.ok(definition, `插件应注册 ${name}`)
     assert.equal(typeof definition.output?.render, 'function', `${name} 必须有 output.render`)
     assert.deepEqual(definition.output.schema, { type: 'object' }, `${name} schema 不许改（机器可读性靠它）`)
   }
+})
+
+/**
+ * 注册面自证：工具线数量不靠人记，靠注册面枚举。
+ *
+ * 插件侧 flow_* 必须**恰好**是期望的八条：多一条（新人加了工具却没接 render/没进本文件）
+ * 或少一条（注册丢失）都会红。MCP 包装器是独立的 CLI 壳（lib/cli/mcp-server.mjs），
+ * 不挂在这个注册面上，显式排除并断言它们没有混进来。
+ */
+const MCP_WRAPPER_ONLY = ['flow_desc', 'flow_check', 'flow_doctor', 'flow_backup', 'flow_init', 'flow_orchestrate']
+
+test('渲染端到端：注册面自证 flow_* 恰好八条（多一条或少一条都红）', async () => {
+  const { root } = freshProject('render-registry')
+  const { ctx, registered } = makeHost(root, { subagents: fakeSubagents() })
+  await mountAll(ctx, {})
+
+  const pluginFlowLines = [...registered.keys()].filter((name) => name.startsWith('flow_')).sort()
+  assert.deepEqual(
+    pluginFlowLines.filter((name) => MCP_WRAPPER_ONLY.includes(name)),
+    [],
+    'MCP 包装器是 CLI 的壳，不该出现在插件工具注册面上',
+  )
+  assert.deepEqual(
+    pluginFlowLines,
+    [...FLOW_TOOL_LINES].sort(),
+    '插件侧 flow_* 工具线必须恰好八条：新增工具要同步接 render 并加入 FLOW_TOOL_LINES',
+  )
 })
 
 test('渲染端到端：空态与列表形状都产出中文可读报告，且不改 value', async () => {
@@ -222,6 +259,73 @@ test('渲染端到端：空态与列表形状都产出中文可读报告，且�
   assert.match(text, /T-20261112000002/)
 })
 
+/**
+ * 剩余四条工具线的真实登记形状。
+ *
+ * flow_subtask / flow_veto 的渲染分支有早退（`lines.length > 1` / `isPlainObject(value.task)`），
+ * 形状稍偏就会落回兜底 JSON——所以这里必须给真实值并断言「首行中文、不是 JSON 开头」
+ * （assertReadableReport 内的 JSON.parse 必须抛 就是这条底线）。
+ */
+test('渲染端到端：status / heartbeat / subtask / veto 四条工具线的真实形状都是中文报告', async () => {
+  const { root } = freshProject('render-rest')
+  const { ctx, registered } = makeHost(root, { subagents: fakeSubagents() })
+  await mountAll(ctx, {})
+
+  const shapes = {
+    flow_status: {
+      root,
+      store: true,
+      contract: { source: 'store', schema: 2, name: 'demo' },
+      experiments: { total: 0, counts: { total: 0 } },
+      tasks: { total: 1, counts: { active: 1 } },
+      gates: [{ id: 'precommit', ok: true, at: '2026-11-12T10:00:00+08:00' }],
+    },
+    flow_heartbeat: {
+      root,
+      workspace: root,
+      store: true,
+      dir: '.agents/heartbeat',
+      items: [{ session: 's1', status: 'working', task: 'T-1' }],
+      counts: { total: 1, active: 1, stale: 0, hidden: 0 },
+      warnings: [],
+    },
+    flow_subtask: {
+      root,
+      task: {
+        id: 'T-20261112152355-01',
+        title: '子任务渲染',
+        type: 'fix',
+        status: 'active',
+        stage: 'implementing',
+        parent: 'T-20261112151914',
+        acceptance: ['cmd:node --test test/'],
+      },
+    },
+    flow_veto: {
+      root,
+      task: { id: 'T-20261112152356', title: '被否决的任务', stage: 'analyzing' },
+      decision: { id: 'D-20261112120000', kind: 'choice', status: 'open' },
+      created: true,
+    },
+  }
+
+  const actions = { flow_status: '', flow_heartbeat: 'list', flow_subtask: 'show', flow_veto: 'veto' }
+  const markers = {
+    flow_status: /flow_status/,
+    flow_heartbeat: /s1/,
+    flow_subtask: /T-20261112152355-01/,
+    flow_veto: /否决决定：D-20261112120000/,
+  }
+
+  const rendered = {}
+  for (const [name, value] of Object.entries(shapes)) {
+    rendered[name] = assertReadableReport(name, registered.get(name), value, actions[name])
+    assert.match(rendered[name], markers[name])
+  }
+  assert.match(rendered.flow_subtask, /实现中/, 'stage 显示中文名')
+  assert.match(rendered.flow_heartbeat, /条心跳/, '首行要说明心跳条数')
+})
+
 test('渲染端到端：失败结果给出 ✖ 摘要 + 下一步，而不是一坨 JSON', async () => {
   const { root } = freshProject('render-error')
   const { ctx, registered } = makeHost(root, { subagents: fakeSubagents() })
@@ -247,6 +351,27 @@ test('渲染端到端：未登记形状回落 JSON（永不丢信息），且不
   assert.ok(text.trim().length > 0, '兜底不能是空文本')
   assert.doesNotThrow(() => JSON.parse(text), '未登记形状必须能 JSON.parse（信息不丢）')
   assert.deepEqual(weird, before, '兜底路径同样不许改 value')
+})
+
+/* -------------------------------------------------------------- 断言自身的反向自检 */
+
+/**
+ * 反向自检：把 render 人为退回 JSON.stringify，assertReadableReport 必须抛。
+ *
+ * 没有这条，就不可能证明上面那批「首行中文 / 不是 JSON」断言不是恒真。
+ */
+test('反向自检：render 退回 JSON.stringify 时 assertReadableReport 必须抛（断言不是恒真）', () => {
+  const broken = {
+    name: 'flow_task',
+    output: {
+      render: (args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
+    },
+  }
+  assert.throws(
+    () => assertReadableReport('flow_task', broken, { root: '/r', store: true, total: 0, counts: {}, items: [] }, 'list'),
+    /首行必须是中文摘要|不应是 JSON|不应回落整段 JSON/,
+    '若这句不抛，说明 e2e 的正向断言形同虚设',
+  )
 })
 
 /* ------------------------------------------------------------------ 派工层 */
