@@ -95,13 +95,14 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 本次 payload 的 `warnings[]`，`lib/paths.mjs` 写全局通道——混用会让面板轮询偷走 core
 警告，`test/warnings.test.mjs` 的《面板读路径 drain 后丢弃》用例守着这个隔离。
 
-**已知结构债（有意欠的，不是疏忽）**：`lib/tools/*` 为了拿 `requireCore` 静态 import
-`state-snapshot.mjs`（1233 行），而实际只用其中 2 个函数——约 **70% 依赖体积不可达**。
-根治要把「core 网关 + `brief`/`takeCoreWarnings`/`storeContractPath`/`taskCountsOf`/
-`pickInteger`」抽成约 100 行的独立模块（**不是 60 行**：少搬 `taskCountsOf`/`pickInteger`
-会让三个 tools 里两个仍留快照依赖、收益归零）。**性能收益可忽略**（≈0.5 ms/进程，因为
-网关仍须 top-level await 加载 core），所以这是**可理解性/风险面**问题，优先级 P3。
-前置条件：`core-unavailable` 降级路径先有测试覆盖、`index.js` 空闲。
+**已知结构债（有意欠的，不是疏忽）**：`lib/tools/*` 曾为了拿 `requireCore` 静态 import
+`state-snapshot.mjs`（1200+ 行），而实际只用其中 2–3 个纯函数——约 **70% 依赖体积不可达**。
+**2026-11-13 T-20261112154526 切片 3 已收口**：`lib/tools/{tasks,subtasks,gates,experiments}.mjs`
+与 `lib/host/tools.mjs`、`lib/host/routes.mjs` 改走 `lib/backend/api.mjs`，不再 import
+`state-snapshot.mjs` 的 `requireCore`/`coreModule`（只留 `taskCountsOf`/`pickInteger` 等纯助手）。
+剩余：`lib/host/session.mjs` 仍用 `coreModule()` 懒取 core（随宿主钩子另片收）；
+`lib/state-snapshot.mjs` 作为面板只读快照 + `requireCore` 降级网关**保留**（session 与
+`test/t-20261107-state-degradation.test.mjs` 依赖它的降级文案）。
 ⚠ 搬的时候**不要动** `clip`/`isoLocal`/`timeValue`/`toPosix`/`isPlainObject`——它们与
 `util` 同名不同契约，`index.js` 依赖的是快照变体。
 

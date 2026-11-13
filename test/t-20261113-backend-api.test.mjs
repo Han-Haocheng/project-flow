@@ -38,6 +38,12 @@ const MIGRATED = [
   'lib/cli/misc.mjs',
   'lib/team-sync.mjs',
   'lib/veto.mjs',
+  'lib/tools/tasks.mjs',
+  'lib/tools/subtasks.mjs',
+  'lib/tools/gates.mjs',
+  'lib/tools/experiments.mjs',
+  'lib/host/tools.mjs',
+  'lib/host/routes.mjs',
 ]
 /** 已迁文件中唯一不 import api 的例外（面板读网关，切片 1 裁定）。 */
 const NO_API_IMPORT_EXCEPTIONS = new Set(['lib/cli/state.mjs'])
@@ -150,6 +156,42 @@ test('结构：bin/state-snapshot 仍是仅有的两个 URL/CORE_URL 加载点�
   assert.match(readRepo('lib/state-snapshot.mjs'), /core\.mjs/, 'state-snapshot 的 core 网关不可静默消失')
   // 切片 3 才收 bin 的注入面：现在 bin 仍 setCoreRef（本断言防止有人提前删坏）。
   assert.match(readRepo('bin/flow.mjs'), /setCoreRef\(core\)/, '切片 3 前 bin 仍应注入 coreRef')
+})
+
+test('结构：降级网关保留在 state-snapshot，tools/host 不再走 requireCore/coreModule', () => {
+  // 网关本身必须在：session.mjs 与 state-degradation 测试依赖它和它的两条文案。
+  const snapshot = readRepo('lib/state-snapshot.mjs')
+  assert.match(snapshot, /function requireCore\(/, 'requireCore 不得删除（session/降级测试依赖）')
+  assert.match(snapshot, /function coreModule\(/, 'coreModule 不得删除')
+  assert.match(snapshot, /core-unavailable: lib\/core\.mjs could not be loaded/, '降级文案不得改写')
+  assert.match(snapshot, /is not installed/, '降级文案的安装提示不得改写')
+
+  // 反例：本片迁移面不得再调用网关；判定样本先自证会咬人。
+  const GATEWAY_CALL = /\b(?:requireCore|coreModule)\s*\(/
+  assert.match('const c = requireCore()', GATEWAY_CALL)
+  assert.match('snapshots.coreModule()', GATEWAY_CALL)
+  assert.doesNotMatch('api.tasks.listTasks()', GATEWAY_CALL)
+  for (const file of MIGRATED) {
+    const source = readRepo(file)
+    assert.doesNotMatch(source, GATEWAY_CALL, `${file} 不得再走 requireCore/coreModule`)
+  }
+
+  // 正例：tools/host 确实 import api（迁移真的发生，而不是仅删除调用）。
+  for (const file of [
+    'lib/tools/tasks.mjs',
+    'lib/tools/subtasks.mjs',
+    'lib/tools/gates.mjs',
+    'lib/tools/experiments.mjs',
+    'lib/host/tools.mjs',
+    'lib/host/routes.mjs',
+  ]) {
+    assert.ok(
+      importSpecifiers(readRepo(file)).some((spec) => spec.endsWith('/backend/api.mjs')),
+      `${file} 必须 import api`,
+    )
+  }
+  // host/tools 的心跳降级提示仍用网关的可读文案（不自造一条）。
+  assert.match(readRepo('lib/host/tools.mjs'), /coreUnavailableMessage\(\)/, '降级 warning 必须复用 state-snapshot 的文案')
 })
 
 // ------------------------------------------------------------------ 行为断言
