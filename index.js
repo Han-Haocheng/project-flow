@@ -45,7 +45,6 @@ import {
   buildSnapshot,
   clip,
   coreAvailable,
-  coreModule,
   coreUnavailableMessage,
   decisionCountsOf,
   decisionRemindMax,
@@ -54,7 +53,6 @@ import {
   isPlainObject,
   isoLocal,
   readManifestName,
-  requireCore,
   storeContractPath,
   takeCoreWarnings,
   timeValue,
@@ -600,6 +598,8 @@ export function apply(ctx, config) {
   // previous mount so a successful re-apply never reports stale failures. A
   // still-broken core re-adds its message every time.
   mountWarnings.length = 0
+  // 唯一的网关用途：启动时探测 core 是否可加载并给出可读降级文案。
+  // 正常读写路径全部经 lib/backend/api.mjs；coreModule / requireCore 已无消费者。
   if (coreAvailable() === false) warnMount(coreUnavailableMessage(), ctx)
   // 2026-11-11 用户口径：**取消"每句话都是任务"**。捕获改为显式 opt-in
   // （`config.capture: true` 才开），默认不建卡、不做捕获——任务由主会话分析后

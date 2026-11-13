@@ -70,7 +70,7 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 | `lib/dispatch.mjs` | P3b 派工核心：`queued-* → 角色` 映射（analyzer/implementer/reviewer）、角色提示词、派工回执（写 `checkpoints`）、`subagents` 服务取用。**不 import core**（core 由工具层注入），纯函数可单测 | `lib/tools/tasks.mjs` |
 | `lib/capture.mjs` | P1 捕获流水线（**2026-11-11 起默认关闭，`config.capture: true` 才开**）：pre-step 过滤/去重后**立即落盘**（`captureTurnStart`），turn-stopping 的 `captureTurnStop` 只作兜底（pending 空即 no-op）；产出 §9 状态块与栈顶选取。**不 import core**（core 由 `index.js` 注入） | `index.js` |
 | `lib/checks.mjs` | `flow check` 的脚本类检查执行器。**不 import core**（可独立工作） | `bin/flow.mjs`（动态 import） |
-| `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**宿主降级网关**（`requireCore`/`coreModule`）：adapter 已全部改走 `lib/backend/api.mjs`，网关只服务尚未迁移的 `index.js`、`lib/host/enforce.mjs`、`lib/host/team.mjs` 与 state-degradation 测试 | `index.js`、`lib/plugin/*`（warnings/降级） |
+| `lib/state-snapshot.mjs` | 面板只读快照装配；同时是**降级网关**（`requireCore`/`coreModule`）：除 MCP 外所有 adapter 均经 `lib/backend/api.mjs`，网关只服务 `index.js` 的启动降级探测与 state-degradation 测试（正常读写路径不再走它） | `index.js`（降级探测）、`lib/plugin/*`（warnings） |
 | `lib/tools/subtasks.mjs` | P4 `flow_subtask` 工具：`add`（子任务直接落 `queued-analysis`）/ `update`（仅 notes+stage，走 `assertTransition`）/ `remove`（**软关闭**：`stage=done` + `notes` 追加 `[removed]`，不物理删除）；写入一律走 core 的 `addTask`/`updateTask` | index.js |
 | `lib/commands.mjs` | D-02 命令解析（`建议/继续/暂停/开始/决策/状态`）：**只识别、不执行**；capture 对 `/` 前缀不入账，reminder 只注入一行给模型看 | `index.js`（reminder） |
 | `lib/veto.mjs` | P4 分析期否决：`vetoSubtask`（会话自决、不建决策）/ `vetoTask`（建 modify\|delete 决策、任务停在 analyzing）/ `applyVetoAnswer`（modify 回 queued-analysis，delete 到 done）；**不碰团队板** | `index.js`（`flow_veto`） |
@@ -101,10 +101,12 @@ POST `/api/project-flow/init`，仍走同一 `lib/core.mjs`）：实验（含 pa
 与 `lib/host/tools.mjs`、`lib/host/routes.mjs` 改走 `lib/backend/api.mjs`，不再 import
 `state-snapshot.mjs` 的 `requireCore`/`coreModule`（只留 `taskCountsOf`/`pickInteger` 等纯助手）。
 `lib/host/session.mjs` 已于同片收口（走 api，不再懒取 core）；bin 的 `setCoreRef`/`ctx.core`
-注入面同时退场（`drainCoreWarnings` 改走 api，仍是同一条 core 警告通道）。剩余
-`index.js`、`lib/host/enforce.mjs`、`lib/host/team.mjs` 仍用网关，另片随宿主钩子收；
-`lib/state-snapshot.mjs` 作为面板只读快照 + 降级网关**保留**
-（`test/t-20261107-state-degradation.test.mjs` 依赖它的降级文案）。
+注入面同时退场（`drainCoreWarnings` 改走 api，仍是同一条 core 警告通道）。
+切片 5 收尾：`index.js`、`lib/host/enforce.mjs`、`lib/host/team.mjs` 已改走
+`lib/backend/api.mjs`；**除 MCP（另卡）外，所有后端 adapter 均经 api**。
+网关（`requireCore`/`coreModule`/`coreAvailable`）只作**降级探测**保留在
+`lib/state-snapshot.mjs`（`index.js` 启动时的一条 `core-unavailable` 警告、
+`test/t-20261107-state-degradation.test.mjs` 的降级断言），正常读写路径不再经过它。
 ⚠ 搬的时候**不要动** `clip`/`isoLocal`/`timeValue`/`toPosix`/`isPlainObject`——它们与
 `util` 同名不同契约，`index.js` 依赖的是快照变体。
 

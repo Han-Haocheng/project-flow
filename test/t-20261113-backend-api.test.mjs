@@ -1,4 +1,4 @@
-// 2026-11-13（T-20261112154526 切片 1–4）：后端单一 API 层 + CLI/域助手/工具/宿主/会话迁移。
+// 2026-11-13（T-20261112154526 切片 1–5）：后端单一 API 层 + CLI/域助手/工具/宿主/会话/装配面迁移。
 //
 // 本文件守三层，且每层都先证「断言会咬人」再证「当前是绿的」：
 //   ① 正例：api 从 ../core.mjs 取能力；已迁文件确实 import api（防文件消失/改名后假绿）；
@@ -45,6 +45,8 @@ const MIGRATED = [
   'lib/host/tools.mjs',
   'lib/host/routes.mjs',
   'lib/host/session.mjs',
+  'lib/host/enforce.mjs',
+  'lib/host/team.mjs',
 ]
 /** 已迁文件中唯一不 import api 的例外（面板读网关，切片 1 裁定）。 */
 const NO_API_IMPORT_EXCEPTIONS = new Set(['lib/cli/state.mjs'])
@@ -170,8 +172,31 @@ test('结构：bin 的 coreRef/ctx.core 注入面已退场，加载点只剩 api
   assert.match(readRepo('lib/state-snapshot.mjs'), /CORE_URL/, 'state-snapshot 的降级加载点必须在')
 })
 
+test('结构：网关调用只剩 state-snapshot 内部，index 仅保留启动降级探测', () => {
+  const GATEWAY_CALL = /\b(?:requireCore|coreModule)\s*\(/
+  // 扫描器自证：已知违规样本必须命中，api 调用不得命中。
+  assert.match('const c = requireCore()', GATEWAY_CALL)
+  assert.match('snapshots.coreModule()', GATEWAY_CALL)
+  assert.doesNotMatch('api.tasks.listTasks()', GATEWAY_CALL)
+
+  // 全库（lib/**、bin/**、index.js）只剩 state-snapshot 自己调用网关。
+  const callers = [...walk('lib'), ...walk('bin'), 'index.js']
+    .filter((rel) => GATEWAY_CALL.test(readRepo(rel)))
+    .sort()
+  assert.deepEqual(callers, ['lib/state-snapshot.mjs'], `网关调用者白名单漂移：${callers.join(', ')}`)
+
+  // index.js 的唯一网关用途是启动降级探测（保留），不得再直接拿 core 模块。
+  const index = readRepo('index.js')
+  assert.match(index, /coreAvailable\(\) === false/, '启动降级探测必须保留')
+  assert.match(index, /coreUnavailableMessage\(\)/, '降级文案来源必须保留')
+  assert.doesNotMatch(index, GATEWAY_CALL, 'index 不得再调用网关')
+  assert.doesNotMatch(index, /^\s*(?:coreModule|requireCore),$/m, 'index 不得再从 state-snapshot import 网关')
+  assert.deepEqual(importSpecifiers(index).filter(isCoreSpecifier), [], 'index 不得 import core')
+})
+
 test('结构：降级网关保留在 state-snapshot，tools/host 不再走 requireCore/coreModule', () => {
-  // 网关本身必须在：state-degradation 测试（与尚未迁移的 enforce/team/index）依赖它和两条文案。
+  // 网关本身必须在：state-degradation 测试与 index.js 的启动降级探测依赖它和两条文案
+  // （它不是正常读写路径；正常路径全部经 api）。
   const snapshot = readRepo('lib/state-snapshot.mjs')
   assert.match(snapshot, /function requireCore\(/, 'requireCore 不得删除（session/降级测试依赖）')
   assert.match(snapshot, /function coreModule\(/, 'coreModule 不得删除')
