@@ -54,7 +54,9 @@ import {
   dispatchRoleModel,
   closeDispatchedChild,
   dispatchTaskRecord,
+  analyzerSplitIssues,
 } from '../lib/dispatch.mjs'
+import { buildDefinition as buildSubtaskDefinition } from '../lib/tools/subtasks.mjs'
 
 const TEMP_ROOTS = []
 
@@ -1487,4 +1489,181 @@ test('dispatch-list --agent：精确名 role:taskId 与角色前缀都可用', (
   const wrongExact = runDispatchCli(root, ['task', 'dispatch-list', '--agent', 'reviewer:' + a.id, '--json'])
   assert.deepEqual(wrongExact.body.data, [], '精确名不得被前缀误伤')
 })
+
+// ======================== T-20261113210219：分析者结构化拆分 ========================
+
+test('分析者拆分校验：缺 mount / 缺写域 / 写域重叠 → 工单 failed、父卡留 analyzing', async () => {
+  const { root, contract } = freshProject('analyzer-split')
+  const parent = addTask(root, contract, { type: 'feat', title: '拆分父卡', stage: 'analyzing' })
+  assert.match(analyzerSplitIssues(root, contract, parent.id).join('；'), /没有拆出任何子卡/)
+
+  const one = addTask(root, contract, { type: 'feat', title: '子一', parent: parent.id, stage: 'queued-implementation' })
+  assert.match(analyzerSplitIssues(root, contract, parent.id).join('；'), /缺 mount/)
+
+  updateTask(root, contract, one.id, {
+    mount: { kind: 'module', id: 'dispatch' },
+    scope: { allow: ['lib/dispatch.mjs'] },
+  })
+  assert.deepEqual(analyzerSplitIssues(root, contract, parent.id), [], '补齐 mount + 写域后应通过')
+
+  const two = addTask(root, contract, {
+    type: 'feat',
+    title: '子二',
+    parent: parent.id,
+    stage: 'queued-implementation',
+    mount: { kind: 'module', id: 'dispatch' },
+    scope: { allow: ['lib/dispatch.mjs'] },
+  })
+  const overlapIssues = analyzerSplitIssues(root, contract, parent.id).join('；')
+  assert.match(overlapIssues, /写域重叠：lib\/dispatch\.mjs/, '兄弟卡写域重叠必须被发现')
+  assert.ok(overlapIssues.includes(one.id) && overlapIssues.includes(two.id), '重叠报告要点名两张卡：' + overlapIssues)
+
+  // 收口路径：缺 mount 的子卡 → analyzer 工单 failed、claim 释放、父卡仍在 analyzing。
+  const { root: closeRoot, contract: closeContract } = freshProject('analyzer-close')
+  const closeParent = addTask(closeRoot, closeContract, { type: 'feat', title: '收口父卡', stage: 'queued-analysis' })
+  const subagents = fakeSubagents()
+  const host = makeHost(closeRoot, { subagents, config: { dispatch: { auto: false } } })
+  const dispatched = await host.tool.execute({ action: 'dispatch', id: closeParent.id, root: closeRoot }, host.exec)
+  assert.equal(dispatched.task.stage, 'analyzing')
+  addTask(closeRoot, closeContract, { type: 'feat', title: '无 mount 子卡', parent: closeParent.id, stage: 'queued-implementation' })
+  const ctx = { get: (name) => (name === 'workingDirectory' ? { get: () => closeRoot } : undefined) }
+  const closed = closeDispatchedChild(ctx, 'child-1')
+  assert.equal(closed.outcome, 'failed', '拆分不合格时 analyzer 工单必须 failed')
+  assert.equal(closed.needsHuman, false)
+  const after = getTask(closeRoot, closeContract, closeParent.id)
+  assert.equal(after.stage, 'analyzing', '父卡留在 analyzing（不新增回退边）')
+  assert.equal(after.dispatch.outcome, 'failed')
+  core.queueDispatch(closeRoot, closeContract, closeParent.id, { agent: 'analyzer:' + closeParent.id, role: 'analyzer' })
+  const nextOrder = core.listDispatches(closeRoot, closeContract).find((row) => row.taskId === closeParent.id)
+  assert.match(String(nextOrder.id), /-r1-a2$/, 'failed 后重新入队 → attempt+1')
+  assert.match(after.notes, /\[dispatch-gate\]/, '校验错误必须写进父卡 notes 交给下一轮分析者')
+  assert.equal(
+    after.checkpoints.some((item) => item.kind === 'claim' && !item.closedAt),
+    false,
+    'close 同批释放 claim',
+  )
+})
+
+test('分析者连续 3 次拆分失败 → 停止自动重派并标 needs-human', () => {
+  const { root, contract } = freshProject('analyzer-needs-human')
+  const parent = addTask(root, contract, { type: 'feat', title: '熔断父卡', stage: 'analyzing' })
+  addTask(root, contract, { type: 'feat', title: '坏子卡', parent: parent.id, stage: 'queued-implementation' })
+  const ctx = { get: (name) => (name === 'workingDirectory' ? { get: () => root } : undefined) }
+  let last = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const session = 'split-child-' + attempt
+    core.queueDispatch(root, contract, parent.id, { agent: 'analyzer:' + parent.id, role: 'analyzer' })
+    core.ackDispatch(root, contract, parent.id, { agent: 'analyzer:' + parent.id, session })
+    last = closeDispatchedChild(ctx, session)
+    assert.equal(last.outcome, 'failed')
+  }
+  assert.equal(last.needsHuman, true, '第 3 次失败必须熔断')
+  const after = getTask(root, contract, parent.id)
+  assert.match(after.notes, /\[needs-human\]/, 'needs-human 标记必须落盘')
+})
+
+test('flow_subtask add：mount + noDispatch 只建卡不派实现者；mount 参数必须成对', async () => {
+  const { root, contract } = freshProject('subtask-mount')
+  const parent = addTask(root, contract, { type: 'feat', title: '拆卡父卡', stage: 'analyzing' })
+  const subagents = fakeSubagents()
+  const ctx = {
+    get(name) {
+      if (name === 'workingDirectory') return { get: () => root }
+      if (name === 'subagents') return subagents
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  const tool = buildSubtaskDefinition({ ctx, toolRoot: () => root }, { autoDispatch: true })
+  const exec = { agent: { id: 'session-main', session: { cwd: root, header: { origin: 'main', delegationDepth: 0 } } } }
+  const added = await tool.execute(
+    {
+      action: 'add',
+      parent: parent.id,
+      title: '子卡',
+      type: 'feat',
+      mountKind: 'module',
+      mount: 'dispatch',
+      scope: { allow: ['lib/dispatch.mjs'] },
+      noDispatch: true,
+    },
+    exec,
+  )
+  assert.equal(subagents.calls.length, 0, 'noDispatch 不得起实现者')
+  assert.deepEqual(added.task.mount, { kind: 'module', id: 'dispatch' })
+  assert.equal(added.task.stage, 'queued-implementation')
+  assert.equal(added.task.parent, parent.id)
+  await assert.rejects(
+    () => tool.execute({ action: 'add', parent: parent.id, title: '缺 id', type: 'feat', mountKind: 'module', noDispatch: true }, exec),
+    /mountKind 与 mount 必须成对/,
+  )
+})
+
+// ======================== T-20261113210219-02：审查 reject 自动回退 ========================
+
+function backToReview(root, contract, id) {
+  updateTask(root, contract, id, { stage: 'implementing' }, { source: 'internal' })
+  updateTask(root, contract, id, { stage: 'queued-review' }, { source: 'internal' })
+}
+
+test('review reject：走 reviewing → queued-implementation，工单 ok（round+1），artifact + 3 次熔断', () => {
+  const { root, contract } = freshProject('review-reject')
+  const task = addTask(root, contract, { type: 'feat', title: '审查打回', stage: 'queued-review' })
+  fs.writeFileSync(path.join(root, 'review.md'), '# 审查意见\n缺少边界测试\n')
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, { subagents, config: { dispatch: { auto: false } } })
+  const first = tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  return first.then(() => {
+    const ctx = { get: (name) => (name === 'workingDirectory' ? { get: () => root } : undefined) }
+    // 模拟 reviewer 先走合法回退边，再结束子会话。
+    updateTask(root, contract, task.id, { stage: 'queued-implementation' }, { source: 'internal' })
+    const closed = closeDispatchedChild(ctx, 'child-1', { reason: '缺少边界测试', artifact: 'review.md' })
+    assert.equal(closed.outcome, 'ok', '打回也以 ok 收口，进入 round+1')
+    assert.equal(closed.decision, 'reject')
+    assert.equal(closed.rejects, 1)
+    const after = getTask(root, contract, task.id)
+    assert.equal(after.stage, 'queued-implementation', '停在合法回退边目标')
+    assert.equal(after.dispatch.outcome, 'ok')
+    assert.match(after.notes, /\[review-reject\] 第 1 次打回：缺少边界测试/)
+    assert.equal(after.artifacts.at(-1).role, 'reviewer', '审查意见必须落 artifact')
+    backToReview(root, contract, task.id)
+    core.queueDispatch(root, contract, task.id, { agent: 'reviewer:' + task.id, role: 'reviewer' })
+    const round2 = core.listDispatches(root, contract).find((row) => row.taskId === task.id)
+    assert.match(String(round2.id), /-r2-a1$/, '打回后重新入队 round+1')
+
+    // 连续第 2、3 次打回：第 3 次停止自动重试并标 needs-human。
+    for (let cycle = 2; cycle <= 3; cycle += 1) {
+      const session = 'review-child-' + cycle
+      core.ackDispatch(root, contract, task.id, { agent: 'reviewer:' + task.id, session })
+      updateTask(root, contract, task.id, { stage: 'queued-implementation' }, { source: 'internal' })
+      const judged = closeDispatchedChild(ctx, session, { reason: '第 ' + cycle + ' 次打回' })
+      assert.equal(judged.outcome, 'ok')
+      assert.equal(judged.rejects, cycle)
+      if (cycle === 3) {
+        assert.equal(judged.needsHuman, true)
+        assert.match(getTask(root, contract, task.id).notes, /\[needs-human\] 审查连续 3 次打回/)
+      } else {
+        backToReview(root, contract, task.id)
+        core.queueDispatch(root, contract, task.id, { agent: 'reviewer:' + task.id, role: 'reviewer' })
+      }
+    }
+  })
+})
+
+test('review approve：stage=done 时正常 ok 收口，不写 reject 标记', async () => {
+  const { root, contract } = freshProject('review-approve')
+  const task = addTask(root, contract, { type: 'feat', title: '审查通过', stage: 'queued-review' })
+  const subagents = fakeSubagents()
+  const { tool, exec } = makeHost(root, { subagents, config: { dispatch: { auto: false } } })
+  await tool.execute({ action: 'dispatch', id: task.id, root }, exec)
+  updateTask(root, contract, task.id, { stage: 'done' }, { source: 'internal' })
+  const ctx = { get: (name) => (name === 'workingDirectory' ? { get: () => root } : undefined) }
+  const closed = closeDispatchedChild(ctx, 'child-1')
+  assert.equal(closed.outcome, 'ok')
+  const after = getTask(root, contract, task.id)
+  assert.equal(after.stage, 'done')
+  assert.equal(after.checkpoints.some((item) => item.kind === 'review' && item.decision === 'reject'), false)
+})
+
+
 

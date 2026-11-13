@@ -741,6 +741,23 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 可以同时 queue + ack，各自持有自己的 open claim；同一张卡的第二个未关闭工单仍被拒绝。
 `closeDispatch` 用 claim 与**本卡工单**的 agent 精确比对释放，不会碰另一张卡同角色 agent 的 claim。
 
+**分析者结构化拆分（T-20261113210219）**：analyzer 拆子卡时必须给每张子卡**单值 mount**
+（`mountKind: module|aspect` + `mount: <id>`）与非空写域 `scope.allow`，并带 `noDispatch: true`
+（只建卡，不立即派实现者；普通手工 `flow_subtask add` 仍默认立即派工）。analyzer 收口时插件校验：
+每张子卡有合法 mount、有非空写域、兄弟写域两两不重叠、parent 正确。**不合格** → 该 analyzer 工单
+`outcome: failed`（同批释放 claim、attempt+1），父卡留在 `analyzing`，问题写入父卡 notes 的
+`[dispatch-gate]` 行与 warning，交给下一轮分析者；同一轮连续 **3 次**失败后不再自动重派，写
+`[needs-human]` 并停止。校验**通过** → 工单 ok，子卡留在 `queued-implementation`，由实现者派工
+路径接手；不新增 `analyzing → queued-analysis` 阶段边。
+
+
+**审查 reject 自动回退（T-20261113210219-02）**：reviewer 走**既有** `reviewing → queued-implementation`
+回退边（不新增边）。reviewer 子会话结束、卡已在该回退目标时：工单以 `outcome: ok` 收口
+（`round+1, attempt=1`，下一轮实现完成后可重新审查），并追加一条 `kind:'review', decision:'reject'`
+回执；若带 `--artifact-report`（宿主为 `artifact`）则登记 role=reviewer 的交接产物。连续 **3 次**
+reject 后写 `[needs-human]` 并停止自动重试。reviewer 结束但卡仍停在 `reviewing`（没有判定）仍按
+`failed` 收口，与既有「子会话无明显进展」口径一致。
+
 #### 3.2.1 任务阶段 `stage`（P0：只落数据）
 
 `stage` 是行为层，`status`（`draft|active|done|archived|cancelled`）是**兼容视图**——面板队列、

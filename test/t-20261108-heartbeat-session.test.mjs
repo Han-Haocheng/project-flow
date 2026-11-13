@@ -28,6 +28,7 @@ import {
   updateHeartbeat,
 } from '../lib/core.mjs'
 import { buildSnapshot } from '../lib/state-snapshot.mjs'
+import { describeHeartbeatSupply, heartbeatGuardReason } from '../lib/host/session.mjs'
 
 const TEMP_ROOTS = []
 const HARNESSES = []
@@ -408,6 +409,59 @@ test('host：子会话永远不建心跳（一一对应只针对主会话）', (
   assert.equal(fs.existsSync(heartbeatFile(root, 'session-t81-root')), false, '也不得顺手给父会话建')
   assert.deepEqual(harness.warns, [])
 })
+
+// ======================== T-20261113211131：子会话不落盘 + 双证据判活 ========================
+
+test('心跳守卫：父心跳 live → 子写放行；父死且注册表无记录 → 拦', () => {
+  const { root } = freshProject('guard-evidence')
+  const harness = makeHarness(root)
+  const parent = harness.addAgent('session-t1131-parent')
+  startHeartbeat(root, loadContract(root).contract, { session: parent.id, goal: '父活' })
+  const child = harness.addChildAgent('session-t1131-leaf', parent.id)
+  const execution = (agent) => ({ name: 'write', agent, args: { file_path: path.join(root, 'x.txt') } })
+  assert.equal(heartbeatGuardReason(harness.ctx, execution(child)), undefined, '父心跳 live 放行')
+
+  removeHeartbeat(root, loadContract(root).contract, { session: parent.id })
+  harness.removeLive(parent.id)
+  assert.match(String(heartbeatGuardReason(harness.ctx, execution(child))), /父会话心跳未登记且不在宿主注册表存活/)
+})
+
+test('心跳守卫：父心跳 stale 但内存注册表存活 → 放行；子会话不写盘、不残行', () => {
+  const { root } = freshProject('guard-registry')
+  const harness = makeHarness(root)
+  const parent = harness.addAgent('session-t1131-root')
+  const mid = harness.addChildAgent('session-t1131-mid', parent.id)
+  const leaf = harness.addChildAgent('session-t1131-leaf2', mid.id)
+  // mid 只在内存注册表里活：心跳先 working 再结束（stale），随后移除 agents 存活证据。
+  startHeartbeat(root, loadContract(root).contract, { session: mid.id, goal: 'mid' })
+  endHeartbeat(root, loadContract(root).contract, { session: mid.id })
+  harness.handler('subagent/start')[0]({ local: true, id: mid.id })
+  harness.removeLive(mid.id)
+
+  const execution = (agent) => ({ name: 'write', agent, args: { file_path: path.join(root, 'x.txt') } })
+  assert.equal(heartbeatGuardReason(harness.ctx, execution(leaf)), undefined, '注册表双证据必须放行')
+  assert.equal(fs.existsSync(heartbeatFile(root, leaf.id)), false, '子会话不落心跳')
+  assert.equal(fs.existsSync(heartbeatFile(root, mid.id)), true, 'mid 曾作为主会话建过心跳（历史行），不是子会话新行')
+})
+
+test('心跳供给：子代理列表只读进 payload，结束后清空；重启无残留', () => {
+  const { root } = freshProject('supply-registry')
+  const harness = makeHarness(root)
+  const parent = harness.addAgent('session-t1131-sup-root')
+  const child = harness.addChildAgent('session-t1131-sup-leaf', parent.id)
+  harness.handler('subagent/start')[0]({ local: true, id: child.id })
+  const supply = describeHeartbeatSupply(harness.ctx)
+  assert.equal(supply.subagentCount, 1)
+  assert.equal(supply.subagents[0].session, child.id)
+  assert.equal(supply.subagents[0].parent, parent.id)
+  assert.equal(fs.existsSync(heartbeatFile(root, child.id)), false, '注册表不落盘')
+
+  harness.handler('subagent/end')[0]({ local: true, id: child.id, stopReason: 'completed' })
+  const afterEnd = describeHeartbeatSupply(harness.ctx)
+  assert.equal(afterEnd.subagentCount, 0, '结束即清空')
+  assert.equal(fs.existsSync(heartbeatFile(root, child.id)), false, '重启/结束都不留行')
+})
+
 
 test('host：状态刷新不改 goal/task/claims，也不创建缺失的记录', () => {
   const { root, contract } = freshProject('preserve')
