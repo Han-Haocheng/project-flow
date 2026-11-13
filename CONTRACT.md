@@ -699,10 +699,13 @@ manifest 声明的所有路径（`store.root`、`experiments.dir`、`tasks.dir`�
 
 - **派工工单 `dispatch`（T-20261113155234，阶段 1）**：把「派工请求」持久化成任务上的**单条工单**，
   与执行权 claim 分开记账——**工单 = 派工请求的持久化事实，claim = 执行权**。
-  - 形状：`dispatch: {id, createdAt, expiresAt, requester, agent, role, attempt, ackedAt?, closedAt?, outcome?, reason?}`；
-    每卡最多 **1 条未关闭**工单；`attempt` 上限 **3**；`expiresAt` 默认 `createdAt + 10min`（`--ttl` 秒可改）。
+  - 形状：`dispatch: {id, createdAt, expiresAt, requester, agent, role, round, attempt, ackedAt?, closedAt?, outcome?, reason?}`；
+    每卡最多 **1 条未关闭**工单；`expiresAt` 默认 `createdAt + 10min`（`--ttl` 秒可改）。
+  - **round + attempt 双计数**：上一单 `outcome:'ok'` 后再入队 → `round+1, attempt=1`（回到入口即新一轮，
+    不会被 attempt 卡死）；上一单 `failed|expired` → 同一轮 `attempt+1`，**上限 3** 只约束 attempt；
+    旧卡没有 `round` 字段时读投影按 **1**（向后兼容）。
   - `dispatch-queue`：只写工单，不 spawn、不推进阶段；同卡已有未关闭工单 → `invalid` 并点名持有者
-    （id/agent/role/createdAt）；`done/archived/cancelled` 禁止下单；attempt 用尽 → `invalid`；
+    （id/agent/role/createdAt）；`done/archived/cancelled` 禁止下单；同一轮 attempt 用尽 → `invalid`；
     `--ttl` 上限 **3600 秒**。
   - `dispatch-ack` 支持显式 `--session`/`--requester`（多会话/宿主派发不依赖 `DSH_SESSION_ID`）。
     读侧 `expiresAt` 非法时按 **stale** 处理，ack 也会拒绝。

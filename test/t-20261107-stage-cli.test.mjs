@@ -873,15 +873,21 @@ test('dispatch：下单/重复入队/ack 复用 claim（只一份回执）/close
   assert.equal(closed.code, 0, closed.stderr)
   assert.equal(closed.json.data.find((row) => row.task === task.id).status, 'ok')
 
-  // attempt 2、3 可以；第 4 次必须拒绝。
+  // 上一单 ok → 新一轮（round 2, attempt 1）；之后同轮 failed 重试到 attempt 3，第 4 次拒绝。
+  const roundTwo = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--json'])
+  assert.equal(roundTwo.code, 0, roundTwo.stdout + roundTwo.stderr)
+  assert.equal(roundTwo.json.data.dispatch.round, 2)
+  assert.equal(roundTwo.json.data.dispatch.attempt, 1)
+  assert.equal(runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'failed', '--reason', 'retry', '--json']).code, 0)
   for (const attempt of [2, 3]) {
     const next = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--json'])
     assert.equal(next.code, 0, next.stdout + next.stderr)
+    assert.equal(next.json.data.dispatch.round, 2)
     assert.equal(next.json.data.dispatch.attempt, attempt)
     assert.equal(runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'failed', '--reason', 'retry', '--json']).code, 0)
   }
   const tooMany = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--json'])
-  assert.equal(tooMany.code, 2, 'attempt 上限 3')
+  assert.equal(tooMany.code, 2, '同一轮 attempt 上限 3')
   assert.match(tooMany.json.error.message, /attempt 已达上限/)
 })
 
@@ -1039,6 +1045,42 @@ test('dispatch API/投影：taskId+claim、--session/--orphan、close ok 释放 
   assert.equal(expiredClose.code, 0, expiredClose.stdout + expiredClose.stderr)
   assert.equal(expiredClose.json.data.dispatch.outcome, 'expired')
 })
+
+test('dispatch round/attempt：ok 回到入口可无限开新轮；failed 同轮 attempt 上限 3；旧卡缺 round 投影为 1', () => {
+  const root = freshProject('dispatch-round')
+  const contract = loadContract(root).contract
+  const task = addTaskCli(root, '多轮工单', ['--stage', 'queued-implementation'])
+  for (let round = 1; round <= 5; round += 1) {
+    const queued = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'm1', '--role', 'implementer', '--json'])
+    assert.equal(queued.code, 0, '第 ' + round + ' 轮入队：' + queued.stdout + queued.stderr)
+    assert.equal(queued.json.data.dispatch.round, round)
+    assert.equal(queued.json.data.dispatch.attempt, 1, '每轮从 attempt 1 开始')
+    assert.equal(runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'm1', '--json']).code, 0)
+    assert.equal(runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'ok', '--json']).code, 0)
+  }
+
+  const failing = addTaskCli(root, '连续失败', ['--stage', 'queued-implementation'])
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const queued = runCli(root, ['task', 'dispatch-queue', failing.id, '--agent', 'm2', '--role', 'implementer', '--json'])
+    assert.equal(queued.code, 0)
+    assert.equal(queued.json.data.dispatch.round, 1, '失败重试不推进 round')
+    assert.equal(queued.json.data.dispatch.attempt, attempt)
+    assert.equal(runCli(root, ['task', 'dispatch-close', failing.id, '--outcome', 'failed', '--json']).code, 0)
+  }
+  const rejected = runCli(root, ['task', 'dispatch-queue', failing.id, '--agent', 'm2', '--role', 'implementer', '--json'])
+  assert.equal(rejected.code, 2, '连续 failed 三次后第 4 次入队必须被拒')
+  assert.match(rejected.json.error.message, /attempt 已达上限/)
+
+  // 旧卡（无 round 字段）读投影按 1。
+  const legacy = addTaskCli(root, '旧卡工单', ['--stage', 'queued-implementation'])
+  const now = '2026-11-13T18:00:00+08:00'
+  updateTask(root, contract, legacy.id, {
+    dispatch: { id: 'D-' + legacy.id + '-1', createdAt: now, expiresAt: '2099-01-01T00:00:00+08:00', requester: '', agent: 'm3', role: 'implementer', attempt: 1 },
+  }, { source: 'internal' })
+  const rows = runCli(root, ['task', 'dispatch-list', '--json']).json.data
+  assert.equal(rows.find((row) => row.task === legacy.id).round, 1, '缺 round 的旧卡按 1 投影')
+})
+
 
 
 
