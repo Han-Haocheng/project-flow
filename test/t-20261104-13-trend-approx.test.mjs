@@ -18,6 +18,12 @@ import {
 } from '../lib/core.mjs'
 import { buildSnapshot, deriveTrend } from '../lib/state-snapshot.mjs'
 
+/** 固定基准时刻：所有日期从它派生，测试不读真实挂钟（T-20261114000336）。 */
+const BASE_NOW = Date.parse('2026-11-05T12:00:00+08:00')
+const DAY_MS = 24 * 60 * 60 * 1000
+/** 相对基准的 ISO 时刻（days 为天偏移，hour 为当地小时）。 */
+const at = (days, hour = 9) => new Date(BASE_NOW + days * DAY_MS + (hour - 12) * 3600 * 1000).toISOString()
+
 const TEMP_ROOTS = []
 after(() => {
   for (const dir of TEMP_ROOTS) {
@@ -55,8 +61,8 @@ function legacyTask(id, status, extra = {}) {
     acceptance: [],
     commits: [],
     notes: '',
-    created_at: '2026-10-20T09:00:00+08:00',
-    updated_at: '2026-10-31T09:00:00+08:00',
+    created_at: at(-20),
+    updated_at: at(-2),
     ...extra,
   }
 }
@@ -95,7 +101,7 @@ test('core 投影：旧 done/archived 记录带估计标记，且文件字节零
   assert.equal(fs.readFileSync(archivedFile, 'utf8'), archivedBytes)
 
   // 显式 done_at 的精确记录不出现任何估计标记。
-  const exact = writeTask(root, legacyTask('T-20261031-03', 'done', { done_at: '2026-10-30T09:00:00+08:00' }))
+  const exact = writeTask(root, legacyTask('T-20261031-03', 'done', { done_at: at(-3) }))
   assert.equal(getTask(root, contract, 'T-20261031-03').doneAtEstimated, undefined)
   assert.equal(fs.readFileSync(exact, 'utf8').includes('Estimated'), false)
 })
@@ -103,11 +109,11 @@ test('core 投影：旧 done/archived 记录带估计标记，且文件字节零
 test('deriveTrend：投影标记让 estimatedFrom 指向最早近似日（精确记录仍 null）', () => {
   const { root, contract } = freshProject('derive')
   writeTask(root, legacyTask('T-20261031-01', 'done'))
-  writeTask(root, legacyTask('T-20261031-02', 'archived', { updated_at: '2026-11-02T09:00:00+08:00' }))
+  writeTask(root, legacyTask('T-20261031-02', 'archived', { updated_at: at(-3) }))
   const projected = listTasks(root, contract)
 
-  const trend = deriveTrend(projected, { now: Date.parse('2026-11-05T12:00:00+08:00'), days: 14 })
-  assert.equal(trend.estimatedFrom, localDayKey('2026-10-31T09:00:00+08:00'), '最早近似日 = 旧 done 的 updated_at 日')
+  const trend = deriveTrend(projected, { now: BASE_NOW, days: 14 })
+  assert.equal(trend.estimatedFrom, localDayKey(at(-3)), '最早近似日 = 最早一条近似记录的 updated_at 日')
   const doneIndex = trend.done.findIndex((count) => count === 1)
   assert.ok(doneIndex >= 0, JSON.stringify(trend.done))
   assert.equal(trend.archived.reduce((sum, count) => sum + count, 0), 1)
@@ -115,17 +121,14 @@ test('deriveTrend：投影标记让 estimatedFrom 指向最早近似日（精确
 
   // 全部精确：estimatedFrom 必须为 null。
   const exact = [
-    { ...legacyTask('T-20261031-04', 'done'), done_at: '2026-10-30T09:00:00+08:00' },
-    { ...legacyTask('T-20261031-05', 'archived'), archived_at: '2026-11-01T09:00:00+08:00', done_at: '2026-10-30T09:00:00+08:00' },
+    { ...legacyTask('T-20261031-04', 'done'), done_at: at(-2) },
+    { ...legacyTask('T-20261031-05', 'archived'), archived_at: at(-1), done_at: at(-2) },
   ]
-  assert.equal(deriveTrend(exact, { now: Date.parse('2026-11-05T12:00:00+08:00') }).estimatedFrom, null)
+  assert.equal(deriveTrend(exact, { now: BASE_NOW }).estimatedFrom, null)
 
   // 未投影的原始记录（无标记）走原有回退逻辑，仍标近似——不回退旧行为。
   const raw = [legacyTask('T-20261031-06', 'done')]
-  assert.equal(
-    deriveTrend(raw, { now: Date.parse('2026-11-05T12:00:00+08:00') }).estimatedFrom,
-    localDayKey('2026-10-31T09:00:00+08:00'),
-  )
+  assert.equal(deriveTrend(raw, { now: BASE_NOW }).estimatedFrom, localDayKey(at(-2)))
 })
 
 test('GET state 集成：buildSnapshot 的 tasks.trend.estimatedFrom 不再是 null', async () => {
@@ -134,8 +137,8 @@ test('GET state 集成：buildSnapshot 的 tasks.trend.estimatedFrom 不再是 n
   writeTask(root, legacyTask('T-20261031-02', 'archived'))
   writeTask(root, {
     ...legacyTask('T-20261101-01', 'active'),
-    created_at: '2026-11-01T09:00:00+08:00',
-    updated_at: '2026-11-01T09:00:00+08:00',
+    created_at: at(-1),
+    updated_at: at(-1),
   })
 
   const payload = await buildSnapshot({
@@ -143,9 +146,10 @@ test('GET state 集成：buildSnapshot 的 tasks.trend.estimatedFrom 不再是 n
     realRoot: root,
     entry: { path: root, name: 'payload' },
     hostWarnings: [],
+    now: new Date(BASE_NOW),
   })
   assert.equal(payload.ok, true, JSON.stringify(payload.error ?? payload.warnings ?? null))
-  assert.equal(payload.tasks.trend.estimatedFrom, localDayKey('2026-10-31T09:00:00+08:00'))
+  assert.equal(payload.tasks.trend.estimatedFrom, localDayKey(at(-2)), '趋势窗口相对固定基准，不随真实日期滑出')
   assert.equal(payload.tasks.trend.done.reduce((sum, count) => sum + count, 0), 1)
   assert.equal(payload.tasks.trend.archived.reduce((sum, count) => sum + count, 0), 1)
   assert.equal(payload.tasks.active[0].id, 'T-20261101-01')
