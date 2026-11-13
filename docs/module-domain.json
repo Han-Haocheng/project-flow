@@ -251,7 +251,8 @@
         "test/t-20261104-12-review-core.test.mjs",
         "test/t-20261030-09-win-compat.test.mjs",
         "test/t-20261109-worktree-store.test.mjs",
-        "test/t-20261113153750-worktree-isolation.test.mjs"
+        "test/t-20261113153750-worktree-isolation.test.mjs",
+        "test/t-20261113213016-auto-dispatch-e2e.test.mjs"
       ],
       "semantics": "存储基础：契约骨架、记录原语、锁、原子写、路径 containment、进程树。"
     },
