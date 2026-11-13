@@ -39,6 +39,13 @@ import {
   setDescriptionPlan,
   updateTask,
 } from '../lib/core.mjs'
+import {
+  DESCRIPTION_GATE_STAGES,
+  DESCRIPTION_STAGE_POLICY,
+  descriptionApplyStages,
+  descriptionPlanStages,
+} from '../lib/description/records.mjs'
+import { STAGE_IDS } from '../lib/stage.mjs'
 
 const PROJECT_SEMANTICS = '项目语义：描述阶段门的测试工程。'
 const NOW = '2026-11-08T12:00:00+08:00'
@@ -128,6 +135,16 @@ function expectGateError(fn, stage, pattern) {
   })
 }
 
+/** 写窗口/形状类的 invalid（不是阶段门，消息不带 `description gate:` 前缀）。 */
+function expectInvalid(fn, pattern) {
+  assert.throws(fn, (error) => {
+    assert.ok(error instanceof FlowError, `应抛 FlowError，实际 ${error?.name}: ${error?.message}`)
+    assert.equal(error.code, 'invalid', `应为 invalid（exit 2），实际 ${error.code}：${error.message}`)
+    if (pattern !== undefined) assert.match(error.message, pattern)
+    return true
+  })
+}
+
 function stageOf(root, contract, id) {
   return getTask(root, contract, id).stage
 }
@@ -172,6 +189,31 @@ function writeLegacyTask(root, id, status = 'active') {
   const dir = path.join(root, '.agents', 'tasks')
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`)
+  return record
+}
+
+/** 直接写一条带 `stage` 的任务记录：把卡「放到」任意阶段（不经阶段机/门禁）。 */
+function writeStagedTask(root, taskId, stage) {
+  const record = {
+    schema: 1,
+    id: taskId,
+    title: `策略表用例 ${stage}`,
+    type: 'feat',
+    status: 'active',
+    stage,
+    parent: null,
+    owner: '',
+    scope: { allow: [], deny: [] },
+    acceptance: [],
+    checkpoints: [],
+    commits: [],
+    notes: '',
+    created_at: NOW,
+    updated_at: NOW,
+  }
+  const dir = path.join(root, '.agents', 'tasks')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, `${taskId}.json`), `${JSON.stringify(record, null, 2)}\n`)
   return record
 }
 
@@ -539,3 +581,82 @@ test('unplanned-change：计划外的新文件让 queued-review 失败', (t) => 
 function moduleIdOf(root, contract, relative) {
   return getDescriptionFile(root, contract, relative).modules[0].id
 }
+
+// ==================================================== 单一真源：DESCRIPTION_STAGE_POLICY
+
+test('单一真源：策略表覆盖九个阶段，门名单与两处写窗口全部由表派生', () => {
+  // 表必须与阶段机逐行对齐：多一行 = 留下一个无人读的口径，少一行 = 静默放行。
+  assert.deepEqual(Object.keys(DESCRIPTION_STAGE_POLICY), [...STAGE_IDS])
+  for (const stage of STAGE_IDS) {
+    const row = DESCRIPTION_STAGE_POLICY[stage]
+    assert.deepEqual(Object.keys(row).sort(), ['apply', 'gate', 'plan', 'requireTests'], stage)
+    assert.ok(['plan', 'full', null].includes(row.gate), stage)
+  }
+
+  // 派生视图 = 表的投影（不是另写一组数组）。
+  assert.deepEqual(
+    [...DESCRIPTION_GATE_STAGES],
+    STAGE_IDS.filter((stage) => DESCRIPTION_STAGE_POLICY[stage].gate !== null)
+  )
+  assert.deepEqual([...DESCRIPTION_GATE_STAGES], ['queued-implementation', 'queued-review', 'done'])
+  assert.deepEqual([...descriptionPlanStages()], [
+    'queued-analysis',
+    'analyzing',
+    'queued-implementation',
+    'implementing',
+    'queued-review',
+  ])
+  assert.deepEqual([...descriptionApplyStages()], ['implementing', 'queued-review'])
+  assert.deepEqual(STAGE_IDS.filter((stage) => DESCRIPTION_STAGE_POLICY[stage].requireTests), ['done'])
+
+  /* 不变式（本卡存在的理由）：凡是设了描述门的阶段，门的修复命令必须在**同一阶段**
+     可执行。queued-review 的 gate 是 'full'（会拒绝未落地的计划），所以它必须同时
+     在 plan/apply 窗口里；queued-implementation 的 gate 是 'plan'（要求计划存在），
+     所以它必须在 plan 窗口里。任一条不成立 = 永远过不去的门。 */
+  for (const stage of DESCRIPTION_GATE_STAGES) {
+    const row = DESCRIPTION_STAGE_POLICY[stage]
+    if (row.gate === 'plan') assert.equal(row.plan, true, `${stage}: plan 门要求计划存在，本阶段却写不了计划`)
+    // 「计划欠账」档的 full 门（queued-review）：apply 与补计划都必须在同阶段可执行。
+    if (row.gate === 'full' && row.requireTests === false) {
+      assert.equal(row.apply, true, `${stage}: full 门拒绝未落地计划，本阶段却 apply 不了`)
+      assert.equal(row.plan, true, `${stage}: apply 之前先要有计划可补`)
+    }
+    /* done 是 full 门但只欠「测试证据」，修复命令是 `flow gate run`（与阶段无关，
+       不属于 plan/apply 写窗口）；而且它的欠账必须在 queued-review 就结清——done 是
+       终态侧的阶段，不会把一张计划未落地的卡再往前推。 */
+    if (row.requireTests === true) assert.equal(row.apply, false, stage)
+  }
+})
+
+test('单一真源：九个阶段的 plan/apply 行为逐行等于策略表（行为断言，不只是结构断言）', () => {
+  const { root, contract } = describedProject('gate-policy-window')
+  const body = { files: [{ path: 'lib/a.mjs', op: 'change', semantics: NEW_SEMANTICS }] }
+
+  for (const stage of STAGE_IDS) {
+    const id = `T-POLICY-${stage}`
+    writeStagedTask(root, id, stage)
+    const row = DESCRIPTION_STAGE_POLICY[stage]
+
+    if (row.plan === true) {
+      const result = setDescriptionPlan(root, contract, id, body)
+      assert.equal(result.plan.task, id, stage)
+      assert.equal(result.plan.status, 'planned', stage)
+    } else {
+      expectInvalid(
+        () => setDescriptionPlan(root, contract, id, body),
+        /只允许 queued-analysis \/ analyzing \/ queued-implementation \/ implementing \/ queued-review/
+      )
+    }
+
+    if (row.apply === true) {
+      const applied = applyDescriptionPlan(root, contract, id, { now: NOW })
+      assert.equal(applied.applied, true, `${stage}: 表说能 apply`)
+      assert.equal(applied.plan.status, 'implemented', stage)
+    } else {
+      expectInvalid(
+        () => applyDescriptionPlan(root, contract, id, { now: NOW }),
+        /只允许 implementing \/ queued-review/
+      )
+    }
+  }
+})

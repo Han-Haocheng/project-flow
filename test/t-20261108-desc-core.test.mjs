@@ -35,6 +35,7 @@ import {
   drainWarnings,
   getDescriptionFile,
   getDescriptionPlan,
+  getTask,
   initProject,
   listDescriptionFiles,
   loadContract,
@@ -735,34 +736,71 @@ test('setDescriptionPlan：files 与 noSemanticChange 的 xor 校验', () => {
   assert.equal(withFiles.plan.noSemanticChange, false, '切回 files 时旧标记要被清掉')
 })
 
-test('setDescriptionPlan：阶段窗口（queued-analysis/analyzing/implementing 之外拒绝）', () => {
+test('setDescriptionPlan：阶段窗口（由 DESCRIPTION_STAGE_POLICY 派生，queued-review 也在内）', () => {
   const { root, contract } = projectWith('plan-stage', { 'lib/a.mjs': 'export function alpha() {}\n' })
   const task = addTask(root, contract, { title: '阶段窗口', type: 'feat' })
   const body = { files: [{ path: 'lib/a.mjs', op: 'change', semantics: LATER_SEMANTICS }] }
 
-  // created：太早。
-  expectFlowError(() => setDescriptionPlan(root, contract, task.id, body), 'invalid', /只允许 queued-analysis \/ analyzing \/ implementing/)
+  // created：太早。名单从单一真源表派生，不再是第二组常量。
+  expectFlowError(
+    () => setDescriptionPlan(root, contract, task.id, body),
+    'invalid',
+    /只允许 queued-analysis \/ analyzing \/ queued-implementation \/ implementing \/ queued-review/
+  )
 
-  for (const stage of ['queued-analysis', 'analyzing']) {
+  /* 五个 plan 窗口阶段逐个走。queued-review 必须在内：描述门在 queued-review 上会
+     拒绝未结清的计划，若该阶段不是写窗口，卡一落到这里就「永远过不去」——
+     门的修复命令（flow desc plan）必须在报错阶段可执行。 */
+  for (const stage of ['queued-analysis', 'analyzing', 'queued-implementation', 'implementing', 'queued-review']) {
     updateTask(root, contract, task.id, { stage })
     const result = setDescriptionPlan(root, contract, task.id, body)
     assert.equal(result.plan.task, task.id)
     assert.equal(result.plan.status, 'planned')
   }
 
-  /* implementing 不是 analyzing 的直接后继（阶段边由 core 校验）：先过 queued-implementation。
-     计划在上一轮已写入，queued-implementation 的计划门因此放行。 */
-  updateTask(root, contract, task.id, { stage: 'queued-implementation' })
-  updateTask(root, contract, task.id, { stage: 'implementing' })
-  const implemented = setDescriptionPlan(root, contract, task.id, body)
-  assert.equal(implemented.plan.task, task.id)
-  assert.equal(implemented.plan.status, 'planned')
-
-  // done：太晚。
-  updateTask(root, contract, task.id, { stage: 'queued-review' })
+  // done：太晚（done 只判门，不是写窗口）。
   updateTask(root, contract, task.id, { stage: 'reviewing' })
   updateTask(root, contract, task.id, { stage: 'done' })
   expectFlowError(() => setDescriptionPlan(root, contract, task.id, body), 'invalid', /只允许/)
+})
+
+test('queued-review：能补计划、能 apply（门的修复命令在同一阶段可执行）', () => {
+  const { root, contract } = projectWith('plan-queued-review', { 'lib/a.mjs': 'export function alpha() {}\n' })
+  buildDescription(root, contract)
+  describeAll(root, contract)
+  assert.equal(checkDescription(root, contract).ok, true, '夹具必须全绿')
+
+  const task = addTask(root, contract, { title: '待审查补账', type: 'feat', stage: 'analyzing' })
+  const body = { files: [{ path: 'lib/a.mjs', op: 'change', semantics: LATER_SEMANTICS }] }
+  setDescriptionPlan(root, contract, task.id, body)
+  updateTask(root, contract, task.id, { stage: 'queued-implementation' })
+  updateTask(root, contract, task.id, { stage: 'implementing' })
+
+  // 计划未落地时门拒绝进入 queued-review（既有行为，desc-gate 另有专测）。
+  expectFlowError(
+    () => updateTask(root, contract, task.id, { stage: 'queued-review' }),
+    'invalid',
+    /plan-unrealized/
+  )
+
+  // 用插件记账豁免把卡合法放到 queued-review（这是落到该阶段的公开入口）。
+  updateTask(root, contract, task.id, { stage: 'queued-review' }, { source: 'internal' })
+  assert.equal(getTask(root, contract, task.id).stage, 'queued-review')
+
+  // 旧实现只允许 queued-analysis/analyzing/implementing 写计划 → 这里必须放行。
+  const amended = setDescriptionPlan(root, contract, task.id, body)
+  assert.equal(amended.plan.task, task.id)
+  assert.equal(amended.plan.status, 'planned')
+
+  // 旧实现只允许 implementing 阶段 apply → 这里也必须放行，否则欠账结不清。
+  const applied = applyDescriptionPlan(root, contract, task.id, { now: NOW })
+  assert.equal(applied.applied, true)
+  assert.equal(applied.plan.status, 'implemented')
+  assert.equal(getDescriptionPlan(root, contract, task.id).status, 'implemented')
+
+  // 门在该阶段不再报 plan-missing / plan-unrealized。
+  const checked = checkDescription(root, contract, { taskId: task.id, stage: 'queued-review' })
+  assert.deepEqual(checked.failed.map((item) => item.kind), [])
 })
 
 test('setDescriptionPlan：apply 之后冻结（implemented 不许再改）', () => {
@@ -919,11 +957,17 @@ test('applyDescriptionPlan：落语义、冻结计划、幂等（保留首次 im
   assert.equal(getDescriptionPlan(root, contract, task.id).updated_at, NOW, '幂等路径不写盘')
 })
 
-test('applyDescriptionPlan：stage 不是 implementing → invalid 提示回实现阶段', () => {
+test('applyDescriptionPlan：apply 窗口 = implementing / queued-review（其它阶段一律 invalid）', () => {
   const { root, contract } = projectWith('apply-stage', { 'lib/a.mjs': 'export function alpha() {}\n' })
   const task = addTask(root, contract, { title: 'apply 阶段', type: 'feat', stage: 'analyzing' })
   setDescriptionPlan(root, contract, task.id, { files: [{ path: 'lib/a.mjs', op: 'change' }] })
-  expectFlowError(() => applyDescriptionPlan(root, contract, task.id), 'invalid', /先把任务推进到 implementing|不能 apply/)
+  // 错误文案直接由表派生的窗口生成，不再给「推进到 implementing」这种在
+  // queued-review 里不可执行的指引。
+  expectFlowError(
+    () => applyDescriptionPlan(root, contract, task.id),
+    'invalid',
+    /只允许 implementing \/ queued-review/
+  )
 })
 
 test('applyDescriptionPlan：计划里的成员不存在 → invalid', () => {
