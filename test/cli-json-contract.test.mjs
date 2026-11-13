@@ -332,6 +332,11 @@ test('契约形状：每条命令真实 --json 输出都符合登记形状', () 
   /* T-20261113163323：派工回执原语（claim 开放 → release 闭合）。 */
   expect('task.claim', ['task', 'claim', taskId, '--agent', 'contract', '--role', 'implementer', '--session', 'contract-session'])
   expect('task.release', ['task', 'release', taskId, '--agent', 'contract', '--outcome', 'ok'])
+  /* T-20261113155234：派工工单四命令（queue → ack → close → list）。 */
+  expect('task.dispatch-queue', ['task', 'dispatch-queue', taskId, '--agent', 'contract-dispatch', '--role', 'implementer'])
+  expect('task.dispatch-ack', ['task', 'dispatch-ack', taskId, '--agent', 'contract-dispatch'])
+  expect('task.dispatch-close', ['task', 'dispatch-close', taskId, '--outcome', 'ok'])
+  expect('task.dispatch-list', ['task', 'dispatch-list'])
   /* T-20261113170144：交接产物 put/list/show 共用 SPEC 的 task.art 键，用 put 覆盖。 */
   expect('task.art', ['task', 'art', 'put', taskId, '--role', 'implementer', '--summary', '交接摘要', '--file', 'lib/a.mjs'])
   expect('task.update', ['task', 'update', taskId, '--notes', 'notes'])

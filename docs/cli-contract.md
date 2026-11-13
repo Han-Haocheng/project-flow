@@ -103,6 +103,10 @@ stderr 只在极少数非契约场景出现（见 §8）。
 | flow task claim | 记录 task（追加一条 open claim 回执） |
 | flow task release | 记录 task（关闭匹配 agent 的 claim 回执，可携带产物指针） |
 | flow task art | 联合（put：记录 task；list：数组<记录 artifact>；show：对象（必填 task·role·artifact·content）） |
+| flow task dispatch-queue | 记录 task（写入一条未关闭工单） |
+| flow task dispatch-ack | 记录 task（工单 ackedAt + 同批 open claim） |
+| flow task dispatch-close | 记录 task（closedAt·outcome·reason?） |
+| flow task dispatch-list | 数组<记录 dispatchOrder> |
 | flow task link | 记录 task |
 | flow task unlink | 记录 task |
 | flow task archive | 对象（必填 archived·candidates·days·cutoff·dryRun·locked；可选 closed —— archiveAfterDays=0 时 closed:true 且 cutoff 为 null） |
@@ -296,4 +300,4 @@ claim 追加一条 open 回执 `{kind:'claim', role, agent, session?, from, to, 
 
 | 契约版本 | 日期 | 变更 |
 |---|---|---|
-| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 70 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |
+| 1 | 2026-11-12 | 首次冻结：信封 + schemaVersion + 全部命令（当前 74 条）的 data 形状 + 记录形状 + 退出码表 + 契约测试（T-20261112161101）；同日并入 `state`（前端快照）与 `gate rules`（规则防篡改） |

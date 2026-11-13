@@ -65,7 +65,7 @@ const BOOL_FLAGS = new Set([
   'allow-unknown-expect',
   // 2026-11-12 裁定 3：门禁分结构/行为；门禁运行默认跑完全部步骤，--fail-fast 才首败即停。
   // `gate rules --init/--record` 是规则文件防篡改的写命令（裁定 1），都是纯开关。
-  'fail-fast', 'init', 'record', 'purge',
+  'fail-fast', 'init', 'record', 'purge', 'stale',
   // T-20261113163323：done 无 reviewer 回执时的显式覆盖（必须配 --reason）。
   'no-dispatch',
 ])
@@ -153,6 +153,11 @@ export const SPEC = Object.freeze({
     verify: { flags: ['id', 'timeout'] },
     // T-20261113163505：rm 默认撤销（需 --reason）；--purge 才物理删除并写审计。
     rm: { flags: ['id', 'yes', 'reason', 'purge'] },
+    // T-20261113155234：派工工单队列（阶段 1：CLI + 台账字段，不接插件）。
+    'dispatch-queue': { flags: ['id', 'agent', 'role', 'ttl'] },
+    'dispatch-ack': { flags: ['id', 'agent'] },
+    'dispatch-close': { flags: ['id', 'outcome', 'reason'] },
+    'dispatch-list': { flags: ['stale'] },
   }),
   gate: Object.freeze({
     list: { flags: [] },
@@ -579,6 +584,8 @@ async function main() {
         'claim', 'release',
         // T-20261113170144：`flow task art put|list|show <id>`
         'art',
+        // T-20261113155234：`flow task dispatch-queue|ack|close <id>`
+        'dispatch-queue', 'dispatch-ack', 'dispatch-close',
       ].includes(action) &&
       // `gate run --phase X` takes no id；`desc show` 是展示命令，不带 id。
       !(command === 'gate' && action === 'run' && parsed.flags.phase !== undefined) &&

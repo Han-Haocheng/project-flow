@@ -838,6 +838,94 @@ test('mount legacy：warn 只警告不写标记；切 hard 后仍算首次，第
   assert.equal(hardSecond.code, 2, 'hard 第二次必须拦')
 })
 
+// ------------------------------- T-20261113155234：派工工单队列（阶段 1）
+
+test('dispatch：下单/重复入队/ack 复用 claim（只一份回执）/close/attempt 上限', () => {
+  const root = freshProject('dispatch-order')
+  const task = addTaskCli(root, '工单卡', ['--stage', 'queued-implementation'])
+
+  const queued = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--ttl', '600', '--json'])
+  assert.equal(queued.code, 0, queued.stdout + queued.stderr)
+  const order = queued.json.data.dispatch
+  assert.equal(order.agent, 'd1')
+  assert.equal(order.role, 'implementer')
+  assert.equal(order.attempt, 1)
+  assert.equal(Date.parse(order.expiresAt) - Date.parse(order.createdAt), 600_000, '--ttl 秒生效')
+
+  const dup = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd2', '--role', 'implementer', '--json'])
+  assert.equal(dup.code, 2, dup.stdout + dup.stderr)
+  assert.match(dup.json.error.message, /已有未关闭工单/)
+  assert.match(dup.json.error.message, /agent=d1/)
+
+  const wrongAgent = runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'd2', '--json'])
+  assert.equal(wrongAgent.code, 2, 'ack 必须匹配 agent')
+  assert.match(wrongAgent.json.error.message, /不匹配/)
+
+  const acked = runCli(root, ['task', 'dispatch-ack', task.id, '--agent', 'd1', '--json'])
+  assert.equal(acked.code, 0, acked.stdout + acked.stderr)
+  assert.match(String(acked.json.data.dispatch.ackedAt), /^\d{4}-/)
+  const claims = acked.json.data.checkpoints.filter((item) => item.kind === 'claim')
+  assert.equal(claims.length, 1, 'ack 必须复用 claimTask 的同一次写入：只一条 claim 回执')
+  assert.equal(acked.json.data.checkpoints.filter((item) => item.kind === 'dispatch').length, 0, '不另造第二套回执')
+
+  assert.equal(runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'ok', '--json']).code, 0)
+  const closed = runCli(root, ['task', 'dispatch-list', '--json'])
+  assert.equal(closed.code, 0, closed.stderr)
+  assert.equal(closed.json.data.find((row) => row.task === task.id).status, 'ok')
+
+  // attempt 2、3 可以；第 4 次必须拒绝。
+  for (const attempt of [2, 3]) {
+    const next = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--json'])
+    assert.equal(next.code, 0, next.stdout + next.stderr)
+    assert.equal(next.json.data.dispatch.attempt, attempt)
+    assert.equal(runCli(root, ['task', 'dispatch-close', task.id, '--outcome', 'failed', '--reason', 'retry', '--json']).code, 0)
+  }
+  const tooMany = runCli(root, ['task', 'dispatch-queue', task.id, '--agent', 'd1', '--role', 'implementer', '--json'])
+  assert.equal(tooMany.code, 2, 'attempt 上限 3')
+  assert.match(tooMany.json.error.message, /attempt 已达上限/)
+})
+
+test('dispatch：过期 ack 拒绝；孤儿 = ack 无 claim 或 claim 心跳不活；--stale 只列异常', () => {
+  const root = freshProject('dispatch-stale')
+  const contract = loadContract(root).contract
+  const expiredTask = addTaskCli(root, '过期卡', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', expiredTask.id, '--agent', 'e1', '--role', 'implementer', '--json']).code, 0)
+  const file = taskFile(root, expiredTask.id)
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'))
+  record.dispatch.expiresAt = '2026-01-01T00:00:00+08:00'
+  fs.writeFileSync(file, JSON.stringify(record, null, 1))
+  const late = runCli(root, ['task', 'dispatch-ack', expiredTask.id, '--agent', 'e1', '--json'])
+  assert.equal(late.code, 2, late.stdout + late.stderr)
+  assert.match(late.json.error.message, /已过期/)
+
+  // 孤儿 A：acked 但没有 open claim（内部写入构造）。
+  const orphanA = addTaskCli(root, '孤儿A', ['--stage', 'queued-implementation'])
+  const now = '2026-11-13T18:00:00+08:00'
+  updateTask(root, contract, orphanA.id, {
+    dispatch: { id: 'D-' + orphanA.id + '-1', createdAt: now, expiresAt: '2026-11-13T18:10:00+08:00', requester: '', agent: 'o1', role: 'implementer', attempt: 1, ackedAt: now },
+  }, { source: 'internal' })
+
+  // 孤儿 B：claim 在，但 session 心跳不活。
+  const orphanB = addTaskCli(root, '孤儿B', ['--stage', 'implementing'])
+  updateTask(root, contract, orphanB.id, {
+    checkpoints: [{ kind: 'claim', role: 'implementer', agent: 'o2', session: 'ghost-session', from: 'queued-implementation', to: 'implementing', at: now }],
+    dispatch: { id: 'D-' + orphanB.id + '-1', createdAt: now, expiresAt: '2099-01-01T00:00:00+08:00', requester: '', agent: 'o2', role: 'implementer', attempt: 1, ackedAt: now },
+  }, { source: 'internal' })
+
+  const listed = runCli(root, ['task', 'dispatch-list', '--json'])
+  const rows = listed.json.data
+  assert.equal(rows.find((row) => row.task === orphanA.id).orphan, true, 'acked 无 claim 是孤儿')
+  assert.equal(rows.find((row) => row.task === orphanB.id).orphan, true, 'claim 心跳不活是孤儿')
+
+  // 一条正常 pending 工单不应出现在 --stale。
+  const healthy = addTaskCli(root, '正常工单', ['--stage', 'queued-implementation'])
+  assert.equal(runCli(root, ['task', 'dispatch-queue', healthy.id, '--agent', 'ok1', '--role', 'implementer', '--json']).code, 0)
+  const staleRows = runCli(root, ['task', 'dispatch-list', '--stale', '--json']).json.data
+  assert.equal(staleRows.some((row) => row.task === healthy.id), false, '--stale 只保留过期/孤儿')
+  assert.equal(staleRows.find((row) => row.task === orphanA.id).orphan, true)
+})
+
+
 
 
 
